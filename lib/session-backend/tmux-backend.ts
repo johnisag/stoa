@@ -33,9 +33,11 @@ let pasteCounter = 0;
 
 export class TmuxBackend implements SessionBackend {
   async create({ name, cwd, command }: CreateOptions): Promise<void> {
+    // A leading "~" is expanded by the shell that runs this command via $HOME.
+    const shellCwd = cwd.replace(/^~/, "$HOME");
     // Matches: tmux set -g mouse on 2>/dev/null; tmux new-session -d -s "name" -c "cwd" "command"
     await execAsync(
-      `tmux set -g mouse on 2>/dev/null; tmux new-session -d -s ${q(name)} -c "${cwd}" "${command}"`
+      `tmux set -g mouse on 2>/dev/null; tmux new-session -d -s ${q(name)} -c "${shellCwd}" "${command}"`
     );
   }
 

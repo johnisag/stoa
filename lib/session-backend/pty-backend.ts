@@ -32,7 +32,22 @@ import {
 } from "./pty/registry";
 
 export class PtyBackend implements SessionBackend {
-  async create({ name, cwd, command }: CreateOptions): Promise<void> {
+  async create({
+    name,
+    cwd,
+    command,
+    binary,
+    args,
+  }: CreateOptions): Promise<void> {
+    // Preferred path: spawn the agent binary directly with argv — no bash
+    // banner, works on native Windows. Used when the caller supplies binary.
+    if (binary && binary.length > 0) {
+      spawnSession(name, { binary, args: args ?? [], cwd });
+      return;
+    }
+    // Fallback: run the (banner-wrapped) command string through a shell. The
+    // bash banner assumes POSIX; orchestration on native Windows should pass
+    // binary/args above instead.
     if (isWindows) {
       const pwsh = resolveBinary("pwsh");
       if (pwsh) {

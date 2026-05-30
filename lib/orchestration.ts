@@ -12,7 +12,7 @@ import { db, queries, type Session } from "./db";
 import { createWorktree, deleteWorktree } from "./worktrees";
 import { setupWorktree } from "./env-setup";
 import { resolveModelForAgent } from "./model-catalog";
-import { type AgentType, getProvider } from "./providers";
+import { type AgentType, getProvider, buildAgentArgs } from "./providers";
 import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
@@ -159,23 +159,27 @@ export async function spawnWorker(
     );
   }
 
-  // Create tmux session and start the agent
+  // Create the session and start the agent. Workers use auto-approve.
   const tmuxSessionName = `${provider.id}-${sessionId}`;
-  const cwd = actualWorkingDir.replace("~", "$HOME");
+  // Raw cwd (may contain "~"); each backend expands it for its platform.
+  const cwd = actualWorkingDir;
 
-  // Build the initial prompt command (workers use auto-approve by default for automation)
+  // tmux backend: banner-wrapped shell command. pty backend: direct argv.
   const flags = provider.buildFlags({ model, autoApprove: true });
-  const flagsStr = flags.join(" ");
-
-  // Create tmux session with the agent and banner
-  const agentCmd = `${provider.command} ${flagsStr}`;
+  const agentCmd = `${provider.command} ${flags.join(" ")}`;
   const newSessionCmd = wrapWithBanner(agentCmd);
+  const { binary, args } = buildAgentArgs(provider.id, {
+    model,
+    autoApprove: true,
+  });
 
   try {
     await backend.create({
       name: tmuxSessionName,
       cwd,
       command: newSessionCmd,
+      binary,
+      args,
     });
 
     // Wait for Claude to be ready by checking for the input prompt

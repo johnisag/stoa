@@ -241,14 +241,21 @@ export async function POST(
       const claudeCmd = session.auto_approve
         ? `${envPrefix}claude --dangerously-skip-permissions`
         : "claude";
+      // Structured argv for the pty backend (no IS_SANDBOX/env prefix — that's a
+      // POSIX-root sandbox concern handled by the tmux command path).
+      const claudeArgs = session.auto_approve
+        ? ["--dangerously-skip-permissions"]
+        : [];
 
       console.log(
-        `[summarize] Creating tmux session: ${newTmuxSession} (${claudeCmd})`
+        `[summarize] Creating session: ${newTmuxSession} (${claudeCmd})`
       );
       await backend.create({
         name: newTmuxSession,
         cwd: cwdExpanded,
         command: claudeCmd,
+        binary: "claude",
+        args: claudeArgs,
       });
       console.log(`[summarize] Tmux session created: ${newTmuxSession}`);
 

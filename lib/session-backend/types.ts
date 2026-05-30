@@ -33,10 +33,16 @@ export interface CaptureOptions {
 export interface CreateOptions {
   /** Session key/name (e.g. `${agentType}-${id}`). */
   name: string;
-  /** Working directory for the session. May contain `$HOME` for the tmux backend. */
+  /** Working directory for the session. May contain a leading "~"; each backend
+   * expands it for its platform (tmux -> $HOME, pty -> os.homedir). */
   cwd: string;
-  /** The full command to run inside the session (already wrapped/escaped by the caller for the shell it runs in). */
+  /** The full shell command to run inside the session (banner-wrapped). Used by
+   * the tmux backend, and by the pty backend only when binary/args are absent. */
   command: string;
+  /** Structured argv for a direct (shell-less) spawn. Preferred by the pty
+   * backend — avoids the bash banner so it works on native Windows. */
+  binary?: string;
+  args?: string[];
 }
 
 export interface SendOptions {
