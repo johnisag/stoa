@@ -16,7 +16,8 @@
 
 import { getSessionBackend } from "./session-backend";
 
-const backend = getSessionBackend();
+// Resolve the backend lazily (per use). Capturing it at module load would lock
+// in the wrong choice before server.ts finalizes the pty-host fallback decision.
 
 // Configuration constants
 const CONFIG = {
@@ -198,7 +199,7 @@ class SessionStatusDetector {
     if (Date.now() - this.cache.updatedAt < CONFIG.CACHE_VALIDITY_MS) return;
 
     try {
-      const sessions = await backend.listWithActivity();
+      const sessions = await getSessionBackend().listWithActivity();
 
       const newData = new Map<string, number>();
       for (const { name, activity } of sessions) {
@@ -220,7 +221,7 @@ class SessionStatusDetector {
   }
 
   async capturePane(name: string): Promise<string> {
-    const stdout = await backend.capture(name);
+    const stdout = await getSessionBackend().capture(name);
     return stdout.trim();
   }
 

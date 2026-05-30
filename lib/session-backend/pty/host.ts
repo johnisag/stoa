@@ -39,8 +39,20 @@ interface Conn {
   >;
 }
 
+/** Drop streamed output if a client is this far behind, to bound daemon memory. */
+const OUTPUT_BACKPRESSURE_CAP = 8 * 1024 * 1024; // 8 MB
+
 function send(conn: Conn, msg: HostMessage) {
-  if (!conn.socket.destroyed) conn.socket.write(encode(msg));
+  if (conn.socket.destroyed) return;
+  // Control replies/exits always go out; only shed high-volume output frames
+  // when the consumer is far behind (honor backpressure without unbounded RAM).
+  if (
+    msg.t === "output" &&
+    conn.socket.writableLength > OUTPUT_BACKPRESSURE_CAP
+  ) {
+    return;
+  }
+  conn.socket.write(encode(msg));
 }
 
 function handleMessage(conn: Conn, msg: ClientMessage) {
@@ -194,6 +206,24 @@ function detachKey(conn: Conn, key: string) {
 
 let server: net.Server | null = null;
 
+// Idle self-shutdown: the daemon exits once there are NO live sessions and NO
+// connected clients for a sustained period, so it never accumulates as a zombie.
+// It will never exit while a session is alive (that would kill the agent).
+const connections = new Set<net.Socket>();
+const IDLE_SHUTDOWN_MS = 5 * 60 * 1000;
+let lastBusyAt = Date.now();
+
+function checkIdle(): void {
+  const busy = connections.size > 0 || listSessions().some((s) => s.alive);
+  if (busy) {
+    lastBusyAt = Date.now();
+    return;
+  }
+  if (Date.now() - lastBusyAt > IDLE_SHUTDOWN_MS) {
+    process.exit(0);
+  }
+}
+
 /**
  * Start the host server. Resolves once listening. If the address is already in
  * use (another host is running), resolves false without starting a second one.
@@ -206,6 +236,8 @@ export function startHost(): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer((socket) => {
       const conn: Conn = { socket, attached: new Map() };
+      connections.add(socket);
+      lastBusyAt = Date.now();
       const decode = createDecoder<ClientMessage>((msg) =>
         handleMessage(conn, msg)
       );
@@ -215,6 +247,8 @@ export function startHost(): Promise<boolean> {
       // sessions — that's the whole point of the daemon.
       const cleanup = () => {
         for (const key of [...conn.attached.keys()]) detachKey(conn, key);
+        connections.delete(socket);
+        lastBusyAt = Date.now();
       };
       socket.on("close", cleanup);
       socket.on("error", cleanup);
@@ -232,6 +266,9 @@ export function startHost(): Promise<boolean> {
     const listen = () => {
       srv.listen(address, () => {
         server = srv;
+        // Periodically self-terminate when fully idle (no sessions, no clients).
+        const idleTimer = setInterval(checkIdle, 60_000);
+        idleTimer.unref?.();
         resolve(true);
       });
     };

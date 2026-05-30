@@ -54,15 +54,17 @@ app.prepare().then(() => {
   //    `tmux attach` (legacy behavior, macOS/Linux).
   //  - pty: subscribe the socket to a long-lived session in the in-process
   //    registry; the session survives disconnects (native, cross-platform).
+  // Connection routing. The host-vs-in-process decision is finalized at startup
+  // (see the pty-host probe before server.listen), so usePtyHost() here is
+  // consistent with what getSessionBackend() returns for the API/status paths —
+  // no split brain.
   terminalWss.on("connection", (ws: WebSocket) => {
-    if (getBackendType() === "pty") {
-      if (usePtyHost()) {
-        handlePtyHostConnection(ws);
-      } else {
-        handlePtyConnection(ws);
-      }
-    } else {
+    if (getBackendType() !== "pty") {
       handleTmuxConnection(ws);
+    } else if (usePtyHost()) {
+      handlePtyHostConnection(ws);
+    } else {
+      handlePtyConnection(ws);
     }
   });
 
@@ -327,7 +329,29 @@ app.prepare().then(() => {
     });
   }
 
-  server.listen(port, () => {
-    console.log(`> Agent-OS ready on http://${hostname}:${port}`);
-  });
+  // Finalize the pty-host (Tier 2) decision ONCE, before accepting connections,
+  // so the terminal path and the API/status path (getSessionBackend) agree. If
+  // the daemon can't be reached we disable host mode globally and fall back to
+  // the in-process registry (Tier 1) — terminals still work, just without
+  // restart-survival. getSessionBackend() is lazy, so flipping the env here
+  // (before its first call) makes the whole process consistently Tier 1.
+  (async () => {
+    if (usePtyHost()) {
+      try {
+        await getHostClient().ensureReady();
+        console.log(
+          "> pty-host daemon ready (Tier 2: sessions survive server restarts)"
+        );
+      } catch (err) {
+        process.env.AGENT_OS_PTY_HOST = "0";
+        console.error(
+          "> pty-host daemon unreachable; using in-process sessions (Tier 1):",
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
+    server.listen(port, () => {
+      console.log(`> Agent-OS ready on http://${hostname}:${port}`);
+    });
+  })();
 });

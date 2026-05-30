@@ -1,3 +1,8 @@
+// Exercise the detector against the in-process registry this test spawns into.
+// (On Windows the backend defaults to the pty-host daemon; force Tier-1 so
+// statusDetector reads the same registry these tests populate.)
+process.env.AGENT_OS_PTY_HOST = "0";
+
 import { describe, it, expect, afterEach } from "vitest";
 import {
   spawnSession,

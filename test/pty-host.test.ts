@@ -92,6 +92,46 @@ describe("pty-host daemon (Tier 2)", () => {
     await clientB.kill("host-survive");
     client_close(clientB);
   });
+
+  it("recovers transparently when its socket drops (daemon stays up)", async () => {
+    const client = new HostClient();
+    const marker = "RECONNECT_MARK_33";
+    await client.spawn("host-recon", {
+      binary: "node",
+      args: [
+        "-e",
+        `process.stdout.write('${marker}\\r\\n'); setInterval(()=>{},1000)`,
+      ],
+      cwd: process.cwd(),
+    });
+    let streamed = "";
+    const { detach } = await client.attach(
+      "host-recon",
+      (d) => (streamed += d),
+      () => {}
+    );
+    await waitFor(() => streamed.includes(marker));
+
+    // Forcibly drop the client's socket while the daemon keeps running.
+    streamed = "";
+    (
+      client as unknown as { socket: { destroy(): void } | null }
+    ).socket?.destroy();
+    await new Promise((r) => setTimeout(r, 100));
+
+    // The next call auto-reconnects, re-validates, and re-attaches the live
+    // subscription (repainting its snapshot to the listener). The session is
+    // intact across the drop.
+    expect(await client.exists("host-recon")).toBe(true);
+    const cap = await client.capture("host-recon", 50);
+    expect(cap).toContain(marker);
+    await waitFor(() => streamed.includes(marker)); // resubscribe repainted it
+    expect(streamed).toContain(marker);
+
+    detach();
+    await client.kill("host-recon");
+    client.close();
+  });
 });
 
 function client_close(c: HostClient) {

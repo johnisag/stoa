@@ -34,19 +34,17 @@ export function getBackendType(): BackendType {
 }
 
 /**
- * Tier 2 (opt-in): when AGENT_OS_PTY_HOST is truthy and the pty backend is
- * active, route through the out-of-process pty-host daemon so sessions survive
- * web-server restarts. Default off — the in-process registry (Tier 1) is used.
+ * Tier 2: when the pty backend is active, route through the out-of-process
+ * pty-host daemon so sessions survive web-server restarts. DEFAULT ON for the
+ * pty backend (Windows) — opt out with AGENT_OS_PTY_HOST=0|false|off. server.ts
+ * probes the daemon once and falls back to the in-process registry (Tier 1) if
+ * it can't be reached, so this is safe to default on.
  */
 export function usePtyHost(): boolean {
-  const flag = process.env.AGENT_OS_PTY_HOST;
-  return (
-    getBackendType() === "pty" &&
-    flag != null &&
-    flag !== "" &&
-    flag !== "0" &&
-    flag.toLowerCase() !== "false"
-  );
+  if (getBackendType() !== "pty") return false;
+  const flag = process.env.AGENT_OS_PTY_HOST?.toLowerCase();
+  if (flag === "0" || flag === "false" || flag === "off") return false;
+  return true;
 }
 
 export function getSessionBackend(): SessionBackend {
