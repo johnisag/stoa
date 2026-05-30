@@ -1,4 +1,18 @@
-import { rgPath } from "@vscode/ripgrep";
+/**
+ * Resolve ripgrep's bundled binary path at runtime.
+ *
+ * Turbopack traces even a literal `require("@vscode/ripgrep")` and tries to
+ * bundle the platform package's raw `rg.exe` ("Unknown module type"), which
+ * breaks `next dev`. We resolve the real Node require and pass a NON-LITERAL
+ * specifier so the bundler can't follow it; the module is loaded from
+ * node_modules at runtime. Paired with serverExternalPackages in next.config.ts.
+ */
+function getRgPath(): string {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const nodeRequire = eval("require") as NodeRequire;
+  const pkg = ["@vscode", "ripgrep"].join("/");
+  return (nodeRequire(pkg) as { rgPath: string }).rgPath;
+}
 
 /**
  * Check if ripgrep is available. ripgrep is now bundled via @vscode/ripgrep,
@@ -59,6 +73,7 @@ export function searchCode(
       ".", // CRITICAL: Tell ripgrep to search current directory explicitly
     ];
 
+    const rgPath = getRgPath();
     const result = spawnSync(rgPath, args, {
       cwd: workingDir,
       encoding: "utf-8",
@@ -98,7 +113,7 @@ export function searchCode(
     // ENOENT = bundled ripgrep binary missing
     if ((error as any).code === "ENOENT") {
       throw new Error(
-        `bundled ripgrep binary not found at ${rgPath}. Try reinstalling dependencies.`
+        `bundled ripgrep binary not found at ${getRgPath()}. Try reinstalling dependencies.`
       );
     }
     // Other errors - return empty
