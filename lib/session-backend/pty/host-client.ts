@@ -3,7 +3,7 @@
  *
  * Connects to the host over the local socket and exposes async control ops plus
  * an attach() that streams output. Auto-spawns the daemon (detached) if it isn't
- * running yet. Used by PtyBackend/HostBackend and server.ts when host mode is on.
+ * running yet. Used by HostTransport (PtyBackend) and server.ts when host mode is on.
  *
  * Hardened for "bulletproof" use as the default Windows backend:
  *  - single-flight connect + ping-validate (the daemon is confirmed serving

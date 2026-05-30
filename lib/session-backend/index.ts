@@ -12,8 +12,7 @@
 import { isWindows } from "../platform";
 import type { SessionBackend } from "./types";
 import { TmuxBackend } from "./tmux-backend";
-import { PtyBackend } from "./pty-backend";
-import { HostBackend } from "./pty/host-backend";
+import { createPtyBackend } from "./pty-backend";
 
 export type { SessionBackend, SessionActivity } from "./types";
 
@@ -49,11 +48,10 @@ export function usePtyHost(): boolean {
 
 export function getSessionBackend(): SessionBackend {
   if (!backend) {
-    if (getBackendType() === "tmux") {
-      backend = new TmuxBackend();
-    } else {
-      backend = usePtyHost() ? new HostBackend() : new PtyBackend();
-    }
+    backend =
+      getBackendType() === "tmux"
+        ? new TmuxBackend()
+        : createPtyBackend(usePtyHost());
   }
   return backend;
 }

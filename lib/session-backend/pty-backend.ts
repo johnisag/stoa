@@ -1,17 +1,10 @@
 /**
  * Pty implementation of SessionBackend.
  *
- * Satisfies the same data/status/input contract as the tmux backend, but
- * against the in-process pty registry instead of the tmux server. This is the
- * cross-platform backend (ConPTY on Windows).
- *
- * Note on create(): the interactive terminal path spawns agents directly via
- * the registry (driven by server.ts on attach), so create() here is used by the
- * headless callers (orchestration workers, summarize). Those pass a shell
- * command string, which we run through the platform shell. The bash banner
- * wrapper still assumes a POSIX shell — running orchestration on native Windows
- * is a documented follow-up (migration-plan.md Phase 4); the interactive path
- * does not depend on it.
+ * One backend, parameterized by a PtyTransport (LocalTransport for the
+ * in-process registry / Tier 1, HostTransport for the out-of-process daemon /
+ * Tier 2). All session ops delegate to the transport, so Tier 1 and Tier 2 share
+ * exactly one implementation of the SessionBackend contract.
  */
 
 import { isWindows, resolveBinary } from "../platform";
@@ -23,15 +16,14 @@ import type {
   SendOptions,
 } from "./types";
 import {
-  spawnSession,
-  killSession,
-  renameSession,
-  hasSession,
-  getSession,
-  listSessions,
-} from "./pty/registry";
+  type PtyTransport,
+  LocalTransport,
+  HostTransport,
+} from "./pty/transport";
 
 export class PtyBackend implements SessionBackend {
+  constructor(private readonly transport: PtyTransport) {}
+
   async create({
     name,
     cwd,
@@ -39,32 +31,28 @@ export class PtyBackend implements SessionBackend {
     binary,
     args,
   }: CreateOptions): Promise<void> {
-    // Preferred path: spawn the agent binary directly with argv — no bash
-    // banner, works on native Windows. Used when the caller supplies binary.
+    // Preferred: spawn the agent binary directly with argv (no bash banner).
     if (binary && binary.length > 0) {
-      spawnSession(name, { binary, args: args ?? [], cwd });
+      await this.transport.spawn(name, { binary, args: args ?? [], cwd });
       return;
     }
     // Fallback: run the (banner-wrapped) command string through a shell. The
-    // bash banner assumes POSIX; orchestration on native Windows should pass
+    // bash banner assumes POSIX; native-Windows orchestration should pass
     // binary/args above instead.
     if (isWindows) {
       const pwsh = resolveBinary("pwsh");
-      if (pwsh) {
-        spawnSession(name, {
-          binary: pwsh,
-          args: ["-NoLogo", "-Command", command],
-          cwd,
-        });
-      } else {
-        spawnSession(name, {
-          binary: process.env.ComSpec || "cmd.exe",
-          args: ["/c", command],
-          cwd,
-        });
-      }
+      await this.transport.spawn(
+        name,
+        pwsh
+          ? { binary: pwsh, args: ["-NoLogo", "-Command", command], cwd }
+          : {
+              binary: process.env.ComSpec || "cmd.exe",
+              args: ["/c", command],
+              cwd,
+            }
+      );
     } else {
-      spawnSession(name, {
+      await this.transport.spawn(name, {
         binary: process.env.SHELL || "/bin/bash",
         args: ["-c", command],
         cwd,
@@ -73,62 +61,45 @@ export class PtyBackend implements SessionBackend {
   }
 
   async kill(name: string): Promise<void> {
-    killSession(name);
+    await this.transport.kill(name);
   }
 
   async rename(oldName: string, newName: string): Promise<void> {
-    // Throw on a no-op (target exists / session missing) so callers don't commit
-    // a DB rename that doesn't match a live session.
-    if (!renameSession(oldName, newName)) {
-      throw new Error(`rename failed: ${oldName} -> ${newName}`);
-    }
+    await this.transport.rename(oldName, newName);
   }
 
   async exists(name: string): Promise<boolean> {
-    const session = getSession(name);
-    return !!session && session.alive;
+    return this.transport.exists(name);
   }
 
   async list(): Promise<string[]> {
-    return listSessions()
-      .filter((s) => s.alive)
-      .map((s) => s.key);
+    return this.transport.list();
   }
 
   async listWithActivity(): Promise<SessionActivity[]> {
-    return listSessions()
-      .filter((s) => s.alive)
-      .map((s) => ({
-        name: s.key,
-        // Epoch seconds, matching tmux's #{session_activity} granularity.
-        activity: Math.floor(s.lastActivity / 1000),
-      }));
+    return this.transport.listActivity();
   }
 
   async getPanePath(name: string): Promise<string | null> {
-    const session = getSession(name);
-    return session ? session.cwd : null;
+    return this.transport.panePath(name);
   }
 
-  async getEnv(name: string, varName: string): Promise<string | null> {
-    // A pty can't introspect its child's environment. Callers that need
-    // CLAUDE_SESSION_ID fall back to reading Claude's JSONL on disk.
-    const session = getSession(name);
-    return session?.meta[varName] ?? null;
+  async getEnv(_name: string, _varName: string): Promise<string | null> {
+    // A pty can't introspect its child's env; callers fall back to Claude's
+    // JSONL on disk.
+    return null;
   }
 
   async capture(name: string, opts?: CaptureOptions): Promise<string> {
-    const session = getSession(name);
-    if (!session) return "";
-    return session.capture(opts?.lines);
+    return this.transport.capture(name, opts?.lines);
   }
 
   async sendEnter(name: string): Promise<void> {
-    getSession(name)?.write("\r");
+    this.transport.write(name, "\r");
   }
 
   async sendKeysLiteral(name: string, text: string): Promise<void> {
-    getSession(name)?.write(text);
+    this.transport.write(name, text);
   }
 
   async sendKeysInterpreted(
@@ -136,7 +107,7 @@ export class PtyBackend implements SessionBackend {
     text: string,
     opts?: SendOptions
   ): Promise<void> {
-    getSession(name)?.write(text + (opts?.enter ? "\r" : ""));
+    this.transport.write(name, text + (opts?.enter ? "\r" : ""));
   }
 
   async pasteText(
@@ -144,11 +115,13 @@ export class PtyBackend implements SessionBackend {
     text: string,
     opts?: SendOptions
   ): Promise<void> {
-    const session = getSession(name);
-    if (!session) return;
-    // Bracketed paste so multi-line input isn't submitted line-by-line
-    // (what tmux load-buffer/paste-buffer effectively achieved).
-    session.write(`\x1b[200~${text}\x1b[201~`);
-    if (opts?.enter) session.write("\r");
+    // Bracketed paste so multi-line input isn't submitted line-by-line.
+    this.transport.write(name, `\x1b[200~${text}\x1b[201~`);
+    if (opts?.enter) this.transport.write(name, "\r");
   }
+}
+
+/** Build the right PtyBackend for the current mode. */
+export function createPtyBackend(useHost: boolean): PtyBackend {
+  return new PtyBackend(useHost ? new HostTransport() : new LocalTransport());
 }
