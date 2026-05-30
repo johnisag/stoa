@@ -149,17 +149,25 @@ export class ClaudeProcessManager {
     // Find claude binary path (resolves claude.cmd on Windows)
     const claudePath = resolveBinary("claude") || "claude";
 
-    const claudeProcess = spawn(claudePath, args, {
+    // On Windows a .cmd/.bat shim can't be spawned directly; route it through
+    // cmd.exe WITHOUT shell:true so Node still quotes each argv entry (the
+    // prompt may contain spaces/quotes/&|<>^ — shell:true would mangle/inject it).
+    let spawnFile = claudePath;
+    let spawnArgs = args;
+    if (isWindows && /\.(cmd|bat)$/i.test(claudePath)) {
+      spawnFile = process.env.ComSpec || "cmd.exe";
+      spawnArgs = ["/c", claudePath, ...args];
+    }
+
+    const claudeProcess = spawn(spawnFile, spawnArgs, {
       cwd,
-      // On Windows inherit the full process env and use shell:true so .cmd
-      // shims resolve; on POSIX prepend the Homebrew paths as before.
+      // On Windows inherit the full process env; on POSIX prepend Homebrew paths.
       env: isWindows
         ? process.env
         : {
             ...process.env,
             PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH}`,
           },
-      shell: isWindows,
       stdio: ["ignore", "pipe", "pipe"],
     });
 

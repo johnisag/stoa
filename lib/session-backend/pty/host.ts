@@ -44,12 +44,15 @@ const OUTPUT_BACKPRESSURE_CAP = 8 * 1024 * 1024; // 8 MB
 
 function send(conn: Conn, msg: HostMessage) {
   if (conn.socket.destroyed) return;
-  // Control replies/exits always go out; only shed high-volume output frames
-  // when the consumer is far behind (honor backpressure without unbounded RAM).
+  // If a client falls too far behind on the output stream, drop its socket
+  // rather than silently shedding frames (which would leave the client's screen
+  // permanently corrupted mid-ANSI). The client reconnects and repaints from a
+  // fresh serialize() snapshot — clean recovery instead of silent divergence.
   if (
     msg.t === "output" &&
     conn.socket.writableLength > OUTPUT_BACKPRESSURE_CAP
   ) {
+    conn.socket.destroy();
     return;
   }
   conn.socket.write(encode(msg));
@@ -130,8 +133,16 @@ function handleMessage(conn: Conn, msg: ClientMessage) {
       break;
 
     case "rename":
-      renameSession(msg.oldKey, msg.newKey);
-      send(conn, { t: "res", id: msg.id, ok: true });
+      if (renameSession(msg.oldKey, msg.newKey)) {
+        send(conn, { t: "res", id: msg.id, ok: true });
+      } else {
+        send(conn, {
+          t: "res",
+          id: msg.id,
+          ok: false,
+          error: `rename failed: ${msg.oldKey} -> ${msg.newKey}`,
+        });
+      }
       break;
 
     case "capture": {
@@ -212,6 +223,7 @@ let server: net.Server | null = null;
 const connections = new Set<net.Socket>();
 const IDLE_SHUTDOWN_MS = 5 * 60 * 1000;
 let lastBusyAt = Date.now();
+let idleTimer: NodeJS.Timeout | null = null;
 
 function checkIdle(): void {
   const busy = connections.size > 0 || listSessions().some((s) => s.alive);
@@ -267,7 +279,7 @@ export function startHost(): Promise<boolean> {
       srv.listen(address, () => {
         server = srv;
         // Periodically self-terminate when fully idle (no sessions, no clients).
-        const idleTimer = setInterval(checkIdle, 60_000);
+        idleTimer = setInterval(checkIdle, 60_000);
         idleTimer.unref?.();
         resolve(true);
       });
@@ -284,6 +296,10 @@ export function startHost(): Promise<boolean> {
 
 export function stopHost(): Promise<void> {
   return new Promise((resolve) => {
+    if (idleTimer) {
+      clearInterval(idleTimer);
+      idleTimer = null;
+    }
     if (!server) return resolve();
     const srv = server;
     server = null;

@@ -57,3 +57,12 @@ export function getSessionBackend(): SessionBackend {
   }
   return backend;
 }
+
+/**
+ * Drop the cached backend instance so the next getSessionBackend() re-resolves.
+ * Used by server.ts when the pty-host daemon probe fails and it flips to Tier 1,
+ * so even a backend cached before the flip is re-evaluated (no split brain).
+ */
+export function resetSessionBackend(): void {
+  backend = null;
+}

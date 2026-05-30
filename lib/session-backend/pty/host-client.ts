@@ -44,6 +44,7 @@ export interface AttachResult {
 
 const CONNECT_ATTEMPTS = 40;
 const CONNECT_RETRY_MS = 100;
+const REQUEST_TIMEOUT_MS = 10_000;
 
 export class HostClient {
   private socket: net.Socket | null = null;
@@ -106,6 +107,11 @@ export class HostClient {
     this.socket = s;
     const decode = createDecoder<HostMessage>((m) => this.route(m));
     s.on("data", decode);
+    // A late socket error (e.g. half-open pipe) must be handled or Node throws
+    // an uncaught exception and crashes the process. Treat it like a close.
+    s.on("error", () => {
+      if (this.socket === s) this.socket = null;
+    });
     s.on("close", () => {
       if (this.socket === s) this.socket = null;
       // Fail in-flight requests so request()'s retry can reconnect.
@@ -144,8 +150,16 @@ export class HostClient {
       this.connecting = null;
     }
 
-    // Validate the daemon is actually serving (not a half-open pipe).
-    await this.pingRaw();
+    // Validate the daemon is actually serving (not a half-open pipe). If the
+    // ping fails, tear down the socket so the NEXT call reconnects instead of
+    // treating this half-open socket as healthy (which would defeat the check).
+    try {
+      await this.pingRaw();
+    } catch (err) {
+      this.socket?.destroy();
+      this.socket = null;
+      throw err;
+    }
 
     // If we reconnected while holding live subscriptions, re-attach them so
     // output resumes and the screen repaints — a transient socket drop is then
@@ -204,9 +218,20 @@ export class HostClient {
         reject(new Error("not connected"));
         return;
       }
+      // Bound every request so a wedged daemon can't hang the caller forever.
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error("host request timeout"));
+      }, REQUEST_TIMEOUT_MS);
       this.pending.set(id, {
-        resolve: resolve as (v: unknown) => void,
-        reject,
+        resolve: (v) => {
+          clearTimeout(timer);
+          (resolve as (x: unknown) => void)(v);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
       });
       this.socket.write(encode(full));
     });

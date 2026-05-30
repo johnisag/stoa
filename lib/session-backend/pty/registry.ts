@@ -150,14 +150,17 @@ export function killSession(key: string): void {
   }
 }
 
-export function renameSession(oldKey: string, newKey: string): void {
+/** Returns true if the rename happened, false on a no-op (missing/collision). */
+export function renameSession(oldKey: string, newKey: string): boolean {
+  if (oldKey === newKey) return true;
   const session = sessions.get(oldKey);
-  if (!session || oldKey === newKey) return;
+  if (!session) return false;
   // Don't clobber an existing session under newKey.
-  if (sessions.has(newKey)) return;
+  if (sessions.has(newKey)) return false;
   sessions.delete(oldKey);
   session.key = newKey; // keep the label in sync (list/listWithActivity report it)
   sessions.set(newKey, session);
+  return true;
 }
 
 /** Resolve a leading "~"/path for callers that need the same expansion. */

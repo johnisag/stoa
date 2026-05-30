@@ -77,7 +77,11 @@ export class PtyBackend implements SessionBackend {
   }
 
   async rename(oldName: string, newName: string): Promise<void> {
-    renameSession(oldName, newName);
+    // Throw on a no-op (target exists / session missing) so callers don't commit
+    // a DB rename that doesn't match a live session.
+    if (!renameSession(oldName, newName)) {
+      throw new Error(`rename failed: ${oldName} -> ${newName}`);
+    }
   }
 
   async exists(name: string): Promise<boolean> {

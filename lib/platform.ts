@@ -103,18 +103,21 @@ export function resolveBinary(name: string): string | null {
  * Encode a working directory into Claude Code's on-disk project-dir name.
  *
  * Claude flattens the cwd into a single folder under ~/.claude/projects/ by
- * replacing path separators (and ":" on Windows) with "-". Verified on Windows:
+ * replacing path separators, ":" AND "." (and other non-word chars) with "-".
+ * Verified on disk:
  *   C:\my-projects\agent-os  ->  c--my-projects-agent-os
- * The previous code only replaced "/", so Windows paths never matched and
- * session-id/resume/summarize-from-JSONL silently failed.
+ *   a path segment like ".test" contributes an extra "-" (the dot).
+ * Earlier versions only replaced "/" (then "/:"), so any path containing a dot
+ * (e.g. C:\src\my.app, ~/.config) never matched and session-id/resume/summarize
+ * silently failed. findClaudeProjectDir() also scans case-insensitively, so a
+ * lowercased vs preserved-case drive letter still resolves.
  */
 export function claudeProjectDirName(cwd: string): string {
-  // Normalize separators, lowercase a leading drive letter (Windows), then
-  // replace every separator/colon with "-" (matches Claude's encoding).
   const normalized = cwd
     .replace(/\\/g, "/")
     .replace(/^([A-Za-z]):/, (_m, d: string) => `${d.toLowerCase()}:`);
-  return normalized.replace(/[/:]/g, "-");
+  // Replace separators, colon, and dot with "-" (Claude's encoding).
+  return normalized.replace(/[/:.]/g, "-");
 }
 
 /**

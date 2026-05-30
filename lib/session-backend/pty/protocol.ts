@@ -66,8 +66,16 @@ export function encode(msg: ClientMessage | HostMessage): string {
 }
 
 /**
+ * Largest single frame we'll buffer before assuming a peer is misbehaving (or
+ * malicious) and resetting — prevents unbounded memory from a stream that never
+ * sends a newline. One pty snapshot can be sizable, so keep this generous.
+ */
+const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
+/**
  * Stateful newline-delimited JSON decoder. Feed chunks; get back complete
- * messages. Tolerates messages split across chunks.
+ * messages. Tolerates messages split across chunks; drops a frame that grows
+ * past MAX_FRAME_BYTES without a delimiter.
  */
 export function createDecoder<T>(
   onMessage: (msg: T) => void
@@ -85,6 +93,10 @@ export function createDecoder<T>(
       } catch {
         // skip malformed line
       }
+    }
+    if (buffer.length > MAX_FRAME_BYTES) {
+      // No delimiter in an oversized buffer — discard to bound memory.
+      buffer = "";
     }
   };
 }

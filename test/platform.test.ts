@@ -20,6 +20,13 @@ describe("claudeProjectDirName", () => {
       "-Users-me-my-projects-agent-os"
     );
   });
+
+  it("replaces dots in path segments (the regression case)", () => {
+    expect(claudeProjectDirName("C:\\src\\my.app")).toBe("c--src-my-app");
+    expect(claudeProjectDirName("/home/me/.config/x")).toBe(
+      "-home-me--config-x"
+    );
+  });
 });
 
 describe("expandHome", () => {

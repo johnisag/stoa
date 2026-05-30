@@ -75,7 +75,7 @@ export class HostBackend implements SessionBackend {
     return this.client.panePath(name);
   }
 
-  async getEnv(): Promise<string | null> {
+  async getEnv(_name: string, _varName: string): Promise<string | null> {
     // Same as the pty backend: a pty can't read its child's env; callers fall
     // back to Claude's JSONL on disk.
     return null;

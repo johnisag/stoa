@@ -3,7 +3,11 @@ import { parse } from "url";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import * as pty from "node-pty";
-import { getBackendType, usePtyHost } from "./lib/session-backend";
+import {
+  getBackendType,
+  usePtyHost,
+  resetSessionBackend,
+} from "./lib/session-backend";
 import {
   getSession,
   spawnSession,
@@ -344,6 +348,7 @@ app.prepare().then(() => {
         );
       } catch (err) {
         process.env.AGENT_OS_PTY_HOST = "0";
+        resetSessionBackend(); // re-resolve to Tier 1 even if already cached
         console.error(
           "> pty-host daemon unreachable; using in-process sessions (Tier 1):",
           err instanceof Error ? err.message : err
