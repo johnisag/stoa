@@ -87,7 +87,14 @@ export function useTerminalConnection({
   }, []);
 
   const attachSession = useCallback((payload: AttachPayload) => {
+    const prev = attachPayloadRef.current;
     attachPayloadRef.current = payload;
+    // Switching to a DIFFERENT session in this same terminal: clear the screen
+    // and scrollback so the incoming session's snapshot repaints cleanly rather
+    // than layering on top of the previous session's output.
+    if (prev?.key !== payload.key) {
+      xtermRef.current?.reset();
+    }
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({
