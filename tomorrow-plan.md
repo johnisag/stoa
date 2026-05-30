@@ -103,4 +103,9 @@ Pick a couple that now fit cleanly on the native backend:
 - [ ] Update `migration-plan.md` status (Phase 6 done, Tier-2 default).
 - [ ] README: native Windows section is in; add Hermes + verify install paths.
 - [ ] Decide PR-to-upstream vs standalone fork (see discussion) and act on it.
+- [ ] **Fork identity (if going standalone):** decide on a project name, then update
+      `LICENSE` (currently MIT, "Saad Naveed"), `package.json` (`name`
+      `@saadnvd1/agent-os`, `author`, `repository`, `bugs`, `homepage`), README
+      title/badges, and the install/update URLs. Keep the upstream copyright line
+      in LICENSE per MIT terms; add your own. — "we'll see" / TBD.
 - [ ] Tag a release once Windows runtime verification passes.
