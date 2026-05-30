@@ -527,7 +527,7 @@ export const ompProvider: AgentProvider = {
 
     if (options.initialPrompt?.trim() && def.initialPromptFlag !== undefined) {
       const prompt = options.initialPrompt.trim();
-      const escapedPrompt = prompt.replace(/'/g, "'\\'");
+      const escapedPrompt = prompt.replace(/'/g, "'\\''");
       flags.push(`'${escapedPrompt}'`);
     }
 

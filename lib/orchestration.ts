@@ -18,6 +18,7 @@ import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
 import { getSessionBackend } from "./session-backend";
+import { expandHome } from "./platform";
 
 const execFileAsync = promisify(execFile);
 
@@ -94,7 +95,7 @@ export async function spawnWorker(
   const model = resolveModelForAgent(agentType, options.model);
 
   // Expand ~ to home directory
-  const workingDirectory = rawWorkingDir.replace(/^~/, process.env.HOME || "");
+  const workingDirectory = expandHome(rawWorkingDir);
 
   const sessionId = randomUUID();
   const sessionName = taskToSessionName(task);

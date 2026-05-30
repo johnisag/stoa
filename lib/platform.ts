@@ -11,6 +11,7 @@
 import os from "os";
 import path from "path";
 import net from "net";
+import { existsSync, readdirSync } from "fs";
 import { execFileSync } from "child_process";
 
 export const isWindows = process.platform === "win32";
@@ -93,6 +94,44 @@ export function resolveBinary(name: string): string | null {
       return executable || lines[0];
     }
     return lines[0];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Encode a working directory into Claude Code's on-disk project-dir name.
+ *
+ * Claude flattens the cwd into a single folder under ~/.claude/projects/ by
+ * replacing path separators (and ":" on Windows) with "-". Verified on Windows:
+ *   C:\my-projects\agent-os  ->  c--my-projects-agent-os
+ * The previous code only replaced "/", so Windows paths never matched and
+ * session-id/resume/summarize-from-JSONL silently failed.
+ */
+export function claudeProjectDirName(cwd: string): string {
+  // Normalize separators, lowercase a leading drive letter (Windows), then
+  // replace every separator/colon with "-" (matches Claude's encoding).
+  const normalized = cwd
+    .replace(/\\/g, "/")
+    .replace(/^([A-Za-z]):/, (_m, d: string) => `${d.toLowerCase()}:`);
+  return normalized.replace(/[/:]/g, "-");
+}
+
+/**
+ * Resolve the actual Claude project directory for a cwd, returning its absolute
+ * path or null. Tries the encoded name, then falls back to a case-insensitive
+ * scan of ~/.claude/projects/ so minor casing/encoding differences still match.
+ */
+export function findClaudeProjectDir(cwd: string): string | null {
+  const base = path.join(homeDir(), ".claude", "projects");
+  const encoded = claudeProjectDirName(cwd);
+  const exact = path.join(base, encoded);
+  if (existsSync(exact)) return exact;
+  try {
+    const match = readdirSync(base).find(
+      (e) => e.toLowerCase() === encoded.toLowerCase()
+    );
+    return match ? path.join(base, match) : null;
   } catch {
     return null;
   }

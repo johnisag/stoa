@@ -3,8 +3,17 @@ import { spawn } from "child_process";
 import { getDb, queries, type Session } from "@/lib/db";
 import { randomUUID } from "crypto";
 import { readFileSync, existsSync } from "fs";
+import { join } from "path";
 import { homedir } from "os";
 import { getSessionBackend } from "@/lib/session-backend";
+import {
+  claudeProjectDirName,
+  findClaudeProjectDir,
+  expandHome,
+  homeDir,
+  resolveBinary,
+  isWindows,
+} from "@/lib/platform";
 
 const backend = getSessionBackend();
 
@@ -14,9 +23,9 @@ async function getClaudeSessionId(tmuxSession: string): Promise<string | null> {
   return sessionId && sessionId !== "null" ? sessionId : null;
 }
 
-// Encode path for Claude's project directory format (/ becomes -)
+// Encode path for Claude's project directory format (cross-platform).
 function encodeProjectPath(cwd: string): string {
-  return cwd.replace(/\//g, "-");
+  return claudeProjectDirName(cwd);
 }
 
 // Read and parse Claude session JSONL file
@@ -24,8 +33,10 @@ function readClaudeSessionHistory(
   cwd: string,
   claudeSessionId: string
 ): string | null {
-  const projectPath = encodeProjectPath(cwd);
-  const jsonlPath = `${homedir()}/.claude/projects/${projectPath}/${claudeSessionId}.jsonl`;
+  const projectDir =
+    findClaudeProjectDir(cwd) ||
+    join(homedir(), ".claude", "projects", encodeProjectPath(cwd));
+  const jsonlPath = join(projectDir, `${claudeSessionId}.jsonl`);
 
   if (!existsSync(jsonlPath)) {
     console.log(`[summarize] JSONL not found: ${jsonlPath}`);
@@ -87,8 +98,9 @@ async function generateSummary(conversation: string): Promise<string> {
   const prompt = `Summarize this Claude Code conversation in under 300 words. Focus on: what was built, key files changed, current state, and any pending work. Be specific.`;
 
   return new Promise((resolve, reject) => {
-    const claude = spawn("claude", ["-p", prompt], {
+    const claude = spawn(resolveBinary("claude") || "claude", ["-p", prompt], {
       stdio: ["pipe", "pipe", "pipe"],
+      shell: isWindows,
     });
 
     let stdout = "";
@@ -173,8 +185,7 @@ export async function POST(
     // Get actual working directory from tmux
     const cwd =
       (await getTmuxCwd(tmuxSessionName)) || session.working_directory;
-    const cwdExpanded =
-      cwd?.replace(/^~/, process.env.HOME || "~") || process.env.HOME || "~";
+    const cwdExpanded = cwd ? expandHome(cwd) : homeDir();
 
     // Try to get full conversation from Claude's JSONL (only for Claude sessions)
     let conversation: string | null = null;

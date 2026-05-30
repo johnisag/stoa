@@ -103,11 +103,10 @@ export function FileEditDialog({
   // For multi-repo files, use repoPath; otherwise use workingDirectory
   const baseDir =
     "repoPath" in file && file.repoPath ? file.repoPath : workingDirectory;
-  // Expand ~ to home directory for display
-  const expandedBaseDir = baseDir.startsWith("~")
-    ? baseDir.replace("~", process.env.HOME || "/Users")
-    : baseDir;
-  const filePath = `${expandedBaseDir}/${file.path}`;
+  // Do not expand ~ on the client (process.env.HOME is undefined here); the
+  // server (/api/files/content) resolves ~ via expandHome. Join separator-
+  // agnostically so a "/"-only path is unchanged.
+  const filePath = `${baseDir.replace(/[\\/]+$/, "")}/${file.path.replace(/^[\\/]+/, "")}`;
   const fileName = baseName(file.path);
   const repoName = "repoName" in file ? file.repoName : null;
   const hasChanges = modifiedContent !== initialModified;

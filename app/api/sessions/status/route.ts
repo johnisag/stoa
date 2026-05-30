@@ -11,6 +11,7 @@ import {
 } from "@/lib/providers/registry";
 import { getDb } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
+import { claudeProjectDirName, findClaudeProjectDir } from "@/lib/platform";
 
 const backend = getSessionBackend();
 
@@ -45,10 +46,14 @@ async function getClaudeSessionIdFromEnv(
 function getClaudeSessionIdFromFiles(projectPath: string): string | null {
   const home = os.homedir();
   const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
-  const projectDirName = projectPath.replace(/\//g, "-");
-  const projectDir = path.join(claudeDir, "projects", projectDirName);
+  // Derive the on-disk project dir using the shared, cross-platform encoder.
+  // Honor CLAUDE_CONFIG_DIR via the encoded name; otherwise resolve the actual
+  // dir (tolerant of casing) under the default ~/.claude/projects.
+  const projectDir = process.env.CLAUDE_CONFIG_DIR
+    ? path.join(claudeDir, "projects", claudeProjectDirName(projectPath))
+    : findClaudeProjectDir(projectPath);
 
-  if (!fs.existsSync(projectDir)) {
+  if (!projectDir || !fs.existsSync(projectDir)) {
     return null;
   }
 

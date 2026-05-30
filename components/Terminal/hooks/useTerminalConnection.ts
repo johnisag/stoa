@@ -196,6 +196,10 @@ export function useTerminalConnection({
             // server re-subscribes this socket and repaints scrollback.
             const payload = attachPayloadRef.current;
             if (payload && wsRef.current?.readyState === WebSocket.OPEN) {
+              // Reset before re-attaching so the incoming snapshot repaints
+              // cleanly. Without this, a same-key socket reconnect layers a
+              // fresh snapshot on top of existing content (duplicated scrollback).
+              xtermRef.current?.reset();
               wsRef.current.send(
                 JSON.stringify({
                   type: "attach",

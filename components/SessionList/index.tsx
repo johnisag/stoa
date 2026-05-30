@@ -21,6 +21,7 @@ import { Plus, FolderPlus, Loader2, AlertCircle } from "lucide-react";
 import type { Session } from "@/lib/db";
 import type { ProjectWithRepositories } from "@/lib/projects";
 import { useViewport } from "@/hooks/useViewport";
+import { baseName } from "@/lib/path-display";
 
 // Data hooks
 import { useSessionsQuery } from "@/data/sessions";
@@ -332,8 +333,7 @@ export function SessionList({
           onClose={() => setShowFolderPicker(false)}
           onSelect={(path) => {
             // Derive project name from folder path
-            const parts = path.split("/").filter(Boolean);
-            const name = parts[parts.length - 1] || "project";
+            const name = baseName(path) || "project";
 
             createProject.mutate(
               {

@@ -171,10 +171,14 @@ export const Pane = memo(function Pane({
   }, [focusPane, paneId]);
 
   const handleDetach = useCallback(() => {
-    if (terminalRef) {
-      terminalRef.sendInput("\x02d"); // Ctrl+B d to detach
-    }
-    detachSession(paneId);
+    void getActiveBackend().then((backend) => {
+      // tmux: send Ctrl+B d to detach the live session. Native pty is
+      // attach-driven, so injecting that keystroke would corrupt the session.
+      if (backend === "tmux" && terminalRef) {
+        terminalRef.sendInput("\x02d"); // Ctrl+B d to detach
+      }
+      detachSession(paneId);
+    });
   }, [detachSession, paneId, terminalRef]);
 
   // Create ref callback for a specific tab

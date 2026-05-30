@@ -203,7 +203,12 @@ function HomeContent() {
       const flagsStr = flags.join(" ");
 
       const agentCmd = `${provider.command} ${flagsStr}`;
-      const command = await getInitScriptCommand(agentCmd);
+      // The init-script POST writes a bash .sh banner used only by the tmux
+      // backend's `command` field. The native pty backend spawns via
+      // binary/args and ignores `command`, so skip the round-trip there.
+      const backend = await getActiveBackend();
+      const command =
+        backend === "tmux" ? await getInitScriptCommand(agentCmd) : agentCmd;
 
       // Structured argv for the native pty backend (no shell quoting).
       const { binary, args } = buildAgentArgs(

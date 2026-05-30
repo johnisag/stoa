@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchCode, formatSearchResults } from "@/lib/code-search";
+import { expandHome } from "@/lib/platform";
 
 export async function GET(request: NextRequest) {
   try {
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const expandedPath = path.replace(/^~/, process.env.HOME || "");
+    const expandedPath = expandHome(path);
 
     const rawMatches = searchCode(expandedPath, query, {
       maxResults,
