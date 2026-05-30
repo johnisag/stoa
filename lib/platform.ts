@@ -73,8 +73,26 @@ export function resolveBinary(name: string): string | null {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    const first = out.split(/\r?\n/).find((l) => l.trim().length > 0);
-    return first ? first.trim() : null;
+    const lines = out
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    if (lines.length === 0) return null;
+    if (isWindows) {
+      // `where` lists every match. npm-installed CLIs ship BOTH an extensionless
+      // shell script (for Git Bash) and a .cmd shim — and the shell script often
+      // sorts first. Windows/ConPTY can't spawn the extensionless script, so
+      // prefer a PATHEXT-executable variant (.cmd/.exe/.bat/.com).
+      const exts = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
+        .split(";")
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean);
+      const executable = lines.find((l) =>
+        exts.some((e) => l.toLowerCase().endsWith(e))
+      );
+      return executable || lines[0];
+    }
+    return lines[0];
   } catch {
     return null;
   }
