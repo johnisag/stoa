@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { baseName } from "@/lib/path-display";
 import { Terminal, GitBranch, Clock, Check } from "lucide-react";
 import type { Session } from "@/lib/db";
 import { CodeSearchResults } from "@/components/CodeSearch/CodeSearchResults";
@@ -235,7 +236,9 @@ export function QuickSwitcher({
                       </div>
                       <div className="text-muted-foreground flex items-center gap-2 text-xs">
                         <span className="truncate">
-                          {session.working_directory?.split("/").pop() || "~"}
+                          {session.working_directory
+                            ? baseName(session.working_directory)
+                            : "~"}
                         </span>
                         <span>•</span>
                         <span className="capitalize">

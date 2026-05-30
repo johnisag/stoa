@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Terminal as TerminalIcon, Clock, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { baseName } from "@/lib/path-display";
 import type { Session } from "@/lib/db";
 
 interface SessionPreviewPopoverProps {
@@ -198,7 +199,7 @@ export function SessionPreviewPopover({
             </span>
             {session.working_directory && (
               <span className="max-w-[250px] truncate">
-                {session.working_directory.split("/").pop()}
+                {baseName(session.working_directory)}
               </span>
             )}
           </div>

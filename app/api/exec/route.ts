@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { isWindows, defaultInteractiveShell } from "@/lib/platform";
 
 const execAsync = promisify(exec);
 
@@ -24,12 +25,17 @@ export async function POST(request: NextRequest) {
     try {
       const { stdout, stderr } = await execAsync(command, {
         timeout: TIMEOUT,
-        shell: "/bin/zsh",
-        env: {
-          ...process.env,
-          PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH}`,
-          HOME: process.env.HOME,
-        },
+        // On Windows use the platform default shell; on POSIX keep zsh.
+        shell: isWindows ? defaultInteractiveShell() : "/bin/zsh",
+        // On Windows inherit the full process env (don't strip PATH/SystemRoot);
+        // on POSIX prepend the Homebrew paths as before.
+        env: isWindows
+          ? process.env
+          : {
+              ...process.env,
+              PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH}`,
+              HOME: process.env.HOME,
+            },
       });
 
       const duration = Date.now() - startTime;

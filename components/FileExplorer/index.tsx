@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { baseName } from "@/lib/path-display";
 import type { FileNode } from "@/lib/file-utils";
 import type { OpenFile } from "@/hooks/useFileEditor";
 
@@ -333,7 +334,7 @@ function DesktopFileExplorer({
       {/* Unsaved changes dialog */}
       <UnsavedChangesDialog
         open={!!pendingClose}
-        fileName={pendingClose?.split("/").pop() || ""}
+        fileName={pendingClose ? baseName(pendingClose) : ""}
         onCancel={onCancelClose}
         onDiscard={onConfirmClose}
         onSave={onSaveAndClose}
@@ -423,7 +424,7 @@ function MobileFileExplorer({
         {/* Unsaved changes dialog */}
         <UnsavedChangesDialog
           open={!!pendingClose}
-          fileName={pendingClose?.split("/").pop() || ""}
+          fileName={pendingClose ? baseName(pendingClose) : ""}
           onCancel={onCancelClose}
           onDiscard={onConfirmClose}
           onSave={onSaveAndClose}

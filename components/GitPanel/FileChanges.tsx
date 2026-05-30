@@ -19,6 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { baseName, dirName } from "@/lib/path-display";
 import type { GitFile } from "@/lib/git-status";
 import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
 
@@ -220,10 +221,8 @@ function FileItem({
 
   const statusIcon = getStatusIcon(file.status);
   const statusColor = getStatusColor(file.status);
-  const fileName = file.path.split("/").pop() || file.path;
-  const filePath = file.path.includes("/")
-    ? file.path.slice(0, file.path.lastIndexOf("/"))
-    : "";
+  const fileName = baseName(file.path);
+  const filePath = /[\\/]/.test(file.path) ? dirName(file.path) : "";
 
   return (
     <div

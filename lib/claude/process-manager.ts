@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from "child_process";
 import { WebSocket } from "ws";
 import { StreamParser } from "./stream-parser";
 import { getDb, queries, type Session } from "../db";
+import { isWindows, homeDir, expandHome, resolveBinary } from "../platform";
 import type { ClaudeSessionOptions, ClientEvent } from "./types";
 
 interface ManagedSession {
@@ -125,9 +126,10 @@ export class ClaudeProcessManager {
     // Spawn Claude process
     const cwd =
       options.workingDirectory ||
-      dbSession?.working_directory?.replace("~", process.env.HOME || "") ||
-      process.env.HOME ||
-      "/";
+      (dbSession?.working_directory
+        ? expandHome(dbSession.working_directory)
+        : undefined) ||
+      homeDir();
 
     console.log(`Spawning Claude for session ${sessionId}:`, args.join(" "));
     console.log(`CWD: ${cwd}`);
@@ -144,16 +146,20 @@ export class ClaudeProcessManager {
       this.handleEvent(sessionId, event);
     });
 
-    // Find claude binary path
-    const claudePath =
-      process.env.HOME + "/.nvm/versions/node/v20.19.0/bin/claude";
+    // Find claude binary path (resolves claude.cmd on Windows)
+    const claudePath = resolveBinary("claude") || "claude";
 
     const claudeProcess = spawn(claudePath, args, {
       cwd,
-      env: {
-        ...process.env,
-        PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH}`,
-      },
+      // On Windows inherit the full process env and use shell:true so .cmd
+      // shims resolve; on POSIX prepend the Homebrew paths as before.
+      env: isWindows
+        ? process.env
+        : {
+            ...process.env,
+            PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH}`,
+          },
+      shell: isWindows,
       stdio: ["ignore", "pipe", "pipe"],
     });
 

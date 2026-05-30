@@ -40,6 +40,8 @@ export function FolderPicker({
     navigateTo,
     navigateUp,
     navigateHome,
+    pathForSegment,
+    separator,
   } = useDirectoryBrowser({ initialPath, filter: DIRS_ONLY });
 
   // Git repo check for current directory
@@ -113,13 +115,17 @@ export function FolderPicker({
           <ChevronLeft className="h-4 w-4" />
         </Button>
         <div className="text-muted-foreground flex items-center gap-0.5 overflow-x-auto text-xs">
-          <span>/</span>
+          <button
+            onClick={() => navigateTo(separator === "\\" ? "" : "/")}
+            className="hover:text-foreground shrink-0 transition-colors"
+            title="Top level"
+          >
+            {separator === "\\" ? "Drives" : "/"}
+          </button>
           {pathSegments.map((segment, i) => (
             <button
               key={i}
-              onClick={() =>
-                navigateTo("/" + pathSegments.slice(0, i + 1).join("/"))
-              }
+              onClick={() => navigateTo(pathForSegment(i))}
               className="hover:text-foreground flex shrink-0 items-center transition-colors"
             >
               <span className="max-w-[100px] truncate">{segment}</span>
