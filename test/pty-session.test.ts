@@ -44,6 +44,8 @@ describe("pty registry / PtySession", () => {
     expect(session.getRawBuffer()).toContain(marker);
     // ...and the live stream that was fanned out to subscribers.
     expect(streamed).toContain(marker);
+    // serialize() repaints the current screen (used for reconnect/switch).
+    expect(session.serialize()).toContain(marker);
   });
 
   it("reaps a session from the registry when its process exits", async () => {
@@ -80,6 +82,8 @@ describe("pty registry / PtySession", () => {
     renameSession("test-old", "test-new");
     expect(hasSession("test-old")).toBe(false);
     expect(getSession("test-new")).toBe(s);
+    // The session's own key label is kept in sync (list/listWithActivity use it).
+    expect(s.key).toBe("test-new");
     killSession("test-new");
   });
 

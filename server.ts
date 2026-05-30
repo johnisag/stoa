@@ -198,9 +198,11 @@ app.prepare().then(() => {
         return;
       }
 
-      // Repaint history first, then stream live output. No await between the
-      // snapshot read and listener registration, so no bytes are dropped/dup'd.
-      const snapshot = session.getRawBuffer();
+      // Repaint the current screen first, then stream live output. No await
+      // between the snapshot and listener registration, so no bytes are
+      // dropped/dup'd. serialize() reconstructs the rendered screen (like tmux
+      // redraw on attach) rather than replaying raw byte history.
+      const snapshot = session.serialize();
       if (snapshot) send({ type: "output", data: snapshot });
       offOutput = session.onOutput((data) => send({ type: "output", data }));
       offExit = session.onExit(({ exitCode }) =>

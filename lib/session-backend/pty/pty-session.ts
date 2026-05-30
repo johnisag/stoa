@@ -18,6 +18,7 @@
 
 import type { IPty } from "node-pty";
 import { Terminal } from "@xterm/headless";
+import { SerializeAddon } from "@xterm/addon-serialize";
 
 /** Max raw bytes retained for client replay (repaint on connect/reconnect). */
 const RAW_BUFFER_LIMIT = 256 * 1024;
@@ -38,10 +39,12 @@ export interface PtySessionInit {
 }
 
 export class PtySession {
-  readonly key: string;
+  // Mutable so a registry rename keeps it in sync (used by list/listWithActivity).
+  key: string;
   readonly cwd: string;
   private readonly pty: IPty;
   private readonly term: Terminal;
+  private readonly serializer: SerializeAddon;
   private rawBuffer = "";
   private outputListeners = new Set<OutputListener>();
   private exitListeners = new Set<ExitListener>();
@@ -62,6 +65,8 @@ export class PtySession {
       scrollback: HEADLESS_SCROLLBACK,
       allowProposedApi: true,
     });
+    this.serializer = new SerializeAddon();
+    this.term.loadAddon(this.serializer);
 
     this.pty.onData((data: string) => {
       this._lastActivity = Date.now();
@@ -92,13 +97,37 @@ export class PtySession {
     return this._lastActivity;
   }
 
+  get cols(): number {
+    return this.term.cols;
+  }
+
+  get rows(): number {
+    return this.term.rows;
+  }
+
   get exitCode(): number | null {
     return this._exitCode;
   }
 
-  /** Raw byte history for repainting a (re)connecting client. */
+  /** Raw byte history (legacy / fallback). Prefer serialize() for repaint. */
   getRawBuffer(): string {
     return this.rawBuffer;
+  }
+
+  /**
+   * A clean repaint of the CURRENT screen + scrollback, as escape sequences,
+   * produced from the rendered VT state (like tmux redrawing on attach). This
+   * reconstructs the exact current screen for a (re)connecting client without
+   * replaying the entire raw byte history — avoiding mid-sequence truncation
+   * and stale/duplicated frames from a long-running TUI.
+   */
+  serialize(): string {
+    try {
+      return this.serializer.serialize();
+    } catch {
+      // Fall back to raw history if serialization ever fails.
+      return this.rawBuffer;
+    }
   }
 
   /** Write input to the process. */

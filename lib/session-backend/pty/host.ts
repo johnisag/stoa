@@ -32,8 +32,11 @@ import {
 
 interface Conn {
   socket: net.Socket;
-  /** Keys this connection is attached to, with their output/exit unsubscribers. */
-  attached: Map<string, { offOutput: () => void; offExit: () => void }>;
+  /** Keys this connection is attached to: output/exit unsubscribers + sizing-client id. */
+  attached: Map<
+    string,
+    { offOutput: () => void; offExit: () => void; clientId: number }
+  >;
 }
 
 function send(conn: Conn, msg: HostMessage) {
@@ -77,14 +80,16 @@ function handleMessage(conn: Conn, msg: ClientMessage) {
       }
       // Detach any prior subscription for this key on this connection.
       detachKey(conn, msg.key);
-      const snapshot = session.getRawBuffer();
+      const snapshot = session.serialize();
       const offOutput = session.onOutput((data) =>
         send(conn, { t: "output", key: msg.key, data })
       );
       const offExit = session.onExit(({ exitCode }) =>
         send(conn, { t: "exit", key: msg.key, code: exitCode })
       );
-      conn.attached.set(msg.key, { offOutput, offExit });
+      // Register this connection as a sizing client (pty -> smallest viewer).
+      const clientId = session.addClient(session.cols, session.rows);
+      conn.attached.set(msg.key, { offOutput, offExit, clientId });
       // The snapshot is the response value; the client repaints it first.
       send(conn, { t: "res", id: msg.id, ok: true, value: { snapshot } });
       break;
@@ -98,9 +103,14 @@ function handleMessage(conn: Conn, msg: ClientMessage) {
       getSession(msg.key)?.write(msg.data);
       break;
 
-    case "resize":
-      getSession(msg.key)?.resize(msg.cols, msg.rows);
+    case "resize": {
+      const sub = conn.attached.get(msg.key);
+      const session = getSession(msg.key);
+      if (sub && session)
+        session.resizeClient(sub.clientId, msg.cols, msg.rows);
+      else session?.resize(msg.cols, msg.rows);
       break;
+    }
 
     case "kill":
       killSession(msg.key);
@@ -177,6 +187,7 @@ function detachKey(conn: Conn, key: string) {
   if (sub) {
     sub.offOutput();
     sub.offExit();
+    getSession(key)?.removeClient(sub.clientId);
     conn.attached.delete(key);
   }
 }

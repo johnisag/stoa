@@ -107,9 +107,15 @@ export function spawnSession(key: string, spec: SpawnSpec): PtySession {
   });
 
   const session = new PtySession({ key, pty: proc, cwd, cols, rows });
-  // Reap from the registry when the process exits so stale keys don't linger.
+  // Reap from the registry when the process exits. Delete by identity (not by
+  // the original key) so a renamed session is still removed from its new key.
   session.onExit(() => {
-    if (sessions.get(key) === session) sessions.delete(key);
+    for (const [k, v] of sessions) {
+      if (v === session) {
+        sessions.delete(k);
+        break;
+      }
+    }
   });
   sessions.set(key, session);
   return session;
@@ -147,9 +153,10 @@ export function killSession(key: string): void {
 export function renameSession(oldKey: string, newKey: string): void {
   const session = sessions.get(oldKey);
   if (!session || oldKey === newKey) return;
-  // PtySession.key is readonly metadata; the registry key is what matters for
-  // lookup. Move the entry; the stale .key label is cosmetic.
+  // Don't clobber an existing session under newKey.
+  if (sessions.has(newKey)) return;
   sessions.delete(oldKey);
+  session.key = newKey; // keep the label in sync (list/listWithActivity report it)
   sessions.set(newKey, session);
 }
 
