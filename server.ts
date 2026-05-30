@@ -3,12 +3,13 @@ import { parse } from "url";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import * as pty from "node-pty";
-import { getBackendType } from "./lib/session-backend";
+import { getBackendType, usePtyHost } from "./lib/session-backend";
 import {
   getSession,
   spawnSession,
   spawnShellSession,
 } from "./lib/session-backend/pty/registry";
+import { getHostClient } from "./lib/session-backend/pty/host-client";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
@@ -55,7 +56,11 @@ app.prepare().then(() => {
   //    registry; the session survives disconnects (native, cross-platform).
   terminalWss.on("connection", (ws: WebSocket) => {
     if (getBackendType() === "pty") {
-      handlePtyConnection(ws);
+      if (usePtyHost()) {
+        handlePtyHostConnection(ws);
+      } else {
+        handlePtyConnection(ws);
+      }
     } else {
       handleTmuxConnection(ws);
     }
@@ -226,6 +231,84 @@ app.prepare().then(() => {
     ws.on("error", (err) => {
       console.error("WebSocket error:", err);
       detach();
+    });
+  }
+
+  // ── pty host mode (Tier 2): subscribe via the out-of-process daemon ──
+  function handlePtyHostConnection(ws: WebSocket) {
+    const client = getHostClient();
+    let currentKey: string | null = null;
+    let detach: (() => void) | null = null;
+    let lastSize = { cols: 80, rows: 24 };
+
+    const send = (obj: unknown) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    };
+
+    const attach = async (
+      key: string,
+      spawn?: { binary?: string; args?: string[]; cwd?: string }
+    ) => {
+      detach?.();
+      detach = null;
+      currentKey = key;
+      try {
+        // Create-if-missing on the daemon (idempotent for a live session).
+        if (spawn) {
+          const cwd = spawn.cwd || process.env.HOME || ".";
+          if (spawn.binary && spawn.binary.length > 0) {
+            await client.spawn(key, {
+              binary: spawn.binary,
+              args: spawn.args ?? [],
+              cwd,
+              cols: lastSize.cols,
+              rows: lastSize.rows,
+            });
+          } else {
+            await client.spawnShell(key, cwd, lastSize.cols, lastSize.rows);
+          }
+        }
+        const { snapshot, detach: d } = await client.attach(
+          key,
+          (data) => send({ type: "output", data }),
+          (code) => send({ type: "exit", code })
+        );
+        detach = d;
+        if (snapshot) send({ type: "output", data: snapshot });
+        client.resize(key, lastSize.cols, lastSize.rows);
+      } catch (err) {
+        console.error("pty-host attach failed:", err);
+        send({ type: "error", message: "Failed to attach session" });
+      }
+    };
+
+    ws.on("message", (message: Buffer) => {
+      try {
+        const msg = JSON.parse(message.toString());
+        switch (msg.type) {
+          case "attach":
+            void attach(msg.key, msg.spawn);
+            break;
+          case "input":
+            if (currentKey) client.input(currentKey, msg.data);
+            break;
+          case "command":
+            if (currentKey) client.input(currentKey, msg.data + "\r");
+            break;
+          case "resize":
+            lastSize = { cols: msg.cols, rows: msg.rows };
+            if (currentKey) client.resize(currentKey, msg.cols, msg.rows);
+            break;
+        }
+      } catch (err) {
+        console.error("Error parsing message:", err);
+      }
+    });
+
+    ws.on("close", () => detach?.());
+    ws.on("error", (err) => {
+      console.error("WebSocket error:", err);
+      detach?.();
     });
   }
 

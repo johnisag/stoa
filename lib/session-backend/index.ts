@@ -13,6 +13,7 @@ import { isWindows } from "../platform";
 import type { SessionBackend } from "./types";
 import { TmuxBackend } from "./tmux-backend";
 import { PtyBackend } from "./pty-backend";
+import { HostBackend } from "./pty/host-backend";
 
 export type { SessionBackend, SessionActivity } from "./types";
 
@@ -32,9 +33,29 @@ export function getBackendType(): BackendType {
   return cachedType;
 }
 
+/**
+ * Tier 2 (opt-in): when AGENT_OS_PTY_HOST is truthy and the pty backend is
+ * active, route through the out-of-process pty-host daemon so sessions survive
+ * web-server restarts. Default off — the in-process registry (Tier 1) is used.
+ */
+export function usePtyHost(): boolean {
+  const flag = process.env.AGENT_OS_PTY_HOST;
+  return (
+    getBackendType() === "pty" &&
+    flag != null &&
+    flag !== "" &&
+    flag !== "0" &&
+    flag.toLowerCase() !== "false"
+  );
+}
+
 export function getSessionBackend(): SessionBackend {
   if (!backend) {
-    backend = getBackendType() === "pty" ? new PtyBackend() : new TmuxBackend();
+    if (getBackendType() === "tmux") {
+      backend = new TmuxBackend();
+    } else {
+      backend = usePtyHost() ? new HostBackend() : new PtyBackend();
+    }
   }
   return backend;
 }

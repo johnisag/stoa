@@ -40,6 +40,28 @@ Do **not** let the hard 5% (Tier 2) block shipping the valuable 95% (Tier 1).
 
 ---
 
+## Implementation Status (2026-05-30)
+
+All phases implemented on branch `feat/windows-native-migration`; `tsc`, `next build`, and `npm test` (15 tests) are green.
+
+- **Phase 0 — Foundations:** ✅ `lib/platform.ts`, cross-env, bundled ripgrep, Node CLI, postinstall.
+- **Phase 1 — SessionBackend abstraction:** ✅ all tmux calls behind one interface (`lib/session-backend`).
+- **Phase 2 — Native pty backend (Tier 1):** ✅ `PtySession` (node-pty + `@xterm/headless` + ring buffer), registry, `server.ts` subscribe/replay/fan-out, client attach protocol. Builds + headless smoke + dev runtime verified. ⚠️ Interactive browser flow still needs hands-on verification on Windows.
+- **Phase 3 — Cross-platform hardening:** ✅ ports/search/git/pr/projects/dev-servers/env-setup/file-APIs, exec route, `claude/process-manager`, file-picker drive roots, basename display, `.husky` hook.
+- **Phase 4 — Provider argv:** ✅ `buildAgentArgs`; `CreateOptions` carries structured `binary/args`; orchestration + summarize spawn argv on the pty path (no bash banner). The POSIX banner remains for the tmux path.
+- **Phase 5 — Install/distribution:** ✅ `scripts/agent-os.js`, `scripts/install.ps1`, README Windows section, cross-platform precommit.
+- **Phase 6 — Tier 2 pty-host daemon:** ✅ opt-in via `AGENT_OS_PTY_HOST=1` (default OFF). IPC protocol + host daemon + client + `HostBackend` + `server.ts` host streaming. Verified: daemon launches/listens/dedupes, cross-process connect works, and a session survives a client disconnect (simulated server restart) in the test suite.
+- **Testing:** ✅ vitest with `buildAgentArgs`, pty-session integration, and Tier-2 daemon survival tests.
+
+### Remaining follow-ups
+
+- Hands-on browser verification of the Phase 2 interactive flow on native Windows (spawn a real `claude`, stream, resize, reconnect).
+- Windows `.cmd` spawning of agent CLIs through ConPTY (resolution logic in place; needs live confirmation).
+- Orchestration's bash banner is POSIX-only; native-Windows orchestration uses the argv path (no status-bar styling).
+- Cross-OS CI matrix (windows/ubuntu/macos) for the test suite.
+
+---
+
 ## 2. Current Architecture (How tmux Is Used)
 
 ### 2.1 tmux's four jobs
