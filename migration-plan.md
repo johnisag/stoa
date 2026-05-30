@@ -51,14 +51,15 @@ All phases implemented on branch `feat/windows-native-migration`; `tsc`, `next b
 - **Phase 4 — Provider argv:** ✅ `buildAgentArgs`; `CreateOptions` carries structured `binary/args`; orchestration + summarize spawn argv on the pty path (no bash banner). The POSIX banner remains for the tmux path.
 - **Phase 5 — Install/distribution:** ✅ `scripts/agent-os.js`, `scripts/install.ps1`, README Windows section, cross-platform precommit.
 - **Phase 6 — Tier 2 pty-host daemon:** ✅ opt-in via `AGENT_OS_PTY_HOST=1` (default OFF). IPC protocol + host daemon + client + `HostBackend` + `server.ts` host streaming. Verified: daemon launches/listens/dedupes, cross-process connect works, and a session survives a client disconnect (simulated server restart) in the test suite.
-- **Testing:** ✅ vitest with `buildAgentArgs`, pty-session integration, and Tier-2 daemon survival tests.
+- **Multi-client sizing:** ✅ `PtySession` tracks per-client viewport sizes and resizes the pty to the smallest viewer (tmux's window-size policy); `server.ts` registers/updates/removes each socket as a sizing client.
+- **Orchestration on Windows:** ✅ workers spawn via argv (no bash banner) and worker cleanup uses `git worktree list --porcelain` parsed in JS + `fs.rm` (no `head`/`sed`/`rm -rf`). The bash banner survives only as tmux status-bar cosmetics on the tmux path.
+- **Testing:** ✅ vitest (20 tests): `buildAgentArgs`, pty-session integration, Tier-2 daemon survival, VT-render safety net (spinner collapse, busy→running, `[Y/n]`→waiting), multi-client fan-out/sizing.
+- **CI:** ✅ `.github/workflows/test.yml` runs typecheck + tests + build on windows/ubuntu/macos.
 
-### Remaining follow-ups
+### Remaining — human-in-the-loop only
 
-- Hands-on browser verification of the Phase 2 interactive flow on native Windows (spawn a real `claude`, stream, resize, reconnect).
-- Windows `.cmd` spawning of agent CLIs through ConPTY (resolution logic in place; needs live confirmation).
-- Orchestration's bash banner is POSIX-only; native-Windows orchestration uses the argv path (no status-bar styling).
-- Cross-OS CI matrix (windows/ubuntu/macos) for the test suite.
+- Hands-on browser verification of the Phase 2 interactive flow on native Windows (create a session, watch a real `claude` spawn, stream, resize, reconnect).
+- Live confirmation of `.cmd` agent-CLI spawning through ConPTY (resolution logic is implemented and unit-covered; needs a real `claude.cmd` on a Windows box).
 
 ---
 

@@ -117,6 +117,41 @@ export class PtySession {
     }
   }
 
+  // ── Multi-client sizing ────────────────────────────────────────────────
+  // With several clients viewing one session, resize the pty to the SMALLEST
+  // client (tmux's default window-size policy) so no client sees clipped output.
+  private clientSizes = new Map<number, { cols: number; rows: number }>();
+  private nextClientId = 1;
+
+  /** Register a viewing client; returns an id to update/remove it. */
+  addClient(cols: number, rows: number): number {
+    const id = this.nextClientId++;
+    this.clientSizes.set(id, { cols, rows });
+    this.applyMinSize();
+    return id;
+  }
+
+  resizeClient(id: number, cols: number, rows: number): void {
+    if (!this.clientSizes.has(id)) return;
+    this.clientSizes.set(id, { cols, rows });
+    this.applyMinSize();
+  }
+
+  removeClient(id: number): void {
+    if (this.clientSizes.delete(id)) this.applyMinSize();
+  }
+
+  private applyMinSize(): void {
+    if (this.clientSizes.size === 0) return;
+    let cols = Infinity;
+    let rows = Infinity;
+    for (const s of this.clientSizes.values()) {
+      cols = Math.min(cols, s.cols);
+      rows = Math.min(rows, s.rows);
+    }
+    if (Number.isFinite(cols) && Number.isFinite(rows)) this.resize(cols, rows);
+  }
+
   /**
    * Rendered terminal text, matching `tmux capture-pane -p [-S -N]`.
    * @param lines  last N rows of (scrollback+visible); omit for the visible screen only.

@@ -146,6 +146,7 @@ app.prepare().then(() => {
     let currentKey: string | null = null;
     let offOutput: (() => void) | null = null;
     let offExit: (() => void) | null = null;
+    let clientId: number | null = null;
     let lastSize = { cols: 80, rows: 24 };
 
     const detach = () => {
@@ -153,6 +154,11 @@ app.prepare().then(() => {
       offExit?.();
       offOutput = null;
       offExit = null;
+      // Drop this client's size vote so the pty can grow back for others.
+      if (currentKey != null && clientId != null) {
+        getSession(currentKey)?.removeClient(clientId);
+      }
+      clientId = null;
     };
 
     const send = (obj: unknown) => {
@@ -200,7 +206,8 @@ app.prepare().then(() => {
       offExit = session.onExit(({ exitCode }) =>
         send({ type: "exit", code: exitCode })
       );
-      session.resize(lastSize.cols, lastSize.rows);
+      // Register as a sizing client (pty resizes to the smallest viewer).
+      clientId = session.addClient(lastSize.cols, lastSize.rows);
     };
 
     ws.on("message", (message: Buffer) => {
@@ -218,7 +225,13 @@ app.prepare().then(() => {
             break;
           case "resize":
             lastSize = { cols: msg.cols, rows: msg.rows };
-            if (currentKey) getSession(currentKey)?.resize(msg.cols, msg.rows);
+            if (currentKey && clientId != null) {
+              getSession(currentKey)?.resizeClient(
+                clientId,
+                msg.cols,
+                msg.rows
+              );
+            }
             break;
         }
       } catch (err) {

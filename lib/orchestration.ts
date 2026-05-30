@@ -6,8 +6,9 @@
  */
 
 import { randomUUID } from "crypto";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
+import { rm } from "fs/promises";
 import { db, queries, type Session } from "./db";
 import { createWorktree, deleteWorktree } from "./worktrees";
 import { setupWorktree } from "./env-setup";
@@ -18,7 +19,7 @@ import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
 import { getSessionBackend } from "./session-backend";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface SpawnWorkerOptions {
   conductorSessionId: string;
@@ -406,19 +407,27 @@ export async function killWorker(
   // Note: This requires knowing the original project path, which we derive from git
   if (cleanupWorktree && session.worktree_path) {
     try {
-      // Get the main worktree (original project) from git
-      const { stdout } = await execAsync(
-        `git -C "${session.worktree_path}" worktree list --porcelain | head -1 | sed 's/worktree //'`
-      );
-      const projectPath = stdout.trim();
+      // Get the main worktree (original project) from git. The first porcelain
+      // entry is the main worktree; parse it in JS (no head/sed shell tools).
+      const { stdout } = await execFileAsync("git", [
+        "-C",
+        session.worktree_path,
+        "worktree",
+        "list",
+        "--porcelain",
+      ]);
+      const firstLine = stdout.split(/\r?\n/)[0] || "";
+      const projectPath = firstLine.startsWith("worktree ")
+        ? firstLine.slice("worktree ".length).trim()
+        : "";
       if (projectPath && projectPath !== session.worktree_path) {
         await deleteWorktree(session.worktree_path, projectPath, true);
       }
     } catch (error) {
       console.error("Failed to delete worktree:", error);
-      // Fallback: just remove the directory
+      // Fallback: remove the directory cross-platform.
       try {
-        await execAsync(`rm -rf "${session.worktree_path}"`);
+        await rm(session.worktree_path, { recursive: true, force: true });
       } catch {
         // Ignore cleanup errors
       }
