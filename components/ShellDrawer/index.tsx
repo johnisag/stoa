@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useDrawerAnimation } from "@/hooks/useDrawerAnimation";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import type { TerminalHandle } from "@/components/Terminal";
+import { getActiveBackend } from "@/lib/client/backend";
 
 const Terminal = dynamic(
   () => import("@/components/Terminal").then((mod) => mod.Terminal),
@@ -32,11 +33,21 @@ export function ShellDrawer({
   // Animation
   const isAnimatingIn = useDrawerAnimation(open);
 
-  // When terminal connects, cd to working directory
-  const handleConnected = useCallback(() => {
-    if (terminalRef.current && workingDirectory && !hasInitialized.current) {
-      hasInitialized.current = true;
-      // Clear any existing command, cd to directory, and clear screen
+  // When the terminal connects, start a shell in the working directory.
+  const handleConnected = useCallback(async () => {
+    if (!terminalRef.current || hasInitialized.current) return;
+    hasInitialized.current = true;
+    const cwd = workingDirectory || "~";
+    const backend = await getActiveBackend();
+    if (backend === "pty") {
+      // Native: spawn/attach a shell session (empty binary => platform shell)
+      // started directly in the working directory — no `cd` needed.
+      terminalRef.current.attachSession({
+        key: `shell:${cwd}`,
+        spawn: { binary: "", args: [], cwd },
+      });
+    } else if (workingDirectory) {
+      // tmux mode: the WS auto-spawned a shell; cd into the directory.
       setTimeout(() => {
         terminalRef.current?.sendInput("\x15"); // Ctrl+U to clear line
         setTimeout(() => {
