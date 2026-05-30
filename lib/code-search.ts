@@ -1,15 +1,11 @@
-import { execSync } from "child_process";
+import { rgPath } from "@vscode/ripgrep";
 
 /**
- * Check if ripgrep is available on the system
+ * Check if ripgrep is available. ripgrep is now bundled via @vscode/ripgrep,
+ * so it is always available regardless of platform.
  */
 export function isRipgrepAvailable(): boolean {
-  try {
-    execSync("which rg", { encoding: "utf-8", stdio: "pipe" });
-    return true;
-  } catch {
-    return false;
-  }
+  return true;
 }
 
 export interface SearchOptions {
@@ -63,7 +59,7 @@ export function searchCode(
       ".", // CRITICAL: Tell ripgrep to search current directory explicitly
     ];
 
-    const result = spawnSync("rg", args, {
+    const result = spawnSync(rgPath, args, {
       cwd: workingDir,
       encoding: "utf-8",
       timeout: 10000,
@@ -99,10 +95,10 @@ export function searchCode(
     return matches;
   } catch (error) {
     console.error("Error in searchCode:", error);
-    // ENOENT = command not found
+    // ENOENT = bundled ripgrep binary missing
     if ((error as any).code === "ENOENT") {
       throw new Error(
-        "ripgrep (rg) not found. Install with: brew install ripgrep"
+        `bundled ripgrep binary not found at ${rgPath}. Try reinstalling dependencies.`
       );
     }
     // Other errors - return empty

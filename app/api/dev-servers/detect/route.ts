@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { detectServers } from "@/lib/dev-servers";
 import { db, queries, Project } from "@/lib/db";
+import { expandHome } from "@/lib/platform";
 
 // GET /api/dev-servers/detect?projectId=X - Auto-detect available dev servers
 export async function GET(request: NextRequest) {
@@ -23,9 +24,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Expand ~ to home directory
-    const expandedPath = project.working_directory.startsWith("~")
-      ? project.working_directory.replace("~", process.env.HOME || "")
-      : project.working_directory;
+    const expandedPath = expandHome(project.working_directory);
 
     const servers = await detectServers(expandedPath);
     return NextResponse.json({ servers, workingDirectory: expandedPath });

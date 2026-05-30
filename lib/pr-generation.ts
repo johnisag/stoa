@@ -1,4 +1,5 @@
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
+import { resolveBinary } from "./platform";
 
 export interface GeneratedPRContent {
   title: string;
@@ -159,8 +160,12 @@ async function generateWithClaude(
   const prompt = buildPRPrompt(diff, commits);
 
   try {
-    // Use claude CLI with --print flag for non-interactive output
-    const output = execSync(`claude --print "${prompt.replace(/"/g, '\\"')}"`, {
+    // Use claude CLI with --print flag for non-interactive output.
+    // Pass the prompt as a single argv entry (no shell quoting) so multi-line
+    // content survives intact. Resolve the binary so the Windows `claude.cmd`
+    // shim is found; fall back to the bare name on POSIX.
+    const claudeBin = resolveBinary("claude") || "claude";
+    const output = execFileSync(claudeBin, ["--print", prompt], {
       cwd: workingDir,
       encoding: "utf-8",
       timeout: 30000,

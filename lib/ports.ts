@@ -4,11 +4,8 @@
  * Assigns unique ports to worktree sessions to avoid conflicts.
  */
 
-import { exec } from "child_process";
-import { promisify } from "util";
+import { isPortInUse as probePortInUse } from "./platform";
 import { getDb } from "./db";
-
-const execAsync = promisify(exec);
 
 // Port range for dev servers
 const BASE_PORT = 3100;
@@ -20,11 +17,7 @@ const MAX_PORT = 3900;
  */
 export async function isPortInUse(port: number): Promise<boolean> {
   try {
-    const { stdout } = await execAsync(
-      `lsof -i :${port} -sTCP:LISTEN 2>/dev/null | head -1`,
-      { timeout: 5000 }
-    );
-    return stdout.trim().length > 0;
+    return await probePortInUse(port);
   } catch {
     return false;
   }

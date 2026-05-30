@@ -1,16 +1,47 @@
-import { execSync } from "child_process";
+import {
+  execFileSync,
+  type ExecFileSyncOptionsWithStringEncoding,
+} from "child_process";
 import { unlinkSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { devNull } from "os";
+import { expandHome } from "./platform";
 
 /**
  * Expand ~ to home directory in paths
  */
 export function expandPath(path: string): string {
-  if (path.startsWith("~")) {
-    return path.replace(/^~/, homedir());
-  }
-  return path;
+  return expandHome(path);
+}
+
+/**
+ * Run a git command via execFileSync (no shell) with an argument array.
+ * Avoids shell quoting/redirection so it behaves identically across platforms.
+ */
+function git(
+  args: string[],
+  cwd: string,
+  opts: { stdio?: "pipe"; maxBuffer?: number } = {}
+): string {
+  const options: ExecFileSyncOptionsWithStringEncoding = {
+    cwd,
+    encoding: "utf-8",
+  };
+  if (opts.stdio) options.stdio = opts.stdio;
+  if (opts.maxBuffer) options.maxBuffer = opts.maxBuffer;
+  return execFileSync("git", args, options);
+}
+
+/**
+ * Extract captured stdout from an execFileSync error. `git diff [--no-index]`
+ * exits non-zero when the inputs differ while still printing the diff to
+ * stdout; this recovers it as a string.
+ */
+function readStdout(error: unknown): string {
+  const stdout = (error as { stdout?: Buffer | string } | null)?.stdout;
+  if (typeof stdout === "string") return stdout;
+  if (stdout) return stdout.toString("utf-8");
+  return "";
 }
 
 export type FileStatus =
@@ -44,31 +75,27 @@ export interface GitStatus {
 export function getGitStatus(workingDir: string): GitStatus {
   try {
     // Get branch info
-    const branchOutput = execSync("git branch --show-current", {
-      cwd: workingDir,
-      encoding: "utf-8",
-    }).trim();
+    const branchOutput = git(["branch", "--show-current"], workingDir).trim();
 
     // Get ahead/behind counts
     let ahead = 0;
     let behind = 0;
     try {
-      const trackingOutput = execSync(
-        "git rev-list --left-right --count @{upstream}...HEAD 2>/dev/null || echo '0 0'",
-        { cwd: workingDir, encoding: "utf-8" }
+      const trackingOutput = git(
+        ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
+        workingDir,
+        { stdio: "pipe" }
       ).trim();
       const [b, a] = trackingOutput.split(/\s+/).map(Number);
       ahead = a || 0;
       behind = b || 0;
     } catch {
-      // No upstream configured
+      // No upstream configured — leaves ahead/behind at 0 (matching the old
+      // `|| echo '0 0'` shell fallback)
     }
 
     // Get status
-    const statusOutput = execSync("git status --porcelain=v1", {
-      cwd: workingDir,
-      encoding: "utf-8",
-    });
+    const statusOutput = git(["status", "--porcelain=v1"], workingDir);
 
     const staged: GitFile[] = [];
     const unstaged: GitFile[] = [];
@@ -160,17 +187,15 @@ export function getFileDiff(
   staged: boolean
 ): string {
   try {
-    const stagedFlag = staged ? "--staged" : "";
-    const output = execSync(
-      `git diff ${stagedFlag} -- "${filePath}" 2>/dev/null || true`,
-      {
-        cwd: workingDir,
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024, // 10MB
-      }
-    );
+    const args = ["diff", ...(staged ? ["--staged"] : []), "--", filePath];
+    const output = git(args, workingDir, {
+      stdio: "pipe",
+      maxBuffer: 10 * 1024 * 1024, // 10MB
+    });
     return output;
   } catch {
+    // Regular `git diff` exits 0 even with changes; a non-zero exit means a
+    // real error (with empty stdout), so "" matches the old `|| true` result.
     return "";
   }
 }
@@ -183,17 +208,15 @@ export function getUntrackedFileDiff(
   filePath: string
 ): string {
   try {
-    const output = execSync(
-      `git diff --no-index /dev/null "${filePath}" 2>/dev/null || true`,
-      {
-        cwd: workingDir,
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024,
-      }
-    );
+    const output = git(["diff", "--no-index", devNull, filePath], workingDir, {
+      stdio: "pipe",
+      maxBuffer: 10 * 1024 * 1024,
+    });
     return output;
-  } catch {
-    return "";
+  } catch (error) {
+    // `git diff --no-index` exits 1 when the files differ; return its captured
+    // stdout (matching the old `2>/dev/null || true` shell behavior).
+    return readStdout(error);
   }
 }
 
@@ -201,40 +224,28 @@ export function getUntrackedFileDiff(
  * Stage a file
  */
 export function stageFile(workingDir: string, filePath: string): void {
-  execSync(`git add -- "${filePath}"`, {
-    cwd: workingDir,
-    encoding: "utf-8",
-  });
+  git(["add", "--", filePath], workingDir);
 }
 
 /**
  * Stage all files
  */
 export function stageAll(workingDir: string): void {
-  execSync("git add -A", {
-    cwd: workingDir,
-    encoding: "utf-8",
-  });
+  git(["add", "-A"], workingDir);
 }
 
 /**
  * Unstage a file
  */
 export function unstageFile(workingDir: string, filePath: string): void {
-  execSync(`git reset HEAD -- "${filePath}"`, {
-    cwd: workingDir,
-    encoding: "utf-8",
-  });
+  git(["reset", "HEAD", "--", filePath], workingDir);
 }
 
 /**
  * Unstage all files
  */
 export function unstageAll(workingDir: string): void {
-  execSync("git reset HEAD", {
-    cwd: workingDir,
-    encoding: "utf-8",
-  });
+  git(["reset", "HEAD"], workingDir);
 }
 
 /**
@@ -243,16 +254,11 @@ export function unstageAll(workingDir: string): void {
 export function discardChanges(workingDir: string, filePath: string): void {
   // Check if file is tracked by git
   try {
-    execSync(`git ls-files --error-unmatch "${filePath}"`, {
-      cwd: workingDir,
-      encoding: "utf-8",
+    git(["ls-files", "--error-unmatch", filePath], workingDir, {
       stdio: "pipe",
     });
     // File is tracked - use checkout
-    execSync(`git checkout -- "${filePath}"`, {
-      cwd: workingDir,
-      encoding: "utf-8",
-    });
+    git(["checkout", "--", filePath], workingDir);
   } catch {
     // File is untracked - delete it
     unlinkSync(join(workingDir, filePath));
@@ -264,11 +270,7 @@ export function discardChanges(workingDir: string, filePath: string): void {
  */
 export function isGitRepo(workingDir: string): boolean {
   try {
-    execSync("git rev-parse --git-dir", {
-      cwd: workingDir,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    git(["rev-parse", "--git-dir"], workingDir, { stdio: "pipe" });
     return true;
   } catch {
     return false;
@@ -280,10 +282,7 @@ export function isGitRepo(workingDir: string): boolean {
  */
 export function getGitRoot(workingDir: string): string {
   try {
-    return execSync("git rev-parse --show-toplevel", {
-      cwd: workingDir,
-      encoding: "utf-8",
-    }).trim();
+    return git(["rev-parse", "--show-toplevel"], workingDir).trim();
   } catch {
     return workingDir;
   }
@@ -294,10 +293,7 @@ export function getGitRoot(workingDir: string): string {
  */
 export function isMainBranch(workingDir: string): boolean {
   try {
-    const branch = execSync("git branch --show-current", {
-      cwd: workingDir,
-      encoding: "utf-8",
-    }).trim();
+    const branch = git(["branch", "--show-current"], workingDir).trim();
     return branch === "main" || branch === "master";
   } catch {
     return false;
@@ -308,38 +304,24 @@ export function isMainBranch(workingDir: string): boolean {
  * Create a new branch and switch to it
  */
 export function createBranch(workingDir: string, branchName: string): void {
-  execSync(`git checkout -b "${branchName}"`, {
-    cwd: workingDir,
-    encoding: "utf-8",
-  });
+  git(["checkout", "-b", branchName], workingDir);
 }
 
 /**
  * Commit staged changes
  */
 export function commit(workingDir: string, message: string): string {
-  const output = execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, {
-    cwd: workingDir,
-    encoding: "utf-8",
-  });
-  return output;
+  return git(["commit", "-m", message], workingDir);
 }
 
 /**
  * Push to remote
  */
 export function push(workingDir: string, setUpstream = false): string {
-  const branch = execSync("git branch --show-current", {
-    cwd: workingDir,
-    encoding: "utf-8",
-  }).trim();
+  const branch = git(["branch", "--show-current"], workingDir).trim();
 
-  const upstreamFlag = setUpstream ? `-u origin "${branch}"` : "";
-  const output = execSync(`git push ${upstreamFlag}`, {
-    cwd: workingDir,
-    encoding: "utf-8",
-  });
-  return output;
+  const args = setUpstream ? ["push", "-u", "origin", branch] : ["push"];
+  return git(args, workingDir);
 }
 
 /**
@@ -347,10 +329,8 @@ export function push(workingDir: string, setUpstream = false): string {
  */
 export function hasUpstream(workingDir: string): boolean {
   try {
-    execSync("git rev-parse --abbrev-ref @{upstream}", {
-      cwd: workingDir,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
+    git(["rev-parse", "--abbrev-ref", "@{upstream}"], workingDir, {
+      stdio: "pipe",
     });
     return true;
   } catch {
@@ -363,10 +343,7 @@ export function hasUpstream(workingDir: string): boolean {
  */
 export function getRemoteUrl(workingDir: string): string | null {
   try {
-    return execSync("git remote get-url origin", {
-      cwd: workingDir,
-      encoding: "utf-8",
-    }).trim();
+    return git(["remote", "get-url", "origin"], workingDir).trim();
   } catch {
     return null;
   }
@@ -378,14 +355,16 @@ export function getRemoteUrl(workingDir: string): string | null {
 export function getDefaultBranch(workingDir: string): string {
   try {
     // Try to get from remote
-    const output = execSync(
-      "git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || echo 'refs/heads/main'",
-      { cwd: workingDir, encoding: "utf-8" }
+    const output = git(
+      ["symbolic-ref", "refs/remotes/origin/HEAD"],
+      workingDir,
+      { stdio: "pipe" }
     ).trim();
     return output
       .replace("refs/remotes/origin/", "")
       .replace("refs/heads/", "");
   } catch {
+    // No origin/HEAD configured — matches the old `|| echo 'refs/heads/main'`
     return "main";
   }
 }

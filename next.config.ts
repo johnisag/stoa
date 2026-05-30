@@ -4,6 +4,9 @@ import { withSerwist } from "@serwist/turbopack";
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  // Keep packages that ship native binaries out of the bundle so Turbopack
+  // doesn't try to trace/bundle their executables (e.g. ripgrep's rg.exe).
+  serverExternalPackages: ["@vscode/ripgrep"],
   turbopack: {
     root: resolve(import.meta.dirname),
   },

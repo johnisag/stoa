@@ -21,6 +21,7 @@ import {
 } from "./db";
 import { resolveModelForAgent } from "./model-catalog";
 import type { AgentType } from "./providers";
+import { expandHome } from "./platform";
 
 const execAsync = promisify(exec);
 
@@ -383,7 +384,7 @@ export function deleteProjectDevServer(id: string): void {
 export async function detectNpmScripts(
   workingDir: string
 ): Promise<DetectedDevServer[]> {
-  const expandedDir = workingDir.replace(/^~/, process.env.HOME || "~");
+  const expandedDir = expandHome(workingDir);
   const packageJsonPath = path.join(expandedDir, "package.json");
 
   if (!fs.existsSync(packageJsonPath)) return [];
@@ -445,7 +446,7 @@ export async function detectNpmScripts(
 export async function detectDockerServices(
   workingDir: string
 ): Promise<DetectedDevServer[]> {
-  const expandedDir = workingDir.replace(/^~/, process.env.HOME || "~");
+  const expandedDir = expandHome(workingDir);
   const composeFiles = [
     "docker-compose.yml",
     "docker-compose.yaml",
@@ -495,7 +496,7 @@ export async function detectDevServers(
  * Validate a working directory exists
  */
 export function validateWorkingDirectory(dir: string): boolean {
-  const expandedDir = dir.replace(/^~/, process.env.HOME || "~");
+  const expandedDir = expandHome(dir);
   try {
     return fs.existsSync(expandedDir) && fs.statSync(expandedDir).isDirectory();
   } catch {

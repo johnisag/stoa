@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listDirectory } from "@/lib/files";
+import { expandHome } from "@/lib/platform";
 
 /**
  * GET /api/files?path=...&recursive=true
@@ -19,7 +20,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Expand ~ to home directory
-    const expandedPath = path.replace(/^~/, process.env.HOME || "");
+    const expandedPath = expandHome(path);
 
     const files = listDirectory(expandedPath, {
       recursive,
