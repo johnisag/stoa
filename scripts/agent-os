@@ -9,7 +9,7 @@ set -euo pipefail
 # Configuration
 AGENT_OS_HOME="${AGENT_OS_HOME:-$HOME/.agent-os}"
 PORT="${AGENT_OS_PORT:-3011}"
-REPO_URL="https://github.com/saadnvd1/agent-os.git"
+REPO_URL="https://github.com/johnisag/agent-os.git"
 
 # Derived paths
 REPO_DIR="$AGENT_OS_HOME/repo"

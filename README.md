@@ -30,7 +30,7 @@ agent-os start
 For fresh installs without Node.js:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/saadnvd1/agent-os/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/johnisag/agent-os/main/scripts/install.sh | bash
 agent-os start
 ```
 
@@ -48,7 +48,7 @@ Download native desktop apps from [Releases](https://github.com/saadnvd1/agent-o
 ### Manual Install
 
 ```bash
-git clone https://github.com/saadnvd1/agent-os
+git clone https://github.com/johnisag/agent-os
 cd agent-os
 npm install
 npm run dev  # http://localhost:3011

@@ -7,7 +7,7 @@ This guide covers installing and running AgentOS on your machine.
 Run this one-liner to install AgentOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/saadnvd1/agent-os/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/johnisag/agent-os/main/scripts/install.sh | bash
 ```
 
 The installer will:
@@ -24,7 +24,7 @@ If you prefer to install manually:
 
 ```bash
 # Clone the repository
-git clone https://github.com/saadnvd1/agent-os ~/.agent-os/repo
+git clone https://github.com/johnisag/agent-os ~/.agent-os/repo
 cd ~/.agent-os/repo
 
 # Install dependencies
