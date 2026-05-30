@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exec } from "child_process";
-import { promisify } from "util";
+import path from "path";
+import os from "os";
 import { getDb, queries, type Session } from "@/lib/db";
+import { getSessionBackend } from "@/lib/session-backend";
 import { appendFileSync } from "fs";
 
-const execAsync = promisify(exec);
-
 // Log to file for debugging
-const LOG_FILE = "/tmp/agent-os-send-keys.log";
+const LOG_FILE = path.join(os.tmpdir(), "agent-os-send-keys.log");
 function log(msg: string) {
   const timestamp = new Date().toISOString();
   const line = `[${timestamp}] ${msg}\n`;
@@ -46,71 +45,22 @@ export async function POST(
     const tmuxSessionName = `${session.agent_type}-${id}`;
     log(`Tmux session name: ${tmuxSessionName}`);
 
+    const backend = getSessionBackend();
+
     // Check if tmux session exists
-    try {
-      await execAsync(`tmux has-session -t "${tmuxSessionName}" 2>/dev/null`);
-      log(`Tmux session exists`);
-    } catch {
+    if (!(await backend.exists(tmuxSessionName))) {
       log(`ERROR: Tmux session ${tmuxSessionName} not running`);
       return NextResponse.json(
         { error: "Tmux session not running" },
         { status: 400 }
       );
     }
+    log(`Tmux session exists`);
 
-    // Write text to a temp file
-    const tempFile = `/tmp/agent-os-send-${id}.txt`;
-    const fs = await import("fs/promises");
-    await fs.writeFile(tempFile, text);
-    log(`Wrote ${text.length} bytes to ${tempFile}`);
+    await backend.pasteText(tmuxSessionName, text, { enter: pressEnter });
 
-    // Use a named buffer to avoid race conditions
-    const bufferName = `send-${id}`;
-
-    try {
-      // Load file into named tmux buffer
-      log(`Loading buffer "${bufferName}" from ${tempFile}`);
-      const loadCmd = `tmux load-buffer -b "${bufferName}" "${tempFile}"`;
-      log(`Running: ${loadCmd}`);
-      const loadResult = await execAsync(loadCmd);
-      log(
-        `Load stdout: "${loadResult.stdout}", stderr: "${loadResult.stderr}"`
-      );
-
-      // Paste the named buffer to the session
-      log(`Pasting buffer "${bufferName}" to ${tmuxSessionName}`);
-      const pasteCmd = `tmux paste-buffer -b "${bufferName}" -t "${tmuxSessionName}"`;
-      log(`Running: ${pasteCmd}`);
-      const pasteResult = await execAsync(pasteCmd);
-      log(
-        `Paste stdout: "${pasteResult.stdout}", stderr: "${pasteResult.stderr}"`
-      );
-
-      // Delete the buffer after use
-      await execAsync(`tmux delete-buffer -b "${bufferName}"`).catch(() => {});
-
-      // Send Enter if requested
-      if (pressEnter) {
-        log(`Sending Enter to ${tmuxSessionName}`);
-        const enterCmd = `tmux send-keys -t "${tmuxSessionName}" Enter`;
-        log(`Running: ${enterCmd}`);
-        const enterResult = await execAsync(enterCmd);
-        log(
-          `Enter stdout: "${enterResult.stdout}", stderr: "${enterResult.stderr}"`
-        );
-      }
-
-      log(`=== SUCCESS ===`);
-      return NextResponse.json({ success: true });
-    } catch (cmdError) {
-      const msg =
-        cmdError instanceof Error ? cmdError.message : String(cmdError);
-      log(`ERROR in commands: ${msg}`);
-      throw cmdError;
-    } finally {
-      // Clean up temp file
-      await fs.unlink(tempFile).catch(() => {});
-    }
+    log(`=== SUCCESS ===`);
+    return NextResponse.json({ success: true });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     log(`ERROR: ${msg}`);

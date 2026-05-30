@@ -1,28 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exec, spawn } from "child_process";
-import { promisify } from "util";
+import { spawn } from "child_process";
 import { getDb, queries, type Session } from "@/lib/db";
 import { randomUUID } from "crypto";
-import { writeFileSync, unlinkSync, readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { homedir } from "os";
+import { getSessionBackend } from "@/lib/session-backend";
 
-const execAsync = promisify(exec);
+const backend = getSessionBackend();
 
 // Get Claude session ID from tmux environment
 async function getClaudeSessionId(tmuxSession: string): Promise<string | null> {
-  try {
-    const { stdout } = await execAsync(
-      `tmux show-environment -t "${tmuxSession}" CLAUDE_SESSION_ID 2>/dev/null || echo ""`
-    );
-    const line = stdout.trim();
-    if (line.startsWith("CLAUDE_SESSION_ID=")) {
-      const sessionId = line.replace("CLAUDE_SESSION_ID=", "");
-      return sessionId && sessionId !== "null" ? sessionId : null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  const sessionId = await backend.getEnv(tmuxSession, "CLAUDE_SESSION_ID");
+  return sessionId && sessionId !== "null" ? sessionId : null;
 }
 
 // Encode path for Claude's project directory format (/ becomes -)
@@ -85,26 +74,12 @@ function readClaudeSessionHistory(
 
 // Fallback: Capture recent tmux scrollback (last 500 lines)
 async function captureScrollback(sessionName: string): Promise<string> {
-  try {
-    const { stdout } = await execAsync(
-      `tmux capture-pane -t "${sessionName}" -p -S -500 2>/dev/null`
-    );
-    return stdout;
-  } catch {
-    return "";
-  }
+  return backend.capture(sessionName, { lines: 500 });
 }
 
 // Get the actual working directory from tmux pane
 async function getTmuxCwd(sessionName: string): Promise<string | null> {
-  try {
-    const { stdout } = await execAsync(
-      `tmux display-message -t "${sessionName}" -p "#{pane_current_path}" 2>/dev/null`
-    );
-    return stdout.trim() || null;
-  } catch {
-    return null;
-  }
+  return backend.getPanePath(sessionName);
 }
 
 // Generate summary using Claude CLI with stdin
@@ -153,9 +128,7 @@ async function waitForClaudeReady(
 ): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      const { stdout } = await execAsync(
-        `tmux capture-pane -t "${sessionName}" -p 2>/dev/null`
-      );
+      const stdout = await backend.capture(sessionName);
       // Look for Claude's status line which appears when UI is ready
       if (stdout.includes("⏵⏵") || stdout.includes("accept edits")) {
         return true;
@@ -174,25 +147,7 @@ async function sendToTmux(
   text: string,
   pressEnter = true
 ): Promise<void> {
-  const tempFile = `/tmp/agent-os-send-${Date.now()}.txt`;
-  const bufferName = `send-${Date.now()}`;
-
-  try {
-    writeFileSync(tempFile, text);
-    await execAsync(`tmux load-buffer -b "${bufferName}" "${tempFile}"`);
-    await execAsync(`tmux paste-buffer -b "${bufferName}" -t "${sessionName}"`);
-    await execAsync(`tmux delete-buffer -b "${bufferName}"`).catch(() => {});
-
-    if (pressEnter) {
-      // Wait for Claude to process pasted text before sending Enter
-      await new Promise((r) => setTimeout(r, 500));
-      await execAsync(`tmux send-keys -t "${sessionName}" Enter`);
-    }
-  } finally {
-    try {
-      unlinkSync(tempFile);
-    } catch {}
-  }
+  await backend.pasteText(sessionName, text, { enter: pressEnter });
 }
 
 // POST /api/sessions/[id]/summarize - Summarize and create fresh session
@@ -287,9 +242,14 @@ export async function POST(
         ? `${envPrefix}claude --dangerously-skip-permissions`
         : "claude";
 
-      const tmuxCmd = `tmux set -g mouse on 2>/dev/null; tmux new-session -d -s "${newTmuxSession}" -c "${cwdExpanded}" "${claudeCmd}"`;
-      console.log(`[summarize] Creating tmux session: ${tmuxCmd}`);
-      await execAsync(tmuxCmd);
+      console.log(
+        `[summarize] Creating tmux session: ${newTmuxSession} (${claudeCmd})`
+      );
+      await backend.create({
+        name: newTmuxSession,
+        cwd: cwdExpanded,
+        command: claudeCmd,
+      });
       console.log(`[summarize] Tmux session created: ${newTmuxSession}`);
 
       // Give Claude a moment to start up before polling

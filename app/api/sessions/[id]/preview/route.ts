@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exec } from "child_process";
-import { promisify } from "util";
 import { queries, getDb, type Session } from "@/lib/db";
-
-const execAsync = promisify(exec);
+import { getSessionBackend } from "@/lib/session-backend";
 
 // Get terminal preview (last N lines) from tmux session
 export async function GET(
@@ -20,9 +17,8 @@ export async function GET(
     const sessionName = session?.tmux_name || `${agentType}-${id}`;
 
     // Capture visible pane content plus scrollback, take last 50 lines
-    const { stdout } = await execAsync(
-      `tmux capture-pane -t "${sessionName}" -p -S -100 2>/dev/null || echo ""`
-    );
+    const backend = getSessionBackend();
+    const stdout = await backend.capture(sessionName, { lines: 100 });
 
     // Take the last 50 non-empty lines (trim trailing empty lines)
     const allLines = stdout.split("\n");

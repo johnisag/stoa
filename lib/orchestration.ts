@@ -16,6 +16,7 @@ import { type AgentType, getProvider } from "./providers";
 import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
+import { getSessionBackend } from "./session-backend";
 
 const execAsync = promisify(exec);
 
@@ -80,6 +81,7 @@ function taskToSessionName(task: string): string {
 export async function spawnWorker(
   options: SpawnWorkerOptions
 ): Promise<Session> {
+  const backend = getSessionBackend();
   const {
     conductorSessionId,
     task,
@@ -168,10 +170,13 @@ export async function spawnWorker(
   // Create tmux session with the agent and banner
   const agentCmd = `${provider.command} ${flagsStr}`;
   const newSessionCmd = wrapWithBanner(agentCmd);
-  const createCmd = `tmux set -g mouse on 2>/dev/null; tmux new-session -d -s "${tmuxSessionName}" -c "${cwd}" "${newSessionCmd}"`;
 
   try {
-    await execAsync(createCmd);
+    await backend.create({
+      name: tmuxSessionName,
+      cwd,
+      command: newSessionCmd,
+    });
 
     // Wait for Claude to be ready by checking for the input prompt
     // Poll every 2 seconds for up to 30 seconds
@@ -189,9 +194,7 @@ export async function spawnWorker(
       waited += pollIntervalMs;
 
       try {
-        const { stdout } = await execAsync(
-          `tmux capture-pane -t '${tmuxSessionName}' -p -S -10 2>/dev/null`
-        );
+        const stdout = await backend.capture(tmuxSessionName, { lines: 10 });
         const content = stdout.toLowerCase();
 
         // Check for trust/permissions prompt and auto-accept
@@ -204,7 +207,7 @@ export async function spawnWorker(
           console.log(
             `[orchestration] Trust prompt detected, pressing Enter to accept`
           );
-          await execAsync(`tmux send-keys -t '${tmuxSessionName}' Enter`);
+          await backend.sendEnter(tmuxSessionName);
           continue; // Keep waiting for the real prompt
         }
 
@@ -230,15 +233,12 @@ export async function spawnWorker(
     }
 
     // Send the task as input, then press Enter
-    const escapedTask = task.replace(/'/g, "'\\''"); // Escape single quotes for shell
     console.log(
       `[orchestration] Sending task to ${tmuxSessionName}: "${task}"`
     );
     try {
-      await execAsync(
-        `tmux send-keys -t '${tmuxSessionName}' -l '${escapedTask}'`
-      );
-      await execAsync(`tmux send-keys -t '${tmuxSessionName}' Enter`);
+      await backend.sendKeysLiteral(tmuxSessionName, task);
+      await backend.sendEnter(tmuxSessionName);
       console.log(
         `[orchestration] Task sent successfully to ${tmuxSessionName}`
       );
@@ -323,13 +323,12 @@ export async function getWorkerOutput(
     throw new Error(`Worker ${workerId} not found`);
   }
 
+  const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
   const tmuxSessionName = session.tmux_name || `${provider.id}-${workerId}`;
 
   try {
-    const { stdout } = await execAsync(
-      `tmux capture-pane -t "${tmuxSessionName}" -p -S -${lines} 2>/dev/null || echo ""`
-    );
+    const stdout = await backend.capture(tmuxSessionName, { lines });
     return stdout.trim();
   } catch {
     return "";
@@ -348,14 +347,14 @@ export async function sendToWorker(
     throw new Error(`Worker ${workerId} not found`);
   }
 
+  const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
   const tmuxSessionName = session.tmux_name || `${provider.id}-${workerId}`;
 
   try {
-    const escapedMessage = message.replace(/"/g, '\\"').replace(/\$/g, "\\$");
-    await execAsync(
-      `tmux send-keys -t "${tmuxSessionName}" "${escapedMessage}" Enter`
-    );
+    await backend.sendKeysInterpreted(tmuxSessionName, message, {
+      enter: true,
+    });
     return true;
   } catch {
     return false;
@@ -388,14 +387,13 @@ export async function killWorker(
     return;
   }
 
+  const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
   const tmuxSessionName = session.tmux_name || `${provider.id}-${workerId}`;
 
   // Kill tmux session
   try {
-    await execAsync(
-      `tmux kill-session -t "${tmuxSessionName}" 2>/dev/null || true`
-    );
+    await backend.kill(tmuxSessionName);
   } catch {
     // Ignore errors
   }

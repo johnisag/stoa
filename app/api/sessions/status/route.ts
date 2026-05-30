@@ -1,6 +1,4 @@
 import { NextResponse } from "next/server";
-import { exec } from "child_process";
-import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -12,8 +10,9 @@ import {
   getSessionIdFromName,
 } from "@/lib/providers/registry";
 import { getDb } from "@/lib/db";
+import { getSessionBackend } from "@/lib/session-backend";
 
-const execAsync = promisify(exec);
+const backend = getSessionBackend();
 
 interface SessionStatusResponse {
   sessionName: string;
@@ -24,47 +23,22 @@ interface SessionStatusResponse {
 }
 
 async function getTmuxSessions(): Promise<string[]> {
-  try {
-    const { stdout } = await execAsync(
-      "tmux list-sessions -F '#{session_name}' 2>/dev/null || true"
-    );
-    return stdout.trim().split("\n").filter(Boolean);
-  } catch {
-    return [];
-  }
+  return backend.list();
 }
 
 async function getTmuxSessionCwd(sessionName: string): Promise<string | null> {
-  try {
-    const { stdout } = await execAsync(
-      `tmux display-message -t "${sessionName}" -p "#{pane_current_path}" 2>/dev/null || echo ""`
-    );
-    const cwd = stdout.trim();
-    return cwd || null;
-  } catch {
-    return null;
-  }
+  return backend.getPanePath(sessionName);
 }
 
 // Get Claude session ID from tmux environment variable
 async function getClaudeSessionIdFromEnv(
   sessionName: string
 ): Promise<string | null> {
-  try {
-    const { stdout } = await execAsync(
-      `tmux show-environment -t "${sessionName}" CLAUDE_SESSION_ID 2>/dev/null || echo ""`
-    );
-    const line = stdout.trim();
-    if (line.startsWith("CLAUDE_SESSION_ID=")) {
-      const sessionId = line.replace("CLAUDE_SESSION_ID=", "");
-      if (sessionId && sessionId !== "null") {
-        return sessionId;
-      }
-    }
-    return null;
-  } catch {
-    return null;
+  const sessionId = await backend.getEnv(sessionName, "CLAUDE_SESSION_ID");
+  if (sessionId && sessionId !== "null") {
+    return sessionId;
   }
+  return null;
 }
 
 // Get Claude session ID by looking at session files on disk
@@ -136,15 +110,9 @@ async function getClaudeSessionId(sessionName: string): Promise<string | null> {
 }
 
 async function getLastLine(sessionName: string): Promise<string> {
-  try {
-    const { stdout } = await execAsync(
-      `tmux capture-pane -t "${sessionName}" -p -S -5 2>/dev/null || echo ""`
-    );
-    const lines = stdout.trim().split("\n").filter(Boolean);
-    return lines.pop() || "";
-  } catch {
-    return "";
-  }
+  const stdout = await backend.capture(sessionName, { lines: 5 });
+  const lines = stdout.trim().split("\n").filter(Boolean);
+  return lines.pop() || "";
 }
 
 // UUID pattern for agent-os managed sessions (derived from registry)

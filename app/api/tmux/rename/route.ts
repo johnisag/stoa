@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exec } from "child_process";
-import { promisify } from "util";
-
-const execAsync = promisify(exec);
+import { getSessionBackend } from "@/lib/session-backend";
 
 // POST /api/tmux/rename - Rename a tmux session
 export async function POST(request: NextRequest) {
@@ -17,7 +14,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Rename the tmux session
-    await execAsync(`tmux rename-session -t "${oldName}" "${newName}"`);
+    const backend = getSessionBackend();
+    await backend.rename(oldName, newName);
 
     return NextResponse.json({ success: true, newName });
   } catch (error) {

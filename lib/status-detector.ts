@@ -14,10 +14,9 @@
  * 4. Cooldown - 2s grace period after activity stops
  */
 
-import { exec } from "child_process";
-import { promisify } from "util";
+import { getSessionBackend } from "./session-backend";
 
-const execAsync = promisify(exec);
+const backend = getSessionBackend();
 
 // Configuration constants
 const CONFIG = {
@@ -199,15 +198,11 @@ class SessionStatusDetector {
     if (Date.now() - this.cache.updatedAt < CONFIG.CACHE_VALIDITY_MS) return;
 
     try {
-      const { stdout } = await execAsync(
-        `tmux list-sessions -F '#{session_name}\t#{session_activity}' 2>/dev/null || echo ""`
-      );
+      const sessions = await backend.listWithActivity();
 
       const newData = new Map<string, number>();
-      for (const line of stdout.trim().split("\n")) {
-        if (!line) continue;
-        const [name, activity] = line.split("\t");
-        if (name && activity) newData.set(name, parseInt(activity, 10) || 0);
+      for (const { name, activity } of sessions) {
+        if (name && activity) newData.set(name, activity || 0);
       }
 
       this.cache = { data: newData, updatedAt: Date.now() };
@@ -225,14 +220,8 @@ class SessionStatusDetector {
   }
 
   async capturePane(name: string): Promise<string> {
-    try {
-      const { stdout } = await execAsync(
-        `tmux capture-pane -t "${name}" -p 2>/dev/null || echo ""`
-      );
-      return stdout.trim();
-    } catch {
-      return "";
-    }
+    const stdout = await backend.capture(name);
+    return stdout.trim();
   }
 
   private getTracker(name: string, timestamp: number): StateTracker {

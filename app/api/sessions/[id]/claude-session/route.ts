@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
-import { exec } from "child_process";
-import { promisify } from "util";
 import { db } from "@/lib/db";
-
-const execAsync = promisify(exec);
+import { getSessionBackend } from "@/lib/session-backend";
 
 // GET: Check tmux environment for Claude session ID
 export async function GET(
@@ -15,13 +12,10 @@ export async function GET(
 
   try {
     // Check tmux environment for CLAUDE_SESSION_ID
-    const { stdout } = await execAsync(
-      `tmux show-environment -t "${tmuxSession}" CLAUDE_SESSION_ID 2>/dev/null || echo ""`
-    );
+    const backend = getSessionBackend();
+    const sessionId = await backend.getEnv(tmuxSession, "CLAUDE_SESSION_ID");
 
-    const line = stdout.trim();
-    if (line.startsWith("CLAUDE_SESSION_ID=")) {
-      const sessionId = line.replace("CLAUDE_SESSION_ID=", "");
+    if (sessionId !== null) {
       if (sessionId && sessionId !== "null") {
         // Update database with the session ID
         const stmt = db.prepare(
