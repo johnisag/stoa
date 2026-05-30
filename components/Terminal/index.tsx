@@ -17,6 +17,7 @@ import { ScrollToBottomButton } from "./ScrollToBottomButton";
 import { TerminalToolbar } from "./TerminalToolbar";
 import { useTerminalConnection, useTerminalSearch } from "./hooks";
 import type { TerminalScrollState } from "./hooks";
+import type { AttachPayload } from "./hooks/useTerminalConnection.types";
 import { useViewport } from "@/hooks/useViewport";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { uploadFileToTemp } from "@/lib/file-upload";
@@ -27,6 +28,7 @@ export type { TerminalScrollState };
 export interface TerminalHandle {
   sendCommand: (command: string) => void;
   sendInput: (data: string) => void;
+  attachSession: (payload: AttachPayload) => void;
   focus: () => void;
   getScrollState: () => TerminalScrollState | null;
   restoreScrollState: (state: TerminalScrollState) => void;
@@ -78,6 +80,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       copySelection,
       sendInput,
       sendCommand,
+      attachSession,
       focus,
       getScrollState,
       restoreScrollState,
@@ -143,6 +146,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     useImperativeHandle(ref, () => ({
       sendCommand,
       sendInput,
+      attachSession,
       focus,
       getScrollState,
       restoreScrollState,

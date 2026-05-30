@@ -595,6 +595,55 @@ export function getAllProviders(): AgentProvider[] {
   return Object.values(providers);
 }
 
+export interface AgentSpawn {
+  /** Executable name (e.g. "claude"); resolved on PATH by the pty registry. */
+  binary: string;
+  /** Clean argv — no shell quoting, no combined tokens. */
+  args: string[];
+}
+
+/**
+ * Build a clean argv for spawning an agent CLI directly via a pty.
+ *
+ * This is the argv-array counterpart of provider.buildFlags() (which returns a
+ * shell-joined, quoted string for the tmux backend). Tokens that buildFlags
+ * combines into one string (e.g. "--resume <id>") and the shell-quoted initial
+ * prompt are emitted as discrete argv entries with NO quoting, which is correct
+ * for a direct (shell-less) spawn. Used by the native pty path.
+ */
+export function buildAgentArgs(
+  agentType: AgentType,
+  options: BuildFlagsOptions
+): AgentSpawn {
+  const def = getProviderDefinition(agentType);
+  const args: string[] = [];
+
+  if (def.defaultArgs) args.push(...def.defaultArgs);
+
+  if ((options.skipPermissions || options.autoApprove) && def.autoApproveFlag) {
+    args.push(def.autoApproveFlag);
+  }
+  if (options.model && def.modelFlag) {
+    args.push(def.modelFlag, options.model);
+  }
+  if (options.sessionId && def.resumeFlag) {
+    args.push(def.resumeFlag, options.sessionId);
+  } else if (options.parentSessionId && def.resumeFlag) {
+    args.push(def.resumeFlag, options.parentSessionId);
+    if (def.supportsFork) args.push("--fork-session");
+  }
+  if (options.initialPrompt?.trim() && def.initialPromptFlag !== undefined) {
+    const prompt = options.initialPrompt.trim();
+    if (def.initialPromptFlag === "") {
+      args.push(prompt); // positional, raw
+    } else {
+      args.push(def.initialPromptFlag, prompt);
+    }
+  }
+
+  return { binary: def.cli, args };
+}
+
 // Type guard (use registry)
 export function isValidAgentType(value: string): value is AgentType {
   return isValidProviderId(value);

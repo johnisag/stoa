@@ -10,6 +10,17 @@ export interface TerminalScrollState {
   baseY: number;
 }
 
+/** Structured attach request for the native pty backend. */
+export interface AttachPayload {
+  /** Session key (e.g. `${agentType}-${id}`). */
+  key: string;
+  /**
+   * How to spawn the session if it doesn't exist yet. Omit binary (or pass "")
+   * for a plain shell. cwd may contain a leading "~".
+   */
+  spawn?: { binary: string; args: string[]; cwd: string };
+}
+
 export interface UseTerminalConnectionProps {
   terminalRef: RefObject<HTMLDivElement | null>;
   onConnected?: () => void;
@@ -31,6 +42,7 @@ export interface UseTerminalConnectionReturn {
   copySelection: () => boolean;
   sendInput: (data: string) => void;
   sendCommand: (command: string) => void;
+  attachSession: (payload: AttachPayload) => void;
   focus: () => void;
   getScrollState: () => TerminalScrollState | null;
   restoreScrollState: (state: TerminalScrollState) => void;

@@ -3,6 +3,12 @@ import { parse } from "url";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import * as pty from "node-pty";
+import { getBackendType } from "./lib/session-backend";
+import {
+  getSession,
+  spawnSession,
+  spawnShellSession,
+} from "./lib/session-backend/pty/registry";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
@@ -42,8 +48,21 @@ app.prepare().then(() => {
     // Let HMR and other WebSocket connections pass through to Next.js
   });
 
-  // Terminal connections
+  // Terminal connections. Two modes:
+  //  - tmux: spawn a disposable shell pty per socket; the client drives
+  //    `tmux attach` (legacy behavior, macOS/Linux).
+  //  - pty: subscribe the socket to a long-lived session in the in-process
+  //    registry; the session survives disconnects (native, cross-platform).
   terminalWss.on("connection", (ws: WebSocket) => {
+    if (getBackendType() === "pty") {
+      handlePtyConnection(ws);
+    } else {
+      handleTmuxConnection(ws);
+    }
+  });
+
+  // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
+  function handleTmuxConnection(ws: WebSocket) {
     let ptyProcess: pty.IPty;
     try {
       const shell = process.env.SHELL || "/bin/zsh";
@@ -115,7 +134,100 @@ app.prepare().then(() => {
       console.error("WebSocket error:", err);
       ptyProcess.kill();
     });
-  });
+  }
+
+  // ── pty mode (native): subscribe to a long-lived registry session ──
+  function handlePtyConnection(ws: WebSocket) {
+    let currentKey: string | null = null;
+    let offOutput: (() => void) | null = null;
+    let offExit: (() => void) | null = null;
+    let lastSize = { cols: 80, rows: 24 };
+
+    const detach = () => {
+      offOutput?.();
+      offExit?.();
+      offOutput = null;
+      offExit = null;
+    };
+
+    const send = (obj: unknown) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    };
+
+    const attach = (
+      key: string,
+      spawn?: { binary?: string; args?: string[]; cwd?: string }
+    ) => {
+      detach();
+      currentKey = key;
+
+      let session = getSession(key);
+      if ((!session || !session.alive) && spawn) {
+        try {
+          const cwd = spawn.cwd || process.env.HOME || ".";
+          session =
+            spawn.binary && spawn.binary.length > 0
+              ? spawnSession(key, {
+                  binary: spawn.binary,
+                  args: spawn.args ?? [],
+                  cwd,
+                  cols: lastSize.cols,
+                  rows: lastSize.rows,
+                })
+              : spawnShellSession(key, cwd, lastSize.cols, lastSize.rows);
+        } catch (err) {
+          console.error("Failed to spawn pty session:", err);
+          send({ type: "error", message: "Failed to start session" });
+          return;
+        }
+      }
+
+      if (!session) {
+        send({ type: "error", message: "Session not found" });
+        return;
+      }
+
+      // Repaint history first, then stream live output. No await between the
+      // snapshot read and listener registration, so no bytes are dropped/dup'd.
+      const snapshot = session.getRawBuffer();
+      if (snapshot) send({ type: "output", data: snapshot });
+      offOutput = session.onOutput((data) => send({ type: "output", data }));
+      offExit = session.onExit(({ exitCode }) =>
+        send({ type: "exit", code: exitCode })
+      );
+      session.resize(lastSize.cols, lastSize.rows);
+    };
+
+    ws.on("message", (message: Buffer) => {
+      try {
+        const msg = JSON.parse(message.toString());
+        switch (msg.type) {
+          case "attach":
+            attach(msg.key, msg.spawn);
+            break;
+          case "input":
+            if (currentKey) getSession(currentKey)?.write(msg.data);
+            break;
+          case "command":
+            if (currentKey) getSession(currentKey)?.write(msg.data + "\r");
+            break;
+          case "resize":
+            lastSize = { cols: msg.cols, rows: msg.rows };
+            if (currentKey) getSession(currentKey)?.resize(msg.cols, msg.rows);
+            break;
+        }
+      } catch (err) {
+        console.error("Error parsing message:", err);
+      }
+    });
+
+    // Disconnect detaches this client but leaves the session running.
+    ws.on("close", () => detach());
+    ws.on("error", (err) => {
+      console.error("WebSocket error:", err);
+      detach();
+    });
+  }
 
   server.listen(port, () => {
     console.log(`> Agent-OS ready on http://${hostname}:${port}`);

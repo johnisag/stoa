@@ -6,6 +6,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { SearchAddon } from "@xterm/addon-search";
 import { WS_RECONNECT_BASE_DELAY } from "../constants";
 import type {
+  AttachPayload,
   TerminalScrollState,
   UseTerminalConnectionProps,
   UseTerminalConnectionReturn,
@@ -38,6 +39,9 @@ export function useTerminalConnection({
   >("connecting");
 
   const wsRef = useRef<WebSocket | null>(null);
+  // Last attach request, re-sent on every (re)connect so the native pty session
+  // is re-subscribed and its scrollback repainted after a dropped socket.
+  const attachPayloadRef = useRef<AttachPayload | null>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
@@ -79,6 +83,19 @@ export function useTerminalConnection({
   const sendCommand = useCallback((command: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "command", data: command }));
+    }
+  }, []);
+
+  const attachSession = useCallback((payload: AttachPayload) => {
+    attachPayloadRef.current = payload;
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "attach",
+          key: payload.key,
+          spawn: payload.spawn,
+        })
+      );
     }
   }, []);
 
@@ -168,6 +185,18 @@ export function useTerminalConnection({
         {
           onConnected: () => {
             callbacksRef.current.onConnected?.();
+            // Re-attach to the native pty session after (re)connect so the
+            // server re-subscribes this socket and repaints scrollback.
+            const payload = attachPayloadRef.current;
+            if (payload && wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(
+                JSON.stringify({
+                  type: "attach",
+                  key: payload.key,
+                  spawn: payload.spawn,
+                })
+              );
+            }
             // Restore scroll state after connection
             if (initialScrollStateRef.current && terminalRef.current) {
               setTimeout(() => {
@@ -273,6 +302,7 @@ export function useTerminalConnection({
     copySelection,
     sendInput,
     sendCommand,
+    attachSession,
     focus,
     getScrollState,
     restoreScrollState,

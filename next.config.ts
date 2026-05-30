@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   devIndicators: false,
   // Keep packages that ship native binaries out of the bundle so Turbopack
   // doesn't try to trace/bundle their executables (e.g. ripgrep's rg.exe).
-  serverExternalPackages: ["@vscode/ripgrep"],
+  serverExternalPackages: ["@vscode/ripgrep", "node-pty"],
   turbopack: {
     root: resolve(import.meta.dirname),
   },
