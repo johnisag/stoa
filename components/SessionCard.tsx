@@ -18,6 +18,7 @@ import {
   Square,
   CheckSquare,
   ExternalLink,
+  Download,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -192,14 +193,17 @@ export function SessionCard({
     setIsEditing(false);
   };
 
-  const hasActions =
-    onMove ||
-    onMoveToProject ||
-    onFork ||
-    onDelete ||
-    onRename ||
-    onCreatePR ||
-    onOpenInTab;
+  // Download the conversation transcript. A hidden-anchor click uses the
+  // browser's native download flow (the route sets Content-Disposition) with no
+  // blank-tab flash that window.open(..., "_blank") would cause.
+  const exportConversation = (format: "md" | "json") => {
+    const a = document.createElement("a");
+    a.href = `/api/sessions/${session.id}/export?format=${format}`;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
 
   // Handle card click - coordinates selection with navigation
   const handleCardClick = (e: React.MouseEvent) => {
@@ -285,6 +289,20 @@ export function SessionCard({
             {isSummarizing ? "Summarizing..." : "Fresh start"}
           </MenuItem>
         )}
+        <MenuSub>
+          <MenuSubTrigger>
+            <Download className="mr-2 h-3 w-3" />
+            Export
+          </MenuSubTrigger>
+          <MenuSubContent>
+            <MenuItem onClick={() => exportConversation("md")}>
+              Markdown (.md)
+            </MenuItem>
+            <MenuItem onClick={() => exportConversation("json")}>
+              JSON (.json)
+            </MenuItem>
+          </MenuSubContent>
+        </MenuSub>
         {onCreatePR && session.branch_name && (
           <MenuItem
             onClick={() => {
@@ -462,7 +480,7 @@ export function SessionCard({
       </span>
 
       {/* Actions menu (button) */}
-      {hasActions && (
+      {
         <DropdownMenu onOpenChange={handleMenuOpenChange}>
           <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
             <Button
@@ -477,21 +495,18 @@ export function SessionCard({
             {renderMenuItems(false)}
           </DropdownMenuContent>
         </DropdownMenu>
-      )}
+      }
     </div>
   );
 
-  // Wrap with context menu if actions are available
-  if (hasActions) {
-    return (
-      <ContextMenu>
-        <ContextMenuTrigger asChild>{cardContent}</ContextMenuTrigger>
-        <ContextMenuContent>{renderMenuItems(true)}</ContextMenuContent>
-      </ContextMenu>
-    );
-  }
-
-  return cardContent;
+  // Always wrap with the context menu — Export is available for every session,
+  // so the menu always has at least one item.
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{cardContent}</ContextMenuTrigger>
+      <ContextMenuContent>{renderMenuItems(true)}</ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 function getTimeAgo(dateStr: string): string {
