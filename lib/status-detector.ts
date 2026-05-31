@@ -4,14 +4,16 @@
  * States:
  * - "running" (GREEN): Sustained activity within cooldown period
  * - "waiting" (YELLOW): Cooldown expired, NOT acknowledged (needs attention)
+ * - "error" (RED): a structured error is on the rendered screen (needs attention)
  * - "idle" (GRAY): Cooldown expired, acknowledged (user saw it)
  * - "dead": Session doesn't exist
  *
- * Detection Strategy:
+ * Detection Strategy (in priority order):
  * 1. Busy indicators + recent activity (highest priority - actively working)
  * 2. Waiting patterns - user input needed
- * 3. Spike detection - activity timestamp changes (2+ in 1s = sustained)
- * 4. Cooldown - 2s grace period after activity stops
+ * 3. Error markers - a failed turn surfaced on the current screen
+ * 4. Spike detection - activity timestamp changes (2+ in 1s = sustained)
+ * 5. Cooldown - 2s grace period after activity stops
  */
 
 import { getSessionBackend } from "./session-backend";
@@ -370,21 +372,21 @@ class SessionStatusDetector {
     //    as running; surfaces a turn that failed and needs attention.
     if (checkErrorPatterns(content)) return "error";
 
-    // 3. Spike detection
+    // 4. Spike detection
     const spikeResult = this.processSpikeDetection(tracker, timestamp);
     if (spikeResult) return spikeResult;
 
-    // 4. During spike window, maintain stable status
+    // 5. During spike window, maintain stable status
     if (this.isInSpikeWindow(tracker)) {
       return this.isInCooldown(tracker)
         ? "running"
         : this.getIdleOrWaiting(tracker);
     }
 
-    // 5. Cooldown check
+    // 6. Cooldown check
     if (this.isInCooldown(tracker)) return "running";
 
-    // 6. Cooldown expired
+    // 7. Cooldown expired
     return this.getIdleOrWaiting(tracker);
   }
 

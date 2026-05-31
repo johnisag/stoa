@@ -29,7 +29,10 @@ interface UseNotificationsOptions {
   onSessionClick?: (sessionId: string) => void;
 }
 
-// Don't re-notify the same session+event within this window (dedup flaps).
+// Don't re-notify the same session+event within this window. Dedups flaps
+// (waiting->idle->waiting) AND rapid same-state re-entry (e.g. a flickering
+// error). A genuine repeat after the window still notifies, and the
+// SessionCard highlight persists in the meantime, so nothing is lost visually.
 const NOTIFY_COOLDOWN_MS = 8000;
 
 export function useNotifications(options: UseNotificationsOptions = {}) {
@@ -199,6 +202,17 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
 
         previousStates.current.set(session.id, currentStatus);
       });
+
+      // Prune tracking for sessions that no longer exist so neither map grows
+      // unbounded over a long-lived mount (also covers the previousStates map).
+      const liveIds = new Set(sessions.map((s) => s.id));
+      for (const id of previousStates.current.keys()) {
+        if (!liveIds.has(id)) previousStates.current.delete(id);
+      }
+      for (const key of lastNotified.current.keys()) {
+        const id = key.replace(/-(waiting|error|completed)$/, "");
+        if (!liveIds.has(id)) lastNotified.current.delete(key);
+      }
 
       // Update tab badge (count of sessions awaiting input).
       if (newWaitingCount !== waitingCount.current) {
