@@ -11,16 +11,25 @@ are all **done**; what remains is below.
 Hermes core is wired: provider registry + object, agent-picker entry, `--yolo`
 auto-approve, and the CLI surface mapped from `hermes --help` (`-z PROMPT`,
 `-m MODEL`, `--resume SESSION`, `--continue`, `--yolo`, `--pass-session-id`).
-It renders through the pty backend with no special-casing. Remaining (each is
-real work, not a one-liner):
+It renders through the pty backend with no special-casing.
 
-- **Live browser test** — restart dev server, start a Hermes session, confirm it
-  spawns/streams/renders like Claude Code (assumes it's already authenticated).
-- **`-z` initial prompt** — confirm `hermes -z "..."` stays interactive (TUI) vs
-  one-shot. If interactive, set `initialPromptFlag: "-z"`.
-- **Resume** — capture Hermes's session id (`--pass-session-id` and/or read
-  `~/.hermes/checkpoints/` / `hermes sessions`), store it, then flip
-  `supportsResume: true` so `--resume <id>` works per Stoa session.
+**Done:**
+
+- **Live browser test** ✅ — Hermes spawns/streams/renders correctly on native
+  Windows (verified end-to-end in the browser).
+- **`-z` initial prompt** ✅ (resolved) — `-z`/`--oneshot` and `chat -q` are
+  one-shot (run once, exit), so they must NOT be the initial-prompt flag;
+  `initialPromptFlag` stays unset and prompts go into the live TUI via the
+  existing send-keys path. No change needed.
+- **Resume** ✅ — Stoa captures Hermes's session id from the startup banner
+  (`Session: <YYYYMMDD_HHMMSS_hex>`) via the status detector's screen capture,
+  persists it in `sessions.claude_session_id`, and `buildAgentArgs` passes
+  `--resume <id>` on respawn. Verified live: a torn-down session reattaches as
+  `↻ Resumed session <id>` with full conversation restored. (Hermes persists
+  incrementally to its store, so resume survives even a hard kill.)
+
+**Remaining:**
+
 - **Model selection** — Hermes models are dynamic (`hermes model` live-fetches
   each provider's `/v1/models`). Offer `-m` via a free-text model field (or a
   Hermes model fetch) instead of the static Claude dropdown.

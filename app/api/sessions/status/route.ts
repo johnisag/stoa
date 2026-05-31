@@ -114,6 +114,24 @@ async function getClaudeSessionId(sessionName: string): Promise<string | null> {
   return null;
 }
 
+// Resolve an agent's own session id (used later for `--resume <id>`), per
+// provider. Claude reads its env var / on-disk project files; Hermes prints the
+// id in its startup banner, which the status detector captures from the rendered
+// screen (Hermes writes no session file until clean exit). Stored in the shared
+// `claude_session_id` column. Other agents have no resume id.
+async function getProviderSessionId(
+  sessionName: string,
+  agentType: AgentType
+): Promise<string | null> {
+  if (agentType === "hermes") {
+    return statusDetector.getHermesSessionId(sessionName);
+  }
+  if (agentType === "claude") {
+    return getClaudeSessionId(sessionName);
+  }
+  return null;
+}
+
 async function getLastLine(sessionName: string): Promise<string> {
   const stdout = await backend.capture(sessionName, { lines: 5 });
   const lines = stdout.trim().split("\n").filter(Boolean);
@@ -145,13 +163,19 @@ export async function GET() {
 
     // Process all sessions in parallel for speed
     const sessionPromises = managedSessions.map(async (sessionName) => {
-      const [status, claudeSessionId, lastLine] = await Promise.all([
+      const agentType = getAgentTypeFromSessionName(sessionName);
+      const [status, lastLine] = await Promise.all([
         statusDetector.getStatus(sessionName),
-        getClaudeSessionId(sessionName),
         getLastLine(sessionName),
       ]);
+      // Resolve the agent session id AFTER getStatus: its capturePane() populates
+      // the Hermes banner-id cache, so reading it here captures the id on the same
+      // poll the banner is visible rather than lagging one poll behind.
+      const claudeSessionId = await getProviderSessionId(
+        sessionName,
+        agentType
+      );
       const id = getSessionIdFromName(sessionName);
-      const agentType = getAgentTypeFromSessionName(sessionName);
 
       return { sessionName, id, status, claudeSessionId, lastLine, agentType };
     });
