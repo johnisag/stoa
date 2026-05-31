@@ -167,10 +167,18 @@ export const PROVIDERS: ProviderDefinition[] = [
     description: "Nous Research agent harness",
     cli: "hermes",
     configDir: "~/.hermes",
-    // Minimal launch: spawns the interactive Hermes TUI (self-authenticating,
-    // like Claude Code). Resume/model/initial-prompt flags can be added once the
-    // CLI surface is confirmed.
-    autoApproveFlag: undefined,
+    // Launches the interactive Hermes TUI (self-authenticating, like Claude Code).
+    // CLI surface (from `hermes --help`): -z PROMPT, -m MODEL, --resume SESSION,
+    // --continue, --yolo, --pass-session-id.
+    //  - --yolo wired here (auto-approve).
+    //  - resumeFlag is "--resume" but resume stays OFF until we capture Hermes's
+    //    session id (--pass-session-id / ~/.hermes/checkpoints) — a follow-up.
+    //  - modelFlag intentionally unset: Hermes models are dynamic/provider-
+    //    specific (`hermes model` live-fetches /v1/models), so AgentOS shouldn't
+    //    impose a static model list. Hermes uses its configured default.
+    //  - -z initial prompt held until interactive-vs-one-shot is confirmed.
+    autoApproveFlag: "--yolo",
+    resumeFlag: "--resume",
     supportsResume: false,
     supportsFork: false,
   },

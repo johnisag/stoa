@@ -80,14 +80,15 @@ describe("buildAgentArgs", () => {
     expect(args).toEqual(["--model", "auto"]);
   });
 
-  it("hermes: launches the bare TUI (no flags in the minimal provider)", () => {
+  it("hermes: --yolo for auto-approve; model/prompt not wired (dynamic models)", () => {
+    expect(buildAgentArgs("hermes", {}).args).toEqual([]);
     const { binary, args } = buildAgentArgs("hermes", {
       autoApprove: true,
-      model: "opus",
-      initialPrompt: "ignored until flags are defined",
+      model: "opus", // ignored: Hermes models are dynamic, modelFlag unset
+      initialPrompt: "ignored until -z semantics confirmed",
     });
     expect(binary).toBe("hermes");
-    expect(args).toEqual([]);
+    expect(args).toEqual(["--yolo"]);
   });
 
   it("shell: empty binary (server spawns a plain shell)", () => {
