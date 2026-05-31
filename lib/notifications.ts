@@ -20,7 +20,9 @@ export const defaultSettings: NotificationSettings = {
   events: {
     waiting: true,
     error: true,
-    completed: true, // notify when a background session finishes (toggle off if noisy)
+    // Off by default: interactive agents do many running->idle cycles per task,
+    // so "finished" pings get noisy. Toggle on per taste in the Bell menu.
+    completed: false,
   },
 };
 

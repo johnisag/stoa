@@ -151,6 +151,10 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
       if (!settings.enabled) return;
 
       const now = Date.now();
+      // Only suppress the focused session while the WINDOW itself is focused —
+      // if you're in another app you can't see it, so it should still alert.
+      const windowFocused =
+        typeof document !== "undefined" && document.hasFocus();
       // Notify once per session+event, then hold off for the cooldown — this
       // dedups both repeats and flaps (e.g. waiting->idle->waiting) without
       // permanently muting a genuine later re-notification.
@@ -176,7 +180,7 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         }
         // Skip if unchanged, or if it's the session you're already looking at.
         if (prevStatus === currentStatus) return;
-        if (session.id === activeSessionId) {
+        if (session.id === activeSessionId && windowFocused) {
           previousStates.current.set(session.id, currentStatus);
           return;
         }
@@ -209,9 +213,16 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
       for (const id of previousStates.current.keys()) {
         if (!liveIds.has(id)) previousStates.current.delete(id);
       }
+      // Build the set of valid `${id}-${event}` keys from live sessions rather
+      // than parsing ids out of keys (robust if id/event names ever change).
+      const validKeys = new Set<string>();
+      for (const id of liveIds) {
+        validKeys.add(`${id}-waiting`);
+        validKeys.add(`${id}-error`);
+        validKeys.add(`${id}-completed`);
+      }
       for (const key of lastNotified.current.keys()) {
-        const id = key.replace(/-(waiting|error|completed)$/, "");
-        if (!liveIds.has(id)) lastNotified.current.delete(key);
+        if (!validKeys.has(key)) lastNotified.current.delete(key);
       }
 
       // Update tab badge (count of sessions awaiting input).

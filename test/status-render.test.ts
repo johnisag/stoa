@@ -129,21 +129,26 @@ describe("error-state detection", () => {
   });
 });
 
-describe("ERROR_PATTERNS (load-bearing, kept conservative)", () => {
+describe("ERROR_PATTERNS (session/provider failures only, kept narrow)", () => {
   const hit = (s: string) => ERROR_PATTERNS.some((p) => p.test(s));
 
-  it("matches structured / provider errors", () => {
-    expect(hit("Traceback (most recent call last):")).toBe(true);
-    expect(hit("  Error code: 400 - bad request")).toBe(true);
-    expect(hit("'type': 'invalid_request_error'")).toBe(true);
+  it("matches provider/session-failure envelopes", () => {
+    expect(
+      hit("Error: Error code: 400 - {'type': 'invalid_request_error'}")
+    ).toBe(true);
     expect(hit("You're out of extra usage. Add more at ...")).toBe(true);
     expect(hit("quota exceeded")).toBe(true);
+    expect(hit("rate limit exceeded")).toBe(true);
+    expect(hit("insufficient_quota")).toBe(true);
   });
 
-  it("does NOT flag benign output that merely mentions 'error'", () => {
+  it("does NOT flag errors the agent prints while doing its job", () => {
+    // A stack trace or HTTP code in normal agent output is the agent working on
+    // YOUR code — not the session failing. These must NOT wedge a session red.
+    expect(hit("Traceback (most recent call last):")).toBe(false);
+    expect(hit("A 404 returns Error code: 404 to the client.")).toBe(false);
+    expect(hit("'type': 'invalid_request_error'")).toBe(false); // mention, no HTTP code
     expect(hit("I fixed the error and all tests pass.")).toBe(false);
-    expect(hit("No errors found.")).toBe(false);
-    expect(hit("Handled the error gracefully.")).toBe(false);
     expect(hit("> ")).toBe(false);
   });
 });

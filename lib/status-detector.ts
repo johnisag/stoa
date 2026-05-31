@@ -157,18 +157,19 @@ export const HERMES_SESSION_ID_RE = /Session:\s*(\d{8}_\d{6}_[0-9a-fA-F]+)/;
 
 export type SessionStatus = "running" | "waiting" | "idle" | "error" | "dead";
 
-// High-signal, STRUCTURED error markers — deliberately conservative so the
-// word "error" in normal agent output doesn't trip a false alarm. Checked on
-// only the last few rendered lines, so a stale error scrolled into history
-// stops counting. Best-effort: tune against real transcripts (the detector is
-// shared across agents, so prefer false-negatives over false-positives here).
+// Markers that the SESSION/agent itself failed (provider/auth/usage), NOT
+// errors the agent merely prints while working on your code (a Traceback or
+// "Error code: 404" in normal output is the agent doing its job — flagging
+// those would false-positive and wedge a healthy session red). So we match only
+// unambiguous provider-failure envelopes, on the last few rendered lines.
+// Best-effort + deliberately narrow (prefer false-negatives — the detector is
+// shared across all agents); tune against real transcripts.
 export const ERROR_PATTERNS: RegExp[] = [
-  /Traceback \(most recent call last\):/, // python crash
-  /^\s*panic:/m, // go panic
-  /\bError code: \d{3}\b/i, // API error envelope, e.g. "Error code: 400"
-  /\binvalid_request_error\b/, // provider error type
-  /You're out of (extra )?usage/i, // provider credit/usage exhaustion
-  /\bquota (exceeded|exhausted)\b/i,
+  // Provider API error envelope: an HTTP code AND a request-error type together.
+  /\bError code: \d{3}\b[^\n]*\binvalid_request_error\b/i,
+  /You're out of (extra )?usage/i, // credit/usage exhausted
+  /\b(quota|rate limit) (exceeded|exhausted)\b/i,
+  /\binsufficient[_ ](quota|credit|balance)\b/i,
 ];
 
 interface StateTracker {
