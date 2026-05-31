@@ -10,8 +10,9 @@
  * The headless Terminal renders the byte stream into a grid so capture() returns
  * the SAME shape of text tmux's `capture-pane -p` did — critical because the
  * status detector matches a spinner line that overwrites itself in place, not an
- * append-only byte log. A separate raw ring buffer holds the original bytes
- * (with ANSI) for repainting a freshly-(re)connected xterm client.
+ * append-only byte log. A (re)connecting client repaints from serialize() (the
+ * rendered VT state); a small bounded raw byte buffer is kept only as a fallback
+ * for the rare case serialize() throws.
  *
  * See migration-plan.md, Phase 2.
  */
@@ -20,10 +21,26 @@ import type { IPty } from "node-pty";
 import { Terminal } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 
-/** Max raw bytes retained for client replay (repaint on connect/reconnect). */
-const RAW_BUFFER_LIMIT = 256 * 1024;
-/** Scrollback rows the headless emulator keeps for rendered capture(). */
-const HEADLESS_SCROLLBACK = 5000;
+/**
+ * Max raw bytes retained for client replay. This is only a FALLBACK for when
+ * serialize() throws (the addon is the real repaint path) — so keep it small.
+ * 64 KiB is plenty for a degraded repaint of recent output without holding a
+ * quarter-megabyte of ANSI per session.
+ */
+const RAW_BUFFER_LIMIT = 64 * 1024;
+/**
+ * Slack before trimming the raw buffer. We let it grow to 2× the limit and then
+ * trim back to 1×, so the trim allocation amortizes to O(1) per byte instead of
+ * reallocating ~RAW_BUFFER_LIMIT on EVERY chunk once full (the old hot-path cost).
+ */
+const RAW_BUFFER_HIGH_WATER = RAW_BUFFER_LIMIT * 2;
+/**
+ * Scrollback rows the headless emulator keeps for rendered capture(). Status and
+ * preview read only the visible screen; the deepest consumer (summarize) reads
+ * 500 lines — so 1000 is comfortably enough and ~5× less per-session memory than
+ * the old 5000. It also shrinks every serialize() snapshot (repaint payload).
+ */
+const HEADLESS_SCROLLBACK = 1000;
 
 export type OutputListener = (data: string) => void;
 export type ExitListener = (info: { exitCode: number }) => void;
@@ -72,12 +89,20 @@ export class PtySession {
       this._lastActivity = Date.now();
       // Feed the headless emulator (rendered grid for capture()).
       this.term.write(data);
-      // Retain raw bytes for client repaint, capped.
+      // Retain raw bytes for the serialize() fallback, capped. Trim only when we
+      // cross the high-water mark (2× limit), back down to the limit — so the
+      // O(limit) slice happens at most once per `limit` bytes, not every chunk.
       this.rawBuffer += data;
-      if (this.rawBuffer.length > RAW_BUFFER_LIMIT) {
+      if (this.rawBuffer.length > RAW_BUFFER_HIGH_WATER) {
         this.rawBuffer = this.rawBuffer.slice(
           this.rawBuffer.length - RAW_BUFFER_LIMIT
         );
+        // The slice cuts at a UTF-16 code-unit boundary; if it landed inside a
+        // surrogate pair, drop the orphaned low surrogate so the fallback
+        // repaint doesn't begin with a stray U+FFFD.
+        const c = this.rawBuffer.charCodeAt(0);
+        if (c >= 0xdc00 && c <= 0xdfff)
+          this.rawBuffer = this.rawBuffer.slice(1);
       }
       for (const listener of this.outputListeners) listener(data);
     });

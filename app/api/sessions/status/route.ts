@@ -132,17 +132,19 @@ async function getProviderSessionId(
   return null;
 }
 
-async function getLastLine(sessionName: string): Promise<string> {
-  const stdout = await backend.capture(sessionName, { lines: 5 });
-  const lines = stdout.trim().split("\n").filter(Boolean);
-  return lines.pop() || "";
-}
-
 // UUID pattern for stoa managed sessions (derived from registry)
 const UUID_PATTERN = getManagedSessionPattern();
 
 // Track previous statuses to detect changes
 const previousStatuses = new Map<string, SessionStatus>();
+
+// Resolved agent resume-id per session (keyed by the stable stoa session id).
+// Resolving it re-scans the Claude project dir on disk (fs reads) every poll;
+// once we've found it, it's effectively fixed for the session's life, so we
+// cache it and stop re-scanning. (Trade-off: if a user starts a brand-new
+// conversation inside the same session, we keep the first id — acceptable, and
+// the explicit intent of the perf follow-up.) Pruned with previousStatuses.
+const resolvedSessionIds = new Map<string, string>();
 
 function getAgentTypeFromSessionName(sessionName: string): AgentType {
   return getProviderIdFromSessionName(sessionName) || "claude";
@@ -164,18 +166,19 @@ export async function GET() {
     // Process all sessions in parallel for speed
     const sessionPromises = managedSessions.map(async (sessionName) => {
       const agentType = getAgentTypeFromSessionName(sessionName);
-      const [status, lastLine] = await Promise.all([
-        statusDetector.getStatus(sessionName),
-        getLastLine(sessionName),
-      ]);
-      // Resolve the agent session id AFTER getStatus: its capturePane() populates
-      // the Hermes banner-id cache, so reading it here captures the id on the same
-      // poll the banner is visible rather than lagging one poll behind.
-      const claudeSessionId = await getProviderSessionId(
-        sessionName,
-        agentType
-      );
       const id = getSessionIdFromName(sessionName);
+      // One screen capture yields both the status and the preview line.
+      const { status, lastLine } =
+        await statusDetector.getStatusDetail(sessionName);
+      // Resolve the agent resume-id AFTER getStatusDetail: its capturePane()
+      // populates the Hermes banner-id cache, so reading it here captures the id
+      // on the same poll the banner is visible rather than one poll behind. Skip
+      // the (fs-scanning) resolution entirely once we already know it.
+      let claudeSessionId = resolvedSessionIds.get(id) ?? null;
+      if (!claudeSessionId) {
+        claudeSessionId = await getProviderSessionId(sessionName, agentType);
+        if (claudeSessionId) resolvedSessionIds.set(id, claudeSessionId);
+      }
 
       return { sessionName, id, status, claudeSessionId, lastLine, agentType };
     });
@@ -229,6 +232,16 @@ export async function GET() {
 
     // Cleanup old trackers
     statusDetector.cleanup();
+
+    // Prune our own per-session maps for sessions that no longer exist, so they
+    // don't leak over a long-lived server process.
+    const liveIds = new Set(results.map((r) => r.id));
+    for (const id of previousStatuses.keys()) {
+      if (!liveIds.has(id)) previousStatuses.delete(id);
+    }
+    for (const id of resolvedSessionIds.keys()) {
+      if (!liveIds.has(id)) resolvedSessionIds.delete(id);
+    }
 
     return NextResponse.json({ statuses: statusMap });
   } catch (error) {

@@ -1,4 +1,5 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import {
   spawnSession,
   getSession,
@@ -46,6 +47,59 @@ describe("pty registry / PtySession", () => {
     expect(streamed).toContain(marker);
     // serialize() repaints the current screen (used for reconnect/switch).
     expect(session.serialize()).toContain(marker);
+  });
+
+  it("keeps the raw fallback buffer bounded under heavy output", async () => {
+    // Emit ~1 MB across many chunks. The raw buffer is a capped fallback (64 KiB,
+    // trimmed at a 128 KiB high-water mark), so it must never grow unbounded —
+    // this locks the amortized-trim fix against a regression to per-chunk slicing
+    // or an uncapped buffer.
+    const session = spawnSession("test-bounded", {
+      binary: "node",
+      args: [
+        "-e",
+        "for(let i=0;i<8000;i++)process.stdout.write('x'.repeat(128));setTimeout(()=>{},10000)",
+      ],
+      cwd: process.cwd(),
+    });
+    // Wait until enough output has streamed that trimming must have kicked in...
+    await waitFor(() => session.getRawBuffer().length >= 64 * 1024);
+    // ...then give it more time to flush the full ~1 MB and assert the cap held.
+    await new Promise((r) => setTimeout(r, 500));
+    const len = session.getRawBuffer().length;
+    expect(len).toBeGreaterThan(0);
+    expect(len).toBeLessThanOrEqual(128 * 1024);
+    killSession("test-bounded");
+  });
+
+  it("serialize() falls back to the raw buffer when the serializer throws", async () => {
+    // serialize() is the primary repaint path; the raw buffer exists ONLY for the
+    // rare case the addon throws. Since #1 shrank that buffer, exercise the catch
+    // branch explicitly: force the serializer to throw and assert we return the
+    // raw buffer (still holding recent output) rather than crashing.
+    const marker = "FALLBACK_MARK_42";
+    const session = spawnSession("test-fallback", {
+      binary: "node",
+      args: [
+        "-e",
+        `process.stdout.write('${marker}\\r\\n'); setTimeout(()=>{},10000)`,
+      ],
+      cwd: process.cwd(),
+    });
+    await waitFor(() => session.getRawBuffer().includes(marker));
+    const spy = vi
+      .spyOn(SerializeAddon.prototype, "serialize")
+      .mockImplementation(() => {
+        throw new Error("serialize boom");
+      });
+    try {
+      const out = session.serialize();
+      expect(out).toBe(session.getRawBuffer());
+      expect(out).toContain(marker);
+    } finally {
+      spy.mockRestore();
+    }
+    killSession("test-fallback");
   });
 
   it("reaps a session from the registry when its process exits", async () => {

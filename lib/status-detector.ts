@@ -218,6 +218,14 @@ function checkErrorPatterns(content: string): boolean {
   return ERROR_PATTERNS.some((p) => p.test(recentLines));
 }
 
+// Last line with visible content from an already-captured screen. Lets the
+// status poll derive the preview line from the SAME capture getStatus took,
+// instead of a second backend.capture() round-trip per session per poll.
+function lastNonEmptyLine(content: string): string {
+  const lines = content.split("\n").filter(Boolean);
+  return lines.length ? lines[lines.length - 1] : "";
+}
+
 class SessionStatusDetector {
   private trackers = new Map<string, StateTracker>();
   private cache: SessionCache = { data: new Map(), updatedAt: 0 };
@@ -345,18 +353,48 @@ class SessionStatusDetector {
   }
 
   async getStatus(sessionName: string): Promise<SessionStatus> {
+    return (await this.evaluate(sessionName)).status;
+  }
+
+  /**
+   * Status AND the last rendered line from a SINGLE screen capture. The status
+   * poll uses this so it captures once per session instead of twice (one for
+   * getStatus, one for the preview line) — halving capture round-trips, which on
+   * the Tier-2 pty-host backend are IPC requests.
+   */
+  async getStatusDetail(
+    sessionName: string
+  ): Promise<{ status: SessionStatus; lastLine: string }> {
+    const { status, content } = await this.evaluate(sessionName);
+    return { status, lastLine: lastNonEmptyLine(content) };
+  }
+
+  // Capture the screen once, then classify. Shared by getStatus/getStatusDetail
+  // so the (potentially IPC-backed) capture happens exactly once per call.
+  private async evaluate(
+    sessionName: string
+  ): Promise<{ status: SessionStatus; content: string }> {
     await this.refreshCache();
 
     // Dead check
     if (!this.sessionExists(sessionName)) {
       this.trackers.delete(sessionName);
-      return "dead";
+      return { status: "dead", content: "" };
     }
 
     const timestamp = this.getTimestamp(sessionName);
     const tracker = this.getTracker(sessionName, timestamp);
     const content = await this.capturePane(sessionName);
+    return { status: this.classify(content, tracker, timestamp), content };
+  }
 
+  // Pure-ish classification over an already-captured screen (mutates the
+  // tracker's activity/spike state as a side effect, exactly as before).
+  private classify(
+    content: string,
+    tracker: StateTracker,
+    timestamp: number
+  ): SessionStatus {
     // 1. Busy indicators in last 10 lines (highest priority - Claude is actively working)
     // No activity timestamp check needed since we only look at recent terminal lines
     if (checkBusyIndicators(content)) {

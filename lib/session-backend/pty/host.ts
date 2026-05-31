@@ -253,7 +253,8 @@ export function startHost(): Promise<boolean> {
       const decode = createDecoder<ClientMessage>((msg) =>
         handleMessage(conn, msg)
       );
-      socket.setEncoding("utf8");
+      // No setEncoding: the decoder reads raw Buffers so length-prefixed frames
+      // reassemble byte-exact (multi-byte UTF-8 is never split mid-character).
       socket.on("data", decode);
       // Disconnect detaches this client's subscriptions but does NOT kill the
       // sessions — that's the whole point of the daemon.
