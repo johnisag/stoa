@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Common utilities for agent-os scripts
+# Common utilities for stoa scripts
 
 # Colors
 RED='\033[0;31m'
@@ -65,7 +65,7 @@ prompt_yn() {
 
 # Process management helpers
 get_pid() {
-    local pid_file="$AGENT_OS_HOME/agent-os.pid"
+    local pid_file="$STOA_HOME/stoa.pid"
     if [[ -f "$pid_file" ]]; then
         local pid
         pid=$(cat "$pid_file")

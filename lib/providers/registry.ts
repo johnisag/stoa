@@ -4,18 +4,7 @@
  * Centralized configuration for all AI coding agent providers.
  */
 
-export const PROVIDER_IDS = [
-  "claude",
-  "codex",
-  "opencode",
-  "gemini",
-  "aider",
-  "cursor",
-  "amp",
-  "pi",
-  "omp",
-  "shell",
-] as const;
+export const PROVIDER_IDS = ["claude", "codex", "hermes", "shell"] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
@@ -82,83 +71,25 @@ export const PROVIDERS: ProviderDefinition[] = [
     initialPromptFlag: "", // Positional argument
   },
   {
-    id: "opencode",
-    name: "OpenCode",
-    description: "Multi-provider AI CLI",
-    cli: "opencode",
-    configDir: "~/.opencode.json",
-    autoApproveFlag: undefined, // OpenCode manages this via config
-    supportsResume: false,
-    supportsFork: false,
-    initialPromptFlag: "--prompt",
-  },
-  {
-    id: "gemini",
-    name: "Gemini CLI",
-    description: "Google's AI CLI",
-    cli: "gemini",
-    configDir: "~/.gemini",
+    id: "hermes",
+    name: "Hermes Agent",
+    description: "Nous Research agent harness",
+    cli: "hermes",
+    configDir: "~/.hermes",
+    // Launches the interactive Hermes TUI (self-authenticating, like Claude Code).
+    // CLI surface (from `hermes --help`): -z PROMPT, -m MODEL, --resume SESSION,
+    // --continue, --yolo, --pass-session-id.
+    //  - --yolo wired here (auto-approve).
+    //  - resumeFlag is "--resume" but resume stays OFF until we capture Hermes's
+    //    session id (--pass-session-id / ~/.hermes/checkpoints) — a follow-up.
+    //  - modelFlag intentionally unset: Hermes models are dynamic/provider-
+    //    specific (`hermes model` live-fetches /v1/models), so Stoa shouldn't
+    //    impose a static model list. Hermes uses its configured default.
+    //  - -z initial prompt held until interactive-vs-one-shot is confirmed.
     autoApproveFlag: "--yolo",
+    resumeFlag: "--resume",
     supportsResume: false,
     supportsFork: false,
-    modelFlag: "-m",
-    initialPromptFlag: "-p",
-  },
-  {
-    id: "aider",
-    name: "Aider",
-    description: "AI pair programming",
-    cli: "aider",
-    configDir: "~/.aider",
-    autoApproveFlag: "--yes",
-    supportsResume: false,
-    supportsFork: false,
-    modelFlag: "--model",
-  },
-  {
-    id: "cursor",
-    name: "Cursor CLI",
-    description: "Cursor's AI agent",
-    cli: "cursor-agent",
-    configDir: "~/.cursor",
-    autoApproveFlag: undefined, // -p requires a prompt, not auto-approve
-    supportsResume: false,
-    supportsFork: false,
-    modelFlag: "--model",
-  },
-  {
-    id: "amp",
-    name: "Amp",
-    description: "Multi-model coding agent",
-    cli: "amp",
-    configDir: "~/.config/amp",
-    autoApproveFlag: "--dangerously-allow-all",
-    supportsResume: false,
-    supportsFork: false,
-    initialPromptFlag: "", // Positional argument
-  },
-  {
-    id: "pi",
-    name: "Pi",
-    description: "Extensible coding harness",
-    cli: "pi",
-    configDir: "~/.pi/agent",
-    supportsResume: false,
-    supportsFork: false,
-    modelFlag: "--model",
-    initialPromptFlag: "", // Positional argument
-  },
-  {
-    id: "omp",
-    name: "Oh My Pi",
-    description: "Enhanced Pi coding harness",
-    cli: "omp",
-    configDir: "~/.omp",
-    autoApproveFlag: undefined,
-    supportsResume: false,
-    supportsFork: false,
-    modelFlag: "--model",
-    initialPromptFlag: "", // Positional argument
   },
   {
     id: "shell",
@@ -206,7 +137,7 @@ export function isValidProviderId(value: string): value is ProviderId {
 }
 
 /**
- * Get regex pattern for matching AgentOS-managed tmux session names
+ * Get regex pattern for matching Stoa-managed tmux session names
  * Format: {provider}-{uuid}
  */
 export function getManagedSessionPattern(): RegExp {

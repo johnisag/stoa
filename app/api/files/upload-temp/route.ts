@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     }
 
     // Create temp directory for screenshots if it doesn't exist
-    const tempDir = path.join(os.tmpdir(), "agent-os-screenshots");
+    const tempDir = path.join(os.tmpdir(), "stoa-screenshots");
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }

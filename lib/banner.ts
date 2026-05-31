@@ -1,4 +1,4 @@
-// AgentOS session initialization
+// Stoa session initialization
 // Writes an init script that shows the banner, configures tmux, then runs the agent
 
 import * as fs from "fs";
@@ -6,11 +6,11 @@ import * as os from "os";
 import * as path from "path";
 
 /**
- * Generate an init script that shows the AgentOS banner and configures tmux
+ * Generate an init script that shows the Stoa banner and configures tmux
  */
 function generateInitScript(agentCommand: string): string {
   return `#!/bin/bash
-# AgentOS Session Init Script
+# Stoa Session Init Script
 # Auto-generated - do not edit manually
 
 # ANSI Colors (purple theme)
@@ -23,7 +23,7 @@ C_BOLD=$'\\033[1m'
 
 # Configure tmux status bar
 tmux set-option status-style 'bg=#1e1e2e,fg=#cdd6f4' 2>/dev/null
-tmux set-option status-left '#[fg=#cba6f7,bold] AgentOS #[fg=#6c7086]| ' 2>/dev/null
+tmux set-option status-left '#[fg=#cba6f7,bold] Stoa #[fg=#6c7086]| ' 2>/dev/null
 tmux set-option status-left-length 20 2>/dev/null
 tmux set-option status-right '#[fg=#6c7086]| #[fg=#89b4fa]#S #[fg=#6c7086]| #[fg=#a6adc8]%H:%M ' 2>/dev/null
 tmux set-option status-right-length 40 2>/dev/null
@@ -56,7 +56,7 @@ exec ${agentCommand}
  */
 export function wrapWithBanner(agentCommand: string): string {
   const scriptContent = generateInitScript(agentCommand);
-  const scriptPath = path.join(os.tmpdir(), `agent-os-init-${Date.now()}.sh`);
+  const scriptPath = path.join(os.tmpdir(), `stoa-init-${Date.now()}.sh`);
 
   fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
 

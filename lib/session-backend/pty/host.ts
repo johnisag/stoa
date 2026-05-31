@@ -2,7 +2,7 @@
  * Pty-host daemon (Tier 2).
  *
  * A standalone, long-lived process that owns the pty registry and serves it
- * over a local socket, so agent sessions survive the AgentOS web server
+ * over a local socket, so agent sessions survive the Stoa web server
  * restarting. It reuses the exact same registry/PtySession used in-process for
  * Tier 1 — this file only adds the socket server and per-connection output
  * routing.
@@ -303,6 +303,10 @@ export function stopHost(): Promise<void> {
     if (!server) return resolve();
     const srv = server;
     server = null;
+    // Destroy any open client sockets first, otherwise srv.close() waits for
+    // them to end and never completes.
+    for (const sock of connections) sock.destroy();
+    connections.clear();
     srv.close(() => resolve());
   });
 }

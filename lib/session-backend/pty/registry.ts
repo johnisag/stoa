@@ -1,5 +1,5 @@
 /**
- * Pty session registry — AgentOS's in-process replacement for the tmux server.
+ * Pty session registry — Stoa's in-process replacement for the tmux server.
  *
  * A module-level Map of live PtySession objects that outlives any single
  * WebSocket. Shared by:
@@ -8,7 +8,7 @@
  *   - server.ts, which subscribes WebSocket clients to a session's output.
  *
  * Tier 1 (migration-plan.md §1): sessions survive browser disconnects but not an
- * AgentOS server restart — the Map lives in the Node process. Tier 2 would move
+ * Stoa server restart — the Map lives in the Node process. Tier 2 would move
  * this into a separate long-lived pty-host process.
  */
 

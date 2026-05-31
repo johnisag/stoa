@@ -164,7 +164,7 @@ export class TmuxBackend implements SessionBackend {
     // Route arbitrary/multi-line text through a tmux buffer via a temp file to
     // avoid send-keys escaping/interpretation issues.
     const unique = `${process.pid}-${++pasteCounter}`;
-    const tempFile = path.join(tmpDir(), `agent-os-send-${unique}.txt`);
+    const tempFile = path.join(tmpDir(), `stoa-send-${unique}.txt`);
     const bufferName = `send-${unique}`;
     try {
       await writeFile(tempFile, text);

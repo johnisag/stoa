@@ -48,13 +48,7 @@ import type {
 const AGENT_OPTIONS: { value: AgentType; label: string }[] = [
   { value: "claude", label: "Claude Code" },
   { value: "codex", label: "Codex" },
-  { value: "opencode", label: "OpenCode" },
-  { value: "gemini", label: "Gemini CLI" },
-  { value: "aider", label: "Aider" },
-  { value: "cursor", label: "Cursor CLI" },
-  { value: "amp", label: "Amp" },
-  { value: "pi", label: "Pi" },
-  { value: "omp", label: "Oh My Pi" },
+  { value: "hermes", label: "Hermes Agent" },
 ];
 
 interface DevServerConfig {

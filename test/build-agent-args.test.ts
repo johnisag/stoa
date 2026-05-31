@@ -31,19 +31,30 @@ describe("buildAgentArgs", () => {
     expect(args).toHaveLength(1);
   });
 
-  it("gemini: model + prompt use their flags as separate tokens", () => {
-    const { binary, args } = buildAgentArgs("gemini", {
+  it("codex: auto-approve flag, model flag, positional prompt", () => {
+    const { binary, args } = buildAgentArgs("codex", {
       autoApprove: true,
-      model: "gemini-2.0",
-      initialPrompt: "do it",
+      model: "o3",
+      initialPrompt: "go",
     });
-    expect(binary).toBe("gemini");
-    expect(args).toEqual(["--yolo", "-m", "gemini-2.0", "-p", "do it"]);
+    expect(binary).toBe("codex");
+    expect(args).toEqual([
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--model",
+      "o3",
+      "go",
+    ]);
   });
 
-  it("opencode: prompt uses --prompt flag form", () => {
-    const { args } = buildAgentArgs("opencode", { initialPrompt: "task" });
-    expect(args).toEqual(["--prompt", "task"]);
+  it("hermes: --yolo for auto-approve; model/prompt not wired (dynamic models)", () => {
+    expect(buildAgentArgs("hermes", {}).args).toEqual([]);
+    const { binary, args } = buildAgentArgs("hermes", {
+      autoApprove: true,
+      model: "opus", // ignored: Hermes models are dynamic, modelFlag unset
+      initialPrompt: "ignored until -z semantics confirmed",
+    });
+    expect(binary).toBe("hermes");
+    expect(args).toEqual(["--yolo"]);
   });
 
   it("shell: empty binary (server spawns a plain shell)", () => {

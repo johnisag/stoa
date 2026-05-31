@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Command implementations for agent-os
+# Command implementations for stoa
 
 cmd_install() {
     local use_local=false
     [[ "${1:-}" == "--local" ]] && use_local=true
 
-    log_info "Installing AgentOS..."
+    log_info "Installing Stoa..."
     echo ""
 
     # Check and install prerequisites
@@ -15,7 +15,7 @@ cmd_install() {
     prompt_ai_cli_install
 
     # Create directory structure
-    mkdir -p "$AGENT_OS_HOME"
+    mkdir -p "$STOA_HOME"
 
     # Clone, copy local, or update repo
     if [[ -d "$REPO_DIR" ]]; then
@@ -50,12 +50,12 @@ cmd_install() {
     npm run build
 
     # Create CLI symlink (prefer ~/.local/bin to avoid sudo)
-    log_info "Adding agent-os to PATH..."
+    log_info "Adding stoa to PATH..."
     local bin_dir="$HOME/.local/bin"
     local needs_path_update=false
 
     mkdir -p "$bin_dir"
-    ln -sf "$REPO_DIR/scripts/agent-os" "$bin_dir/agent-os"
+    ln -sf "$REPO_DIR/scripts/stoa" "$bin_dir/stoa"
 
     # Check if ~/.local/bin is in PATH
     if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
@@ -73,14 +73,14 @@ cmd_install() {
         if [[ -n "$shell_profile" ]]; then
             if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$shell_profile" 2>/dev/null; then
                 echo '' >> "$shell_profile"
-                echo '# Added by AgentOS' >> "$shell_profile"
+                echo '# Added by Stoa' >> "$shell_profile"
                 echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$shell_profile"
             fi
         fi
     fi
 
     echo ""
-    log_success "AgentOS installed successfully!"
+    log_success "Stoa installed successfully!"
     echo ""
 
     if [[ "$needs_path_update" == true ]]; then
@@ -90,25 +90,25 @@ cmd_install() {
     fi
 
     echo "Next steps:"
-    echo "  agent-os start     Start the server"
-    echo "  agent-os enable    Auto-start on boot"
-    echo "  agent-os status    Show URLs"
+    echo "  stoa start     Start the server"
+    echo "  stoa enable    Auto-start on boot"
+    echo "  stoa status    Show URLs"
 }
 
 cmd_start() {
     if is_running; then
         local pid
         pid=$(get_pid)
-        log_warn "AgentOS is already running (PID: $pid)"
+        log_warn "Stoa is already running (PID: $pid)"
         return 0
     fi
 
     if [[ ! -d "$REPO_DIR" ]]; then
-        log_error "AgentOS is not installed. Run 'agent-os install' first."
+        log_error "Stoa is not installed. Run 'stoa install' first."
         exit 1
     fi
 
-    log_info "Starting AgentOS..."
+    log_info "Starting Stoa..."
 
     cd "$REPO_DIR"
 
@@ -129,12 +129,12 @@ cmd_start() {
     # Wait and verify
     sleep 2
     if ! ps -p "$pid" &> /dev/null; then
-        log_error "Failed to start AgentOS. Check logs: agent-os logs"
+        log_error "Failed to start Stoa. Check logs: stoa logs"
         rm -f "$PID_FILE"
         exit 1
     fi
 
-    log_success "AgentOS started (PID: $pid)"
+    log_success "Stoa started (PID: $pid)"
     echo ""
     echo "  Local:     http://localhost:$PORT"
 
@@ -144,18 +144,18 @@ cmd_start() {
         echo "  Tailscale: http://$ts_ip:$PORT"
     fi
     echo ""
-    echo "Run 'agent-os logs' to view logs"
+    echo "Run 'stoa logs' to view logs"
 }
 
 cmd_stop() {
     if ! is_running; then
-        log_warn "AgentOS is not running"
+        log_warn "Stoa is not running"
         return 0
     fi
 
     local pid
     pid=$(get_pid)
-    log_info "Stopping AgentOS (PID: $pid)..."
+    log_info "Stopping Stoa (PID: $pid)..."
 
     kill "$pid" 2>/dev/null || true
 
@@ -177,7 +177,7 @@ cmd_stop() {
     fi
 
     rm -f "$PID_FILE"
-    log_success "AgentOS stopped"
+    log_success "Stoa stopped"
 }
 
 cmd_restart() {
@@ -233,11 +233,11 @@ cmd_status() {
         if [[ -d "$REPO_DIR" ]]; then
             echo "  Install:   $REPO_DIR"
             echo ""
-            echo "  Run 'agent-os start' to start the server"
+            echo "  Run 'stoa start' to start the server"
         else
             echo "  Install:   Not installed"
             echo ""
-            echo "  Run 'agent-os install' to install"
+            echo "  Run 'stoa install' to install"
         fi
     fi
     echo ""
@@ -254,7 +254,7 @@ cmd_logs() {
 
 cmd_update() {
     if [[ ! -d "$REPO_DIR" ]]; then
-        log_error "AgentOS is not installed. Run 'agent-os install' first."
+        log_error "Stoa is not installed. Run 'stoa install' first."
         exit 1
     fi
 
@@ -264,7 +264,7 @@ cmd_update() {
         cmd_stop
     fi
 
-    log_info "Updating AgentOS..."
+    log_info "Updating Stoa..."
 
     cd "$REPO_DIR"
 
@@ -296,7 +296,7 @@ cmd_update() {
 
 cmd_enable() {
     if [[ ! -d "$REPO_DIR" ]]; then
-        log_error "AgentOS is not installed. Run 'agent-os install' first."
+        log_error "Stoa is not installed. Run 'stoa install' first."
         exit 1
     fi
 
@@ -304,7 +304,7 @@ cmd_enable() {
     script_path=$(realpath "$0")
 
     if [[ "$OS" == "macos" ]]; then
-        local plist_path="$HOME/Library/LaunchAgents/com.agent-os.plist"
+        local plist_path="$HOME/Library/LaunchAgents/com.stoa.plist"
 
         cat > "$plist_path" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -312,7 +312,7 @@ cmd_enable() {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.agent-os</string>
+    <string>com.stoa</string>
     <key>ProgramArguments</key>
     <array>
         <string>$script_path</string>
@@ -341,13 +341,13 @@ EOF
 
     elif [[ -d /etc/systemd ]]; then
         local service_dir="$HOME/.config/systemd/user"
-        local service_path="$service_dir/agent-os.service"
+        local service_path="$service_dir/stoa.service"
 
         mkdir -p "$service_dir"
 
         cat > "$service_path" << EOF
 [Unit]
-Description=AgentOS - AI Coding Session Manager
+Description=Stoa - AI Coding Session Manager
 After=network.target
 
 [Service]
@@ -362,7 +362,7 @@ WantedBy=default.target
 EOF
 
         systemctl --user daemon-reload
-        systemctl --user enable agent-os
+        systemctl --user enable stoa
         log_success "Auto-start enabled (systemd)"
         echo "  Service: $service_path"
 
@@ -374,7 +374,7 @@ EOF
 
 cmd_disable() {
     if [[ "$OS" == "macos" ]]; then
-        local plist_path="$HOME/Library/LaunchAgents/com.agent-os.plist"
+        local plist_path="$HOME/Library/LaunchAgents/com.stoa.plist"
 
         if [[ -f "$plist_path" ]]; then
             launchctl unload "$plist_path" 2>/dev/null || true
@@ -385,8 +385,8 @@ cmd_disable() {
         fi
 
     elif [[ -d /etc/systemd ]]; then
-        systemctl --user disable agent-os 2>/dev/null || true
-        rm -f "$HOME/.config/systemd/user/agent-os.service"
+        systemctl --user disable stoa 2>/dev/null || true
+        rm -f "$HOME/.config/systemd/user/stoa.service"
         systemctl --user daemon-reload
         log_success "Auto-start disabled"
 
@@ -398,7 +398,7 @@ cmd_disable() {
 
 cmd_uninstall() {
     echo ""
-    log_warn "This will remove AgentOS and all its data."
+    log_warn "This will remove Stoa and all its data."
 
     if ! prompt_yn "Are you sure?" "n"; then
         log_info "Cancelled"
@@ -421,35 +421,35 @@ cmd_uninstall() {
 
     # Remove CLI symlink (only for non-npm installs)
     if [[ "$installed_via_npm" == false ]]; then
-        if [[ -L "$HOME/.local/bin/agent-os" ]]; then
+        if [[ -L "$HOME/.local/bin/stoa" ]]; then
             log_info "Removing CLI symlink..."
-            rm -f "$HOME/.local/bin/agent-os"
-        elif [[ -L "/usr/local/bin/agent-os" ]]; then
+            rm -f "$HOME/.local/bin/stoa"
+        elif [[ -L "/usr/local/bin/stoa" ]]; then
             # Legacy location
             log_info "Removing CLI symlink..."
-            sudo rm -f "/usr/local/bin/agent-os"
+            sudo rm -f "/usr/local/bin/stoa"
         fi
     fi
 
     # Remove installation directory
-    if [[ -d "$AGENT_OS_HOME" ]]; then
-        log_info "Removing $AGENT_OS_HOME..."
-        rm -rf "$AGENT_OS_HOME"
+    if [[ -d "$STOA_HOME" ]]; then
+        log_info "Removing $STOA_HOME..."
+        rm -rf "$STOA_HOME"
     fi
 
-    log_success "AgentOS uninstalled"
+    log_success "Stoa uninstalled"
 
     # If installed via npm, provide instructions to remove the global package
     if [[ "$installed_via_npm" == true ]]; then
         echo ""
         log_info "To completely remove the CLI, run:"
-        echo "  npm uninstall -g @saadnvd1/agent-os"
+        echo "  npm uninstall -g @johnisag/stoa"
     fi
 }
 
 cmd_start_foreground() {
     if [[ ! -d "$REPO_DIR" ]]; then
-        log_error "AgentOS is not installed."
+        log_error "Stoa is not installed."
         exit 1
     fi
 
@@ -463,12 +463,12 @@ cmd_start_foreground() {
 
 cmd_help() {
     echo ""
-    echo -e "${BOLD}AgentOS${NC} - Self-hosted AI coding session manager"
+    echo -e "${BOLD}Stoa${NC} - Self-hosted AI coding session manager"
     echo ""
-    echo "Usage: agent-os <command>"
+    echo "Usage: stoa <command>"
     echo ""
     echo "Commands:"
-    echo "  install     Install AgentOS (auto-installs dependencies)"
+    echo "  install     Install Stoa (auto-installs dependencies)"
     echo "  run         Start server and open in browser"
     echo "  start       Start the server in background"
     echo "  stop        Stop the server"
@@ -478,10 +478,10 @@ cmd_help() {
     echo "  update      Update to latest version"
     echo "  enable      Enable auto-start on boot"
     echo "  disable     Disable auto-start"
-    echo "  uninstall   Remove AgentOS completely"
+    echo "  uninstall   Remove Stoa completely"
     echo ""
     echo "Environment variables:"
-    echo "  AGENT_OS_HOME   Installation directory (default: ~/.agent-os)"
-    echo "  AGENT_OS_PORT   Server port (default: 3011)"
+    echo "  STOA_HOME   Installation directory (default: ~/.stoa)"
+    echo "  STOA_PORT   Server port (default: 3011)"
     echo ""
 }

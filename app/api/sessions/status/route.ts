@@ -120,7 +120,7 @@ async function getLastLine(sessionName: string): Promise<string> {
   return lines.pop() || "";
 }
 
-// UUID pattern for agent-os managed sessions (derived from registry)
+// UUID pattern for stoa managed sessions (derived from registry)
 const UUID_PATTERN = getManagedSessionPattern();
 
 // Track previous statuses to detect changes
@@ -134,7 +134,7 @@ export async function GET() {
   try {
     const sessions = await getTmuxSessions();
 
-    // Get status for agent-os managed sessions
+    // Get status for stoa managed sessions
     const managedSessions = sessions.filter((s) => UUID_PATTERN.test(s));
 
     // Use the new status detector

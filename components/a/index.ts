@@ -1,13 +1,13 @@
 /**
- * AgentOS Design System
+ * Stoa Design System
  *
- * A collection of reusable UI components that follow AgentOS design guidelines:
+ * A collection of reusable UI components that follow Stoa design guidelines:
  * - No strong borders, uses subtle shadows instead
  * - Purple theme (HSL hue 270)
  * - Mobile-first design
  * - Consistent styling across the app
  *
- * All components are prefixed with "A" (for AgentOS).
+ * All components are prefixed with "A" (for Stoa).
  */
 
 // Core components

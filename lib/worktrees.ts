@@ -18,7 +18,7 @@ import {
 const execAsync = promisify(exec);
 
 // Base directory for all worktrees
-const WORKTREES_DIR = path.join(os.homedir(), ".agent-os", "worktrees");
+const WORKTREES_DIR = path.join(os.homedir(), ".stoa", "worktrees");
 
 export interface WorktreeInfo {
   worktreePath: string;
@@ -247,9 +247,9 @@ export async function listWorktrees(projectPath: string): Promise<
 }
 
 /**
- * Check if a path is inside an AgentOS worktree
+ * Check if a path is inside an Stoa worktree
  */
-export function isAgentOSWorktree(worktreePath: string): boolean {
+export function isStoaWorktree(worktreePath: string): boolean {
   const resolvedPath = resolvePath(worktreePath);
   return resolvedPath.startsWith(WORKTREES_DIR);
 }

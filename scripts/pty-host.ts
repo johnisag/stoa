@@ -1,6 +1,6 @@
 // Entry point for the pty-host daemon (Tier 2). Run via the tsx CLI:
 //   node node_modules/tsx/dist/cli.mjs scripts/pty-host.ts
-// Auto-spawned (detached) by the host client when AGENT_OS_PTY_HOST=1 and no
+// Auto-spawned (detached) by the host client when STOA_PTY_HOST=1 and no
 // daemon is running yet. Keeps agent sessions alive across web-server restarts.
 import { startHost } from "../lib/session-backend/pty/host";
 

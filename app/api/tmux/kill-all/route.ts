@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
+import { getManagedSessionPattern } from "@/lib/providers/registry";
 
-// POST /api/tmux/kill-all - Kill all AgentOS tmux sessions and remove from database
+// POST /api/tmux/kill-all - Kill all Stoa tmux sessions and remove from database
 export async function POST() {
   try {
     const db = getDb();
@@ -11,9 +12,10 @@ export async function POST() {
     // Get all tmux sessions
     const sessions = await backend.list();
 
-    const tmuxSessions = sessions.filter(
-      (s) => s && /^(claude|codex|opencode|gemini|aider|cursor)-/.test(s)
-    );
+    // Match Stoa-managed session names ({provider}-{uuid}) via the registry
+    // pattern so this stays in sync with the supported provider list.
+    const managedPattern = getManagedSessionPattern();
+    const tmuxSessions = sessions.filter((s) => s && managedPattern.test(s));
 
     // Kill each tmux session
     const killed: string[] = [];

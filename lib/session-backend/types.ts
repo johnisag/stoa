@@ -1,5 +1,5 @@
 /**
- * SessionBackend — the abstraction that decouples AgentOS from tmux.
+ * SessionBackend — the abstraction that decouples Stoa from tmux.
  *
  * Today the only implementation is `TmuxBackend`, which reproduces the exact
  * tmux commands the codebase used inline. A future `PtyBackend` (ConPTY on
@@ -60,7 +60,7 @@ export interface SessionBackend {
   rename(oldName: string, newName: string): Promise<void>;
   /** Whether a session currently exists. (tmux: has-session) */
   exists(name: string): Promise<boolean>;
-  /** All AgentOS-managed session names. (tmux: list-sessions -F '#{session_name}') */
+  /** All Stoa-managed session names. (tmux: list-sessions -F '#{session_name}') */
   list(): Promise<string[]>;
   /** All sessions with last-activity timestamps. (tmux: list-sessions -F '…#{session_activity}') */
   listWithActivity(): Promise<SessionActivity[]>;

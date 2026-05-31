@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
-import { deleteWorktree, isAgentOSWorktree } from "@/lib/worktrees";
+import { deleteWorktree, isStoaWorktree } from "@/lib/worktrees";
 import { releasePort } from "@/lib/ports";
 import { killWorker } from "@/lib/orchestration";
 import { generateBranchName, getCurrentBranch, renameBranch } from "@/lib/git";
@@ -79,7 +79,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       }
 
       // If this is a worktree session, also rename the git branch
-      if (existing.worktree_path && isAgentOSWorktree(existing.worktree_path)) {
+      if (existing.worktree_path && isStoaWorktree(existing.worktree_path)) {
         try {
           const currentBranch = await getCurrentBranch(existing.worktree_path);
           const newBranchName = generateBranchName(body.name);
@@ -172,7 +172,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     queries.deleteSession(db).run(id);
 
     // Clean up worktree in background (non-blocking)
-    if (existing.worktree_path && isAgentOSWorktree(existing.worktree_path)) {
+    if (existing.worktree_path && isStoaWorktree(existing.worktree_path)) {
       const worktreePath = existing.worktree_path; // Capture for closure
       runInBackground(async () => {
         const { exec } = await import("child_process");
@@ -194,7 +194,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     // Also cleanup worker worktrees in background
     if (workers.length > 0) {
       for (const worker of workers) {
-        if (worker.worktree_path && isAgentOSWorktree(worker.worktree_path)) {
+        if (worker.worktree_path && isStoaWorktree(worker.worktree_path)) {
           const worktreePath = worker.worktree_path; // Capture for closure
           const workerId = worker.id; // Capture ID for task name
           runInBackground(async () => {

@@ -2,7 +2,7 @@
  * IPC protocol for the pty-host daemon (Tier 2, migration-plan.md §6, Phase 6).
  *
  * The host owns the pty registry in a separate long-lived process so agent
- * sessions survive the AgentOS web server restarting. Web-server-side clients
+ * sessions survive the Stoa web server restarting. Web-server-side clients
  * talk to it over a local socket (named pipe on Windows, unix socket on POSIX).
  *
  * Framing: newline-delimited JSON. pty output is carried as a JSON string
@@ -13,12 +13,17 @@ import os from "os";
 import path from "path";
 import { isWindows } from "../../platform";
 
-/** Absolute address of the host's listening socket. */
+/**
+ * Absolute address of the host's listening socket. The basename can be
+ * overridden via STOA_PTY_HOST_NAME so multiple Stoa instances (or test
+ * files) can run isolated daemons without colliding on the global pipe/socket.
+ */
 export function hostAddress(): string {
+  const name = process.env.STOA_PTY_HOST_NAME || "stoa-pty-host";
   if (isWindows) {
-    return "\\\\.\\pipe\\agent-os-pty-host";
+    return `\\\\.\\pipe\\${name}`;
   }
-  return path.join(os.tmpdir(), "agent-os-pty-host.sock");
+  return path.join(os.tmpdir(), `${name}.sock`);
 }
 
 export interface SpawnSpecMsg {

@@ -1,5 +1,5 @@
 /**
- * PtySession — one long-lived agent process under AgentOS's own supervision.
+ * PtySession — one long-lived agent process under Stoa's own supervision.
  *
  * Replaces what a single tmux session provided:
  *  - a persistent process (survives browser disconnect; killed only explicitly)

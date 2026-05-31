@@ -8,11 +8,11 @@
  * Setup (one-time, in ~/.claude/settings.json or project .mcp.json):
  *   {
  *     "mcpServers": {
- *       "agent-os": {
+ *       "stoa": {
  *         "command": "npx",
- *         "args": ["tsx", "/path/to/agent-os/mcp/orchestration-server.ts"],
+ *         "args": ["tsx", "/path/to/stoa/mcp/orchestration-server.ts"],
  *         "env": {
- *           "AGENTOS_URL": "http://localhost:3011"
+ *           "STOA_URL": "http://localhost:3011"
  *         }
  *       }
  *     }
@@ -29,13 +29,13 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const AGENTOS_URL = process.env.AGENTOS_URL || "http://localhost:3011";
+const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
 
 // Optional: Get conductor session ID from environment (can also be passed per-call)
 const DEFAULT_CONDUCTOR_ID = process.env.CONDUCTOR_SESSION_ID || "";
 
 async function apiCall(path: string, options?: RequestInit) {
-  const url = `${AGENTOS_URL}${path}`;
+  const url = `${STOA_URL}${path}`;
   const response = await fetch(url, {
     ...options,
     headers: {
@@ -48,7 +48,7 @@ async function apiCall(path: string, options?: RequestInit) {
 
 const server = new Server(
   {
-    name: "agent-os-orchestration",
+    name: "stoa-orchestration",
     version: "1.0.0",
   },
   {
@@ -432,7 +432,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Agent-OS Orchestration MCP Server started");
+  console.error("Stoa Orchestration MCP Server started");
 }
 
 main().catch(console.error);

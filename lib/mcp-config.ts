@@ -8,7 +8,7 @@
 import { writeFileSync, existsSync, readFileSync } from "fs";
 import path from "path";
 
-const AGENTOS_URL = process.env.AGENTOS_URL || "http://localhost:3011";
+const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
 
 interface McpConfig {
   mcpServers: Record<
@@ -51,12 +51,12 @@ export function ensureMcpConfig(
     }
   }
 
-  // Add/update agent-os orchestration server
-  config.mcpServers["agent-os"] = {
+  // Add/update stoa orchestration server
+  config.mcpServers["stoa"] = {
     command: "npx",
     args: ["tsx", orchestrationServerPath],
     env: {
-      AGENTOS_URL,
+      STOA_URL,
       CONDUCTOR_SESSION_ID: sessionId,
     },
   };
@@ -66,7 +66,7 @@ export function ensureMcpConfig(
 }
 
 /**
- * Check if .mcp.json exists and has agent-os configured
+ * Check if .mcp.json exists and has stoa configured
  */
 export function hasMcpConfig(workingDirectory: string): boolean {
   const configPath = path.join(workingDirectory, ".mcp.json");
@@ -74,7 +74,7 @@ export function hasMcpConfig(workingDirectory: string): boolean {
 
   try {
     const config = JSON.parse(readFileSync(configPath, "utf-8"));
-    return !!config.mcpServers?.["agent-os"];
+    return !!config.mcpServers?.["stoa"];
   } catch {
     return false;
   }

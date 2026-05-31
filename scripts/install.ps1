@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-    AgentOS installer for native Windows.
+    Stoa installer for native Windows.
 
 .DESCRIPTION
     Mirrors scripts/install.sh for Windows / PowerShell. Checks prerequisites
-    (Node 20+, Git), clones or updates the repo into %USERPROFILE%\.agent-os\repo,
+    (Node 20+, Git), clones or updates the repo into %USERPROFILE%\.stoa\repo,
     installs npm dependencies, builds for production, and prints how to start.
 
     Designed to be run via:
-        irm https://raw.githubusercontent.com/johnisag/agent-os/main/scripts/install.ps1 | iex
+        irm https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.ps1 | iex
 
 .NOTES
     PowerShell 5.1 compatible: no `&&`/`||` chaining; uses `if ($?) {}` instead.
@@ -18,8 +18,8 @@
 # Stop on the first unhandled error so a failed step doesn't cascade silently.
 $ErrorActionPreference = "Stop"
 
-$RepoUrl    = "https://github.com/johnisag/agent-os.git"
-$AgentHome  = Join-Path $env:USERPROFILE ".agent-os"
+$RepoUrl    = "https://github.com/johnisag/stoa.git"
+$AgentHome  = Join-Path $env:USERPROFILE ".stoa"
 $InstallDir = Join-Path $AgentHome "repo"
 
 function Write-Info    { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
@@ -27,7 +27,7 @@ function Write-Ok      { param([string]$Message) Write-Host "==> $Message" -Fore
 function Write-Err     { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Red }
 
 Write-Host ""
-Write-Host "AgentOS Installer" -ForegroundColor White
+Write-Host "Stoa Installer" -ForegroundColor White
 Write-Host ""
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ if (Test-Path $InstallDir) {
     if (-not $?) { Pop-Location; Write-Err "git pull failed."; exit 1 }
     Pop-Location
 } else {
-    Write-Info "Downloading AgentOS..."
+    Write-Info "Downloading Stoa..."
     if (-not (Test-Path $AgentHome)) {
         New-Item -ItemType Directory -Force -Path $AgentHome | Out-Null
     }
@@ -100,12 +100,12 @@ Pop-Location
 # Done
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Ok "AgentOS installed successfully!"
+Write-Ok "Stoa installed successfully!"
 Write-Host ""
 Write-Host "Installed at: $InstallDir"
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "  agent-os start          (if the CLI is on your PATH)"
+Write-Host "  stoa start          (if the CLI is on your PATH)"
 Write-Host "  - or -"
 Write-Host "  cd `"$InstallDir`"; npm start"
 Write-Host ""

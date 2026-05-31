@@ -12,7 +12,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-const LOGS_DIR = path.join(homeDir(), ".agent-os", "logs");
+const LOGS_DIR = path.join(homeDir(), ".stoa", "logs");
 
 // Ensure logs directory exists
 if (!fs.existsSync(LOGS_DIR)) {

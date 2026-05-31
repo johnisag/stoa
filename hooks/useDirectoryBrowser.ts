@@ -79,7 +79,7 @@ export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
   const roots = useMemo(() => rootsData?.roots || ["/"], [rootsData]);
   const separator = rootsData?.separator || "/";
 
-  // Resolved path for display/navigation (e.g., "~" → "/Users/saad").
+  // Resolved path for display/navigation (e.g., "~" → "/Users/you").
   // While showing roots there is no current directory.
   const currentPath = showRoots ? "" : data?.resolvedPath || requestedPath;
 

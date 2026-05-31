@@ -38,6 +38,10 @@ coverage/
 .mem.db
 .mem.db-wal
 .mem.db-shm
+stoa.db
+stoa.db-wal
+stoa.db-shm
+# legacy name (pre-Stoa rename); kept ignored so old local DBs don't get committed
 agent-os.db
 agent-os.db-wal
 agent-os.db-shm
@@ -56,7 +60,9 @@ docs/*
 .git-evening
 
 # Private development notes (open source repo)
-CLAUDE.md
+# CLAUDE.md is checked in as a thin pointer to AGENTS.md; personal notes go in
+# CLAUDE.local.md (auto-loaded by Claude Code, ignored here).
+CLAUDE.local.md
 master.md
 progress.md
 .git-evening

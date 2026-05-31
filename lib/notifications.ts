@@ -1,4 +1,4 @@
-// Notification utilities for AgentOS
+// Notification utilities for Stoa
 
 export type NotificationEvent = "waiting" | "error" | "completed";
 
@@ -24,7 +24,7 @@ export const defaultSettings: NotificationSettings = {
   },
 };
 
-const SETTINGS_KEY = "agentosNotificationSettings";
+const SETTINGS_KEY = "stoaNotificationSettings";
 
 export function loadSettings(): NotificationSettings {
   if (typeof window === "undefined") return defaultSettings;

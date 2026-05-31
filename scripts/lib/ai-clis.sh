@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AI CLI detection and installation for agent-os
+# AI CLI detection and installation for stoa
 
 detect_ai_clis() {
     local installed=()
@@ -94,7 +94,7 @@ prompt_ai_cli_install() {
     echo ""
     log_warn "No AI coding CLI detected"
     echo ""
-    echo "AgentOS supports these AI coding assistants:"
+    echo "Stoa supports these AI coding assistants:"
     echo ""
     echo "  1) Claude Code (Anthropic) - Recommended"
     echo "  2) Codex (OpenAI)"
@@ -120,7 +120,7 @@ prompt_ai_cli_install() {
         5)
             log_info "Skipping AI CLI installation"
             echo ""
-            echo "Install one of these before using AgentOS:"
+            echo "Install one of these before using Stoa:"
             echo "  Claude Code: npm install -g @anthropic-ai/claude-code"
             echo "  Codex:       npm install -g @openai/codex"
             echo "  Aider:       pip install aider-chat"

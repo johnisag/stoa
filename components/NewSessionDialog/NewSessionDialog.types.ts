@@ -2,10 +2,10 @@ import type { AgentType } from "@/lib/providers";
 import type { ProjectWithDevServers } from "@/lib/projects";
 
 // LocalStorage keys
-export const SKIP_PERMISSIONS_KEY = "agentOS:skipPermissions";
-export const AGENT_TYPE_KEY = "agentOS:defaultAgentType";
-export const RECENT_DIRS_KEY = "agentOS:recentDirectories";
-export const USE_TMUX_KEY = "agentOS:useTmux";
+export const SKIP_PERMISSIONS_KEY = "stoa:skipPermissions";
+export const AGENT_TYPE_KEY = "stoa:defaultAgentType";
+export const RECENT_DIRS_KEY = "stoa:recentDirectories";
+export const USE_TMUX_KEY = "stoa:useTmux";
 export const MAX_RECENT_DIRS = 5;
 
 // Random feature name generator
@@ -92,16 +92,10 @@ export const AGENT_OPTIONS: {
 }[] = [
   { value: "claude", label: "Claude Code", description: "Anthropic's CLI" },
   { value: "codex", label: "Codex", description: "OpenAI's CLI" },
-  { value: "opencode", label: "OpenCode", description: "Multi-provider CLI" },
-  { value: "gemini", label: "Gemini CLI", description: "Google's CLI" },
-  { value: "aider", label: "Aider", description: "AI pair programming" },
-  { value: "cursor", label: "Cursor CLI", description: "Cursor's AI agent" },
-  { value: "amp", label: "Amp", description: "Multi-model coding agent" },
-  { value: "pi", label: "Pi", description: "Extensible coding harness" },
   {
-    value: "omp",
-    label: "Oh My Pi",
-    description: "Enhanced Pi coding harness",
+    value: "hermes",
+    label: "Hermes Agent",
+    description: "Nous Research harness",
   },
 ];
 

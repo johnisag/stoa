@@ -1,13 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { claudeProjectDirName, expandHome, baseName } from "@/lib/platform";
+import {
+  claudeProjectDirName,
+  expandHome,
+  baseName,
+  isPortInUse,
+  resolveBinary,
+  defaultInteractiveShell,
+} from "@/lib/platform";
 import os from "os";
 import path from "path";
+import net from "net";
 
 describe("claudeProjectDirName", () => {
   it("encodes a Windows path to Claude's project-dir convention", () => {
-    // Verified on disk: C:\my-projects\agent-os -> c--my-projects-agent-os
-    expect(claudeProjectDirName("C:\\my-projects\\agent-os")).toBe(
-      "c--my-projects-agent-os"
+    // Verified on disk: C:\my-projects\stoa -> c--my-projects-stoa
+    expect(claudeProjectDirName("C:\\my-projects\\stoa")).toBe(
+      "c--my-projects-stoa"
     );
   });
 
@@ -16,8 +24,8 @@ describe("claudeProjectDirName", () => {
   });
 
   it("encodes a POSIX path (leading separator -> leading dash)", () => {
-    expect(claudeProjectDirName("/Users/me/my-projects/agent-os")).toBe(
-      "-Users-me-my-projects-agent-os"
+    expect(claudeProjectDirName("/Users/me/my-projects/stoa")).toBe(
+      "-Users-me-my-projects-stoa"
     );
   });
 
@@ -42,7 +50,32 @@ describe("expandHome", () => {
 
 describe("baseName (re-exported pure helper)", () => {
   it("is separator-agnostic", () => {
-    expect(baseName("C:\\my-projects\\agent-os")).toBe("agent-os");
+    expect(baseName("C:\\my-projects\\stoa")).toBe("stoa");
     expect(baseName("/a/b/c")).toBe("c");
+  });
+});
+
+describe("isPortInUse", () => {
+  it("is true while a port is bound and false once it's free", async () => {
+    const srv = net.createServer();
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const port = (srv.address() as net.AddressInfo).port;
+    expect(await isPortInUse(port)).toBe(true);
+    await new Promise<void>((r) => srv.close(() => r()));
+    expect(await isPortInUse(port)).toBe(false);
+  });
+});
+
+describe("resolveBinary / defaultInteractiveShell", () => {
+  it("resolves node (on PATH in every environment)", () => {
+    const resolved = resolveBinary("node");
+    expect(resolved).toBeTruthy();
+    expect(resolved!.toLowerCase()).toContain("node");
+  });
+  it("returns null for a binary that does not exist", () => {
+    expect(resolveBinary("definitely-not-a-real-binary-xyz")).toBeNull();
+  });
+  it("picks a non-empty interactive shell for the platform", () => {
+    expect(defaultInteractiveShell().length).toBeGreaterThan(0);
   });
 });

@@ -41,8 +41,8 @@ export async function readWorktreeConfig(
   projectPath: string
 ): Promise<WorktreeConfig | null> {
   const configPaths = [
-    path.join(projectPath, ".agent-os", "worktrees.json"),
-    path.join(projectPath, ".agent-os.json"),
+    path.join(projectPath, ".stoa", "worktrees.json"),
+    path.join(projectPath, ".stoa.json"),
   ];
 
   for (const configPath of configPaths) {

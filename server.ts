@@ -231,7 +231,7 @@ app.prepare().then(() => {
           "> pty-host daemon ready (Tier 2: sessions survive server restarts)"
         );
       } catch (err) {
-        process.env.AGENT_OS_PTY_HOST = "0";
+        process.env.STOA_PTY_HOST = "0";
         resetSessionBackend(); // re-resolve to Tier 1 even if already cached
         console.error(
           "> pty-host daemon unreachable; using in-process sessions (Tier 1):",
@@ -240,7 +240,7 @@ app.prepare().then(() => {
       }
     }
     server.listen(port, () => {
-      console.log(`> Agent-OS ready on http://${hostname}:${port}`);
+      console.log(`> Stoa ready on http://${hostname}:${port}`);
     });
   })();
 });
