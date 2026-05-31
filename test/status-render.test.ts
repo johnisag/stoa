@@ -12,7 +12,7 @@ import {
   killSession,
   _resetRegistryForTests,
 } from "@/lib/session-backend/pty/registry";
-import { statusDetector } from "@/lib/status-detector";
+import { statusDetector, ERROR_PATTERNS } from "@/lib/status-detector";
 
 afterEach(() => _resetRegistryForTests());
 
@@ -109,5 +109,41 @@ describe("multi-client fan-out + sizing", () => {
     s.removeClient(big);
     expect(s.alive).toBe(true);
     killSession("size");
+  });
+});
+
+describe("error-state detection", () => {
+  it("classifies a structured error on the rendered screen as 'error'", async () => {
+    spawnSession("vt-err", {
+      binary: "node",
+      args: printAndHold(
+        "Error code: 400 - {'type': 'invalid_request_error'}\r\n"
+      ),
+      cwd: process.cwd(),
+    });
+    const ok = await waitFor(
+      async () => (await statusDetector.getStatus("vt-err")) === "error"
+    );
+    expect(ok).toBe(true);
+    killSession("vt-err");
+  });
+});
+
+describe("ERROR_PATTERNS (load-bearing, kept conservative)", () => {
+  const hit = (s: string) => ERROR_PATTERNS.some((p) => p.test(s));
+
+  it("matches structured / provider errors", () => {
+    expect(hit("Traceback (most recent call last):")).toBe(true);
+    expect(hit("  Error code: 400 - bad request")).toBe(true);
+    expect(hit("'type': 'invalid_request_error'")).toBe(true);
+    expect(hit("You're out of extra usage. Add more at ...")).toBe(true);
+    expect(hit("quota exceeded")).toBe(true);
+  });
+
+  it("does NOT flag benign output that merely mentions 'error'", () => {
+    expect(hit("I fixed the error and all tests pass.")).toBe(false);
+    expect(hit("No errors found.")).toBe(false);
+    expect(hit("Handled the error gracefully.")).toBe(false);
+    expect(hit("> ")).toBe(false);
   });
 });

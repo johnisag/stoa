@@ -36,6 +36,10 @@ export function useSessionStatusesQuery({
     queryKey: statusKeys.all,
     queryFn: fetchStatuses,
     staleTime: 2000,
+    // Refetch on window focus (overrides the global default) so transitions
+    // missed while the tab was hidden/throttled are caught the moment you
+    // return — checkStateChanges then fires any pending notifications.
+    refetchOnWindowFocus: true,
     refetchInterval: (query) => {
       const statuses = query.state.data?.statuses;
       if (!statuses) return 5000;

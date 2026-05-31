@@ -110,6 +110,48 @@ export function NotificationSettings({
           </span>
         </DropdownMenuItem>
 
+        {/* Per-event toggles: which transitions notify you */}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-muted-foreground text-xs">
+          Notify me when a session…
+        </DropdownMenuLabel>
+        {(
+          [
+            ["waiting", "Needs input"],
+            ["error", "Hits an error"],
+            ["completed", "Finishes"],
+          ] as const
+        ).map(([event, label]) => {
+          const on = settings.events[event];
+          return (
+            <DropdownMenuItem
+              key={event}
+              onSelect={(e) => {
+                e.preventDefault();
+                onUpdateSettings({
+                  events: { ...settings.events, [event]: !on },
+                });
+              }}
+              className="flex items-center justify-between"
+            >
+              <span>{label}</span>
+              <span
+                className={cn(
+                  "relative h-4 w-8 rounded-full transition-colors",
+                  on ? "bg-primary" : "bg-muted"
+                )}
+              >
+                <span
+                  className={cn(
+                    "bg-background absolute top-0.5 h-3 w-3 rounded-full transition-transform",
+                    on ? "translate-x-4" : "translate-x-0.5"
+                  )}
+                />
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+
         {/* Browser notifications - only show if not granted */}
         {!permissionGranted && (
           <DropdownMenuItem

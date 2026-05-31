@@ -153,7 +153,21 @@ const WAITING_PATTERNS = [
 // until a clean exit, so the on-screen banner is the reliable capture source.
 export const HERMES_SESSION_ID_RE = /Session:\s*(\d{8}_\d{6}_[0-9a-fA-F]+)/;
 
-export type SessionStatus = "running" | "waiting" | "idle" | "dead";
+export type SessionStatus = "running" | "waiting" | "idle" | "error" | "dead";
+
+// High-signal, STRUCTURED error markers — deliberately conservative so the
+// word "error" in normal agent output doesn't trip a false alarm. Checked on
+// only the last few rendered lines, so a stale error scrolled into history
+// stops counting. Best-effort: tune against real transcripts (the detector is
+// shared across agents, so prefer false-negatives over false-positives here).
+export const ERROR_PATTERNS: RegExp[] = [
+  /Traceback \(most recent call last\):/, // python crash
+  /^\s*panic:/m, // go panic
+  /\bError code: \d{3}\b/i, // API error envelope, e.g. "Error code: 400"
+  /\binvalid_request_error\b/, // provider error type
+  /You're out of (extra )?usage/i, // provider credit/usage exhaustion
+  /\bquota (exceeded|exhausted)\b/i,
+];
 
 interface StateTracker {
   lastChangeTime: number;
@@ -194,6 +208,11 @@ function checkBusyIndicators(content: string): boolean {
 function checkWaitingPatterns(content: string): boolean {
   const recentLines = content.split("\n").slice(-5).join("\n");
   return WAITING_PATTERNS.some((p) => p.test(recentLines));
+}
+
+function checkErrorPatterns(content: string): boolean {
+  const recentLines = content.split("\n").slice(-8).join("\n");
+  return ERROR_PATTERNS.some((p) => p.test(recentLines));
 }
 
 class SessionStatusDetector {
@@ -345,6 +364,11 @@ class SessionStatusDetector {
 
     // 2. Waiting patterns (only if not actively running)
     if (checkWaitingPatterns(content)) return "waiting";
+
+    // 3. Error markers on the current screen (not working, not awaiting input).
+    //    Checked after busy/waiting so an actively-retrying agent still reads
+    //    as running; surfaces a turn that failed and needs attention.
+    if (checkErrorPatterns(content)) return "error";
 
     // 3. Spike detection
     const spikeResult = this.processSpikeDetection(tracker, timestamp);

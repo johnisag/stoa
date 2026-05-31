@@ -20,7 +20,7 @@ export const defaultSettings: NotificationSettings = {
   events: {
     waiting: true,
     error: true,
-    completed: false, // Off by default - can be noisy
+    completed: true, // notify when a background session finishes (toggle off if noisy)
   },
 };
 
