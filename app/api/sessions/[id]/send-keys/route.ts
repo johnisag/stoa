@@ -6,7 +6,7 @@ import { getSessionBackend } from "@/lib/session-backend";
 import { appendFileSync } from "fs";
 
 // Log to file for debugging
-const LOG_FILE = path.join(os.tmpdir(), "agent-os-send-keys.log");
+const LOG_FILE = path.join(os.tmpdir(), "stoa-send-keys.log");
 function log(msg: string) {
   const timestamp = new Date().toISOString();
   const line = `[${timestamp}] ${msg}\n`;

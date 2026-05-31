@@ -1,6 +1,6 @@
 {
-  "name": "AgentOS",
-  "short_name": "AgentOS",
+  "name": "Stoa",
+  "short_name": "Stoa",
   "description": "AI Agent Command Center",
   "start_url": "/",
   "display": "standalone",

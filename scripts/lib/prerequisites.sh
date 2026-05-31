@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prerequisite installation for agent-os
+# Prerequisite installation for stoa
 
 # Attempt to source common Node.js version managers
 # This ensures we detect Node even if it's not in the current PATH

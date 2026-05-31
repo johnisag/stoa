@@ -1,12 +1,12 @@
 [package]
-name = "agent-os"
+name = "stoa"
 version = "0.1.0"
-description = "AgentOS Desktop - Manage AI coding sessions"
-authors = ["AgentOS"]
+description = "Stoa Desktop - Manage AI coding sessions"
+authors = ["Stoa"]
 edition = "2021"
 
 [[bin]]
-name = "AgentOS"
+name = "Stoa"
 path = "src/main.rs"
 
 [build-dependencies]

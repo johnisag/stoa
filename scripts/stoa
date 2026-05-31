@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 #
-# AgentOS - Self-hosted AI coding session manager
-# https://github.com/anthropics/agent-os
+# Stoa - Self-hosted AI coding session manager
+# https://github.com/anthropics/stoa
 #
 
 set -euo pipefail
 
 # Configuration
-AGENT_OS_HOME="${AGENT_OS_HOME:-$HOME/.agent-os}"
-PORT="${AGENT_OS_PORT:-3011}"
-REPO_URL="https://github.com/johnisag/agent-os.git"
+STOA_HOME="${STOA_HOME:-$HOME/.stoa}"
+PORT="${STOA_PORT:-3011}"
+REPO_URL="https://github.com/johnisag/stoa.git"
 
 # Derived paths
-REPO_DIR="$AGENT_OS_HOME/repo"
-PID_FILE="$AGENT_OS_HOME/agent-os.pid"
-LOG_FILE="$AGENT_OS_HOME/agent-os.log"
+REPO_DIR="$STOA_HOME/repo"
+PID_FILE="$STOA_HOME/stoa.pid"
+LOG_FILE="$STOA_HOME/stoa.log"
 
 # Detect OS
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

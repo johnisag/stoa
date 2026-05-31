@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /*
- * AgentOS - Self-hosted AI coding session manager
- * https://github.com/johnisag/agent-os
+ * Stoa - Self-hosted AI coding session manager
+ * https://github.com/johnisag/stoa
  *
  * Cross-platform Node CLI (CommonJS so it runs under plain `node` without
  * any transpiler). Mirrors the behavior of the POSIX bash CLI in
- * `scripts/agent-os`, but works natively on Windows, macOS and Linux.
+ * `scripts/stoa`, but works natively on Windows, macOS and Linux.
  *
  * Subcommands: install, start, stop, restart, status, run, logs, update, help
  */
@@ -24,17 +24,16 @@ const path = require("path");
 const IS_WINDOWS = process.platform === "win32";
 
 // Port the server listens on (matches server.ts default and the bash CLI).
-const PORT = process.env.AGENT_OS_PORT || "3011";
+const PORT = process.env.STOA_PORT || "3011";
 const URL = `http://localhost:${PORT}`;
 
-// ~/.agent-os is the AgentOS home; everything (pid, logs) lives under it.
-const AGENT_OS_HOME =
-  process.env.AGENT_OS_HOME || path.join(os.homedir(), ".agent-os");
-const PID_FILE = path.join(AGENT_OS_HOME, "agent-os.pid");
-const LOG_DIR = path.join(AGENT_OS_HOME, "logs");
-const LOG_FILE = path.join(LOG_DIR, "agent-os.log");
+// ~/.stoa is the Stoa home; everything (pid, logs) lives under it.
+const STOA_HOME = process.env.STOA_HOME || path.join(os.homedir(), ".stoa");
+const PID_FILE = path.join(STOA_HOME, "stoa.pid");
+const LOG_DIR = path.join(STOA_HOME, "logs");
+const LOG_FILE = path.join(LOG_DIR, "stoa.log");
 
-// The repo this script lives in: scripts/agent-os.js -> repo root is one up.
+// The repo this script lives in: scripts/stoa.js -> repo root is one up.
 const REPO_DIR = path.resolve(__dirname, "..");
 
 // On Windows, npm/git are .cmd shims, so they must be invoked via the shell.
@@ -137,23 +136,23 @@ function cmdInstall() {
   runSync("npm", ["run", "build"]);
 
   console.log("");
-  info("AgentOS installed successfully!");
+  info("Stoa installed successfully!");
   console.log("");
   console.log("Next steps:");
-  console.log("  agent-os start     Start the server");
-  console.log("  agent-os status    Show status and URL");
+  console.log("  stoa start     Start the server");
+  console.log("  stoa status    Show status and URL");
 }
 
 /** start: spawn the production server detached in the background. */
 function cmdStart() {
   const running = getRunningPid();
   if (running) {
-    warn(`AgentOS is already running (PID: ${running})`);
+    warn(`Stoa is already running (PID: ${running})`);
     return;
   }
 
-  info("Starting AgentOS...");
-  ensureDir(AGENT_OS_HOME);
+  info("Starting Stoa...");
+  ensureDir(STOA_HOME);
   ensureDir(LOG_DIR);
 
   // Open the log file for append; the detached child writes stdout+stderr here.
@@ -170,7 +169,7 @@ function cmdStart() {
   });
 
   if (typeof child.pid !== "number") {
-    error("Failed to start AgentOS. Check logs: agent-os logs");
+    error("Failed to start Stoa. Check logs: stoa logs");
     process.exit(1);
   }
 
@@ -179,23 +178,23 @@ function cmdStart() {
   // Let the child outlive this CLI process.
   child.unref();
 
-  info(`AgentOS started (PID: ${child.pid})`);
+  info(`Stoa started (PID: ${child.pid})`);
   console.log("");
   console.log(`  Local:  ${URL}`);
   console.log("");
-  console.log("Run 'agent-os logs' to view logs");
+  console.log("Run 'stoa logs' to view logs");
 }
 
 /** stop: kill the running server cross-platform and clean up the pid file. */
 function cmdStop() {
   const pid = getRunningPid();
   if (!pid) {
-    warn("AgentOS is not running");
+    warn("Stoa is not running");
     clearPidFile();
     return;
   }
 
-  info(`Stopping AgentOS (PID: ${pid})...`);
+  info(`Stopping Stoa (PID: ${pid})...`);
 
   if (IS_WINDOWS) {
     // /T kills the process tree (npm -> tsx -> node); /F forces termination.
@@ -222,7 +221,7 @@ function cmdStop() {
   }
 
   clearPidFile();
-  info("AgentOS stopped");
+  info("Stoa stopped");
 }
 
 /** restart: stop then start. */
@@ -245,7 +244,7 @@ function cmdStatus() {
     console.log("  Status:  Stopped");
     console.log(`  Install: ${REPO_DIR}`);
     console.log("");
-    console.log("  Run 'agent-os start' to start the server");
+    console.log("  Run 'stoa start' to start the server");
   }
   console.log("");
 }
@@ -312,7 +311,7 @@ function cmdUpdate() {
   const wasRunning = !!getRunningPid();
   if (wasRunning) cmdStop();
 
-  info("Updating AgentOS...");
+  info("Updating Stoa...");
   runSync("git", ["pull", "--ff-only"]);
 
   info("Installing dependencies...");
@@ -329,9 +328,9 @@ function cmdUpdate() {
 /** help: usage text. */
 function cmdHelp() {
   console.log("");
-  console.log("AgentOS - Self-hosted AI coding session manager");
+  console.log("Stoa - Self-hosted AI coding session manager");
   console.log("");
-  console.log("Usage: agent-os <command>");
+  console.log("Usage: stoa <command>");
   console.log("");
   console.log("Commands:");
   console.log("  install     Install dependencies and build");
@@ -344,8 +343,8 @@ function cmdHelp() {
   console.log("  update      Update to the latest version");
   console.log("");
   console.log("Environment variables:");
-  console.log("  AGENT_OS_HOME   Home directory (default: ~/.agent-os)");
-  console.log("  AGENT_OS_PORT   Server port (default: 3011)");
+  console.log("  STOA_HOME   Home directory (default: ~/.stoa)");
+  console.log("  STOA_PORT   Server port (default: 3011)");
   console.log("");
 }
 

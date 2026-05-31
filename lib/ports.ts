@@ -48,7 +48,7 @@ export async function findAvailablePort(): Promise<number> {
       continue;
     }
 
-    // Check if port is actually in use (by something outside AgentOS)
+    // Check if port is actually in use (by something outside Stoa)
     if (!(await isPortInUse(port))) {
       return port;
     }

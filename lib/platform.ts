@@ -105,7 +105,7 @@ export function resolveBinary(name: string): string | null {
  * Claude flattens the cwd into a single folder under ~/.claude/projects/ by
  * replacing path separators, ":" AND "." (and other non-word chars) with "-".
  * Verified on disk:
- *   C:\my-projects\agent-os  ->  c--my-projects-agent-os
+ *   C:\my-projects\stoa  ->  c--my-projects-stoa
  *   a path segment like ".test" contributes an extra "-" (the dot).
  * Earlier versions only replaced "/" (then "/:"), so any path containing a dot
  * (e.g. C:\src\my.app, ~/.config) never matched and session-id/resume/summarize

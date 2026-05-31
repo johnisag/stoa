@@ -1,9 +1,10 @@
 {
-  "name": "@saadnvd1/agent-os",
+  "name": "@johnisag/stoa",
   "version": "0.2.1",
-  "description": "Self-hosted web UI for managing Claude Code sessions",
+  "description": "Stoa — a self-hosted cockpit for running AI coding agents in real terminals (native on Windows, macOS, Linux)",
+  "author": "johnisag",
   "bin": {
-    "agent-os": "./scripts/agent-os.js"
+    "stoa": "./scripts/stoa.js"
   },
   "files": [
     "app/",
@@ -45,7 +46,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/saadnvd1/agent-os.git"
+    "url": "git+https://github.com/johnisag/stoa.git"
   },
   "keywords": [
     "claude",
@@ -54,15 +55,14 @@
     "tmux",
     "agent"
   ],
-  "author": "Saad Naveed",
   "license": "MIT",
   "engines": {
     "node": ">=20"
   },
   "bugs": {
-    "url": "https://github.com/saadnvd1/agent-os/issues"
+    "url": "https://github.com/johnisag/stoa/issues"
   },
-  "homepage": "https://github.com/saadnvd1/agent-os#readme",
+  "homepage": "https://github.com/johnisag/stoa#readme",
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.11",

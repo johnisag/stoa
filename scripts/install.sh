@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# AgentOS Installer
+# Stoa Installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/johnisag/agent-os/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.sh | bash
 #
 
 set -e
@@ -19,11 +19,11 @@ log_info() { echo -e "${BLUE}==>${NC} $1"; }
 log_success() { echo -e "${GREEN}==>${NC} $1"; }
 log_error() { echo -e "${RED}==>${NC} $1"; }
 
-REPO_URL="https://github.com/johnisag/agent-os.git"
-INSTALL_DIR="$HOME/.agent-os/repo"
+REPO_URL="https://github.com/johnisag/stoa.git"
+INSTALL_DIR="$HOME/.stoa/repo"
 
 echo ""
-echo -e "${BOLD}AgentOS Installer${NC}"
+echo -e "${BOLD}Stoa Installer${NC}"
 echo ""
 
 # Check for git
@@ -38,11 +38,11 @@ if [[ -d "$INSTALL_DIR" ]]; then
     cd "$INSTALL_DIR"
     git pull --ff-only
 else
-    log_info "Downloading AgentOS..."
+    log_info "Downloading Stoa..."
     mkdir -p "$(dirname "$INSTALL_DIR")"
     git clone "$REPO_URL" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
 fi
 
 # Run the install command
-exec "$INSTALL_DIR/scripts/agent-os" install
+exec "$INSTALL_DIR/scripts/stoa" install

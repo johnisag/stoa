@@ -1,10 +1,10 @@
 // Exercise the detector against the in-process registry this test spawns into.
-// Force the in-process pty backend on EVERY OS: without AGENT_OS_BACKEND=pty,
+// Force the in-process pty backend on EVERY OS: without STOA_BACKEND=pty,
 // POSIX defaults to the tmux backend, so statusDetector would shell out to tmux
 // (absent on CI) instead of reading the registry these tests populate. PTY_HOST=0
 // keeps it Tier-1 (no daemon).
-process.env.AGENT_OS_BACKEND = "pty";
-process.env.AGENT_OS_PTY_HOST = "0";
+process.env.STOA_BACKEND = "pty";
+process.env.STOA_PTY_HOST = "0";
 
 import { describe, it, expect, afterEach } from "vitest";
 import {

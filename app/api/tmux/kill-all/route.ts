@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
 
-// POST /api/tmux/kill-all - Kill all AgentOS tmux sessions and remove from database
+// POST /api/tmux/kill-all - Kill all Stoa tmux sessions and remove from database
 export async function POST() {
   try {
     const db = getDb();

@@ -41,7 +41,7 @@ export function SessionListHeader({
           <path d="M15 13v2" />
           <path d="M9 13v2" />
         </svg>
-        <h2 className="font-semibold">AgentOS</h2>
+        <h2 className="font-semibold">Stoa</h2>
       </div>
       <div className="flex gap-1">
         <ADropdownMenu

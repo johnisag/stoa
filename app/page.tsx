@@ -11,13 +11,13 @@ function debugLog(message: string) {
   const entry = `[${timestamp}] ${message}`;
   debugLogs.push(entry);
   if (debugLogs.length > MAX_DEBUG_LOGS) debugLogs.shift();
-  console.log(`[AgentOS] ${message}`);
+  console.log(`[Stoa] ${message}`);
 }
 
 // Expose to window for debugging
 if (typeof window !== "undefined") {
-  (window as unknown as { agentOSLogs: () => void }).agentOSLogs = () => {
-    console.log("=== AgentOS Debug Logs ===");
+  (window as unknown as { stoaLogs: () => void }).stoaLogs = () => {
+    console.log("=== Stoa Debug Logs ===");
     debugLogs.forEach((log) => console.log(log));
     console.log("=== End Logs ===");
   };
@@ -267,7 +267,7 @@ function HomeContent() {
           `ERROR: No terminal available to attach session: ${session.name}`
         );
         alert(
-          `[AgentOS Debug] No terminal available!\n\nRun agentOSLogs() in console to see debug logs.`
+          `[Stoa Debug] No terminal available!\n\nRun stoaLogs() in console to see debug logs.`
         );
         return;
       }

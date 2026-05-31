@@ -2,10 +2,10 @@ import type { AgentType } from "@/lib/providers";
 import type { ProjectWithDevServers } from "@/lib/projects";
 
 // LocalStorage keys
-export const SKIP_PERMISSIONS_KEY = "agentOS:skipPermissions";
-export const AGENT_TYPE_KEY = "agentOS:defaultAgentType";
-export const RECENT_DIRS_KEY = "agentOS:recentDirectories";
-export const USE_TMUX_KEY = "agentOS:useTmux";
+export const SKIP_PERMISSIONS_KEY = "stoa:skipPermissions";
+export const AGENT_TYPE_KEY = "stoa:defaultAgentType";
+export const RECENT_DIRS_KEY = "stoa:recentDirectories";
+export const USE_TMUX_KEY = "stoa:useTmux";
 export const MAX_RECENT_DIRS = 5;
 
 // Random feature name generator

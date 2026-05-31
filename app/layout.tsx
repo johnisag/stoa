@@ -16,13 +16,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AgentOS",
+  title: "Stoa",
   description: "AI Agent Command Center",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "AgentOS",
+    title: "Stoa",
   },
   icons: {
     icon: "/icon.svg",

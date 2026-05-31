@@ -13,9 +13,9 @@ import net from "net";
 
 describe("claudeProjectDirName", () => {
   it("encodes a Windows path to Claude's project-dir convention", () => {
-    // Verified on disk: C:\my-projects\agent-os -> c--my-projects-agent-os
-    expect(claudeProjectDirName("C:\\my-projects\\agent-os")).toBe(
-      "c--my-projects-agent-os"
+    // Verified on disk: C:\my-projects\stoa -> c--my-projects-stoa
+    expect(claudeProjectDirName("C:\\my-projects\\stoa")).toBe(
+      "c--my-projects-stoa"
     );
   });
 
@@ -24,8 +24,8 @@ describe("claudeProjectDirName", () => {
   });
 
   it("encodes a POSIX path (leading separator -> leading dash)", () => {
-    expect(claudeProjectDirName("/Users/me/my-projects/agent-os")).toBe(
-      "-Users-me-my-projects-agent-os"
+    expect(claudeProjectDirName("/Users/me/my-projects/stoa")).toBe(
+      "-Users-me-my-projects-stoa"
     );
   });
 
@@ -50,7 +50,7 @@ describe("expandHome", () => {
 
 describe("baseName (re-exported pure helper)", () => {
   it("is separator-agnostic", () => {
-    expect(baseName("C:\\my-projects\\agent-os")).toBe("agent-os");
+    expect(baseName("C:\\my-projects\\stoa")).toBe("stoa");
     expect(baseName("/a/b/c")).toBe("c");
   });
 });

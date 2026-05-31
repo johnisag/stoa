@@ -1,7 +1,7 @@
 /**
  * ASheet - Design system Sheet component
  *
- * A slide-out panel that follows AgentOS design guidelines:
+ * A slide-out panel that follows Stoa design guidelines:
  * - No strong borders, uses subtle shadows instead
  * - Consistent styling across the app
  * - Wraps Radix Sheet primitive

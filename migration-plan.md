@@ -1,21 +1,21 @@
-# AgentOS → Native Windows Migration Plan
+# Stoa → Native Windows Migration Plan
 
 **Status:** Proposed
 **Author:** Deep analysis by 3 expert agents, synthesized
 **Date:** 2026-05-30
-**Goal:** Run AgentOS natively on Windows (no WSL, no tmux) with full feature parity, robustness, and stability — while remaining fully functional on macOS/Linux.
+**Goal:** Run Stoa natively on Windows (no WSL, no tmux) with full feature parity, robustness, and stability — while remaining fully functional on macOS/Linux.
 
 ---
 
 ## 1. Executive Summary
 
-AgentOS does not run on native Windows for one root reason: **tmux is the process supervisor for every agent session, and tmux does not exist on Windows.** A secondary reason is a broad set of POSIX assumptions (Unix shells, `/tmp`, `lsof`, `which`, `~`/`$HOME`, `sed`/`head`, bash install scripts).
+Stoa does not run on native Windows for one root reason: **tmux is the process supervisor for every agent session, and tmux does not exist on Windows.** A secondary reason is a broad set of POSIX assumptions (Unix shells, `/tmp`, `lsof`, `which`, `~`/`$HOME`, `sed`/`head`, bash install scripts).
 
 The good news, established by the analysis:
 
 - **node-pty already works on Windows** via ConPTY — `win32-x64` and `win32-arm64` prebuilds ship in the dependency today. The PTY primitive is solved; only _what it spawns_ (a Unix shell that runs `tmux attach`) and the surrounding Unix tooling are the problem.
 - **No npm dependency is hard-blocked on Windows.** Every blocker is in application code or bash-only install/run scripts.
-- The migration is fundamentally an **architecture inversion**: today tmux owns the agent processes and AgentOS attaches to them; in the target, **AgentOS itself owns the processes** via a server-side PTY registry.
+- The migration is fundamentally an **architecture inversion**: today tmux owns the agent processes and Stoa attaches to them; in the target, **Stoa itself owns the processes** via a server-side PTY registry.
 
 The native design actually _removes_ layers. Today's chain is:
 
@@ -31,10 +31,10 @@ WebSocket → server-side PTY registry → ConPTY(agent binary, argv[], cwd, env
 
 ### Decision: two-tier delivery
 
-The one genuinely hard problem is **surviving an AgentOS server restart**. tmux gives this for free because it is a separate OS-level daemon; a ConPTY child of the Node process dies when Node dies. We therefore ship in two tiers:
+The one genuinely hard problem is **surviving an Stoa server restart**. tmux gives this for free because it is a separate OS-level daemon; a ConPTY child of the Node process dies when Node dies. We therefore ship in two tiers:
 
-- **Tier 1 (covers ~95% of real usage):** in-process PTY registry. Agents survive **browser disconnect**, full scrollback, multi-client attach, status detection, orchestration. Agents do **not** survive an AgentOS server restart. This is the valuable, shippable milestone.
-- **Tier 2 (full parity):** a separate long-lived **PTY-host daemon** (or Windows Service) that owns the registry and survives Next.js restarts, with AgentOS connecting over a local socket. This restores tmux's "survives server restart + full scrollback" guarantee natively.
+- **Tier 1 (covers ~95% of real usage):** in-process PTY registry. Agents survive **browser disconnect**, full scrollback, multi-client attach, status detection, orchestration. Agents do **not** survive an Stoa server restart. This is the valuable, shippable milestone.
+- **Tier 2 (full parity):** a separate long-lived **PTY-host daemon** (or Windows Service) that owns the registry and survives Next.js restarts, with Stoa connecting over a local socket. This restores tmux's "survives server restart + full scrollback" guarantee natively.
 
 Do **not** let the hard 5% (Tier 2) block shipping the valuable 95% (Tier 1).
 
@@ -49,8 +49,8 @@ All phases implemented on branch `feat/windows-native-migration`; `tsc`, `next b
 - **Phase 2 — Native pty backend (Tier 1):** ✅ `PtySession` (node-pty + `@xterm/headless` + ring buffer), registry, `server.ts` subscribe/replay/fan-out, client attach protocol. Builds + headless smoke + dev runtime verified. ⚠️ Interactive browser flow still needs hands-on verification on Windows.
 - **Phase 3 — Cross-platform hardening:** ✅ ports/search/git/pr/projects/dev-servers/env-setup/file-APIs, exec route, `claude/process-manager`, file-picker drive roots, basename display, `.husky` hook.
 - **Phase 4 — Provider argv:** ✅ `buildAgentArgs`; `CreateOptions` carries structured `binary/args`; orchestration + summarize spawn argv on the pty path (no bash banner). The POSIX banner remains for the tmux path.
-- **Phase 5 — Install/distribution:** ✅ `scripts/agent-os.js`, `scripts/install.ps1`, README Windows section, cross-platform precommit.
-- **Phase 6 — Tier 2 pty-host daemon:** ✅ opt-in via `AGENT_OS_PTY_HOST=1` (default OFF). IPC protocol + host daemon + client + `HostBackend` + `server.ts` host streaming. Verified: daemon launches/listens/dedupes, cross-process connect works, and a session survives a client disconnect (simulated server restart) in the test suite.
+- **Phase 5 — Install/distribution:** ✅ `scripts/stoa.js`, `scripts/install.ps1`, README Windows section, cross-platform precommit.
+- **Phase 6 — Tier 2 pty-host daemon:** ✅ opt-in via `STOA_PTY_HOST=1` (default OFF). IPC protocol + host daemon + client + `HostBackend` + `server.ts` host streaming. Verified: daemon launches/listens/dedupes, cross-process connect works, and a session survives a client disconnect (simulated server restart) in the test suite.
 - **Multi-client sizing:** ✅ `PtySession` tracks per-client viewport sizes and resizes the pty to the smallest viewer (tmux's window-size policy); `server.ts` registers/updates/removes each socket as a sizing client.
 - **Orchestration on Windows:** ✅ workers spawn via argv (no bash banner) and worker cleanup uses `git worktree list --porcelain` parsed in JS + `fs.rm` (no `head`/`sed`/`rm -rf`). The bash banner survives only as tmux status-bar cosmetics on the tmux path.
 - **Testing:** ✅ vitest (20 tests): `buildAgentArgs`, pty-session integration, Tier-2 daemon survival, VT-render safety net (spinner collapse, busy→running, `[Y/n]`→waiting), multi-client fan-out/sizing.
@@ -182,7 +182,7 @@ Independent of the backend swap; valuable on all platforms.
 3. **package.json scripts:**
    - `package.json:32` `"start"`: `NODE_ENV=production tsx server.ts` → `cross-env NODE_ENV=production tsx server.ts` _(Blocker for prod start on Windows)_
    - `package.json:33` `"postinstall"`: replace `chmod ... 2>/dev/null || true` with a Node script that no-ops on `win32`.
-   - `package.json` `bin`: point `agent-os` at a cross-platform **`scripts/agent-os.js`** (`#!/usr/bin/env node`) instead of the bash script.
+   - `package.json` `bin`: point `stoa` at a cross-platform **`scripts/stoa.js`** (`#!/usr/bin/env node`) instead of the bash script.
 4. **ripgrep:** `lib/code-search.ts:8` (`execSync("which rg")`), `:66,106` — replace detection + bare `rg` with `@vscode/ripgrep`'s `rgPath`. Removes the prerequisite entirely.
 5. **Port probing:** `lib/ports.ts:23-24` and `lib/dev-servers.ts:56,68` — replace `lsof ... | head -1` with a Node `net.createServer().listen()` probe (cross-platform).
 
@@ -245,20 +245,20 @@ Systematic removal of POSIX assumptions (full inventory in §6). Themes:
 
 ### Phase 5 — Install & distribution (Windows)
 
-Current distribution is two Windows-hostile bash paths (`scripts/install.sh` → `agent-os install` → `scripts/lib/*.sh`: `chmod`, `ln -sf`, `rsync`, `nohup`, `kill -0`, launchd/systemd, brew/apt/yum, `/tmp`; and `bin` pointing at a bash script).
+Current distribution is two Windows-hostile bash paths (`scripts/install.sh` → `stoa install` → `scripts/lib/*.sh`: `chmod`, `ln -sf`, `rsync`, `nohup`, `kill -0`, launchd/systemd, brew/apt/yum, `/tmp`; and `bin` pointing at a bash script).
 
 1. **`install.ps1`** (`irm https://.../install.ps1 | iex`): checks Node 20+ / Git (hint `winget install OpenJS.NodeJS.LTS Git.Git`), clones/updates, `npm install --legacy-peer-deps` + `npm run build`, autostart via **Scheduled Task** (`Register-ScheduledTask`) or Startup shortcut.
-2. **`scripts/agent-os.js`** (Node) implementing `start/stop/status/run/update` via `child_process` + PID file (or Windows Service) — same `bin` works everywhere; npm generates a working `.cmd` shim; also resolves the `NODE_ENV=` start blocker.
+2. **`scripts/stoa.js`** (Node) implementing `start/stop/status/run/update` via `child_process` + PID file (or Windows Service) — same `bin` works everywhere; npm generates a working `.cmd` shim; also resolves the `NODE_ENV=` start blocker.
 3. **Prerequisites on Windows**: tmux **removed**; ripgrep **bundled** (`@vscode/ripgrep`); git/gh/docker/AI-CLIs detected via `where` with winget hints.
 4. **Tauri desktop**: `tauri.conf.json` already declares `bundle.windows` + `icon.ico` → cleanest Windows vector (MSI/NSIS), once the server starts cross-platform. `Dockerfile.linux`/`tauri:build:linux` are irrelevant to Windows.
 5. **`.husky/pre-commit`** (`grep`/`xargs`/`[ ]`) → call a Node script (e.g. lint-staged).
 
 ### Phase 6 — Tier 2: PTY-host daemon (full restart-survival parity)
 
-The only design that natively reproduces tmux's "survives AgentOS restart + full scrollback":
+The only design that natively reproduces tmux's "survives Stoa restart + full scrollback":
 
 - A separate long-lived process (Node "pty-host", or a Windows Service) owns the registry + ring buffers and survives Next.js restarts.
-- AgentOS connects over a **local socket** (named pipe on Windows / Unix domain socket elsewhere); the `pty` `SessionBackend` becomes a thin client of it.
+- Stoa connects over a **local socket** (named pipe on Windows / Unix domain socket elsewhere); the `pty` `SessionBackend` becomes a thin client of it.
 - The DB `tmux_name`/`key` remains the durable join key for reattach after restart.
 - Alternatives considered and rejected for the primary path: detached child processes (`detached:true`) lose the ConPTY handle/scrollback on restart (partial only); a real multiplexer (abduco/dtach/tmux-on-WSL) defeats the native-Windows goal.
 
@@ -286,8 +286,8 @@ Severity: **Blocker** = native Windows can't function; **Major** = feature broke
 | `lib/code-search.ts:8,66,106`                                                                                               | `which rg`; bare `rg`; "brew install" msg                               | `@vscode/ripgrep` `rgPath`                                  | Blocker (search)     |
 | `package.json:32`                                                                                                           | `NODE_ENV=` start prefix                                                | `cross-env`                                                 | Blocker (prod start) |
 | `package.json:33`                                                                                                           | `chmod ... 2>/dev/null \|\| true` postinstall                           | Node script, no-op on win32                                 | Major                |
-| `package.json` `bin`                                                                                                        | bash `scripts/agent-os`                                                 | Node `scripts/agent-os.js`                                  | Blocker (CLI)        |
-| `scripts/install.sh`, `scripts/agent-os`, `scripts/setup.sh`, `scripts/lib/*.sh`                                            | full bash: chmod/ln/rsync/nohup/launchd/systemd/brew/apt                | `install.ps1` + Node CLI (§4.5)                             | Blocker (install)    |
+| `package.json` `bin`                                                                                                        | bash `scripts/stoa`                                                     | Node `scripts/stoa.js`                                      | Blocker (CLI)        |
+| `scripts/install.sh`, `scripts/stoa`, `scripts/setup.sh`, `scripts/lib/*.sh`                                                | full bash: chmod/ln/rsync/nohup/launchd/systemd/brew/apt                | `install.ps1` + Node CLI (§4.5)                             | Blocker (install)    |
 | `lib/banner.ts:12-65`, `app/api/sessions/init-script/route.ts:10-56`                                                        | `#!/bin/bash` script, `chmod 0o755`, `id -u`, `sleep`, `export`, tmux   | drop wrapper; print banner from Node                        | Blocker              |
 | `lib/ports.ts:23-24`, `lib/dev-servers.ts:56,68`                                                                            | `lsof -i ... \| head -1`                                                | Node `net` probe; `netstat -ano` for PID                    | Major                |
 | `lib/dev-servers.ts:9,163-168`                                                                                              | `HOME\|\|"~"` logs dir; `~/` expand                                     | `os.homedir()`                                              | Major                |

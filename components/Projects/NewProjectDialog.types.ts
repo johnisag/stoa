@@ -25,7 +25,7 @@ export interface NewProjectDialogProps {
   onCreated: (projectId: string) => void;
 }
 
-export const RECENT_DIRS_KEY = "agentOS:recentDirectories";
+export const RECENT_DIRS_KEY = "stoa:recentDirectories";
 export const MAX_RECENT_DIRS = 5;
 
 export const AGENT_OPTIONS: { value: AgentType; label: string }[] = [

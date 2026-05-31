@@ -5,7 +5,7 @@
 
 ## Problem
 
-When using AgentOS on iOS Safari, the terminal would become unresponsive after the phone was locked or Safari was backgrounded. The UI would show "Reconnecting..." but never complete - the terminal stayed stuck.
+When using Stoa on iOS Safari, the terminal would become unresponsive after the phone was locked or Safari was backgrounded. The UI would show "Reconnecting..." but never complete - the terminal stayed stuck.
 
 ## Root Cause
 
@@ -93,7 +93,7 @@ newWs.onmessage = savedHandlers.onmessage;
 2. **Run server with visible logs**:
 
    ```bash
-   npx tsx server.ts 2>&1 | tee /tmp/agent-os.log
+   npx tsx server.ts 2>&1 | tee /tmp/stoa.log
    ```
 
 3. **Look for the pattern**:

@@ -1,21 +1,21 @@
-# AgentOS Setup Guide
+# Stoa Setup Guide
 
-This guide covers installing and running AgentOS on your machine.
+This guide covers installing and running Stoa on your machine.
 
 ## Quick Install (Recommended)
 
-Run this one-liner to install AgentOS:
+Run this one-liner to install Stoa:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/johnisag/agent-os/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.sh | bash
 ```
 
 The installer will:
 
-1. Download the `agent-os` CLI to your PATH
+1. Download the `stoa` CLI to your PATH
 2. Check for prerequisites (Node.js 20+, git, tmux) and offer to install any missing ones
 3. Detect installed AI CLIs or prompt you to install one (Claude Code recommended)
-4. Clone the repository to `~/.agent-os/repo`
+4. Clone the repository to `~/.stoa/repo`
 5. Install dependencies and build for production
 
 ## Manual Install
@@ -24,8 +24,8 @@ If you prefer to install manually:
 
 ```bash
 # Clone the repository
-git clone https://github.com/johnisag/agent-os ~/.agent-os/repo
-cd ~/.agent-os/repo
+git clone https://github.com/johnisag/stoa ~/.stoa/repo
+cd ~/.stoa/repo
 
 # Install dependencies
 npm install
@@ -39,19 +39,19 @@ npm start
 
 ## CLI Commands
 
-After installation, use the `agent-os` command to manage the server:
+After installation, use the `stoa` command to manage the server:
 
-| Command              | Description                     |
-| -------------------- | ------------------------------- |
-| `agent-os start`     | Start the server in background  |
-| `agent-os stop`      | Stop the server                 |
-| `agent-os restart`   | Restart the server              |
-| `agent-os status`    | Show status, PID, and URLs      |
-| `agent-os logs`      | Tail server logs                |
-| `agent-os update`    | Pull latest version and rebuild |
-| `agent-os enable`    | Enable auto-start on boot       |
-| `agent-os disable`   | Disable auto-start              |
-| `agent-os uninstall` | Remove AgentOS completely       |
+| Command          | Description                     |
+| ---------------- | ------------------------------- |
+| `stoa start`     | Start the server in background  |
+| `stoa stop`      | Stop the server                 |
+| `stoa restart`   | Restart the server              |
+| `stoa status`    | Show status, PID, and URLs      |
+| `stoa logs`      | Tail server logs                |
+| `stoa update`    | Pull latest version and rebuild |
+| `stoa enable`    | Enable auto-start on boot       |
+| `stoa disable`   | Disable auto-start              |
+| `stoa uninstall` | Remove Stoa completely          |
 
 ## Prerequisites
 
@@ -77,20 +77,20 @@ You need at least one AI coding CLI installed. The installer will prompt you to 
 
 ### Environment Variables
 
-| Variable        | Default         | Description            |
-| --------------- | --------------- | ---------------------- |
-| `AGENT_OS_HOME` | `~/.agent-os`   | Installation directory |
-| `AGENT_OS_PORT` | `3011`          | Server port            |
-| `DB_PATH`       | `./agent-os.db` | SQLite database path   |
+| Variable    | Default     | Description            |
+| ----------- | ----------- | ---------------------- |
+| `STOA_HOME` | `~/.stoa`   | Installation directory |
+| `STOA_PORT` | `3011`      | Server port            |
+| `DB_PATH`   | `./stoa.db` | SQLite database path   |
 
 ### Custom Port
 
 ```bash
 # Start on a different port
-AGENT_OS_PORT=8080 agent-os start
+STOA_PORT=8080 stoa start
 
 # Or set permanently in your shell config
-export AGENT_OS_PORT=8080
+export STOA_PORT=8080
 ```
 
 ## Auto-Start on Boot
@@ -98,34 +98,34 @@ export AGENT_OS_PORT=8080
 ### macOS (launchd)
 
 ```bash
-agent-os enable
+stoa enable
 ```
 
-This creates a Launch Agent at `~/Library/LaunchAgents/com.agent-os.plist`.
+This creates a Launch Agent at `~/Library/LaunchAgents/com.stoa.plist`.
 
 To disable:
 
 ```bash
-agent-os disable
+stoa disable
 ```
 
 ### Linux (systemd)
 
 ```bash
-agent-os enable
+stoa enable
 ```
 
-This creates a user service at `~/.config/systemd/user/agent-os.service`.
+This creates a user service at `~/.config/systemd/user/stoa.service`.
 
 To disable:
 
 ```bash
-agent-os disable
+stoa disable
 ```
 
 ## Mobile Access with Tailscale
 
-AgentOS is designed for mobile access. The easiest way to access it from your phone is with [Tailscale](https://tailscale.com):
+Stoa is designed for mobile access. The easiest way to access it from your phone is with [Tailscale](https://tailscale.com):
 
 1. **Install Tailscale on your machine:**
 
@@ -154,27 +154,27 @@ AgentOS is designed for mobile access. The easiest way to access it from your ph
 
 5. **Sign in with the same account**
 
-6. **Access AgentOS:**
+6. **Access Stoa:**
    ```
    http://100.64.0.1:3011
    ```
 
-The `agent-os status` command will show your Tailscale URL if Tailscale is installed.
+The `stoa status` command will show your Tailscale URL if Tailscale is installed.
 
 ## Directory Structure
 
 ```
-~/.agent-os/
-├── repo/              # Cloned AgentOS repository
-├── agent-os.pid       # PID file when running
-├── agent-os.log       # Server logs
-└── agent-os.log.old   # Rotated logs (if > 10MB)
+~/.stoa/
+├── repo/              # Cloned Stoa repository
+├── stoa.pid       # PID file when running
+├── stoa.log       # Server logs
+└── stoa.log.old   # Rotated logs (if > 10MB)
 ```
 
 ## Updating
 
 ```bash
-agent-os update
+stoa update
 ```
 
 This will:
@@ -192,20 +192,20 @@ This will:
 Check the logs:
 
 ```bash
-agent-os logs
+stoa logs
 ```
 
 Common issues:
 
-- Port already in use: Change `AGENT_OS_PORT`
-- Missing dependencies: Run `agent-os install` again
+- Port already in use: Change `STOA_PORT`
+- Missing dependencies: Run `stoa install` again
 - Node.js version: Ensure Node.js 20+ is installed
 
 ### Can't connect from phone
 
 1. Ensure both devices are on the same Tailscale network
-2. Check `agent-os status` for the correct URL
-3. Verify the server is running: `agent-os status`
+2. Check `stoa status` for the correct URL
+3. Verify the server is running: `stoa status`
 4. Check firewall settings if not using Tailscale
 
 ### Build fails
@@ -213,25 +213,25 @@ Common issues:
 Try a clean reinstall:
 
 ```bash
-agent-os stop
-rm -rf ~/.agent-os/repo/node_modules
-rm -rf ~/.agent-os/repo/.next
-agent-os install
+stoa stop
+rm -rf ~/.stoa/repo/node_modules
+rm -rf ~/.stoa/repo/.next
+stoa install
 ```
 
 ## Uninstalling
 
 ```bash
-agent-os uninstall
+stoa uninstall
 ```
 
 This removes:
 
-- The `~/.agent-os` directory
+- The `~/.stoa` directory
 - Auto-start configuration (launchd/systemd)
 
-The `agent-os` CLI script itself is not removed. Delete it manually:
+The `stoa` CLI script itself is not removed. Delete it manually:
 
 ```bash
-rm $(which agent-os)
+rm $(which stoa)
 ```

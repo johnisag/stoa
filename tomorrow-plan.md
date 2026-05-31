@@ -1,4 +1,4 @@
-# AgentOS — Next Session Plan
+# Stoa — Next Session Plan
 
 Continuation after the native-Windows migration (branch `feat/windows-native-migration`).
 Today ended with the `PtyTransport` refactor (unifying the two pty backends + WS
@@ -23,7 +23,7 @@ and the full CLI surface mapped from `hermes --help`
   one-shot. If interactive, set `initialPromptFlag: "-z"`.
 - **Resume** — capture Hermes's session id (`--pass-session-id` and/or read
   `~/.hermes/checkpoints/` / `hermes sessions`), store it, then flip
-  `supportsResume: true` so `--resume <id>` works per AgentOS session.
+  `supportsResume: true` so `--resume <id>` works per Stoa session.
 - **Model selection** — Hermes models are dynamic (`hermes model` live-fetches
   each provider's `/v1/models`). To offer `-m` correctly, add a free-text model
   field (or a Hermes model fetch) instead of the static Claude dropdown.
@@ -34,9 +34,9 @@ and the full CLI surface mapped from `hermes --help`
 
 ## (original Hermes notes, for reference)
 
-Add **Hermes** as a first-class agent in AgentOS.
+Add **Hermes** as a first-class agent in Stoa.
 
-> **Scope to confirm:** what is Hermes, exactly, in AgentOS terms?
+> **Scope to confirm:** what is Hermes, exactly, in Stoa terms?
 >
 > - **(a) A CLI agent** (like claude/codex/aider) → add a provider registry entry
 >   and it mostly "just works" through the existing provider abstraction.
@@ -76,7 +76,7 @@ Everything builds + 28 tests pass, but these need a human at a real browser/agen
 
 - [ ] Interactive flow: create a session, watch a real agent spawn → stream → resize → reconnect.
 - [ ] `.cmd` spawn of each agent CLI through ConPTY (claude confirmed; verify others).
-- [ ] **Tier-2 restart-survival**: start a session, restart the AgentOS server, reattach — session intact.
+- [ ] **Tier-2 restart-survival**: start a session, restart the Stoa server, reattach — session intact.
 - [ ] Orchestration (conductor/workers) on native Windows (uses the argv path; banner is POSIX-only).
 - [ ] Shell drawer, file picker (drive roots), Git panel against a real repo, PR flow.
 - [ ] Confirm the `.github/workflows/test.yml` matrix goes green on ubuntu/macos/windows.
@@ -131,7 +131,7 @@ Pick a couple that now fit cleanly on the native backend:
 - [ ] Decide PR-to-upstream vs standalone fork (see discussion) and act on it.
 - [ ] **Fork identity (if going standalone):** decide on a project name, then update
       `LICENSE` (currently MIT, "Saad Naveed"), `package.json` (`name`
-      `@saadnvd1/agent-os`, `author`, `repository`, `bugs`, `homepage`), README
+      `@johnisag/stoa`, `author`, `repository`, `bugs`, `homepage`), README
       title/badges, and the install/update URLs. Keep the upstream copyright line
       in LICENSE per MIT terms; add your own. — "we'll see" / TBD.
 - [ ] Tag a release once Windows runtime verification passes.

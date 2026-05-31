@@ -1,4 +1,4 @@
-# Agent-OS Future Ideas
+# Stoa Future Ideas
 
 ## Features
 

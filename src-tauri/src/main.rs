@@ -30,7 +30,7 @@ fn start_server() -> Option<Child> {
         ("npx", vec!["tsx", "server.ts"], project_root)
     };
 
-    println!("Starting AgentOS server...");
+    println!("Starting Stoa server...");
     println!("Working dir: {:?}", working_dir);
 
     let child = Command::new(cmd)

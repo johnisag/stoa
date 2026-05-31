@@ -1,5 +1,5 @@
 /**
- * Theme configuration for AgentOS
+ * Theme configuration for Stoa
  * UI theme definitions and helper functions
  */
 

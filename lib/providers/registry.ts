@@ -174,7 +174,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     //  - resumeFlag is "--resume" but resume stays OFF until we capture Hermes's
     //    session id (--pass-session-id / ~/.hermes/checkpoints) — a follow-up.
     //  - modelFlag intentionally unset: Hermes models are dynamic/provider-
-    //    specific (`hermes model` live-fetches /v1/models), so AgentOS shouldn't
+    //    specific (`hermes model` live-fetches /v1/models), so Stoa shouldn't
     //    impose a static model list. Hermes uses its configured default.
     //  - -z initial prompt held until interactive-vs-one-shot is confirmed.
     autoApproveFlag: "--yolo",
@@ -228,7 +228,7 @@ export function isValidProviderId(value: string): value is ProviderId {
 }
 
 /**
- * Get regex pattern for matching AgentOS-managed tmux session names
+ * Get regex pattern for matching Stoa-managed tmux session names
  * Format: {provider}-{uuid}
  */
 export function getManagedSessionPattern(): RegExp {

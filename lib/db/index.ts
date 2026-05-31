@@ -8,7 +8,7 @@ import { runMigrations } from "./migrations";
 export * from "./types";
 export { queries } from "./queries";
 
-const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "agent-os.db");
+const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "stoa.db");
 const LOCK_PATH = DB_PATH + ".init-lock";
 
 // Simple file-based lock for initialization

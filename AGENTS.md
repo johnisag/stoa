@@ -1,9 +1,9 @@
-# AGENTS.md — working principles for AgentOS
+# AGENTS.md — working principles for Stoa
 
 Guidance for any AI agent (or human) working in this repo. Read before changing
 code. Keep changes surgical and match surrounding style.
 
-AgentOS is a mobile-first web UI for running AI coding agents in real terminals.
+Stoa is a mobile-first web UI for running AI coding agents in real terminals.
 It runs **natively on Windows, macOS, and Linux** — preserving that is a hard
 requirement, not a nice-to-have.
 
@@ -35,7 +35,7 @@ requirement, not a nice-to-have.
 - **All session & terminal operations go through `getSessionBackend()`** (the
   `SessionBackend` interface). Do not call `tmux` or `node-pty` directly elsewhere.
 - Backend selection (`lib/session-backend/index.ts`): **tmux on macOS/Linux, pty on
-  Windows**; `AGENT_OS_BACKEND=tmux|pty` overrides. The tmux path must stay
+  Windows**; `STOA_BACKEND=tmux|pty` overrides. The tmux path must stay
   behavior-identical on POSIX — it's locked by `test/tmux-backend.test.ts`.
 - **`PtyTransport`** is the seam for _where_ the pty lives: `LocalTransport`
   (in-process registry, Tier 1) vs `HostTransport` (out-of-process daemon, Tier 2).
@@ -64,11 +64,17 @@ requirement, not a nice-to-have.
 
 ## Testing principles
 
+- **New functionality ships with tests.** Any new logic — backends, transports,
+  providers, the IPC protocol, platform helpers, parsing/argv construction —
+  must come with unit tests in `test/`, and a bug fix should add a regression
+  test that fails before the fix. (Purely presentational UI is exempt where a
+  unit test adds no real signal.) The verification gate above is not met until
+  the new tests are green on the CI matrix.
 - Tests must pass on **all three OSes** — no real `tmux` or agent binaries.
   - Command construction: mock `child_process.exec` (see `tmux-backend.test.ts`).
   - pty round-trips: spawn `node` with an inline script (see `pty-backend.test.ts`).
   - ports: use a real `net` server (see `platform.test.ts`).
-- Daemon tests must isolate their socket via `AGENT_OS_PTY_HOST_NAME` so parallel
+- Daemon tests must isolate their socket via `STOA_PTY_HOST_NAME` so parallel
   test files don't collide on the global pipe/socket.
 - Lock anything easy to silently regress: command strings, argv, the tmux path.
 
