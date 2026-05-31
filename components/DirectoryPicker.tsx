@@ -46,6 +46,23 @@ export function DirectoryPicker({
   // Track home directory path from API
   const [homePath, setHomePath] = useState<string | null>(null);
 
+  // Filesystem roots + OS separator (drive letters on Windows, "/" on POSIX).
+  const [roots, setRoots] = useState<string[]>(["/"]);
+  const [separator, setSeparator] = useState("/");
+
+  // Empty path means "show top-level filesystem roots" (drive list on Windows).
+  const showRoots = currentPath === "";
+
+  useEffect(() => {
+    fetch("/api/files/roots")
+      .then((res) => res.json())
+      .then((data) => {
+        setRoots(data.roots || ["/"]);
+        setSeparator(data.separator || "/");
+      })
+      .catch(() => {});
+  }, []);
+
   // Fetch directory contents
   const fetchDirectory = useCallback(async (path: string) => {
     setLoading(true);
@@ -76,41 +93,81 @@ export function DirectoryPicker({
 
   // Load initial directory
   useEffect(() => {
-    if (open) {
-      fetchDirectory(currentPath).then(({ dirs }) => setDirectories(dirs));
-      setSelectedPath(null);
+    if (!open) return;
+    setSelectedPath(null);
+    if (showRoots) {
+      // Top level: list filesystem roots (drive letters on Windows).
+      setDirectories(
+        roots.map((root) => ({ name: root, path: root, type: "directory" }))
+      );
+      return;
     }
-  }, [open, currentPath, fetchDirectory]);
+    fetchDirectory(currentPath).then(({ dirs }) => setDirectories(dirs));
+  }, [open, currentPath, showRoots, roots, fetchDirectory]);
+
+  // Whether a resolved path is a filesystem root ("/" or e.g. "C:\").
+  const isRootPath = (p: string) => {
+    if (p === "/") return true;
+    const normalized = p.replace(/[\\/]+$/, "");
+    if (/^[a-zA-Z]:$/.test(normalized)) return true;
+    return roots.some(
+      (r) => r.replace(/[\\/]+$/, "").toLowerCase() === normalized.toLowerCase()
+    );
+  };
 
   // Navigate up to parent
   const goUp = () => {
-    // Can't go above root
-    if (currentPath === "/") {
+    // Already at the top-level roots listing.
+    if (showRoots) return;
+
+    // At a filesystem root: go to the top-level roots listing on Windows
+    // (multiple drives) or stay at "/" on POSIX.
+    if (isRootPath(currentPath)) {
+      setCurrentPath(roots.length > 1 ? "" : "/");
+      setExpanded(new Set());
       return;
     }
 
     // From ~ or homePath, go to parent of home directory
     if (currentPath === "~" || (homePath && currentPath === homePath)) {
       if (homePath) {
-        const homeParent = homePath.split("/").slice(0, -1).join("/") || "/";
-        setCurrentPath(homeParent);
+        const parts = homePath.split(/[\\/]/).filter(Boolean);
+        parts.pop();
+        setCurrentPath(rebuildPath(parts));
         setExpanded(new Set());
       }
       return;
     }
 
-    const parts = currentPath.split("/").filter(Boolean);
+    const isTilde = currentPath.startsWith("~");
+    const parts = currentPath.split(/[\\/]/).filter(Boolean);
     parts.pop();
-    const newPath = currentPath.startsWith("~")
-      ? "~/" + parts.slice(1).join("/") || "~"
-      : "/" + parts.join("/") || "/";
-    setCurrentPath(newPath);
+    setCurrentPath(isTilde ? rebuildTilde(parts) : rebuildPath(parts));
     setExpanded(new Set());
   };
 
-  // Go to root
+  // Rebuild an absolute path from segments using the OS separator.
+  const rebuildPath = (parts: string[]) => {
+    if (parts.length === 0) return separator === "\\" ? "" : "/";
+    if (/^[a-zA-Z]:$/.test(parts[0])) {
+      const head = parts[0];
+      const rest = parts.slice(1);
+      return rest.length
+        ? head + separator + rest.join(separator)
+        : head + separator;
+    }
+    return "/" + parts.join("/");
+  };
+
+  // Rebuild a "~"-relative path (parts include the leading "~").
+  const rebuildTilde = (parts: string[]) => {
+    if (parts.length <= 1) return "~";
+    return "~/" + parts.slice(1).join("/");
+  };
+
+  // Go to root (top-level: drive list on Windows, "/" on POSIX)
   const goRoot = () => {
-    setCurrentPath("/");
+    setCurrentPath(roots.length > 1 ? "" : "/");
     setExpanded(new Set());
   };
 
@@ -185,18 +242,19 @@ export function DirectoryPicker({
             variant="ghost"
             size="icon-sm"
             onClick={goUp}
-            disabled={currentPath === "/"}
+            disabled={showRoots}
             title="Go up"
           >
             <ChevronUp className="h-4 w-4" />
           </Button>
           <span className="text-muted-foreground flex-1 truncate font-mono text-sm">
-            {currentPath}
+            {showRoots ? (separator === "\\" ? "Drives" : "/") : currentPath}
           </span>
           <Button
             variant="outline"
             size="sm"
             onClick={selectCurrentDirectory}
+            disabled={showRoots}
             title="Select this directory"
           >
             <FolderInput className="mr-1 h-4 w-4" />

@@ -1,15 +1,25 @@
-import { execSync } from "child_process";
+/**
+ * Resolve ripgrep's bundled binary path at runtime.
+ *
+ * Turbopack traces even a literal `require("@vscode/ripgrep")` and tries to
+ * bundle the platform package's raw `rg.exe` ("Unknown module type"), which
+ * breaks `next dev`. We resolve the real Node require and pass a NON-LITERAL
+ * specifier so the bundler can't follow it; the module is loaded from
+ * node_modules at runtime. Paired with serverExternalPackages in next.config.ts.
+ */
+function getRgPath(): string {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const nodeRequire = eval("require") as NodeRequire;
+  const pkg = ["@vscode", "ripgrep"].join("/");
+  return (nodeRequire(pkg) as { rgPath: string }).rgPath;
+}
 
 /**
- * Check if ripgrep is available on the system
+ * Check if ripgrep is available. ripgrep is now bundled via @vscode/ripgrep,
+ * so it is always available regardless of platform.
  */
 export function isRipgrepAvailable(): boolean {
-  try {
-    execSync("which rg", { encoding: "utf-8", stdio: "pipe" });
-    return true;
-  } catch {
-    return false;
-  }
+  return true;
 }
 
 export interface SearchOptions {
@@ -63,7 +73,8 @@ export function searchCode(
       ".", // CRITICAL: Tell ripgrep to search current directory explicitly
     ];
 
-    const result = spawnSync("rg", args, {
+    const rgPath = getRgPath();
+    const result = spawnSync(rgPath, args, {
       cwd: workingDir,
       encoding: "utf-8",
       timeout: 10000,
@@ -99,10 +110,10 @@ export function searchCode(
     return matches;
   } catch (error) {
     console.error("Error in searchCode:", error);
-    // ENOENT = command not found
+    // ENOENT = bundled ripgrep binary missing
     if ((error as any).code === "ENOENT") {
       throw new Error(
-        "ripgrep (rg) not found. Install with: brew install ripgrep"
+        `bundled ripgrep binary not found at ${getRgPath()}. Try reinstalling dependencies.`
       );
     }
     // Other errors - return empty

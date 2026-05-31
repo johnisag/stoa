@@ -1,33 +1,25 @@
 import { NextResponse } from "next/server";
-import { exec } from "child_process";
-import { promisify } from "util";
 import { getDb, queries, type Session } from "@/lib/db";
-
-const execAsync = promisify(exec);
+import { getSessionBackend } from "@/lib/session-backend";
 
 // POST /api/tmux/kill-all - Kill all AgentOS tmux sessions and remove from database
 export async function POST() {
   try {
     const db = getDb();
+    const backend = getSessionBackend();
 
     // Get all tmux sessions
-    const { stdout } = await execAsync(
-      'tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""',
-      { timeout: 5000 }
-    );
+    const sessions = await backend.list();
 
-    const tmuxSessions = stdout
-      .trim()
-      .split("\n")
-      .filter(
-        (s) => s && /^(claude|codex|opencode|gemini|aider|cursor)-/.test(s)
-      );
+    const tmuxSessions = sessions.filter(
+      (s) => s && /^(claude|codex|opencode|gemini|aider|cursor)-/.test(s)
+    );
 
     // Kill each tmux session
     const killed: string[] = [];
     for (const session of tmuxSessions) {
       try {
-        await execAsync(`tmux kill-session -t "${session}"`, { timeout: 5000 });
+        await backend.kill(session);
         killed.push(session);
       } catch {
         // Session might already be dead, continue

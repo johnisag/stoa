@@ -6,6 +6,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { SearchAddon } from "@xterm/addon-search";
 import { WS_RECONNECT_BASE_DELAY } from "../constants";
 import type {
+  AttachPayload,
   TerminalScrollState,
   UseTerminalConnectionProps,
   UseTerminalConnectionReturn,
@@ -38,6 +39,9 @@ export function useTerminalConnection({
   >("connecting");
 
   const wsRef = useRef<WebSocket | null>(null);
+  // Last attach request, re-sent on every (re)connect so the native pty session
+  // is re-subscribed and its scrollback repainted after a dropped socket.
+  const attachPayloadRef = useRef<AttachPayload | null>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
@@ -79,6 +83,26 @@ export function useTerminalConnection({
   const sendCommand = useCallback((command: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "command", data: command }));
+    }
+  }, []);
+
+  const attachSession = useCallback((payload: AttachPayload) => {
+    const prev = attachPayloadRef.current;
+    attachPayloadRef.current = payload;
+    // Switching to a DIFFERENT session in this same terminal: clear the screen
+    // and scrollback so the incoming session's snapshot repaints cleanly rather
+    // than layering on top of the previous session's output.
+    if (prev?.key !== payload.key) {
+      xtermRef.current?.reset();
+    }
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "attach",
+          key: payload.key,
+          spawn: payload.spawn,
+        })
+      );
     }
   }, []);
 
@@ -168,6 +192,22 @@ export function useTerminalConnection({
         {
           onConnected: () => {
             callbacksRef.current.onConnected?.();
+            // Re-attach to the native pty session after (re)connect so the
+            // server re-subscribes this socket and repaints scrollback.
+            const payload = attachPayloadRef.current;
+            if (payload && wsRef.current?.readyState === WebSocket.OPEN) {
+              // Reset before re-attaching so the incoming snapshot repaints
+              // cleanly. Without this, a same-key socket reconnect layers a
+              // fresh snapshot on top of existing content (duplicated scrollback).
+              xtermRef.current?.reset();
+              wsRef.current.send(
+                JSON.stringify({
+                  type: "attach",
+                  key: payload.key,
+                  spawn: payload.spawn,
+                })
+              );
+            }
             // Restore scroll state after connection
             if (initialScrollStateRef.current && terminalRef.current) {
               setTimeout(() => {
@@ -273,6 +313,7 @@ export function useTerminalConnection({
     copySelection,
     sendInput,
     sendCommand,
+    attachSession,
     focus,
     getScrollState,
     restoreScrollState,

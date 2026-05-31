@@ -16,6 +16,7 @@ import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { baseName, dirName } from "@/lib/path-display";
 import type { GitFile } from "@/lib/git-status";
 import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
 
@@ -102,12 +103,11 @@ export function FileEditDialog({
   // For multi-repo files, use repoPath; otherwise use workingDirectory
   const baseDir =
     "repoPath" in file && file.repoPath ? file.repoPath : workingDirectory;
-  // Expand ~ to home directory for display
-  const expandedBaseDir = baseDir.startsWith("~")
-    ? baseDir.replace("~", process.env.HOME || "/Users")
-    : baseDir;
-  const filePath = `${expandedBaseDir}/${file.path}`;
-  const fileName = file.path.split("/").pop() || file.path;
+  // Do not expand ~ on the client (process.env.HOME is undefined here); the
+  // server (/api/files/content) resolves ~ via expandHome. Join separator-
+  // agnostically so a "/"-only path is unchanged.
+  const filePath = `${baseDir.replace(/[\\/]+$/, "")}/${file.path.replace(/^[\\/]+/, "")}`;
+  const fileName = baseName(file.path);
   const repoName = "repoName" in file ? file.repoName : null;
   const hasChanges = modifiedContent !== initialModified;
 
@@ -270,13 +270,9 @@ export function FileEditDialog({
                       >
                         {getStatusIcon(f.status)}
                         <div className="min-w-0 flex-1">
-                          <div className="truncate">
-                            {f.path.split("/").pop()}
-                          </div>
+                          <div className="truncate">{baseName(f.path)}</div>
                           <div className="text-muted-foreground truncate text-xs">
-                            {f.path.includes("/")
-                              ? f.path.slice(0, f.path.lastIndexOf("/"))
-                              : f.status}
+                            {/[\\/]/.test(f.path) ? dirName(f.path) : f.status}
                           </div>
                         </div>
                       </button>

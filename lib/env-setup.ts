@@ -200,7 +200,9 @@ export async function setupWorktree(options: {
   // 3. Run config setup commands if present
   if (config?.setup && config.setup.length > 0) {
     for (const cmd of config.setup) {
-      // Expand variables in command
+      // Expand `$KEY` references in user-provided setup commands.
+      // NOTE: user `setup`/`dev` commands are shell-specific (this `$KEY`
+      // syntax is POSIX); they are run as-authored and not translated per OS.
       let expandedCmd = cmd;
       for (const [key, value] of Object.entries(envVars)) {
         expandedCmd = expandedCmd.replace(new RegExp(`\\$${key}`, "g"), value);
@@ -252,15 +254,19 @@ export async function setupWorktree(options: {
 export async function getDevServerCommand(
   projectPath: string,
   port?: number
-): Promise<{ command: string; port: number } | null> {
+): Promise<{ command: string; port: number; portEnvVar: string } | null> {
   // Check config first
   const config = await readWorktreeConfig(projectPath);
   if (config?.devServer) {
     const portEnvVar = config.devServer.portEnvVar || "PORT";
     const finalPort = port || 3000;
+    // Return the bare command; the port is supplied to the process via the
+    // spawn `env` option (env: { [portEnvVar]: String(port) }) rather than a
+    // POSIX `KEY=value cmd` prefix, which is not portable to Windows shells.
     return {
-      command: `${portEnvVar}=${finalPort} ${config.devServer.command}`,
+      command: config.devServer.command,
       port: finalPort,
+      portEnvVar,
     };
   }
 
@@ -271,9 +277,11 @@ export async function getDevServerCommand(
       const pkg = JSON.parse(await fs.promises.readFile(pkgPath, "utf-8"));
       if (pkg.scripts?.dev) {
         const finalPort = port || 3000;
+        // PORT is passed via the spawn `env` option, not an inline prefix.
         return {
-          command: `PORT=${finalPort} npm run dev`,
+          command: "npm run dev",
           port: finalPort,
+          portEnvVar: "PORT",
         };
       }
     } catch {

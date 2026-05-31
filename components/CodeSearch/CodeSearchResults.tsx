@@ -6,6 +6,7 @@ import { useState, useEffect } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { cn } from "@/lib/utils";
+import { baseName, dirName } from "@/lib/path-display";
 import type { FormattedMatch } from "@/lib/code-search";
 
 interface CodeSearchResultsProps {
@@ -110,10 +111,8 @@ function SearchResultItem({
   onClick,
 }: SearchResultItemProps) {
   const language = getLanguageFromPath(result.file);
-  const fileName = result.file.split("/").pop() || result.file;
-  const filePath = result.file.includes("/")
-    ? result.file.slice(0, result.file.lastIndexOf("/"))
-    : "";
+  const fileName = baseName(result.file);
+  const filePath = /[\\/]/.test(result.file) ? dirName(result.file) : "";
 
   return (
     <button

@@ -27,6 +27,7 @@ import { FileChanges } from "@/components/GitPanel/FileChanges";
 import { CommitForm } from "@/components/GitPanel/CommitForm";
 import { FileEditDialog } from "./FileEditDialog";
 import { cn } from "@/lib/utils";
+import { baseName } from "@/lib/path-display";
 import { useDrawerAnimation } from "@/hooks/useDrawerAnimation";
 import {
   useGitStatus,
@@ -436,7 +437,7 @@ export function GitDrawer({
             <DialogDescription>
               Are you sure you want to discard changes to{" "}
               <span className="font-mono font-medium">
-                {discardFile?.path.split("/").pop()}
+                {discardFile ? baseName(discardFile.path) : null}
               </span>
               ? This action cannot be undone.
             </DialogDescription>

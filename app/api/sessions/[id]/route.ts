@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exec } from "child_process";
-import { promisify } from "util";
 import { getDb, queries, type Session } from "@/lib/db";
 import { deleteWorktree, isAgentOSWorktree } from "@/lib/worktrees";
 import { releasePort } from "@/lib/ports";
 import { killWorker } from "@/lib/orchestration";
 import { generateBranchName, getCurrentBranch, renameBranch } from "@/lib/git";
 import { runInBackground } from "@/lib/async-operations";
-
-const execAsync = promisify(exec);
+import { getSessionBackend } from "@/lib/session-backend";
 
 // Sanitize a name for use as tmux session name
 function sanitizeTmuxName(name: string): string {
@@ -69,9 +66,8 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       // Try to rename the tmux session
       if (oldTmuxName && newTmuxName) {
         try {
-          await execAsync(
-            `tmux rename-session -t "${oldTmuxName}" "${newTmuxName}"`
-          );
+          const backend = getSessionBackend();
+          await backend.rename(oldTmuxName, newTmuxName);
           updates.push("tmux_name = ?");
           values.push(newTmuxName);
         } catch {

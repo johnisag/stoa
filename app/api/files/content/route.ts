@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFileContent, writeFileContent } from "@/lib/files";
+import { expandHome } from "@/lib/platform";
 
 /**
  * GET /api/files/content?path=...
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Expand ~ to home directory
-    const expandedPath = path.replace(/^~/, process.env.HOME || "");
+    const expandedPath = expandHome(path);
 
     const result = readFileContent(expandedPath);
 
@@ -56,7 +57,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Expand ~ to home directory
-    const expandedPath = path.replace(/^~/, process.env.HOME || "");
+    const expandedPath = expandHome(path);
 
     const result = writeFileContent(expandedPath, content);
 

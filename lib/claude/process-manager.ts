@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from "child_process";
 import { WebSocket } from "ws";
 import { StreamParser } from "./stream-parser";
 import { getDb, queries, type Session } from "../db";
+import { isWindows, homeDir, expandHome, resolveBinary } from "../platform";
 import type { ClaudeSessionOptions, ClientEvent } from "./types";
 
 interface ManagedSession {
@@ -125,9 +126,10 @@ export class ClaudeProcessManager {
     // Spawn Claude process
     const cwd =
       options.workingDirectory ||
-      dbSession?.working_directory?.replace("~", process.env.HOME || "") ||
-      process.env.HOME ||
-      "/";
+      (dbSession?.working_directory
+        ? expandHome(dbSession.working_directory)
+        : undefined) ||
+      homeDir();
 
     console.log(`Spawning Claude for session ${sessionId}:`, args.join(" "));
     console.log(`CWD: ${cwd}`);
@@ -144,16 +146,28 @@ export class ClaudeProcessManager {
       this.handleEvent(sessionId, event);
     });
 
-    // Find claude binary path
-    const claudePath =
-      process.env.HOME + "/.nvm/versions/node/v20.19.0/bin/claude";
+    // Find claude binary path (resolves claude.cmd on Windows)
+    const claudePath = resolveBinary("claude") || "claude";
 
-    const claudeProcess = spawn(claudePath, args, {
+    // On Windows a .cmd/.bat shim can't be spawned directly; route it through
+    // cmd.exe WITHOUT shell:true so Node still quotes each argv entry (the
+    // prompt may contain spaces/quotes/&|<>^ — shell:true would mangle/inject it).
+    let spawnFile = claudePath;
+    let spawnArgs = args;
+    if (isWindows && /\.(cmd|bat)$/i.test(claudePath)) {
+      spawnFile = process.env.ComSpec || "cmd.exe";
+      spawnArgs = ["/c", claudePath, ...args];
+    }
+
+    const claudeProcess = spawn(spawnFile, spawnArgs, {
       cwd,
-      env: {
-        ...process.env,
-        PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH}`,
-      },
+      // On Windows inherit the full process env; on POSIX prepend Homebrew paths.
+      env: isWindows
+        ? process.env
+        : {
+            ...process.env,
+            PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH}`,
+          },
       stdio: ["ignore", "pipe", "pipe"],
     });
 

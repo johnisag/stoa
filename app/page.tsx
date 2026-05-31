@@ -33,10 +33,11 @@ import { useDevServersManager } from "@/hooks/useDevServersManager";
 import { useSessionStatuses } from "@/hooks/useSessionStatuses";
 import type { Session } from "@/lib/db";
 import type { TerminalHandle } from "@/components/Terminal";
-import { getProvider } from "@/lib/providers";
+import { getProvider, buildAgentArgs } from "@/lib/providers";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
+import { getActiveBackend } from "@/lib/client/backend";
 
 function HomeContent() {
   // UI State
@@ -148,14 +149,26 @@ function HomeContent() {
   const buildSessionCommand = useCallback(
     async (
       session: Session
-    ): Promise<{ sessionName: string; cwd: string; command: string }> => {
+    ): Promise<{
+      sessionName: string;
+      cwd: string;
+      command: string;
+      spawn: { binary: string; args: string[]; cwd: string };
+    }> => {
       const provider = getProvider(session.agent_type || "claude");
       const sessionName = session.tmux_name || `${provider.id}-${session.id}`;
       const cwd = session.working_directory?.replace("~", "$HOME") || "$HOME";
+      // Raw cwd for the pty backend (the registry expands a leading "~").
+      const ptyCwd = session.working_directory || "~";
 
       // Shell sessions just open a terminal - no agent command
       if (provider.id === "shell") {
-        return { sessionName, cwd, command: "" };
+        return {
+          sessionName,
+          cwd,
+          command: "",
+          spawn: { binary: "", args: [], cwd: ptyCwd },
+        };
       }
 
       // TODO: Add explicit "Enable Orchestration" toggle that creates .mcp.json
@@ -178,19 +191,37 @@ function HomeContent() {
         clearPendingPrompt(session.id);
       }
 
-      const flags = provider.buildFlags({
+      const buildFlagsOptions = {
         sessionId: session.claude_session_id,
         parentSessionId,
         autoApprove: session.auto_approve,
         model: session.model,
         initialPrompt: initialPrompt || undefined,
-      });
+      };
+
+      const flags = provider.buildFlags(buildFlagsOptions);
       const flagsStr = flags.join(" ");
 
       const agentCmd = `${provider.command} ${flagsStr}`;
-      const command = await getInitScriptCommand(agentCmd);
+      // The init-script POST writes a bash .sh banner used only by the tmux
+      // backend's `command` field. The native pty backend spawns via
+      // binary/args and ignores `command`, so skip the round-trip there.
+      const backend = await getActiveBackend();
+      const command =
+        backend === "tmux" ? await getInitScriptCommand(agentCmd) : agentCmd;
 
-      return { sessionName, cwd, command };
+      // Structured argv for the native pty backend (no shell quoting).
+      const { binary, args } = buildAgentArgs(
+        session.agent_type || "claude",
+        buildFlagsOptions
+      );
+
+      return {
+        sessionName,
+        cwd,
+        command,
+        spawn: { binary, args, cwd: ptyCwd },
+      };
     },
     [sessions, getInitScriptCommand]
   );
@@ -201,15 +232,26 @@ function HomeContent() {
       terminal: TerminalHandle,
       paneId: string,
       session: Session,
-      sessionInfo: { sessionName: string; cwd: string; command: string }
+      sessionInfo: {
+        sessionName: string;
+        cwd: string;
+        command: string;
+        spawn: { binary: string; args: string[]; cwd: string };
+      },
+      backend: "pty" | "tmux"
     ) => {
-      const { sessionName, cwd, command } = sessionInfo;
-      const tmuxNew = command
-        ? `tmux new -s ${sessionName} -c "${cwd}" "${command}"`
-        : `tmux new -s ${sessionName} -c "${cwd}"`;
-      terminal.sendCommand(
-        `tmux set -g mouse on 2>/dev/null; tmux attach -t ${sessionName} 2>/dev/null || ${tmuxNew}`
-      );
+      const { sessionName, cwd, command, spawn } = sessionInfo;
+      if (backend === "pty") {
+        // Native: subscribe to (or spawn) the registry session directly.
+        terminal.attachSession({ key: sessionName, spawn });
+      } else {
+        const tmuxNew = command
+          ? `tmux new -s ${sessionName} -c "${cwd}" "${command}"`
+          : `tmux new -s ${sessionName} -c "${cwd}"`;
+        terminal.sendCommand(
+          `tmux set -g mouse on 2>/dev/null; tmux attach -t ${sessionName} 2>/dev/null || ${tmuxNew}`
+        );
+      }
       attachSession(paneId, session.id, sessionName);
       terminal.focus();
     },
@@ -232,6 +274,17 @@ function HomeContent() {
 
       const { terminal, paneId } = terminalInfo;
       const activeTab = getActiveTab(paneId);
+      const backend = await getActiveBackend();
+
+      if (backend === "pty") {
+        // Native: switching sessions just re-subscribes the socket; the server
+        // detaches the previous session and repaints the new one. No tmux
+        // detach (Ctrl-B d) / Ctrl-C dance.
+        const sessionInfo = await buildSessionCommand(session);
+        runSessionInTerminal(terminal, paneId, session, sessionInfo, "pty");
+        return;
+      }
+
       const isInTmux = !!activeTab?.attachedTmux;
 
       if (isInTmux) {
@@ -243,7 +296,13 @@ function HomeContent() {
           terminal.sendInput("\x03");
           setTimeout(async () => {
             const sessionInfo = await buildSessionCommand(session);
-            runSessionInTerminal(terminal, paneId, session, sessionInfo);
+            runSessionInTerminal(
+              terminal,
+              paneId,
+              session,
+              sessionInfo,
+              "tmux"
+            );
           }, 50);
         },
         isInTmux ? 100 : 0
@@ -273,12 +332,14 @@ function HomeContent() {
           if (!existingKeys.has(key) && key.startsWith(`${focusedPaneId}:`)) {
             const terminal = terminalRefs.current.get(key);
             if (terminal) {
-              buildSessionCommand(session).then((sessionInfo) => {
+              buildSessionCommand(session).then(async (sessionInfo) => {
+                const backend = await getActiveBackend();
                 runSessionInTerminal(
                   terminal,
                   focusedPaneId,
                   session,
-                  sessionInfo
+                  sessionInfo,
+                  backend
                 );
               });
               return;

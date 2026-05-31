@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2, GitBranch, FolderOpen } from "lucide-react";
 import { FolderPicker } from "@/components/FolderPicker";
+import { baseName } from "@/lib/path-display";
 import { useHomePath } from "@/hooks/useHomePath";
 
 interface DirectoryFieldProps {
@@ -73,7 +74,7 @@ export function DirectoryField({
                 className="bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground max-w-[200px] truncate rounded-full px-2 py-0.5 text-xs transition-colors"
                 title={dir}
               >
-                {dir.replace(/^~\//, "").split("/").pop() || dir}
+                {baseName(dir.replace(/^~\//, "")) || dir}
               </button>
             ))}
           </div>

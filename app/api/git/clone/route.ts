@@ -3,6 +3,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs/promises";
+import { expandHome } from "@/lib/platform";
 
 const execAsync = promisify(exec);
 
@@ -30,7 +31,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Resolve ~ to home directory
-    const resolvedDir = directory.replace(/^~/, process.env.HOME || "");
+    const resolvedDir = expandHome(directory);
 
     // Verify parent directory exists
     try {

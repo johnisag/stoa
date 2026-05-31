@@ -54,6 +54,37 @@ npm install
 npm run dev  # http://localhost:3011
 ```
 
+### Windows (native)
+
+AgentOS runs natively on Windows — no WSL or tmux required.
+
+Requires Node.js 20+ and Git. Install them via [winget](https://learn.microsoft.com/windows/package-manager/winget/) if needed:
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+winget install Git.Git
+```
+
+Then clone and run:
+
+```powershell
+git clone https://github.com/johnisag/agent-os
+cd agent-os
+npm install --legacy-peer-deps
+npm run build
+npm start  # or: agent-os start
+```
+
+Or use the PowerShell installer:
+
+```powershell
+irm https://raw.githubusercontent.com/johnisag/agent-os/main/scripts/install.ps1 | iex
+```
+
+On Windows the native pty backend is selected automatically (no tmux/WSL needed). Set `AGENT_OS_BACKEND=tmux|pty` to override the choice on any platform.
+
+> **Tier-1 caveat:** Agent sessions survive browser disconnects, but not an AgentOS server restart (yet).
+
 ### Prerequisites
 
 - Node.js 20+

@@ -10,6 +10,7 @@ import type {
 } from "@/components/Terminal";
 import type { Session, Project } from "@/lib/db";
 import { sessionRegistry } from "@/lib/client/session-registry";
+import { getActiveBackend, buildSpawnForSession } from "@/lib/client/backend";
 import { cn } from "@/lib/utils";
 import { ConductorPanel } from "@/components/ConductorPanel";
 import { useFileEditor } from "@/hooks/useFileEditor";
@@ -170,10 +171,14 @@ export const Pane = memo(function Pane({
   }, [focusPane, paneId]);
 
   const handleDetach = useCallback(() => {
-    if (terminalRef) {
-      terminalRef.sendInput("\x02d"); // Ctrl+B d to detach
-    }
-    detachSession(paneId);
+    void getActiveBackend().then((backend) => {
+      // tmux: send Ctrl+B d to detach the live session. Native pty is
+      // attach-driven, so injecting that keystroke would corrupt the session.
+      if (backend === "tmux" && terminalRef) {
+        terminalRef.sendInput("\x02d"); // Ctrl+B d to detach
+      }
+      detachSession(paneId);
+    });
   }, [detachSession, paneId, terminalRef]);
 
   // Create ref callback for a specific tab
@@ -199,17 +204,59 @@ export const Pane = memo(function Pane({
 
       onRegisterTerminal(paneId, tab.id, handle);
 
-      // Determine tmux session name to attach
-      const tmuxName = tab.sessionId
-        ? sessions.find((s) => s.id === tab.sessionId)?.tmux_name ||
-          tab.attachedTmux
-        : tab.attachedTmux;
+      // Determine the session/key to attach
+      const session = tab.sessionId
+        ? sessions.find((s) => s.id === tab.sessionId)
+        : undefined;
+      const sessionName = session?.tmux_name || tab.attachedTmux;
 
-      if (tmuxName) {
-        setTimeout(() => handle.sendCommand(`tmux attach -t ${tmuxName}`), 100);
-      }
+      if (!sessionName) return;
+
+      void getActiveBackend().then((backend) => {
+        if (backend === "pty") {
+          // Native: (re)attach to the registry session. spawn lets the server
+          // respawn it if it isn't running (e.g. after a server restart).
+          const spawn = session ? buildSpawnForSession(session) : undefined;
+          setTimeout(
+            () => handle.attachSession({ key: sessionName, spawn }),
+            100
+          );
+        } else {
+          setTimeout(
+            () => handle.sendCommand(`tmux attach -t ${sessionName}`),
+            100
+          );
+        }
+      });
     },
     [paneId, sessions, onRegisterTerminal]
+  );
+
+  // Attach the pane's terminal to a worker session (from the conductor panel),
+  // backend-aware: native re-subscribe vs the legacy tmux detach/attach dance.
+  const handleAttachToWorker = useCallback(
+    (workerId: string) => {
+      const worker = sessions.find((s) => s.id === workerId);
+      if (!worker || !terminalRef) return;
+      const sessionName = worker.tmux_name || `claude-${workerId}`;
+      void getActiveBackend().then((backend) => {
+        if (backend === "pty") {
+          terminalRef.attachSession({
+            key: sessionName,
+            spawn: buildSpawnForSession(worker),
+          });
+        } else {
+          terminalRef.sendInput("\x02d");
+          setTimeout(() => {
+            terminalRef.sendInput("\x15");
+            setTimeout(() => {
+              terminalRef.sendCommand(`tmux attach -t ${sessionName}`);
+            }, 50);
+          }, 100);
+        }
+      });
+    },
+    [sessions, terminalRef]
   );
 
   // Track current tab ID for cleanup
@@ -386,17 +433,7 @@ export const Pane = memo(function Pane({
               conductorSessionId={session.id}
               onAttachToWorker={(workerId) => {
                 setViewMode("terminal");
-                const worker = sessions.find((s) => s.id === workerId);
-                if (worker && terminalRef) {
-                  const sessionName = `claude-${workerId}`;
-                  terminalRef.sendInput("\x02d");
-                  setTimeout(() => {
-                    terminalRef?.sendInput("\x15");
-                    setTimeout(() => {
-                      terminalRef?.sendCommand(`tmux attach -t ${sessionName}`);
-                    }, 50);
-                  }, 100);
-                }
+                handleAttachToWorker(workerId);
               }}
             />
           )}
@@ -473,19 +510,7 @@ export const Pane = memo(function Pane({
                       conductorSessionId={session.id}
                       onAttachToWorker={(workerId) => {
                         setViewMode("terminal");
-                        const worker = sessions.find((s) => s.id === workerId);
-                        if (worker && terminalRef) {
-                          const sessionName = `claude-${workerId}`;
-                          terminalRef.sendInput("\x02d");
-                          setTimeout(() => {
-                            terminalRef?.sendInput("\x15");
-                            setTimeout(() => {
-                              terminalRef?.sendCommand(
-                                `tmux attach -t ${sessionName}`
-                              );
-                            }, 50);
-                          }, 100);
-                        }
+                        handleAttachToWorker(workerId);
                       }}
                     />
                   )}

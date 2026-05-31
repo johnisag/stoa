@@ -34,6 +34,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { devServerKeys } from "@/data/dev-servers";
 import { repositoryKeys } from "@/data/repositories";
 import type { AgentType } from "@/lib/providers";
+import { baseName } from "@/lib/path-display";
 import {
   getDefaultModelForAgent,
   getModelOptions,
@@ -245,8 +246,7 @@ export function ProjectSettingsDialog({
         const existingPaths = new Set(repositories.map((r) => r.path));
         if (!existingPaths.has(workingDirectory)) {
           // Extract repo name from path
-          const pathParts = workingDirectory.split("/").filter(Boolean);
-          const repoName = pathParts[pathParts.length - 1] || "Repository";
+          const repoName = baseName(workingDirectory) || "Repository";
 
           setRepositories((prev) => [
             ...prev,
@@ -803,8 +803,7 @@ export function ProjectSettingsDialog({
             if (!repoId) return;
 
             // Auto-fill name from path if empty
-            const pathParts = path.split("/").filter(Boolean);
-            const name = pathParts[pathParts.length - 1] || "Repository";
+            const name = baseName(path) || "Repository";
 
             // First close the picker
             setFolderPickerRepoId(null);

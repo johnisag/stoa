@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 
 export interface PRInfo {
   number: number;
@@ -163,7 +163,7 @@ export function createPR(
 ): PRInfo {
   // First ensure branch is pushed
   try {
-    execSync(`git push -u origin "${branchName}"`, {
+    execFileSync("git", ["push", "-u", "origin", branchName], {
       cwd: workingDir,
       timeout: 30000,
       stdio: "pipe",
@@ -173,11 +173,12 @@ export function createPR(
   }
 
   // Create PR using gh CLI
-  // gh pr create outputs the PR URL on success
-  const titleEscaped = title.replace(/'/g, "'\\''");
-  const bodyEscaped = body.replace(/'/g, "'\\''");
-  const output = execSync(
-    `gh pr create --title '${titleEscaped}' --base "${baseBranch}" --body '${bodyEscaped}'`,
+  // gh pr create outputs the PR URL on success.
+  // Pass arguments as an array so multi-line bodies and special characters are
+  // forwarded verbatim (no shell quoting/escaping, cross-platform safe).
+  const output = execFileSync(
+    "gh",
+    ["pr", "create", "--title", title, "--base", baseBranch, "--body", body],
     {
       cwd: workingDir,
       encoding: "utf-8",
@@ -217,12 +218,15 @@ export function getCurrentBranch(workingDir: string): string {
  */
 export function getBaseBranch(workingDir: string): string {
   try {
-    // Try to get from remote HEAD
-    const output = execSync(
-      "git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || echo 'refs/heads/main'",
+    // Try to get from remote HEAD. The shell `2>/dev/null || echo` fallback is
+    // handled here in JS so this works cross-platform (no POSIX shell needed).
+    const output = execFileSync(
+      "git",
+      ["symbolic-ref", "refs/remotes/origin/HEAD"],
       {
         cwd: workingDir,
         encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
       }
     ).trim();
     return output

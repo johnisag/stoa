@@ -6,18 +6,21 @@
  */
 
 import { randomUUID } from "crypto";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
+import { rm } from "fs/promises";
 import { db, queries, type Session } from "./db";
 import { createWorktree, deleteWorktree } from "./worktrees";
 import { setupWorktree } from "./env-setup";
 import { resolveModelForAgent } from "./model-catalog";
-import { type AgentType, getProvider } from "./providers";
+import { type AgentType, getProvider, buildAgentArgs } from "./providers";
 import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
+import { getSessionBackend } from "./session-backend";
+import { expandHome } from "./platform";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface SpawnWorkerOptions {
   conductorSessionId: string;
@@ -80,6 +83,7 @@ function taskToSessionName(task: string): string {
 export async function spawnWorker(
   options: SpawnWorkerOptions
 ): Promise<Session> {
+  const backend = getSessionBackend();
   const {
     conductorSessionId,
     task,
@@ -91,7 +95,7 @@ export async function spawnWorker(
   const model = resolveModelForAgent(agentType, options.model);
 
   // Expand ~ to home directory
-  const workingDirectory = rawWorkingDir.replace(/^~/, process.env.HOME || "");
+  const workingDirectory = expandHome(rawWorkingDir);
 
   const sessionId = randomUUID();
   const sessionName = taskToSessionName(task);
@@ -157,21 +161,28 @@ export async function spawnWorker(
     );
   }
 
-  // Create tmux session and start the agent
+  // Create the session and start the agent. Workers use auto-approve.
   const tmuxSessionName = `${provider.id}-${sessionId}`;
-  const cwd = actualWorkingDir.replace("~", "$HOME");
+  // Raw cwd (may contain "~"); each backend expands it for its platform.
+  const cwd = actualWorkingDir;
 
-  // Build the initial prompt command (workers use auto-approve by default for automation)
+  // tmux backend: banner-wrapped shell command. pty backend: direct argv.
   const flags = provider.buildFlags({ model, autoApprove: true });
-  const flagsStr = flags.join(" ");
-
-  // Create tmux session with the agent and banner
-  const agentCmd = `${provider.command} ${flagsStr}`;
+  const agentCmd = `${provider.command} ${flags.join(" ")}`;
   const newSessionCmd = wrapWithBanner(agentCmd);
-  const createCmd = `tmux set -g mouse on 2>/dev/null; tmux new-session -d -s "${tmuxSessionName}" -c "${cwd}" "${newSessionCmd}"`;
+  const { binary, args } = buildAgentArgs(provider.id, {
+    model,
+    autoApprove: true,
+  });
 
   try {
-    await execAsync(createCmd);
+    await backend.create({
+      name: tmuxSessionName,
+      cwd,
+      command: newSessionCmd,
+      binary,
+      args,
+    });
 
     // Wait for Claude to be ready by checking for the input prompt
     // Poll every 2 seconds for up to 30 seconds
@@ -189,9 +200,7 @@ export async function spawnWorker(
       waited += pollIntervalMs;
 
       try {
-        const { stdout } = await execAsync(
-          `tmux capture-pane -t '${tmuxSessionName}' -p -S -10 2>/dev/null`
-        );
+        const stdout = await backend.capture(tmuxSessionName, { lines: 10 });
         const content = stdout.toLowerCase();
 
         // Check for trust/permissions prompt and auto-accept
@@ -204,7 +213,7 @@ export async function spawnWorker(
           console.log(
             `[orchestration] Trust prompt detected, pressing Enter to accept`
           );
-          await execAsync(`tmux send-keys -t '${tmuxSessionName}' Enter`);
+          await backend.sendEnter(tmuxSessionName);
           continue; // Keep waiting for the real prompt
         }
 
@@ -230,15 +239,12 @@ export async function spawnWorker(
     }
 
     // Send the task as input, then press Enter
-    const escapedTask = task.replace(/'/g, "'\\''"); // Escape single quotes for shell
     console.log(
       `[orchestration] Sending task to ${tmuxSessionName}: "${task}"`
     );
     try {
-      await execAsync(
-        `tmux send-keys -t '${tmuxSessionName}' -l '${escapedTask}'`
-      );
-      await execAsync(`tmux send-keys -t '${tmuxSessionName}' Enter`);
+      await backend.sendKeysLiteral(tmuxSessionName, task);
+      await backend.sendEnter(tmuxSessionName);
       console.log(
         `[orchestration] Task sent successfully to ${tmuxSessionName}`
       );
@@ -323,13 +329,12 @@ export async function getWorkerOutput(
     throw new Error(`Worker ${workerId} not found`);
   }
 
+  const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
   const tmuxSessionName = session.tmux_name || `${provider.id}-${workerId}`;
 
   try {
-    const { stdout } = await execAsync(
-      `tmux capture-pane -t "${tmuxSessionName}" -p -S -${lines} 2>/dev/null || echo ""`
-    );
+    const stdout = await backend.capture(tmuxSessionName, { lines });
     return stdout.trim();
   } catch {
     return "";
@@ -348,14 +353,14 @@ export async function sendToWorker(
     throw new Error(`Worker ${workerId} not found`);
   }
 
+  const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
   const tmuxSessionName = session.tmux_name || `${provider.id}-${workerId}`;
 
   try {
-    const escapedMessage = message.replace(/"/g, '\\"').replace(/\$/g, "\\$");
-    await execAsync(
-      `tmux send-keys -t "${tmuxSessionName}" "${escapedMessage}" Enter`
-    );
+    await backend.sendKeysInterpreted(tmuxSessionName, message, {
+      enter: true,
+    });
     return true;
   } catch {
     return false;
@@ -388,14 +393,13 @@ export async function killWorker(
     return;
   }
 
+  const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
   const tmuxSessionName = session.tmux_name || `${provider.id}-${workerId}`;
 
   // Kill tmux session
   try {
-    await execAsync(
-      `tmux kill-session -t "${tmuxSessionName}" 2>/dev/null || true`
-    );
+    await backend.kill(tmuxSessionName);
   } catch {
     // Ignore errors
   }
@@ -404,19 +408,27 @@ export async function killWorker(
   // Note: This requires knowing the original project path, which we derive from git
   if (cleanupWorktree && session.worktree_path) {
     try {
-      // Get the main worktree (original project) from git
-      const { stdout } = await execAsync(
-        `git -C "${session.worktree_path}" worktree list --porcelain | head -1 | sed 's/worktree //'`
-      );
-      const projectPath = stdout.trim();
+      // Get the main worktree (original project) from git. The first porcelain
+      // entry is the main worktree; parse it in JS (no head/sed shell tools).
+      const { stdout } = await execFileAsync("git", [
+        "-C",
+        session.worktree_path,
+        "worktree",
+        "list",
+        "--porcelain",
+      ]);
+      const firstLine = stdout.split(/\r?\n/)[0] || "";
+      const projectPath = firstLine.startsWith("worktree ")
+        ? firstLine.slice("worktree ".length).trim()
+        : "";
       if (projectPath && projectPath !== session.worktree_path) {
         await deleteWorktree(session.worktree_path, projectPath, true);
       }
     } catch (error) {
       console.error("Failed to delete worktree:", error);
-      // Fallback: just remove the directory
+      // Fallback: remove the directory cross-platform.
       try {
-        await execAsync(`rm -rf "${session.worktree_path}"`);
+        await rm(session.worktree_path, { recursive: true, force: true });
       } catch {
         // Ignore cleanup errors
       }

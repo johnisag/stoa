@@ -3,6 +3,7 @@
 import { useRef, useEffect } from "react";
 import { X, File } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { baseName } from "@/lib/path-display";
 import type { OpenFile } from "@/hooks/useFileEditor";
 
 interface FileTabsProps {
@@ -46,7 +47,7 @@ export function FileTabs({
       {files.map((file) => {
         const isActive = file.path === activeFilePath;
         const dirty = isDirty(file.path);
-        const fileName = file.path.split("/").pop() || file.path;
+        const fileName = baseName(file.path);
         const ext = fileName.split(".").pop()?.toLowerCase() || "";
 
         return (

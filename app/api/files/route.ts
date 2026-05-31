@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import nodePath from "path";
 import { listDirectory } from "@/lib/files";
+import { expandHome } from "@/lib/platform";
 
 /**
  * GET /api/files?path=...&recursive=true
@@ -8,18 +10,20 @@ import { listDirectory } from "@/lib/files";
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const path = searchParams.get("path");
+    const inputPath = searchParams.get("path");
     const recursive = searchParams.get("recursive") === "true";
 
-    if (!path) {
+    if (!inputPath) {
       return NextResponse.json(
         { error: "Path parameter is required" },
         { status: 400 }
       );
     }
 
-    // Expand ~ to home directory
-    const expandedPath = path.replace(/^~/, process.env.HOME || "");
+    // Expand ~ to home, then resolve to an ABSOLUTE path so drive-relative
+    // inputs like "\my-projects" become "C:\my-projects" (and children inherit
+    // the drive). Without this, Windows paths lose their drive letter in the UI.
+    const expandedPath = nodePath.resolve(expandHome(inputPath));
 
     const files = listDirectory(expandedPath, {
       recursive,

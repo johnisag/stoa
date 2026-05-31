@@ -1,12 +1,18 @@
-import { spawn, exec } from "child_process";
+import { spawn, execFile } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
 import path from "path";
 import { db, queries, DevServer, DevServerType, DevServerStatus } from "./db";
+import {
+  isWindows,
+  homeDir,
+  expandHome,
+  isPortInUse as portInUse,
+} from "./platform";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
-const LOGS_DIR = path.join(process.env.HOME || "~", ".agent-os", "logs");
+const LOGS_DIR = path.join(homeDir(), ".agent-os", "logs");
 
 // Ensure logs directory exists
 if (!fs.existsSync(LOGS_DIR)) {
@@ -51,23 +57,31 @@ async function isPidRunning(pid: number): Promise<boolean> {
 
 // Check if a port is in use
 async function isPortInUse(port: number): Promise<boolean> {
-  try {
-    const { stdout } = await execAsync(
-      `lsof -i :${port} -t 2>/dev/null || true`
-    );
-    return stdout.trim().length > 0;
-  } catch {
-    return false;
-  }
+  return portInUse(port);
 }
 
 // Get PID using a port
 async function getPidOnPort(port: number): Promise<number | null> {
   try {
-    const { stdout } = await execAsync(
-      `lsof -i :${port} -t 2>/dev/null | head -1`
-    );
-    const pid = parseInt(stdout.trim(), 10);
+    if (isWindows) {
+      // netstat -ano lists connections with the owning PID in the last column.
+      const { stdout } = await execFileAsync("netstat", ["-ano"]);
+      for (const line of stdout.split(/\r?\n/)) {
+        const cols = line.trim().split(/\s+/);
+        // Columns: Proto  Local Address  Foreign Address  State  PID
+        if (cols.length < 5 || cols[0].toUpperCase() !== "TCP") continue;
+        const local = cols[1];
+        // Match :PORT at the end of the local address (handles IPv4 and IPv6).
+        if (!local.endsWith(`:${port}`)) continue;
+        if (cols[3].toUpperCase() !== "LISTENING") continue;
+        const pid = parseInt(cols[cols.length - 1], 10);
+        if (!isNaN(pid)) return pid;
+      }
+      return null;
+    }
+
+    const { stdout } = await execFileAsync("lsof", ["-i", `:${port}`, "-t"]);
+    const pid = parseInt(stdout.trim().split(/\r?\n/)[0], 10);
     return isNaN(pid) ? null : pid;
   } catch {
     return null;
@@ -103,9 +117,12 @@ async function checkDockerStatus(server: DevServer): Promise<DevServerStatus> {
   if (!server.container_id) return "stopped";
 
   try {
-    const { stdout } = await execAsync(
-      `docker inspect -f '{{.State.Status}}' ${server.container_id} 2>/dev/null || echo ""`
-    );
+    const { stdout } = await execFileAsync("docker", [
+      "inspect",
+      "-f",
+      "{{.State.Status}}",
+      server.container_id,
+    ]);
     const status = stdout.trim();
     if (status === "running") return "running";
     if (status === "starting" || status === "restarting") return "starting";
@@ -160,14 +177,6 @@ export async function getServersByProject(
   return servers;
 }
 
-// Expand ~ to home directory
-function expandHome(filePath: string): string {
-  if (filePath.startsWith("~/")) {
-    return path.join(process.env.HOME || "", filePath.slice(2));
-  }
-  return filePath;
-}
-
 // Start a Node.js server
 async function spawnNodeServer(
   id: string,
@@ -186,7 +195,7 @@ async function spawnNodeServer(
   // This lets Next.js/Vite/etc load .env.local without interference from parent process env
   const env: Record<string, string | undefined> = {
     PATH: process.env.PATH,
-    HOME: process.env.HOME,
+    HOME: homeDir(),
     USER: process.env.USER,
     SHELL: process.env.SHELL,
     TERM: process.env.TERM || "xterm-256color",
@@ -198,9 +207,9 @@ async function spawnNodeServer(
     env.PORT = String(ports[0]);
   }
 
-  const fullCommand = `cd "${cwd}" && ${command}`;
-
-  const child = spawn(fullCommand, [], {
+  // Run the command directly with cwd set via the spawn option; no `cd` prefix
+  // so we avoid cmd/PowerShell `cd &&` quoting issues on Windows.
+  const child = spawn(command, [], {
     cwd,
     env: env as NodeJS.ProcessEnv,
     shell: true,
@@ -226,13 +235,14 @@ async function spawnDockerService(
 ): Promise<{ containerId: string | null }> {
   try {
     // command is expected to be the service name
-    await execAsync(`docker compose up -d ${command}`, {
+    await execFileAsync("docker", ["compose", "up", "-d", command], {
       cwd: workingDirectory,
     });
 
     // Get container ID
-    const { stdout } = await execAsync(
-      `docker compose ps -q ${command} 2>/dev/null || echo ""`,
+    const { stdout } = await execFileAsync(
+      "docker",
+      ["compose", "ps", "-q", command],
       { cwd: workingDirectory }
     );
     const containerId = stdout.trim() || null;
@@ -301,7 +311,7 @@ export async function stopServer(id: string): Promise<void> {
   if (server.type === "docker") {
     if (server.container_id) {
       try {
-        await execAsync(`docker stop ${server.container_id}`);
+        await execFileAsync("docker", ["stop", server.container_id]);
       } catch {
         // Container may already be stopped
       }
@@ -390,10 +400,15 @@ export async function getServerLogs(
 
   if (server.type === "docker" && server.container_id) {
     try {
-      const { stdout } = await execAsync(
-        `docker logs --tail ${lines} ${server.container_id} 2>&1`
-      );
-      return stdout.split("\n");
+      // docker writes logs to both stdout and stderr; merge them to mirror the
+      // previous `2>&1` redirection.
+      const { stdout, stderr } = await execFileAsync("docker", [
+        "logs",
+        "--tail",
+        String(lines),
+        server.container_id,
+      ]);
+      return (stdout + stderr).split("\n");
     } catch {
       return [];
     }
@@ -465,11 +480,12 @@ export async function detectDockerServices(
     const composePath = path.join(workingDir, file);
     if (fs.existsSync(composePath)) {
       try {
-        const { stdout } = await execAsync(
-          `docker compose -f ${file} config --services 2>/dev/null || echo ""`,
+        const { stdout } = await execFileAsync(
+          "docker",
+          ["compose", "-f", file, "config", "--services"],
           { cwd: workingDir }
         );
-        const services = stdout.trim().split("\n").filter(Boolean);
+        const services = stdout.trim().split(/\r?\n/).filter(Boolean);
 
         return services.map((service) => ({
           type: "docker" as const,

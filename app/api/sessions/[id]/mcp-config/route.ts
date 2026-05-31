@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, queries, type Session } from "@/lib/db";
 import { ensureMcpConfig } from "@/lib/mcp-config";
+import { expandHome } from "@/lib/platform";
 
 // POST /api/sessions/[id]/mcp-config - Ensure MCP config exists for this session
 export async function POST(
@@ -16,10 +17,7 @@ export async function POST(
     }
 
     // Expand ~ to home directory
-    const workingDirectory = session.working_directory.replace(
-      /^~/,
-      process.env.HOME || ""
-    );
+    const workingDirectory = expandHome(session.working_directory);
 
     ensureMcpConfig(workingDirectory, id);
 
