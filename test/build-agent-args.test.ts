@@ -46,6 +46,40 @@ describe("buildAgentArgs", () => {
     expect(args).toEqual(["--prompt", "task"]);
   });
 
+  it("codex: auto-approve flag, model flag, positional prompt", () => {
+    const { binary, args } = buildAgentArgs("codex", {
+      autoApprove: true,
+      model: "o3",
+      initialPrompt: "go",
+    });
+    expect(binary).toBe("codex");
+    expect(args).toEqual([
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--model",
+      "o3",
+      "go",
+    ]);
+  });
+
+  it("aider: --yes + --model; no prompt flag means the prompt is dropped", () => {
+    const { binary, args } = buildAgentArgs("aider", {
+      autoApprove: true,
+      model: "sonnet",
+      initialPrompt: "should be ignored",
+    });
+    expect(binary).toBe("aider");
+    expect(args).toEqual(["--yes", "--model", "sonnet"]);
+  });
+
+  it("cursor: model flag, no auto-approve flag", () => {
+    const { binary, args } = buildAgentArgs("cursor", {
+      autoApprove: true,
+      model: "auto",
+    });
+    expect(binary).toBe("cursor-agent");
+    expect(args).toEqual(["--model", "auto"]);
+  });
+
   it("shell: empty binary (server spawns a plain shell)", () => {
     const { binary, args } = buildAgentArgs("shell", {});
     expect(binary).toBe("");

@@ -13,12 +13,17 @@ import os from "os";
 import path from "path";
 import { isWindows } from "../../platform";
 
-/** Absolute address of the host's listening socket. */
+/**
+ * Absolute address of the host's listening socket. The basename can be
+ * overridden via AGENT_OS_PTY_HOST_NAME so multiple AgentOS instances (or test
+ * files) can run isolated daemons without colliding on the global pipe/socket.
+ */
 export function hostAddress(): string {
+  const name = process.env.AGENT_OS_PTY_HOST_NAME || "agent-os-pty-host";
   if (isWindows) {
-    return "\\\\.\\pipe\\agent-os-pty-host";
+    return `\\\\.\\pipe\\${name}`;
   }
-  return path.join(os.tmpdir(), "agent-os-pty-host.sock");
+  return path.join(os.tmpdir(), `${name}.sock`);
 }
 
 export interface SpawnSpecMsg {

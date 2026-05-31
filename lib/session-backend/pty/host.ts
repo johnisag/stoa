@@ -303,6 +303,10 @@ export function stopHost(): Promise<void> {
     if (!server) return resolve();
     const srv = server;
     server = null;
+    // Destroy any open client sockets first, otherwise srv.close() waits for
+    // them to end and never completes.
+    for (const sock of connections) sock.destroy();
+    connections.clear();
     srv.close(() => resolve());
   });
 }

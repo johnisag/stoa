@@ -1,3 +1,7 @@
+// Isolated daemon socket so this file's daemon doesn't collide with other
+// daemon-using test files running in parallel workers (global pipe/socket).
+process.env.AGENT_OS_PTY_HOST_NAME = "agent-os-pty-host-test-host";
+
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { startHost, stopHost } from "@/lib/session-backend/pty/host";
 import { HostClient } from "@/lib/session-backend/pty/host-client";
