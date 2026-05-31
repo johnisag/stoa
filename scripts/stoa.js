@@ -306,13 +306,65 @@ function cmdLogs() {
   }
 }
 
-/** update: git pull, reinstall deps, rebuild. */
+/** Capture a git command's trimmed stdout in REPO_DIR, or null on failure. */
+function gitCapture(args) {
+  const r = spawnSync("git", args, {
+    cwd: REPO_DIR,
+    shell: SPAWN_SHELL,
+    encoding: "utf8",
+  });
+  return r.status === 0 ? (r.stdout || "").trim() : null;
+}
+
+/** True if `dir` is a git checkout (vs. e.g. an `npm i -g` install). */
+function isGitInstall(dir = REPO_DIR) {
+  return fs.existsSync(path.join(dir, ".git"));
+}
+
+/**
+ * update: pull the latest `main` and rebuild.
+ *
+ * Hardened for already-installed clones: it pins to `main` (so an old or
+ * feature-branch checkout still updates), refuses to clobber local edits, and
+ * tells npm-global installs to update via npm instead of git.
+ */
 function cmdUpdate() {
+  // npm-global installs aren't git checkouts — they can't self-update via git.
+  if (!isGitInstall()) {
+    error("This install isn't a git checkout, so it can't update via git.");
+    console.log("  Update the npm package instead:");
+    console.log("    npm install -g @johnisag/stoa@latest");
+    process.exit(1);
+  }
+
+  // Don't blow away uncommitted local changes with a checkout/pull.
+  const dirty = gitCapture(["status", "--porcelain"]);
+  if (dirty) {
+    error("You have uncommitted local changes in the install directory.");
+    console.log(`  (${REPO_DIR})`);
+    console.log("  Commit or stash them, then re-run:");
+    console.log("    git stash && stoa update");
+    process.exit(1);
+  }
+
   const wasRunning = !!getRunningPid();
   if (wasRunning) cmdStop();
 
-  info("Updating Stoa...");
-  runSync("git", ["pull", "--ff-only"]);
+  const origin = gitCapture(["remote", "get-url", "origin"]) || "origin";
+  info(`Updating from ${origin}`);
+  const before = gitCapture(["rev-parse", "--short", "HEAD"]);
+
+  runSync("git", ["fetch", "origin", "--tags"]);
+  // Pin to main: an install left on a (now-deleted) feature branch still updates.
+  runSync("git", ["checkout", "main"]);
+  runSync("git", ["pull", "--ff-only", "origin", "main"]);
+
+  const after = gitCapture(["rev-parse", "--short", "HEAD"]);
+  if (before && after && before === after) {
+    info("Already up to date.");
+  } else {
+    info(`Updated ${before || "?"} -> ${after || "?"}`);
+  }
 
   info("Installing dependencies...");
   runSync("npm", ["install", "--legacy-peer-deps"]);
@@ -393,4 +445,9 @@ function main() {
   }
 }
 
-main();
+// Run as a CLI when invoked directly; stay importable (side-effect-free) for tests.
+if (require.main === module) {
+  main();
+}
+
+module.exports = { isGitInstall };

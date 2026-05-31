@@ -118,6 +118,28 @@ stoa logs      # Tail logs
 stoa update    # Update to latest
 ```
 
+## Updating
+
+```bash
+stoa update
+```
+
+`stoa update` stops the server (if running), pulls the latest `main`, reinstalls
+dependencies, rebuilds, and restarts. It pins to `main`, so an install left on
+an old branch still updates correctly. (Installed globally via npm instead of a
+git clone? Update with `npm install -g @johnisag/stoa@latest`.)
+
+**Migrating an older install (one-time):** if you installed before the repo
+moved to `johnisag/stoa`, point your clone at the current remote once, then
+`stoa update` works from then on:
+
+```bash
+cd "$(stoa status | awk '/Install:/{print $2}')"   # your install dir
+git remote set-url origin https://github.com/johnisag/stoa.git
+git checkout main && git pull --ff-only
+stoa update
+```
+
 ## Mobile Access
 
 Use [Tailscale](https://tailscale.com) for secure access from your phone:
