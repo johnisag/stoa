@@ -552,6 +552,60 @@ export const ompProvider: AgentProvider = {
  * Shell Provider
  * Plain terminal without any AI CLI
  */
+/**
+ * Hermes Agent (Nous Research) — a Claude-Code-style TUI agent that runs
+ * natively on Windows/macOS/Linux and self-authenticates. Spawned via the pty
+ * backend exactly like any other CLI agent; rendering is handled by the terminal
+ * with no special casing. Minimal flag surface for now (launches the TUI);
+ * buildFlags honors any registry flags added later.
+ */
+export const hermesProvider: AgentProvider = {
+  id: "hermes",
+  name: "Hermes Agent",
+  description: "Nous Research agent harness",
+  command: "hermes",
+  configDir: "~/.hermes",
+
+  supportsResume: false,
+  supportsFork: false,
+
+  buildFlags(options: BuildFlagsOptions): string[] {
+    const def = getProviderDefinition("hermes");
+    const flags: string[] = [];
+    if (
+      (options.skipPermissions || options.autoApprove) &&
+      def.autoApproveFlag
+    ) {
+      flags.push(def.autoApproveFlag);
+    }
+    if (options.model && def.modelFlag) {
+      flags.push(`${def.modelFlag} ${options.model}`);
+    }
+    if (options.initialPrompt?.trim() && def.initialPromptFlag !== undefined) {
+      const prompt = options.initialPrompt.trim().replace(/'/g, "'\\''");
+      flags.push(
+        def.initialPromptFlag === ""
+          ? `'${prompt}'`
+          : `${def.initialPromptFlag} '${prompt}'`
+      );
+    }
+    return flags;
+  },
+
+  // Shared TUI conventions; tune once we observe Hermes busy/waiting output.
+  waitingPatterns: [
+    /\[Y\/n\]/i,
+    /\[y\/N\]/i,
+    /Allow\?/i,
+    /Approve\?/i,
+    /Continue\?/i,
+    /Press Enter/i,
+    /Do you want to/i,
+  ],
+  runningPatterns: [SPINNER_CHARS, /esc to interrupt/i, /tokens/i],
+  idlePatterns: [],
+};
+
 export const shellProvider: AgentProvider = {
   id: "shell",
   name: "Terminal",
@@ -582,6 +636,7 @@ export const providers: Record<AgentType, AgentProvider> = {
   amp: ampProvider,
   pi: piProvider,
   omp: ompProvider,
+  hermes: hermesProvider,
   shell: shellProvider,
 };
 

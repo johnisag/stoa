@@ -80,6 +80,16 @@ describe("buildAgentArgs", () => {
     expect(args).toEqual(["--model", "auto"]);
   });
 
+  it("hermes: launches the bare TUI (no flags in the minimal provider)", () => {
+    const { binary, args } = buildAgentArgs("hermes", {
+      autoApprove: true,
+      model: "opus",
+      initialPrompt: "ignored until flags are defined",
+    });
+    expect(binary).toBe("hermes");
+    expect(args).toEqual([]);
+  });
+
   it("shell: empty binary (server spawns a plain shell)", () => {
     const { binary, args } = buildAgentArgs("shell", {});
     expect(binary).toBe("");

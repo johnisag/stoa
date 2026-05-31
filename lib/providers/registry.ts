@@ -14,6 +14,7 @@ export const PROVIDER_IDS = [
   "amp",
   "pi",
   "omp",
+  "hermes",
   "shell",
 ] as const;
 
@@ -159,6 +160,19 @@ export const PROVIDERS: ProviderDefinition[] = [
     supportsFork: false,
     modelFlag: "--model",
     initialPromptFlag: "", // Positional argument
+  },
+  {
+    id: "hermes",
+    name: "Hermes Agent",
+    description: "Nous Research agent harness",
+    cli: "hermes",
+    configDir: "~/.hermes",
+    // Minimal launch: spawns the interactive Hermes TUI (self-authenticating,
+    // like Claude Code). Resume/model/initial-prompt flags can be added once the
+    // CLI surface is confirmed.
+    autoApproveFlag: undefined,
+    supportsResume: false,
+    supportsFork: false,
   },
   {
     id: "shell",

@@ -103,6 +103,11 @@ export const AGENT_OPTIONS: {
     label: "Oh My Pi",
     description: "Enhanced Pi coding harness",
   },
+  {
+    value: "hermes",
+    label: "Hermes Agent",
+    description: "Nous Research harness",
+  },
 ];
 
 // Props for main dialog
