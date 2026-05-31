@@ -56,7 +56,9 @@ docs/*
 .git-evening
 
 # Private development notes (open source repo)
-CLAUDE.md
+# CLAUDE.md is checked in as a thin pointer to AGENTS.md; personal notes go in
+# CLAUDE.local.md (auto-loaded by Claude Code, ignored here).
+CLAUDE.local.md
 master.md
 progress.md
 .git-evening
