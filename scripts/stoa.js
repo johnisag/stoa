@@ -350,14 +350,33 @@ function cmdUpdate() {
   const wasRunning = !!getRunningPid();
   if (wasRunning) cmdStop();
 
+  // Past this point the server is stopped. On ANY failure (network, diverged
+  // main, npm), restart the existing version so a failed update never leaves the
+  // user's server down — then exit non-zero.
+  const recover = (what) => {
+    error(`Update failed (${what}).`);
+    if (wasRunning) {
+      info("Restarting the server with the existing version...");
+      cmdStart();
+    }
+    process.exit(1);
+  };
+  const step = (what, cmd, args) => {
+    if (runSync(cmd, args, { allowFail: true }) !== 0) recover(what);
+  };
+
   const origin = gitCapture(["remote", "get-url", "origin"]) || "origin";
   info(`Updating from ${origin}`);
   const before = gitCapture(["rev-parse", "--short", "HEAD"]);
 
-  runSync("git", ["fetch", "origin", "--tags"]);
+  step("git fetch", "git", ["fetch", "origin", "--tags"]);
   // Pin to main: an install left on a (now-deleted) feature branch still updates.
-  runSync("git", ["checkout", "main"]);
-  runSync("git", ["pull", "--ff-only", "origin", "main"]);
+  step("git checkout main", "git", ["checkout", "main"]);
+  step(
+    "git pull (local main may have diverged — try `git stash` or reclone)",
+    "git",
+    ["pull", "--ff-only", "origin", "main"]
+  );
 
   const after = gitCapture(["rev-parse", "--short", "HEAD"]);
   if (before && after && before === after) {
@@ -367,10 +386,10 @@ function cmdUpdate() {
   }
 
   info("Installing dependencies...");
-  runSync("npm", ["install", "--legacy-peer-deps"]);
+  step("npm install", "npm", ["install", "--legacy-peer-deps"]);
 
   info("Rebuilding...");
-  runSync("npm", ["run", "build"]);
+  step("npm run build", "npm", ["run", "build"]);
 
   info("Update complete!");
 

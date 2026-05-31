@@ -5,6 +5,7 @@ import {
   isSupportedModelForAgent,
   resolveModelForAgent,
   isFreeTextModelAgent,
+  nextModelOnAgentChange,
 } from "@/lib/model-catalog";
 
 describe("model catalog — static agents (claude/codex)", () => {
@@ -42,5 +43,23 @@ describe("model catalog — free-text agents (hermes)", () => {
     expect(resolveModelForAgent("hermes", "")).toBe("");
     expect(resolveModelForAgent("hermes", null)).toBe("");
     expect(resolveModelForAgent("hermes", undefined)).toBe("");
+  });
+});
+
+describe("nextModelOnAgentChange (model carry-over on agent switch)", () => {
+  it("static -> free-text: resets (no static model name leaks into Hermes)", () => {
+    expect(nextModelOnAgentChange("hermes", "sonnet")).toBe("");
+    expect(nextModelOnAgentChange("hermes", "gpt-5.4")).toBe("");
+  });
+
+  it("free-text -> static: drops the free-text value for the static default", () => {
+    expect(
+      nextModelOnAgentChange("claude", "anthropic/claude-sonnet-4.6")
+    ).toBe("sonnet");
+  });
+
+  it("static -> static: keeps a valid model, else the new agent's default", () => {
+    expect(nextModelOnAgentChange("claude", "opus")).toBe("opus");
+    expect(nextModelOnAgentChange("codex", "sonnet")).toBe("gpt-5.4");
   });
 });

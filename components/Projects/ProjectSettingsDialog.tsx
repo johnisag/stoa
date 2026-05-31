@@ -40,6 +40,7 @@ import {
   getModelOptions,
   isSupportedModelForAgent,
   isFreeTextModelAgent,
+  nextModelOnAgentChange,
 } from "@/lib/model-catalog";
 import type {
   ProjectWithRepositories,
@@ -440,11 +441,9 @@ export function ProjectSettingsDialog({
 
   const handleAgentTypeChange = (value: AgentType) => {
     setAgentType(value);
-    setDefaultModel((current) =>
-      isSupportedModelForAgent(value, current)
-        ? current
-        : getDefaultModelForAgent(value)
-    );
+    // Reset the model across the static/free-text boundary so a static model
+    // name can't leak into a free-text agent's field (and vice versa).
+    setDefaultModel((current) => nextModelOnAgentChange(value, current));
   };
 
   if (!project) return null;

@@ -261,7 +261,8 @@ cmd_update() {
     cd "$REPO_DIR"
 
     # npm-global installs aren't git checkouts — they can't self-update via git.
-    if [[ ! -d .git ]]; then
+    # Use -e (not -d): in a git worktree, .git is a FILE, not a directory.
+    if [[ ! -e .git ]]; then
         log_error "This install isn't a git checkout, so it can't update via git."
         echo "  Update the npm package instead:"
         echo "    npm install -g @johnisag/stoa@latest"
@@ -286,20 +287,39 @@ cmd_update() {
     local before after
     before=$(git rev-parse --short HEAD)
 
-    git fetch origin --tags
+    # Run the risky steps without set -e so a failure restarts the existing
+    # version instead of aborting with the server left down.
+    set +e
     # Pin to main so an install left on a (now-deleted) feature branch still updates.
-    git checkout main
-    git pull --ff-only origin main
+    git fetch origin --tags && git checkout main && git pull --ff-only origin main
+    local pull_rc=$?
+    set -e
+    if [[ $pull_rc -ne 0 ]]; then
+        log_error "Update failed (git pull — local main may have diverged)."
+        if [[ "$was_running" == true ]]; then
+            log_warn "Restarting the server with the existing version..."
+            cmd_start
+        fi
+        exit 1
+    fi
 
     after=$(git rev-parse --short HEAD)
     if [[ "$before" == "$after" ]]; then
         log_success "Already up to date ($after)"
     else
         log_info "Updated $before -> $after"
-        log_info "Installing dependencies..."
-        npm install --legacy-peer-deps
-        log_info "Rebuilding..."
-        npm run build
+        set +e
+        npm install --legacy-peer-deps && npm run build
+        local build_rc=$?
+        set -e
+        if [[ $build_rc -ne 0 ]]; then
+            log_error "Update failed (dependency install/build)."
+            if [[ "$was_running" == true ]]; then
+                log_warn "Restarting the server with the existing version..."
+                cmd_start
+            fi
+            exit 1
+        fi
         log_success "Update complete!"
     fi
 

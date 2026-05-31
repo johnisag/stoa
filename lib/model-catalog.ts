@@ -86,3 +86,27 @@ export function resolveModelForAgent(
 
   return getDefaultModelForAgent(agentType);
 }
+
+/**
+ * The default-model value to use when a form's selected agent changes to
+ * `nextAgent`, carrying the previously-selected `currentModel` only when it
+ * makes sense.
+ *
+ * Switching TO a free-text agent always resets to its default (empty) — a
+ * static model name (e.g. "sonnet") accepted verbatim by a free-text agent
+ * would otherwise leak into its field and be passed as a bogus `-m`. Switching
+ * to a static agent keeps the current model if it's valid there, else the
+ * agent's default.
+ */
+export function nextModelOnAgentChange(
+  nextAgent: AgentType,
+  currentModel: string | null | undefined
+): string {
+  if (isFreeTextModelAgent(nextAgent)) {
+    return getDefaultModelForAgent(nextAgent);
+  }
+  if (currentModel && isSupportedModelForAgent(nextAgent, currentModel)) {
+    return currentModel;
+  }
+  return getDefaultModelForAgent(nextAgent);
+}
