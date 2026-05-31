@@ -77,6 +77,30 @@ describe("VT rendering — the status-detection safety net", () => {
   });
 });
 
+describe("getStatusDetail — status + last line from a single capture", () => {
+  it("returns the status and the last rendered non-empty line together", async () => {
+    spawnSession("detail-ok", {
+      binary: "node",
+      args: printAndHold("scrollback noise\r\nLASTLINE_MARKER_7\r\n"),
+      cwd: process.cwd(),
+    });
+    const got = await waitFor(async () => {
+      const d = await statusDetector.getStatusDetail("detail-ok");
+      return d.lastLine.includes("LASTLINE_MARKER_7");
+    });
+    expect(got).toBe(true);
+    const detail = await statusDetector.getStatusDetail("detail-ok");
+    expect(detail.lastLine).toContain("LASTLINE_MARKER_7");
+    expect(["running", "waiting", "idle", "error"]).toContain(detail.status);
+    killSession("detail-ok");
+  });
+
+  it("reports a non-existent session as dead with an empty last line", async () => {
+    const detail = await statusDetector.getStatusDetail("detail-missing");
+    expect(detail).toEqual({ status: "dead", lastLine: "" });
+  });
+});
+
 describe("multi-client fan-out + sizing", () => {
   it("delivers output to every subscriber", async () => {
     const s = spawnSession("fan", {

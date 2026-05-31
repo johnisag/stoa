@@ -72,7 +72,8 @@ export class HostClient {
   private connectOnce(): Promise<net.Socket> {
     return new Promise((resolve, reject) => {
       const s = net.connect(hostAddress());
-      s.setEncoding("utf8");
+      // No setEncoding: read raw Buffers so the length-prefixed decoder can
+      // reassemble frames byte-exact (see protocol.ts framing notes).
       const onError = (err: Error) => {
         s.removeAllListeners();
         s.destroy();

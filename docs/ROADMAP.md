@@ -64,18 +64,32 @@ CI is green on ubuntu/macos/windows, but these need a human at a real browser/ag
 - [ ] Shell drawer, file picker (drive roots), Git panel against a real repo, PR flow.
 - [ ] Tag a release once this verification passes.
 
-## 2. Performance follow-ups (from the perf review)
+## 2. Performance follow-ups (from the perf review) ✅
 
-- [ ] `PtySession` raw ring buffer: `rawBuffer += data` + `.slice()` per chunk is O(256KB)
-      per chunk once full. Since `serialize()` is now the repaint path, consider
-      shrinking or removing the raw buffer (it's only a fallback) → big CPU+mem win.
-- [ ] Status polling: capture once per session (not `getStatus` capture + `getLastLine`
-      capture) and **cache `claudeSessionId`** instead of re-scanning the project dir
-      every poll (`getClaudeSessionIdFromFiles` does fs reads per poll per session).
-- [ ] Reduce `HEADLESS_SCROLLBACK` (5000) — status/preview only read the visible screen;
-      summarize reads ≤500 lines. ~1000 is plenty and cuts per-session memory.
-- [ ] Tier-2 IPC: frame output as length-prefixed raw bytes instead of JSON-string-escaping
-      every chunk (and encode once per chunk, not per viewer).
+All four done on `perf/session-hotpaths` (tsc + 83 tests + build green; reviewed by
+a 5-dimension adversarial pass — see notes).
+
+- [x] `PtySession` raw ring buffer: was `rawBuffer += data` + `.slice()` per chunk =
+      O(256KB) per chunk once full. Now an **amortized high-water trim** (grow to 2×
+      the limit, slice back to 1× — amortized O(1)/byte) and the limit shrank 256KB→64KB
+      (it's only the `serialize()`-throws fallback). CPU + 4× memory win.
+- [x] Status polling: one capture per session via `statusDetector.getStatusDetail()`
+      (`{status, lastLine}` from a single screen) — was a `getStatus` capture **plus** a
+      `getLastLine` capture (2 IPC round-trips/session/poll on Tier-2). Plus a route-level
+      `resolvedSessionIds` cache so the resume-id is resolved once instead of fs-scanning
+      the Claude project dir every poll. Both module maps are pruned by live ids.
+      **Trade-off (intentional):** the Claude resume-id is cached for the session's life,
+      so starting a brand-new conversation (e.g. `/clear`) inside the *same* managed
+      session keeps the first id. Acceptable — new sessions get new ids; add a TTL only if
+      multi-conversation sessions become common.
+- [x] `HEADLESS_SCROLLBACK` 5000→1000 — status/preview read the visible screen, summarize
+      reads ≤500. ~5× less per-session VT memory and smaller `serialize()` snapshots. The
+      orchestrate worker-output endpoint now clamps `?lines=` to ≤1000 (was unbounded).
+- [x] Tier-2 IPC: **length-prefixed binary frames** (4-byte BE length + KIND tag;
+      output = `[u16 keyLen][key][raw UTF-8 bytes]`, control/res/exit = JSON). Output bytes
+      are carried verbatim — no JSON-escaping of ANSI on every chunk. (Note: "encode once
+      per viewer" was moot — viewers multiplex client-side through one daemon socket per
+      server, so the per-chunk JSON-escape was the real cost; the binary framing removes it.)
 
 ## 3. Architecture follow-ups (from the architecture review)
 

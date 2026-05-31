@@ -16,7 +16,14 @@ export async function GET(request: Request, { params }: RouteParams) {
   try {
     const { id } = await params;
     const { searchParams } = new URL(request.url);
-    const lines = parseInt(searchParams.get("lines") || "50", 10);
+    // Clamp the requested line count: the rendered backends retain only a
+    // bounded scrollback (the pty backend keeps HEADLESS_SCROLLBACK=1000 rows),
+    // so asking for more returns no extra data — and bounding it stops a hostile
+    // or fat-fingered ?lines= from walking an arbitrarily large range. NaN -> 50.
+    const requested = parseInt(searchParams.get("lines") || "50", 10);
+    const lines = Number.isFinite(requested)
+      ? Math.min(Math.max(requested, 0), 1000)
+      : 50;
 
     const output = await getWorkerOutput(id, lines);
     return NextResponse.json({ output });
