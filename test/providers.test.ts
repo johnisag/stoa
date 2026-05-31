@@ -20,13 +20,15 @@ describe("Hermes provider wiring", () => {
     expect(def.cli).toBe("hermes");
     expect(def.autoApproveFlag).toBe("--yolo");
     expect(def.resumeFlag).toBe("--resume");
-    expect(def.supportsResume).toBe(false); // off until session-id capture
+    expect(def.supportsResume).toBe(true); // resume on via banner session-id capture
+    expect(def.supportsFork).toBe(false); // Hermes has no --fork-session
     expect(def.modelFlag).toBeUndefined(); // models are dynamic in Hermes
   });
 
   it("has a provider object whose buildFlags emits --yolo only on auto-approve", () => {
     const p = getProvider("hermes");
     expect(p.command).toBe("hermes");
+    expect(p.supportsResume).toBe(true); // lockstep with the registry definition
     expect(p.buildFlags({})).toEqual([]);
     expect(p.buildFlags({ autoApprove: true })).toEqual(["--yolo"]);
     expect(p.buildFlags({ skipPermissions: true })).toEqual(["--yolo"]);

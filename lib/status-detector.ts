@@ -147,6 +147,12 @@ const WAITING_PATTERNS = [
   /allow all commands/i,
 ];
 
+// Hermes prints its session id in the startup banner, e.g.
+// "Session: 20260531_133925_98d9fc". We capture it from the rendered screen so
+// Stoa can later resume with `--resume <id>`. Hermes writes no session file
+// until a clean exit, so the on-screen banner is the reliable capture source.
+export const HERMES_SESSION_ID_RE = /Session:\s*(\d{8}_\d{6}_[0-9a-fA-F]+)/;
+
 export type SessionStatus = "running" | "waiting" | "idle" | "dead";
 
 interface StateTracker {
@@ -193,6 +199,10 @@ function checkWaitingPatterns(content: string): boolean {
 class SessionStatusDetector {
   private trackers = new Map<string, StateTracker>();
   private cache: SessionCache = { data: new Map(), updatedAt: 0 };
+  // Hermes session ids captured from the rendered startup banner, memoized per
+  // session (the banner prints once and may scroll off). Read by the status
+  // route to persist for resume.
+  private hermesSessionIds = new Map<string, string>();
 
   // Cache management
   async refreshCache(): Promise<void> {
@@ -222,7 +232,19 @@ class SessionStatusDetector {
 
   async capturePane(name: string): Promise<string> {
     const stdout = await getSessionBackend().capture(name);
-    return stdout.trim();
+    const trimmed = stdout.trim();
+    // Capture the Hermes banner session id once (cheap; once set, has() short-
+    // circuits the regex). Agent-agnostic here — only Hermes prints this line.
+    if (!this.hermesSessionIds.has(name)) {
+      const m = trimmed.match(HERMES_SESSION_ID_RE);
+      if (m) this.hermesSessionIds.set(name, m[1]);
+    }
+    return trimmed;
+  }
+
+  /** Hermes session id captured from the startup banner, or null if not seen yet. */
+  getHermesSessionId(name: string): string | null {
+    return this.hermesSessionIds.get(name) ?? null;
   }
 
   private getTracker(name: string, timestamp: number): StateTracker {
@@ -358,6 +380,9 @@ class SessionStatusDetector {
   cleanup(): void {
     for (const [name] of this.trackers) {
       if (!this.sessionExists(name)) this.trackers.delete(name);
+    }
+    for (const [name] of this.hermesSessionIds) {
+      if (!this.sessionExists(name)) this.hermesSessionIds.delete(name);
     }
   }
 }

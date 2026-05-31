@@ -57,6 +57,26 @@ describe("buildAgentArgs", () => {
     expect(args).toEqual(["--yolo"]);
   });
 
+  it("hermes: resume passes --resume <id> as discrete tokens (banner-captured id)", () => {
+    const sid = "20260531_133925_98d9fc";
+    expect(buildAgentArgs("hermes", { sessionId: sid }).args).toEqual([
+      "--resume",
+      sid,
+    ]);
+    // flag ordering with auto-approve
+    expect(
+      buildAgentArgs("hermes", { autoApprove: true, sessionId: sid }).args
+    ).toEqual(["--yolo", "--resume", sid]);
+    // best-effort: a falsy/empty id must not append --resume (mustn't break spawn)
+    expect(buildAgentArgs("hermes", { sessionId: "" }).args).toEqual([]);
+    expect(buildAgentArgs("hermes", { sessionId: null }).args).toEqual([]);
+    // Hermes has no --fork-session: a parentSessionId resumes but never forks
+    expect(buildAgentArgs("hermes", { parentSessionId: sid }).args).toEqual([
+      "--resume",
+      sid,
+    ]);
+  });
+
   it("shell: empty binary (server spawns a plain shell)", () => {
     const { binary, args } = buildAgentArgs("shell", {});
     expect(binary).toBe("");

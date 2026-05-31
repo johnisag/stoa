@@ -204,7 +204,7 @@ export const hermesProvider: AgentProvider = {
   command: "hermes",
   configDir: "~/.hermes",
 
-  supportsResume: false,
+  supportsResume: true,
   supportsFork: false,
 
   buildFlags(options: BuildFlagsOptions): string[] {

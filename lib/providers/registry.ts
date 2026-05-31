@@ -80,15 +80,18 @@ export const PROVIDERS: ProviderDefinition[] = [
     // CLI surface (from `hermes --help`): -z PROMPT, -m MODEL, --resume SESSION,
     // --continue, --yolo, --pass-session-id.
     //  - --yolo wired here (auto-approve).
-    //  - resumeFlag is "--resume" but resume stays OFF until we capture Hermes's
-    //    session id (--pass-session-id / ~/.hermes/checkpoints) — a follow-up.
+    //  - resume is ON: Stoa captures Hermes's session id from the startup banner
+    //    ("Session: <YYYYMMDD_HHMMSS_hex>") via the status detector's screen
+    //    capture and persists it; buildAgentArgs then passes `--resume <id>`.
+    //    Best-effort: Hermes only flushes its session JSON on clean exit, so a
+    //    hard-killed session may not be resumable (degrades to a fresh session).
     //  - modelFlag intentionally unset: Hermes models are dynamic/provider-
     //    specific (`hermes model` live-fetches /v1/models), so Stoa shouldn't
     //    impose a static model list. Hermes uses its configured default.
     //  - -z initial prompt held until interactive-vs-one-shot is confirmed.
     autoApproveFlag: "--yolo",
     resumeFlag: "--resume",
-    supportsResume: false,
+    supportsResume: true,
     supportsFork: false,
   },
   {
