@@ -29,6 +29,12 @@ interface UseNotificationsOptions {
   onSessionClick?: (sessionId: string) => void;
 }
 
+// Don't re-notify the same session+event within this window. Dedups flaps
+// (waiting->idle->waiting) AND rapid same-state re-entry (e.g. a flickering
+// error). A genuine repeat after the window still notifies, and the
+// SessionCard highlight persists in the meantime, so nothing is lost visually.
+const NOTIFY_COOLDOWN_MS = 8000;
+
 export function useNotifications(options: UseNotificationsOptions = {}) {
   const { onSessionClick } = options;
   const [settings, setSettings] =
@@ -36,8 +42,10 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
   const [permissionGranted, setPermissionGranted] = useState(false);
   const previousStates = useRef<Map<string, SessionStatus>>(new Map());
   const waitingCount = useRef(0);
-  // Track which sessions have been notified to prevent duplicates
-  const notifiedSessions = useRef<Set<string>>(new Set());
+  // Last time we notified each `${sessionId}-${event}`, for cooldown-based
+  // dedup: suppresses flap (waiting->idle->waiting) and repeat alerts while
+  // still allowing a genuine re-notification once the cooldown passes.
+  const lastNotified = useRef<Map<string, number>>(new Map());
 
   // Load settings on mount
   useEffect(() => {
@@ -142,68 +150,82 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
     (sessions: SessionState[], activeSessionId?: string | null) => {
       if (!settings.enabled) return;
 
+      const now = Date.now();
+      // Only suppress the focused session while the WINDOW itself is focused —
+      // if you're in another app you can't see it, so it should still alert.
+      const windowFocused =
+        typeof document !== "undefined" && document.hasFocus();
+      // Notify once per session+event, then hold off for the cooldown — this
+      // dedups both repeats and flaps (e.g. waiting->idle->waiting) without
+      // permanently muting a genuine later re-notification.
+      const shouldNotify = (key: string): boolean => {
+        const last = lastNotified.current.get(key) || 0;
+        if (now - last < NOTIFY_COOLDOWN_MS) return false;
+        lastNotified.current.set(key, now);
+        return true;
+      };
+
       let newWaitingCount = 0;
 
       sessions.forEach((session) => {
         const prevStatus = previousStates.current.get(session.id);
         const currentStatus = session.status;
 
-        // Track waiting count
-        if (currentStatus === "waiting") {
-          newWaitingCount++;
-        }
+        if (currentStatus === "waiting") newWaitingCount++;
 
-        // Skip if no previous state (initial load)
+        // Skip on initial load (no previous state).
         if (prevStatus === undefined) {
           previousStates.current.set(session.id, currentStatus);
           return;
         }
-
-        // Skip if status unchanged
+        // Skip if unchanged, or if it's the session you're already looking at.
         if (prevStatus === currentStatus) return;
-
-        // Skip notifications for the currently active/focused session
-        if (session.id === activeSessionId) {
+        if (session.id === activeSessionId && windowFocused) {
           previousStates.current.set(session.id, currentStatus);
           return;
         }
 
-        // Detect transitions and notify (with deduplication)
-        const notifyKey = `${session.id}-${currentStatus}`;
-
-        if (currentStatus === "waiting" && prevStatus !== "waiting") {
-          if (!notifiedSessions.current.has(notifyKey)) {
-            notifiedSessions.current.add(notifyKey);
+        // Notify on the meaningful transitions.
+        if (currentStatus === "waiting") {
+          if (shouldNotify(`${session.id}-waiting`)) {
             notify("waiting", session.id, session.name);
           }
-        } else if (currentStatus === "error" && prevStatus !== "error") {
-          if (!notifiedSessions.current.has(notifyKey)) {
-            notifiedSessions.current.add(notifyKey);
+        } else if (currentStatus === "error") {
+          if (shouldNotify(`${session.id}-error`)) {
             notify("error", session.id, session.name);
           }
         } else if (
           currentStatus === "idle" &&
           (prevStatus === "running" || prevStatus === "waiting")
         ) {
-          const completedKey = `${session.id}-completed`;
-          if (!notifiedSessions.current.has(completedKey)) {
-            notifiedSessions.current.add(completedKey);
+          // running/waiting -> idle = the agent finished a turn ("done").
+          if (shouldNotify(`${session.id}-completed`)) {
             notify("completed", session.id, session.name);
-          }
-        }
-
-        // Clear notification tracking when status changes away from notified state
-        if (prevStatus !== currentStatus) {
-          notifiedSessions.current.delete(`${session.id}-${prevStatus}`);
-          if (prevStatus === "idle") {
-            notifiedSessions.current.delete(`${session.id}-completed`);
           }
         }
 
         previousStates.current.set(session.id, currentStatus);
       });
 
-      // Update tab badge
+      // Prune tracking for sessions that no longer exist so neither map grows
+      // unbounded over a long-lived mount (also covers the previousStates map).
+      const liveIds = new Set(sessions.map((s) => s.id));
+      for (const id of previousStates.current.keys()) {
+        if (!liveIds.has(id)) previousStates.current.delete(id);
+      }
+      // Build the set of valid `${id}-${event}` keys from live sessions rather
+      // than parsing ids out of keys (robust if id/event names ever change).
+      const validKeys = new Set<string>();
+      for (const id of liveIds) {
+        validKeys.add(`${id}-waiting`);
+        validKeys.add(`${id}-error`);
+        validKeys.add(`${id}-completed`);
+      }
+      for (const key of lastNotified.current.keys()) {
+        if (!validKeys.has(key)) lastNotified.current.delete(key);
+      }
+
+      // Update tab badge (count of sessions awaiting input).
       if (newWaitingCount !== waitingCount.current) {
         waitingCount.current = newWaitingCount;
         setTabNotificationCount(newWaitingCount);

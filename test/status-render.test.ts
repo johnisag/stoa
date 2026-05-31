@@ -12,7 +12,7 @@ import {
   killSession,
   _resetRegistryForTests,
 } from "@/lib/session-backend/pty/registry";
-import { statusDetector } from "@/lib/status-detector";
+import { statusDetector, ERROR_PATTERNS } from "@/lib/status-detector";
 
 afterEach(() => _resetRegistryForTests());
 
@@ -109,5 +109,46 @@ describe("multi-client fan-out + sizing", () => {
     s.removeClient(big);
     expect(s.alive).toBe(true);
     killSession("size");
+  });
+});
+
+describe("error-state detection", () => {
+  it("classifies a structured error on the rendered screen as 'error'", async () => {
+    spawnSession("vt-err", {
+      binary: "node",
+      args: printAndHold(
+        "Error code: 400 - {'type': 'invalid_request_error'}\r\n"
+      ),
+      cwd: process.cwd(),
+    });
+    const ok = await waitFor(
+      async () => (await statusDetector.getStatus("vt-err")) === "error"
+    );
+    expect(ok).toBe(true);
+    killSession("vt-err");
+  });
+});
+
+describe("ERROR_PATTERNS (session/provider failures only, kept narrow)", () => {
+  const hit = (s: string) => ERROR_PATTERNS.some((p) => p.test(s));
+
+  it("matches provider/session-failure envelopes", () => {
+    expect(
+      hit("Error: Error code: 400 - {'type': 'invalid_request_error'}")
+    ).toBe(true);
+    expect(hit("You're out of extra usage. Add more at ...")).toBe(true);
+    expect(hit("quota exceeded")).toBe(true);
+    expect(hit("rate limit exceeded")).toBe(true);
+    expect(hit("insufficient_quota")).toBe(true);
+  });
+
+  it("does NOT flag errors the agent prints while doing its job", () => {
+    // A stack trace or HTTP code in normal agent output is the agent working on
+    // YOUR code — not the session failing. These must NOT wedge a session red.
+    expect(hit("Traceback (most recent call last):")).toBe(false);
+    expect(hit("A 404 returns Error code: 404 to the client.")).toBe(false);
+    expect(hit("'type': 'invalid_request_error'")).toBe(false); // mention, no HTTP code
+    expect(hit("I fixed the error and all tests pass.")).toBe(false);
+    expect(hit("> ")).toBe(false);
   });
 });

@@ -20,7 +20,9 @@ export const defaultSettings: NotificationSettings = {
   events: {
     waiting: true,
     error: true,
-    completed: false, // Off by default - can be noisy
+    // Off by default: interactive agents do many running->idle cycles per task,
+    // so "finished" pings get noisy. Toggle on per taste in the Bell menu.
+    completed: false,
   },
 };
 

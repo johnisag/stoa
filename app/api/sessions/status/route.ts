@@ -192,7 +192,7 @@ export async function GET() {
     } of results) {
       // Track status changes - update DB when session becomes active
       const prevStatus = previousStatuses.get(id);
-      if (status === "running" || status === "waiting") {
+      if (status === "running" || status === "waiting" || status === "error") {
         if (prevStatus !== status) {
           sessionsToUpdate.push(id);
         }

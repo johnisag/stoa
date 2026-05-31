@@ -36,12 +36,21 @@ export function useSessionStatusesQuery({
     queryKey: statusKeys.all,
     queryFn: fetchStatuses,
     staleTime: 2000,
+    // Refetch on window focus (overrides the global default) so transitions
+    // missed while the tab was hidden/throttled are caught the moment you
+    // return — checkStateChanges then fires any pending notifications.
+    refetchOnWindowFocus: true,
     refetchInterval: (query) => {
       const statuses = query.state.data?.statuses;
       if (!statuses) return 5000;
 
+      // "running"/"waiting"/"error" are live or needs-attention states — poll
+      // fast so transitions (and recovery) show quickly; otherwise back off.
       const hasActive = Object.values(statuses).some(
-        (s) => s.status === "running" || s.status === "waiting"
+        (s) =>
+          s.status === "running" ||
+          s.status === "waiting" ||
+          s.status === "error"
       );
 
       return hasActive ? 5000 : 30000;

@@ -103,7 +103,19 @@ fit cleanly on the native backend.
 
 **Near-term polish (pick a couple):**
 
-- [ ] Notifications when a session needs attention (waiting/error/done).
+- [x] Notifications when a session needs attention (waiting/error/done) —
+      foreground path: toast + sound + tab badge/flash + browser notification
+      (when unfocused) + per-session highlight, with active-session suppression
+      and per-event toggles. `error` is now a real detected state (conservative
+      screen patterns); `done` = the running→idle "completed" event (default on);
+      cooldown dedup fixes flap; statuses refetch on window-focus to recover
+      transitions missed while the tab was hidden. **Best-effort caveats:** the
+      error patterns need live tuning against real transcripts, and a fully
+      *closed* tab/browser still needs Web Push (separate milestone below).
+- [ ] **Notifications — closed-tab/browser (Web Push).** Foreground polling
+      can't alert when the tab is fully closed; add a service-worker push path
+      (VAPID + subscription store + server emitter on status transitions). Large;
+      iOS-Safari needs PWA-standalone. Do after the foreground path proves out.
 - [ ] Session search / fuzzy switch across conversations.
 - [ ] Export conversation to Markdown/JSON.
 - [ ] Keyboard shortcuts for navigation.

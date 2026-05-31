@@ -366,7 +366,8 @@ export function SessionCard({
           : isActive
             ? "bg-primary/10"
             : "hover:bg-accent/50",
-        status === "waiting" && !isActive && !isSelected && "bg-yellow-500/5"
+        status === "waiting" && !isActive && !isSelected && "bg-yellow-500/5",
+        status === "error" && !isActive && !isSelected && "bg-red-500/5"
       )}
     >
       {/* Selection checkbox - visible when in select mode */}
