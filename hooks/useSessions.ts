@@ -14,6 +14,9 @@ export function useSessions() {
   const { data, refetch } = useSessionsQuery();
   const sessions = data?.sessions ?? [];
   const groups = data?.groups ?? [];
+  // True once the query has returned at least once (vs. the initial undefined).
+  // Guards pane reconciliation so we never detach restored tabs mid-load.
+  const loaded = data !== undefined;
 
   const deleteMutation = useDeleteSession();
   const renameMutation = useRenameSession();
@@ -72,6 +75,7 @@ export function useSessions() {
   return {
     sessions,
     groups,
+    loaded,
     summarizingSessionId: summarizeMutation.isPending
       ? (summarizeMutation.variables as string)
       : null,

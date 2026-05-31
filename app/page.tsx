@@ -53,12 +53,18 @@ function HomeContent() {
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
 
   // Pane context
-  const { focusedPaneId, attachSession, getActiveTab, addTab } = usePanes();
+  const {
+    focusedPaneId,
+    attachSession,
+    getActiveTab,
+    addTab,
+    reconcileSessions,
+  } = usePanes();
   const focusedActiveTab = getActiveTab(focusedPaneId);
   const { isMobile, isHydrated } = useViewport();
 
   // Data hooks
-  const { sessions, fetchSessions } = useSessions();
+  const { sessions, fetchSessions, loaded: sessionsLoaded } = useSessions();
   const { projects, fetchProjects } = useProjects();
   const {
     startDevServerProjectId,
@@ -66,6 +72,15 @@ function HomeContent() {
     startDevServer,
     createDevServer,
   } = useDevServersManager();
+
+  // Once the session list has loaded, detach any pane tab whose session no
+  // longer exists (e.g. all sessions deleted) so it can't linger as a live
+  // orphan pane. Guarded on `sessionsLoaded` so we never wipe restored tabs
+  // before the first fetch resolves.
+  useEffect(() => {
+    if (!sessionsLoaded) return;
+    reconcileSessions(new Set(sessions.map((s) => s.id)));
+  }, [sessionsLoaded, sessions, reconcileSessions]);
 
   // Helper to get init script command from API
   const getInitScriptCommand = useCallback(
