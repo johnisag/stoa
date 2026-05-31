@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { spawn } from "child_process";
 import { getDb, queries, type Session } from "@/lib/db";
+import { sessionKey } from "@/lib/providers/registry";
 import { randomUUID } from "crypto";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -180,7 +181,11 @@ export async function POST(
     }
 
     // Get tmux session name (pattern: {agent_type}-{id})
-    const tmuxSessionName = `${session.agent_type}-${id}`;
+    const tmuxSessionName = sessionKey({
+      kind: "agent",
+      provider: session.agent_type,
+      id,
+    });
 
     // Get actual working directory from tmux
     const cwd =
@@ -226,7 +231,11 @@ export async function POST(
       const newId = randomUUID();
       const newName = `${session.name} (fresh)`;
       const agentType = session.agent_type || "claude";
-      const tmuxName = `${agentType}-${newId}`;
+      const tmuxName = sessionKey({
+        kind: "agent",
+        provider: agentType,
+        id: newId,
+      });
 
       // Create new session in DB (using cwd already fetched above)
       queries.createSession(db).run(

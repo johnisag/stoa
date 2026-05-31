@@ -14,6 +14,7 @@ import { createWorktree, deleteWorktree } from "./worktrees";
 import { setupWorktree } from "./env-setup";
 import { resolveModelForAgent } from "./model-catalog";
 import { type AgentType, getProvider, buildAgentArgs } from "./providers";
+import { sessionKey } from "./providers/registry";
 import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
@@ -136,7 +137,11 @@ export async function spawnWorker(
   }
 
   // Create session in database
-  const tmuxName = `${provider.id}-${sessionId}`;
+  const tmuxName = sessionKey({
+    kind: "agent",
+    provider: provider.id,
+    id: sessionId,
+  });
   queries.createWorkerSession(db).run(
     sessionId,
     sessionName,
@@ -162,7 +167,11 @@ export async function spawnWorker(
   }
 
   // Create the session and start the agent. Workers use auto-approve.
-  const tmuxSessionName = `${provider.id}-${sessionId}`;
+  const tmuxSessionName = sessionKey({
+    kind: "agent",
+    provider: provider.id,
+    id: sessionId,
+  });
   // Raw cwd (may contain "~"); each backend expands it for its platform.
   const cwd = actualWorkingDir;
 
@@ -280,7 +289,9 @@ export async function getWorkers(
 
   for (const worker of workers) {
     const provider = getProvider(worker.agent_type || "claude");
-    const tmuxSessionName = worker.tmux_name || `${provider.id}-${worker.id}`;
+    const tmuxSessionName =
+      worker.tmux_name ||
+      sessionKey({ kind: "agent", provider: provider.id, id: worker.id });
 
     // Get live status from tmux
     let liveStatus: string;
@@ -331,7 +342,9 @@ export async function getWorkerOutput(
 
   const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
-  const tmuxSessionName = session.tmux_name || `${provider.id}-${workerId}`;
+  const tmuxSessionName =
+    session.tmux_name ||
+    sessionKey({ kind: "agent", provider: provider.id, id: workerId });
 
   try {
     const stdout = await backend.capture(tmuxSessionName, { lines });
@@ -355,7 +368,9 @@ export async function sendToWorker(
 
   const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
-  const tmuxSessionName = session.tmux_name || `${provider.id}-${workerId}`;
+  const tmuxSessionName =
+    session.tmux_name ||
+    sessionKey({ kind: "agent", provider: provider.id, id: workerId });
 
   try {
     await backend.sendKeysInterpreted(tmuxSessionName, message, {
@@ -395,7 +410,9 @@ export async function killWorker(
 
   const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
-  const tmuxSessionName = session.tmux_name || `${provider.id}-${workerId}`;
+  const tmuxSessionName =
+    session.tmux_name ||
+    sessionKey({ kind: "agent", provider: provider.id, id: workerId });
 
   // Kill tmux session
   try {

@@ -12,7 +12,7 @@ export interface TerminalScrollState {
 
 /** Structured attach request for the native pty backend. */
 export interface AttachPayload {
-  /** Session key (e.g. `${agentType}-${id}`). */
+  /** Session key, built by sessionKey() (e.g. "claude-<uuid>"). */
   key: string;
   /**
    * How to spawn the session if it doesn't exist yet. Omit binary (or pass "")

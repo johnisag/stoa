@@ -34,6 +34,7 @@ import { useSessionStatuses } from "@/hooks/useSessionStatuses";
 import type { Session } from "@/lib/db";
 import type { TerminalHandle } from "@/components/Terminal";
 import { getProvider, buildAgentArgs } from "@/lib/providers";
+import { sessionKey } from "@/lib/providers/registry";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
@@ -171,7 +172,9 @@ function HomeContent() {
       spawn: { binary: string; args: string[]; cwd: string };
     }> => {
       const provider = getProvider(session.agent_type || "claude");
-      const sessionName = session.tmux_name || `${provider.id}-${session.id}`;
+      const sessionName =
+        session.tmux_name ||
+        sessionKey({ kind: "agent", provider: provider.id, id: session.id });
       const cwd = session.working_directory?.replace("~", "$HOME") || "$HOME";
       // Raw cwd for the pty backend (the registry expands a leading "~").
       const ptyCwd = session.working_directory || "~";

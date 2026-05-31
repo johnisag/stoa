@@ -9,6 +9,7 @@ import type {
   TerminalScrollState,
 } from "@/components/Terminal";
 import type { Session, Project } from "@/lib/db";
+import { sessionKey } from "@/lib/providers/registry";
 import { sessionRegistry } from "@/lib/client/session-registry";
 import { getActiveBackend, buildSpawnForSession } from "@/lib/client/backend";
 import { cn } from "@/lib/utils";
@@ -238,7 +239,13 @@ export const Pane = memo(function Pane({
     (workerId: string) => {
       const worker = sessions.find((s) => s.id === workerId);
       if (!worker || !terminalRef) return;
-      const sessionName = worker.tmux_name || `claude-${workerId}`;
+      const sessionName =
+        worker.tmux_name ||
+        sessionKey({
+          kind: "agent",
+          provider: worker.agent_type,
+          id: workerId,
+        });
       void getActiveBackend().then((backend) => {
         if (backend === "pty") {
           terminalRef.attachSession({

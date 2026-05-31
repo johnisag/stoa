@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import * as fs from "fs";
 import * as path from "path";
 import { db, queries, type Session } from "@/lib/db";
+import { sessionKey } from "@/lib/providers/registry";
 import { getSessionBackend } from "@/lib/session-backend";
 import { expandHome, findClaudeProjectDir } from "@/lib/platform";
 
@@ -49,7 +50,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const tmuxSession = `claude-${id}`;
+  const tmuxSession = sessionKey({ kind: "agent", provider: "claude", id });
 
   try {
     // Check tmux environment for CLAUDE_SESSION_ID

@@ -174,3 +174,22 @@ export function getSessionIdFromName(sessionName: string): string {
   const providerPattern = PROVIDER_IDS.join("|");
   return sessionName.replace(new RegExp(`^(${providerPattern})-`, "i"), "");
 }
+
+/**
+ * Input to sessionKey(): an agent session (provider + id) or a shell session.
+ */
+export type SessionKeyInput =
+  | { kind: "agent"; provider: ProviderId; id: string }
+  | { kind: "shell"; id: string };
+
+/**
+ * Build a Stoa-managed session key/name — THE single place the `{provider}-{id}`
+ * namespace is constructed (the inverse of getProviderIdFromSessionName /
+ * getSessionIdFromName). A shell session uses the "shell" provider prefix.
+ * Callers holding a raw agent_type should normalize via getProvider(type).id so
+ * the unknown -> "claude" fallback stays single-sourced.
+ */
+export function sessionKey(input: SessionKeyInput): string {
+  const provider = input.kind === "shell" ? "shell" : input.provider;
+  return `${provider}-${input.id}`;
+}
