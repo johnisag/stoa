@@ -1,0 +1,88 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+# Cancel in-flight reviews when a new commit arrives on the same PR so stale
+# review signal against obsolete commits doesn't land after the fix.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    # Skip drafts: synchronize fires on every push including draft pushes.
+    # Drafts still get reviewed on the ready_for_review transition.
+    if: github.event.pull_request.draft == false
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        # Pinned explicitly: the floating v1 tag has been unreliable across repos.
+        uses: anthropics/claude-code-action@v1.0.88
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Emit structured progress into the PR thread so review runs are
+          # visible instead of looking silently stuck.
+          track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            You are Claude-bot reviewing this pull request for Stoa, a
+            mobile-first web UI for running AI coding agents in real terminals,
+            native on Windows, macOS, and Linux.
+
+            Ground yourself before reviewing:
+            1. Read `CLAUDE.md` at the repo root.
+            2. Read `AGENTS.md` at the repo root — it encodes Stoa's hard
+               invariants (cross-platform support, the SessionBackend /
+               PtyTransport seams, and the test gate). Treat violations of
+               those as review findings.
+
+            Review for:
+            - correctness and cross-file consistency
+            - cross-platform safety: no POSIX-only assumptions (Windows, macOS,
+              and Linux must all work) — watch for `process.env.HOME`,
+              hardcoded `/tmp` or `/bin`, `split("/")` on paths, `lsof`/`which`,
+              or shell-string `exec` with pipes/redirects; the helpers live in
+              `lib/platform.ts`
+            - session/terminal logic that bypasses the `SessionBackend` or
+              `PtyTransport` seams, or that breaks the macOS/Linux tmux path
+            - new logic (backends, transports, providers, parsing/argv) that
+              ships without tests — the repo requires it
+            - risky assumptions or missing validation
+
+            Keep feedback constructive and specific.
+
+            Review workflow:
+            1. Post concrete line-level findings as inline review comments using
+               `mcp__github_inline_comment__create_inline_comment`, anchored to
+               the exact file and line.
+            2. Only comment when there is a meaningful issue, risk, or strong
+               improvement suggestion.
+            3. After inline comments, post one top-level summary with
+               `gh pr comment` covering the main concerns, overall risk level,
+               and whether follow-up testing or clarification is needed.
+            4. Do not rewrite the PR. Highlight issues and suggest fixes.
+
+            Prioritize signal over volume. Avoid nitpicks unless they are
+            load-bearing for maintainability or correctness.
+
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://docs.claude.com/en/docs/claude-code/cli-reference for available options
+          claude_args: '--max-turns 150 --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Glob,Grep,Write(//tmp/**),Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(date:*)"'

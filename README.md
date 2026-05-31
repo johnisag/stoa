@@ -1,10 +1,10 @@
 # Stoa
 
-A mobile-first web UI for managing AI coding sessions — native on Windows, macOS, and Linux.
+**Stoa is a self-hosted cockpit for running AI coding agents in real terminals — from any browser, including your phone.**
 
-https://github.com/user-attachments/assets/0e2e66f7-037e-4739-99ec-608d1840df0a
+Point it at a repo, pick an agent (Claude Code, Codex, or Hermes), and Stoa spawns a real terminal session you can watch stream live, steer, and reconnect to from anywhere on your network. It runs **natively on Windows, macOS, and Linux** — no WSL or tmux required on Windows — and your sessions keep running even after you close the tab.
 
-![Stoa Screenshot](screenshot-v2.png)
+It's built for the way agents actually work: run several side by side, dictate prompts by voice, search the codebase, browse and attach files, review diffs and open PRs, manage dev servers, and coordinate conductor/worker agent fleets — all from a mobile-first UI.
 
 ## Installation
 
@@ -85,24 +85,27 @@ On Windows the native pty backend is selected automatically (no tmux/WSL needed)
 
 ## Supported Agents
 
-| Agent       | Resume | Fork | Auto-Approve                     |
-| ----------- | ------ | ---- | -------------------------------- |
-| Claude Code | ✅     | ✅   | `--dangerously-skip-permissions` |
-| Codex       | ❌     | ❌   | `--approval-mode full-auto`      |
-| Hermes      | ❌     | ❌   | `--yolo`                         |
+| Agent       | Resume | Fork | Auto-Approve                                 |
+| ----------- | ------ | ---- | -------------------------------------------- |
+| Claude Code | ✅     | ✅   | `--dangerously-skip-permissions`             |
+| Codex       | ❌     | ❌   | `--dangerously-bypass-approvals-and-sandbox` |
+| Hermes      | ❌     | ❌   | `--yolo`                                     |
+
+_**Resume**/**Fork** reflect what Stoa manages per session, not the CLI's raw
+capability. **Auto-Approve** is the flag Stoa passes when you enable "skip
+permissions". Hermes resume is planned — see [docs/ROADMAP.md](docs/ROADMAP.md)._
 
 ## Features
 
 - **Mobile-first** - Full functionality from your phone, not a dumbed-down responsive view
-- **Voice-to-text** - Dictate prompts to your coding sessions hands-free
-- **Multi-pane layout** - Run up to 4 sessions side-by-side
-- **Code search** - Fast codebase search with syntax-highlighted results (Cmd+K)
-- **File picker** - Browse and attach files to sessions, with direct upload from mobile
-- **Clone from GitHub** - Clone repos directly from the UI when creating projects
-- **Git integration** - Status, diffs, commits, PRs from the UI
+- **Multi-pane** - Run up to 4 agent sessions side-by-side
+- **Voice-to-text** - Dictate prompts to your sessions hands-free
+- **Code search** - Fast, syntax-highlighted codebase search (Cmd+K)
+- **File picker** - Browse and attach files, with direct upload from mobile
+- **Git built in** - Status, diffs, commits, PRs, and GitHub clone — from the UI
 - **Git worktrees** - Isolated branches with auto-setup
-- **Dev servers** - Start/stop Node.js and Docker servers
-- **Session orchestration** - Conductor/worker model via MCP
+- **Dev servers** - Start/stop Node.js and Docker servers per project
+- **Session orchestration** - Coordinate conductor/worker agent fleets via MCP
 
 ## CLI Commands
 
