@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import os from "os";
 import { getDb, queries, type Session } from "@/lib/db";
+import { sessionKey } from "@/lib/providers/registry";
 import { getSessionBackend } from "@/lib/session-backend";
 import { appendFileSync } from "fs";
 
@@ -42,7 +43,11 @@ export async function POST(
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
-    const tmuxSessionName = `${session.agent_type}-${id}`;
+    const tmuxSessionName = sessionKey({
+      kind: "agent",
+      provider: session.agent_type,
+      id,
+    });
     log(`Tmux session name: ${tmuxSessionName}`);
 
     const backend = getSessionBackend();

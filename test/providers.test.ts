@@ -10,7 +10,10 @@ import {
   getAllProviderDefinitions,
   getProviderDefinition,
   getManagedSessionPattern,
+  getProviderIdFromSessionName,
+  getSessionIdFromName,
   isValidProviderId,
+  sessionKey,
 } from "@/lib/providers/registry";
 import { AGENT_OPTIONS } from "@/components/NewSessionDialog/NewSessionDialog.types";
 
@@ -77,6 +80,52 @@ describe("provider registry integrity", () => {
   it("buildAgentArgs uses each provider's cli as the spawn binary", () => {
     for (const id of PROVIDER_IDS) {
       expect(buildAgentArgs(id, {}).binary).toBe(getProviderDefinition(id).cli);
+    }
+  });
+});
+
+// sessionKey() is the single constructor for the `{provider}-{id}` namespace;
+// these lock its format and that it stays the exact inverse of the parsers so
+// the migration from 13 hand-built sites is byte-identical.
+describe("sessionKey() — centralized session-name construction", () => {
+  const UUID = "12345678-1234-1234-1234-123456789abc";
+
+  it("builds the canonical {provider}-{id} for each provider (format lock)", () => {
+    expect(sessionKey({ kind: "agent", provider: "claude", id: "abc" })).toBe(
+      "claude-abc"
+    );
+    expect(sessionKey({ kind: "agent", provider: "codex", id: "abc" })).toBe(
+      "codex-abc"
+    );
+    expect(sessionKey({ kind: "agent", provider: "hermes", id: "abc" })).toBe(
+      "hermes-abc"
+    );
+    expect(sessionKey({ kind: "agent", provider: "shell", id: "abc" })).toBe(
+      "shell-abc"
+    );
+  });
+
+  it("shell sugar equals the explicit shell-provider form", () => {
+    expect(sessionKey({ kind: "shell", id: UUID })).toBe(
+      sessionKey({ kind: "agent", provider: "shell", id: UUID })
+    );
+    expect(sessionKey({ kind: "shell", id: UUID })).toBe(`shell-${UUID}`);
+  });
+
+  it("round-trips through the parsers + managed pattern for every provider", () => {
+    for (const id of PROVIDER_IDS) {
+      const key = sessionKey({ kind: "agent", provider: id, id: UUID });
+      expect(getProviderIdFromSessionName(key)).toBe(id);
+      expect(getSessionIdFromName(key)).toBe(UUID);
+      expect(getManagedSessionPattern().test(key)).toBe(true);
+    }
+  });
+
+  it("no provider id prefixes another (keeps getProviderIdFromSessionName unambiguous)", () => {
+    for (const a of PROVIDER_IDS) {
+      for (const b of PROVIDER_IDS) {
+        if (a !== b) expect(`${a}-`.startsWith(`${b}-`)).toBe(false);
+      }
     }
   });
 });

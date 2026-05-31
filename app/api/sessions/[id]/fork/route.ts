@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session, type Message } from "@/lib/db";
+import { sessionKey } from "@/lib/providers/registry";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -35,7 +36,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const newId = randomUUID();
     const newName = name || `${parent.name} (fork)`;
     const agentType = parent.agent_type || "claude";
-    const tmuxName = `${agentType}-${newId}`;
+    const tmuxName = sessionKey({
+      kind: "agent",
+      provider: agentType,
+      id: newId,
+    });
 
     queries
       .createSession(db)

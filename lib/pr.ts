@@ -1,4 +1,32 @@
-import { execSync, execFileSync } from "child_process";
+import {
+  execFileSync,
+  type ExecFileSyncOptionsWithStringEncoding,
+} from "child_process";
+import { resolveBinary } from "./platform";
+
+// Resolve gh once. On Windows an npm/winget-installed `gh` may be a `.cmd` shim,
+// which ENOENTs under execFile when invoked bare — resolveBinary picks a
+// spawnable PATHEXT variant. `git` is a real .exe, so it stays bare.
+const gh = resolveBinary("gh") || "gh";
+
+/**
+ * Run a git command via execFileSync (no shell) with an argument array, so it
+ * behaves identically across platforms — no shell quoting/redirection. Mirrors
+ * the helper in lib/git-status.ts.
+ */
+function git(
+  args: string[],
+  cwd: string,
+  opts: { timeout?: number; stdio?: "pipe" } = {}
+): string {
+  const options: ExecFileSyncOptionsWithStringEncoding = {
+    cwd,
+    encoding: "utf-8",
+  };
+  if (opts.timeout) options.timeout = opts.timeout;
+  if (opts.stdio) options.stdio = opts.stdio;
+  return execFileSync("git", args, options);
+}
 
 export interface PRInfo {
   number: number;
@@ -18,7 +46,7 @@ export interface CommitInfo {
  */
 export function checkGhCli(): boolean {
   try {
-    execSync("gh auth status", { timeout: 5000, stdio: "pipe" });
+    execFileSync(gh, ["auth", "status"], { timeout: 5000, stdio: "pipe" });
     return true;
   } catch {
     return false;
@@ -34,25 +62,35 @@ export function getCommitsSinceBase(
 ): CommitInfo[] {
   try {
     // Get the merge base
-    const mergeBase = execSync(`git merge-base ${baseBranch} HEAD`, {
-      cwd: workingDir,
-      encoding: "utf-8",
-    }).trim();
+    const mergeBase = git(
+      ["merge-base", baseBranch, "HEAD"],
+      workingDir
+    ).trim();
 
-    // Get commits since merge base
-    const output = execSync(
-      `git log ${mergeBase}..HEAD --format="COMMIT_START%n%H%n%s%n%b%nCOMMIT_END"`,
-      {
-        cwd: workingDir,
-        encoding: "utf-8",
-      }
+    // Get commits since merge base. The --format value is a single argv token
+    // with NO surrounding quotes (the old shell string quoted it); git expands
+    // %n to newlines and the COMMIT_START/COMMIT_END parsing below is unchanged.
+    const output = git(
+      [
+        "log",
+        `${mergeBase}..HEAD`,
+        "--format=COMMIT_START%n%H%n%s%n%b%nCOMMIT_END",
+      ],
+      workingDir
     );
 
     const commits: CommitInfo[] = [];
     const parts = output.split("COMMIT_START").filter(Boolean);
 
     for (const part of parts) {
-      const lines = part.split("\n").filter((line) => line !== "COMMIT_END");
+      // Each part begins with the "%n" that followed COMMIT_START and ends with
+      // the "%n" before COMMIT_END's trailing newline. Trim those framing
+      // newlines so lines[0] is the hash — without the trim, the leading "" made
+      // hash empty and this returned [] for all real `git log` output.
+      const lines = part
+        .trim()
+        .split("\n")
+        .filter((line) => line !== "COMMIT_END");
       if (lines.length >= 2) {
         const hash = lines[0].trim();
         const subject = lines[1].trim();
@@ -136,8 +174,18 @@ export function getPRForBranch(
   branchName: string
 ): PRInfo | null {
   try {
-    const output = execSync(
-      `gh pr list --head "${branchName}" --json number,url,state,title --limit 1`,
+    const output = execFileSync(
+      gh,
+      [
+        "pr",
+        "list",
+        "--head",
+        branchName,
+        "--json",
+        "number,url,state,title",
+        "--limit",
+        "1",
+      ],
       {
         cwd: workingDir,
         encoding: "utf-8",
@@ -163,8 +211,7 @@ export function createPR(
 ): PRInfo {
   // First ensure branch is pushed
   try {
-    execFileSync("git", ["push", "-u", "origin", branchName], {
-      cwd: workingDir,
+    git(["push", "-u", "origin", branchName], workingDir, {
       timeout: 30000,
       stdio: "pipe",
     });
@@ -177,7 +224,7 @@ export function createPR(
   // Pass arguments as an array so multi-line bodies and special characters are
   // forwarded verbatim (no shell quoting/escaping, cross-platform safe).
   const output = execFileSync(
-    "gh",
+    gh,
     ["pr", "create", "--title", title, "--base", baseBranch, "--body", body],
     {
       cwd: workingDir,
@@ -207,10 +254,7 @@ export function createPR(
  * Get current branch name
  */
 export function getCurrentBranch(workingDir: string): string {
-  return execSync("git branch --show-current", {
-    cwd: workingDir,
-    encoding: "utf-8",
-  }).trim();
+  return git(["branch", "--show-current"], workingDir).trim();
 }
 
 /**

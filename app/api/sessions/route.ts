@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session, type Group } from "@/lib/db";
 import { isValidAgentType, type AgentType } from "@/lib/providers";
+import { sessionKey } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
 import { createWorktree } from "@/lib/worktrees";
 import { setupWorktree, type SetupResult } from "@/lib/env-setup";
@@ -141,7 +142,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const tmuxName = useTmux ? `${agentType}-${id}` : null;
+    const tmuxName = useTmux
+      ? sessionKey({ kind: "agent", provider: agentType, id })
+      : null;
     queries.createSession(db).run(
       id,
       name,

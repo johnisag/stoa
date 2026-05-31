@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queries, getDb, type Session } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
+import { sessionKey } from "@/lib/providers/registry";
 
 // Get terminal preview (last N lines) from tmux session
 export async function GET(
@@ -14,7 +15,9 @@ export async function GET(
     // Look up session to get the tmux name
     const session = queries.getSession(db).get(id) as Session | undefined;
     const agentType = session?.agent_type || "claude";
-    const sessionName = session?.tmux_name || `${agentType}-${id}`;
+    const sessionName =
+      session?.tmux_name ||
+      sessionKey({ kind: "agent", provider: agentType, id });
 
     // Capture visible pane content plus scrollback, take last 50 lines
     const backend = getSessionBackend();

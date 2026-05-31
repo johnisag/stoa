@@ -31,7 +31,7 @@ export interface CaptureOptions {
 }
 
 export interface CreateOptions {
-  /** Session key/name (e.g. `${agentType}-${id}`). */
+  /** Session key/name, built by sessionKey() (e.g. "claude-<uuid>"). */
   name: string;
   /** Working directory for the session. May contain a leading "~"; each backend
    * expands it for its platform (tmux -> $HOME, pty -> os.homedir). */
