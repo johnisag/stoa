@@ -119,7 +119,7 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
       if (settings.browserNotifications && permissionGranted) {
         sendBrowserNotification(
           title,
-          { body, tag: `agentos-${event}-${sessionName}` },
+          { body, tag: `stoa-${event}-${sessionName}` },
           () => onSessionClick?.(sessionId)
         );
       }

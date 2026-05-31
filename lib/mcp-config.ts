@@ -8,7 +8,7 @@
 import { writeFileSync, existsSync, readFileSync } from "fs";
 import path from "path";
 
-const AGENTOS_URL = process.env.AGENTOS_URL || "http://localhost:3011";
+const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
 
 interface McpConfig {
   mcpServers: Record<
@@ -56,7 +56,7 @@ export function ensureMcpConfig(
     command: "npx",
     args: ["tsx", orchestrationServerPath],
     env: {
-      AGENTOS_URL,
+      STOA_URL,
       CONDUCTOR_SESSION_ID: sessionId,
     },
   };

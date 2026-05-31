@@ -4,19 +4,7 @@
  * Centralized configuration for all AI coding agent providers.
  */
 
-export const PROVIDER_IDS = [
-  "claude",
-  "codex",
-  "opencode",
-  "gemini",
-  "aider",
-  "cursor",
-  "amp",
-  "pi",
-  "omp",
-  "hermes",
-  "shell",
-] as const;
+export const PROVIDER_IDS = ["claude", "codex", "hermes", "shell"] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
@@ -77,85 +65,6 @@ export const PROVIDERS: ProviderDefinition[] = [
     cli: "codex",
     configDir: "~/.codex",
     autoApproveFlag: "--dangerously-bypass-approvals-and-sandbox",
-    supportsResume: false,
-    supportsFork: false,
-    modelFlag: "--model",
-    initialPromptFlag: "", // Positional argument
-  },
-  {
-    id: "opencode",
-    name: "OpenCode",
-    description: "Multi-provider AI CLI",
-    cli: "opencode",
-    configDir: "~/.opencode.json",
-    autoApproveFlag: undefined, // OpenCode manages this via config
-    supportsResume: false,
-    supportsFork: false,
-    initialPromptFlag: "--prompt",
-  },
-  {
-    id: "gemini",
-    name: "Gemini CLI",
-    description: "Google's AI CLI",
-    cli: "gemini",
-    configDir: "~/.gemini",
-    autoApproveFlag: "--yolo",
-    supportsResume: false,
-    supportsFork: false,
-    modelFlag: "-m",
-    initialPromptFlag: "-p",
-  },
-  {
-    id: "aider",
-    name: "Aider",
-    description: "AI pair programming",
-    cli: "aider",
-    configDir: "~/.aider",
-    autoApproveFlag: "--yes",
-    supportsResume: false,
-    supportsFork: false,
-    modelFlag: "--model",
-  },
-  {
-    id: "cursor",
-    name: "Cursor CLI",
-    description: "Cursor's AI agent",
-    cli: "cursor-agent",
-    configDir: "~/.cursor",
-    autoApproveFlag: undefined, // -p requires a prompt, not auto-approve
-    supportsResume: false,
-    supportsFork: false,
-    modelFlag: "--model",
-  },
-  {
-    id: "amp",
-    name: "Amp",
-    description: "Multi-model coding agent",
-    cli: "amp",
-    configDir: "~/.config/amp",
-    autoApproveFlag: "--dangerously-allow-all",
-    supportsResume: false,
-    supportsFork: false,
-    initialPromptFlag: "", // Positional argument
-  },
-  {
-    id: "pi",
-    name: "Pi",
-    description: "Extensible coding harness",
-    cli: "pi",
-    configDir: "~/.pi/agent",
-    supportsResume: false,
-    supportsFork: false,
-    modelFlag: "--model",
-    initialPromptFlag: "", // Positional argument
-  },
-  {
-    id: "omp",
-    name: "Oh My Pi",
-    description: "Enhanced Pi coding harness",
-    cli: "omp",
-    configDir: "~/.omp",
-    autoApproveFlag: undefined,
     supportsResume: false,
     supportsFork: false,
     modelFlag: "--model",

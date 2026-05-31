@@ -12,7 +12,7 @@
  *         "command": "npx",
  *         "args": ["tsx", "/path/to/stoa/mcp/orchestration-server.ts"],
  *         "env": {
- *           "AGENTOS_URL": "http://localhost:3011"
+ *           "STOA_URL": "http://localhost:3011"
  *         }
  *       }
  *     }
@@ -29,13 +29,13 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const AGENTOS_URL = process.env.AGENTOS_URL || "http://localhost:3011";
+const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
 
 // Optional: Get conductor session ID from environment (can also be passed per-call)
 const DEFAULT_CONDUCTOR_ID = process.env.CONDUCTOR_SESSION_ID || "";
 
 async function apiCall(path: string, options?: RequestInit) {
-  const url = `${AGENTOS_URL}${path}`;
+  const url = `${STOA_URL}${path}`;
   const response = await fetch(url, {
     ...options,
     headers: {
