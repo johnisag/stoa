@@ -6,7 +6,33 @@ handlers). This plan is ordered by priority.
 
 ---
 
-## 0. Headline: Hermes support ⭐
+## 0. Headline: Hermes support ⭐ — DONE (core) + follow-ups
+
+Hermes is a Claude-Code-style TUI agent (`hermes`) that runs natively on
+Win/mac/Linux and self-authenticates → it dropped into the provider system and
+renders through the pty backend with no special casing.
+
+**Done:** provider registry + object, agent picker entry, `--yolo` auto-approve,
+and the full CLI surface mapped from `hermes --help`
+(`-z PROMPT`, `-m MODEL`, `--resume SESSION`, `--continue`, `--yolo`,
+`--pass-session-id`).
+
+**Follow-ups (each is real work, not a one-liner):**
+
+- **-z initial prompt** — confirm `hermes -z "..."` stays interactive (TUI) vs
+  one-shot. If interactive, set `initialPromptFlag: "-z"`.
+- **Resume** — capture Hermes's session id (`--pass-session-id` and/or read
+  `~/.hermes/checkpoints/` / `hermes sessions`), store it, then flip
+  `supportsResume: true` so `--resume <id>` works per AgentOS session.
+- **Model selection** — Hermes models are dynamic (`hermes model` live-fetches
+  each provider's `/v1/models`). To offer `-m` correctly, add a free-text model
+  field (or a Hermes model fetch) instead of the static Claude dropdown.
+- **Status detection** — tune busy/waiting patterns once we observe Hermes's
+  actual working/confirmation output (currently reuses Claude-style markers).
+
+---
+
+## (original Hermes notes, for reference)
 
 Add **Hermes** as a first-class agent in AgentOS.
 
