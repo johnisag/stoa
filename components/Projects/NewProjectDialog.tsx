@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/select";
 import { Link, GitBranch, FolderPlus, Check } from "lucide-react";
 import type { AgentType } from "@/lib/providers";
-import { getModelOptions } from "@/lib/model-catalog";
+import { getModelOptions, isFreeTextModelAgent } from "@/lib/model-catalog";
 import { AGENT_OPTIONS, CLONE_STEP } from "./NewProjectDialog.types";
 import type { NewProjectDialogProps } from "./NewProjectDialog.types";
 import { useNewProjectForm } from "./hooks/useNewProjectForm";
@@ -136,22 +136,32 @@ export function NewProjectDialog({
           {/* Default Model */}
           <div className="space-y-2">
             <label className="text-sm font-medium">Default Model</label>
-            <Select
-              key={form.agentType}
-              value={form.defaultModel}
-              onValueChange={form.setDefaultModel}
-            >
-              <SelectTrigger>
-                <SelectValue>{selectedModelLabel}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {modelOptions.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {isFreeTextModelAgent(form.agentType) ? (
+              // Dynamic-model agents (e.g. Hermes): free-text instead of a list.
+              // Blank = the agent's own default (no model flag passed).
+              <Input
+                value={form.defaultModel}
+                onChange={(e) => form.setDefaultModel(e.target.value)}
+                placeholder="e.g. anthropic/claude-sonnet-4.6 — blank for the agent default"
+              />
+            ) : (
+              <Select
+                key={form.agentType}
+                value={form.defaultModel}
+                onValueChange={form.setDefaultModel}
+              >
+                <SelectTrigger>
+                  <SelectValue>{selectedModelLabel}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {modelOptions.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
 
           {/* Dev Servers (hidden in clone mode) */}

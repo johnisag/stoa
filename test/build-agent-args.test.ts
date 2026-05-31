@@ -46,15 +46,19 @@ describe("buildAgentArgs", () => {
     ]);
   });
 
-  it("hermes: --yolo for auto-approve; model/prompt not wired (dynamic models)", () => {
+  it("hermes: --yolo + free-text model via -m; prompt still not wired", () => {
     expect(buildAgentArgs("hermes", {}).args).toEqual([]);
     const { binary, args } = buildAgentArgs("hermes", {
       autoApprove: true,
-      model: "opus", // ignored: Hermes models are dynamic, modelFlag unset
+      model: "anthropic/claude-sonnet-4.6", // dynamic/free-text → passed via -m
       initialPrompt: "ignored until -z semantics confirmed",
     });
     expect(binary).toBe("hermes");
-    expect(args).toEqual(["--yolo"]);
+    expect(args).toEqual(["--yolo", "-m", "anthropic/claude-sonnet-4.6"]);
+    // empty model must not append -m (Hermes falls back to its own default)
+    expect(
+      buildAgentArgs("hermes", { autoApprove: true, model: "" }).args
+    ).toEqual(["--yolo"]);
   });
 
   it("hermes: resume passes --resume <id> as discrete tokens (banner-captured id)", () => {
