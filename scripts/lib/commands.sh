@@ -258,34 +258,68 @@ cmd_update() {
         exit 1
     fi
 
+    cd "$REPO_DIR"
+
+    # npm-global installs aren't git checkouts — they can't self-update via git.
+    # Use -e (not -d): in a git worktree, .git is a FILE, not a directory.
+    if [[ ! -e .git ]]; then
+        log_error "This install isn't a git checkout, so it can't update via git."
+        echo "  Update the npm package instead:"
+        echo "    npm install -g @johnisag/stoa@latest"
+        exit 1
+    fi
+
+    # Don't clobber uncommitted local changes with a checkout/pull.
+    if [[ -n "$(git status --porcelain)" ]]; then
+        log_error "You have uncommitted local changes in $REPO_DIR."
+        echo "  Commit or stash them, then re-run:"
+        echo "    git stash && stoa update"
+        exit 1
+    fi
+
     local was_running=false
     if is_running; then
         was_running=true
         cmd_stop
     fi
 
-    log_info "Updating Stoa..."
+    log_info "Updating from $(git remote get-url origin 2>/dev/null || echo origin)"
+    local before after
+    before=$(git rev-parse --short HEAD)
 
-    cd "$REPO_DIR"
+    # Run the risky steps without set -e so a failure restarts the existing
+    # version instead of aborting with the server left down.
+    set +e
+    # Pin to main so an install left on a (now-deleted) feature branch still updates.
+    git fetch origin --tags && git checkout main && git pull --ff-only origin main
+    local pull_rc=$?
+    set -e
+    if [[ $pull_rc -ne 0 ]]; then
+        log_error "Update failed (git pull — local main may have diverged)."
+        if [[ "$was_running" == true ]]; then
+            log_warn "Restarting the server with the existing version..."
+            cmd_start
+        fi
+        exit 1
+    fi
 
-    # Fetch and check
-    git fetch
-    local local_hash remote_hash
-    local_hash=$(git rev-parse HEAD)
-    remote_hash=$(git rev-parse @{u})
-
-    if [[ "$local_hash" == "$remote_hash" ]]; then
-        log_success "Already up to date"
+    after=$(git rev-parse --short HEAD)
+    if [[ "$before" == "$after" ]]; then
+        log_success "Already up to date ($after)"
     else
-        log_info "Pulling latest changes..."
-        git pull --ff-only
-
-        log_info "Installing dependencies..."
-        npm install --legacy-peer-deps
-
-        log_info "Rebuilding..."
-        npm run build
-
+        log_info "Updated $before -> $after"
+        set +e
+        npm install --legacy-peer-deps && npm run build
+        local build_rc=$?
+        set -e
+        if [[ $build_rc -ne 0 ]]; then
+            log_error "Update failed (dependency install/build)."
+            if [[ "$was_running" == true ]]; then
+                log_warn "Restarting the server with the existing version..."
+                cmd_start
+            fi
+            exit 1
+        fi
         log_success "Update complete!"
     fi
 

@@ -28,13 +28,28 @@ It renders through the pty backend with no special-casing.
   `↻ Resumed session <id>` with full conversation restored. (Hermes persists
   incrementally to its store, so resume survives even a hard kill.)
 
+- **Model selection** ✅ — Hermes models are dynamic, so the project model
+  field is now FREE-TEXT for Hermes (no static dropdown); `modelFlag: "-m"`
+  passes it as `-m <model>`, and an empty value leaves Hermes on its own
+  default. See `lib/model-catalog.ts` (`isFreeTextModelAgent`).
+
 **Remaining:**
 
-- **Model selection** — Hermes models are dynamic (`hermes model` live-fetches
-  each provider's `/v1/models`). Offer `-m` via a free-text model field (or a
-  Hermes model fetch) instead of the static Claude dropdown.
-- **Status detection** — tune busy/waiting patterns once we observe Hermes's
-  actual working/confirmation output (currently reuses Claude-style markers).
+- **Status detection** — needs a live observation to tune confidently, and
+  it's more involved than first thought:
+  - The per-provider `waitingPatterns`/`runningPatterns`/`idlePatterns` on the
+    `AgentProvider` objects are **vestigial** — `lib/status-detector.ts` only
+    uses its own GLOBAL lists (`BUSY_INDICATORS`, `SPINNER_CHARS`,
+    whimsical-words + `tokens`, `WAITING_PATTERNS`), shared across all agents.
+  - So tuning means either (a) wiring the detector to also consult the active
+    provider's patterns (additive, but changes behavior for every agent — risks
+    the locked Claude path), or (b) adding a Hermes-unique marker to the global
+    lists. Either needs a real observation of Hermes's sustained busy / waiting
+    output — a headless capture didn't surface it reliably (TUI/alt-screen), and
+    a guessed marker (e.g. "Initializing agent…") lingers in scrollback and
+    would false-positive as busy when idle.
+  - **Next step:** a ~2-min live session watching `/api/sessions/status` while
+    Hermes generates vs. waits vs. idles, then pick the safe pattern(s).
 
 ---
 

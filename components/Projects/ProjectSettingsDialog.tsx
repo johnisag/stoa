@@ -39,6 +39,8 @@ import {
   getDefaultModelForAgent,
   getModelOptions,
   isSupportedModelForAgent,
+  isFreeTextModelAgent,
+  nextModelOnAgentChange,
 } from "@/lib/model-catalog";
 import type {
   ProjectWithRepositories,
@@ -439,11 +441,9 @@ export function ProjectSettingsDialog({
 
   const handleAgentTypeChange = (value: AgentType) => {
     setAgentType(value);
-    setDefaultModel((current) =>
-      isSupportedModelForAgent(value, current)
-        ? current
-        : getDefaultModelForAgent(value)
-    );
+    // Reset the model across the static/free-text boundary so a static model
+    // name can't leak into a free-text agent's field (and vice versa).
+    setDefaultModel((current) => nextModelOnAgentChange(value, current));
   };
 
   if (!project) return null;
@@ -503,22 +503,32 @@ export function ProjectSettingsDialog({
             {/* Default Model */}
             <div className="space-y-2">
               <label className="text-sm font-medium">Default Model</label>
-              <Select
-                key={agentType}
-                value={defaultModel}
-                onValueChange={setDefaultModel}
-              >
-                <SelectTrigger>
-                  <SelectValue>{selectedModelLabel}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {modelOptions.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {isFreeTextModelAgent(agentType) ? (
+                // Dynamic-model agents (e.g. Hermes): free-text instead of a
+                // list. Blank = the agent's own default (no model flag passed).
+                <Input
+                  value={defaultModel}
+                  onChange={(e) => setDefaultModel(e.target.value)}
+                  placeholder="e.g. anthropic/claude-sonnet-4.6 — blank for the agent default"
+                />
+              ) : (
+                <Select
+                  key={agentType}
+                  value={defaultModel}
+                  onValueChange={setDefaultModel}
+                >
+                  <SelectTrigger>
+                    <SelectValue>{selectedModelLabel}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
 
             {/* Initial Prompt */}

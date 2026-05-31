@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { AgentType } from "@/lib/providers";
 import {
   getDefaultModelForAgent,
-  isSupportedModelForAgent,
+  nextModelOnAgentChange,
 } from "@/lib/model-catalog";
 import { useCreateProject, useDetectDevServers } from "@/data/projects";
 import { useGitCheck, useCloneRepo } from "@/data/git/queries";
@@ -121,11 +121,9 @@ export function useNewProjectForm(
 
   const handleAgentTypeChange = useCallback((value: AgentType) => {
     setAgentType(value);
-    setDefaultModel((current) =>
-      isSupportedModelForAgent(value, current)
-        ? current
-        : getDefaultModelForAgent(value)
-    );
+    // Reset the model across the static/free-text boundary so a static model
+    // name can't leak into a free-text agent's field (and vice versa).
+    setDefaultModel((current) => nextModelOnAgentChange(value, current));
   }, []);
 
   const handleGithubUrlChange = (value: string) => {

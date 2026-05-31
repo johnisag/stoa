@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Stoa - Self-hosted AI coding session manager
-# https://github.com/anthropics/stoa
+# https://github.com/johnisag/stoa
 #
 
 set -euo pipefail

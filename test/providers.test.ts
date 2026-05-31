@@ -22,7 +22,7 @@ describe("Hermes provider wiring", () => {
     expect(def.resumeFlag).toBe("--resume");
     expect(def.supportsResume).toBe(true); // resume on via banner session-id capture
     expect(def.supportsFork).toBe(false); // Hermes has no --fork-session
-    expect(def.modelFlag).toBeUndefined(); // models are dynamic in Hermes
+    expect(def.modelFlag).toBe("-m"); // dynamic models passed as free-text via -m
   });
 
   it("has a provider object whose buildFlags emits --yolo only on auto-approve", () => {
@@ -34,14 +34,14 @@ describe("Hermes provider wiring", () => {
     expect(p.buildFlags({ skipPermissions: true })).toEqual(["--yolo"]);
   });
 
-  it("builds argv with --yolo and ignores model/prompt (not wired)", () => {
+  it("builds argv with --yolo + free-text model via -m; prompt still not wired", () => {
     const { binary, args } = buildAgentArgs("hermes", {
       autoApprove: true,
-      model: "claude-opus-4-8",
-      initialPrompt: "hi",
+      model: "anthropic/claude-opus-4.8",
+      initialPrompt: "hi", // still ignored (initialPromptFlag unset)
     });
     expect(binary).toBe("hermes");
-    expect(args).toEqual(["--yolo"]);
+    expect(args).toEqual(["--yolo", "-m", "anthropic/claude-opus-4.8"]);
   });
 
   it("is a valid agent type and appears in the New Session picker", () => {

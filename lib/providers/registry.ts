@@ -85,12 +85,14 @@ export const PROVIDERS: ProviderDefinition[] = [
     //    capture and persists it; buildAgentArgs then passes `--resume <id>`.
     //    Best-effort: Hermes only flushes its session JSON on clean exit, so a
     //    hard-killed session may not be resumable (degrades to a fresh session).
-    //  - modelFlag intentionally unset: Hermes models are dynamic/provider-
-    //    specific (`hermes model` live-fetches /v1/models), so Stoa shouldn't
-    //    impose a static model list. Hermes uses its configured default.
+    //  - modelFlag is "-m": Hermes models are dynamic/provider-specific
+    //    (`hermes model` live-fetches /v1/models), so Stoa offers a FREE-TEXT
+    //    model field (no static list) rather than a dropdown. An empty model
+    //    leaves Hermes on its own configured default (no -m passed).
     //  - -z initial prompt held until interactive-vs-one-shot is confirmed.
     autoApproveFlag: "--yolo",
     resumeFlag: "--resume",
+    modelFlag: "-m",
     supportsResume: true,
     supportsFork: false,
   },
