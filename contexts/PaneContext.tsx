@@ -41,6 +41,8 @@ interface PaneContextValue {
   // Session management (operates on active tab)
   attachSession: (paneId: string, sessionId: string, tmuxName: string) => void;
   detachSession: (paneId: string) => void;
+  // Detach tabs whose session no longer exists (e.g. after deletion)
+  reconcileSessions: (validSessionIds: Set<string>) => void;
   getPaneData: (paneId: string) => PaneData;
   getActiveTab: (paneId: string) => TabData | null;
 }
@@ -224,6 +226,30 @@ export function PaneProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // Detach any tab still pointing at a session that no longer exists, so a
+  // deleted session can't leave a live orphan pane attached to it (under the
+  // Tier-2 daemon the pty may outlive the DB row). Tabs are reset to empty, not
+  // removed, so the pane falls back to its empty "no session" state.
+  const reconcileSessions = useCallback((validSessionIds: Set<string>) => {
+    setState((prev) => {
+      let changed = false;
+      const panes: Record<string, PaneData> = {};
+      for (const [paneId, pane] of Object.entries(prev.panes)) {
+        let paneChanged = false;
+        const tabs = pane.tabs.map((tab) => {
+          if (tab.sessionId && !validSessionIds.has(tab.sessionId)) {
+            paneChanged = true;
+            return { ...tab, sessionId: null, attachedTmux: null };
+          }
+          return tab;
+        });
+        panes[paneId] = paneChanged ? { ...pane, tabs } : pane;
+        if (paneChanged) changed = true;
+      }
+      return changed ? { ...prev, panes } : prev;
+    });
+  }, []);
+
   const getPaneData = useCallback(
     (paneId: string): PaneData => {
       return state.panes[paneId] || defaultPaneData;
@@ -261,6 +287,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
         switchTab,
         attachSession,
         detachSession,
+        reconcileSessions,
         getPaneData,
         getActiveTab,
       }}

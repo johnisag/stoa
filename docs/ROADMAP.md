@@ -92,6 +92,11 @@ fit cleanly on the native backend.
 - [ ] Session search / fuzzy switch across conversations.
 - [ ] Export conversation to Markdown/JSON.
 - [ ] Keyboard shortcuts for navigation.
+- [ ] Live-tear-down a pane's terminal when its session is deleted. The reconcile
+      in PaneContext already detaches the tab in state (so it clears on reload),
+      but the mounted `<Terminal>` keeps its WS until remount. Needs a terminal
+      `detach()` triggered on the set→null transition — without regressing the
+      imperative session-switch path (which reuses the same attach handle).
 
 **Session management:**
 
