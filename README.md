@@ -8,31 +8,20 @@ It's built for the way agents actually work: run several side by side, dictate p
 
 ## Installation
 
-### Via npm (Recommended)
+> **Heads-up:** Stoa isn't published to npm yet, so `npm install -g @johnisag/stoa`
+> won't work — use one of the methods below (they clone the repo). npm
+> distribution is planned.
 
-If you already have Node.js 20+ installed:
+### Quick install (curl)
 
-```bash
-# Install globally
-npm install -g @johnisag/stoa
-
-# Run setup (installs deps, builds the app)
-stoa install
-
-# Start the server
-stoa start
-```
-
-### Via curl (Installs everything)
-
-For fresh installs without Node.js:
+Installs prerequisites, clones the repo, and builds:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.sh | bash
 stoa start
 ```
 
-### Manual Install
+### Manual install
 
 ```bash
 git clone https://github.com/johnisag/stoa
@@ -124,21 +113,9 @@ stoa update    # Update to latest
 stoa update
 ```
 
-`stoa update` stops the server (if running), pulls the latest `main`, reinstalls
-dependencies, rebuilds, and restarts. It pins to `main`, so an install left on
-an old branch still updates correctly. (Installed globally via npm instead of a
-git clone? Update with `npm install -g @johnisag/stoa@latest`.)
-
-**Migrating an older install (one-time):** if you installed before the repo
-moved to `johnisag/stoa`, point your clone at the current remote once, then
-`stoa update` works from then on:
-
-```bash
-cd "$(stoa status | awk '/Install:/{print $2}')"   # your install dir
-git remote set-url origin https://github.com/johnisag/stoa.git
-git checkout main && git pull --ff-only
-stoa update
-```
+Stops the server (if running), pulls the latest `main`, reinstalls dependencies,
+rebuilds, and restarts. It pins to `main`, and if anything fails it restarts the
+existing version — so a bad update never leaves the server down.
 
 ## Mobile Access
 
