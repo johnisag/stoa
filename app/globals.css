@@ -186,6 +186,33 @@ body {
   }
 }
 
+/* App-wide visible scrollbars on desktop. macOS hides overlay scrollbars by
+   default, so scrollable panels (sidebar, git drawer, file lists, dialog
+   bodies) showed no scroll affordance. Thin + themed; `.scrollbar-none` opts
+   out (higher specificity) and the terminal keeps its own wider bar above. */
+@media (min-width: 769px) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.35);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.55);
+  }
+}
+
 /* Safe area padding utilities */
 .safe-area-bottom {
   padding-bottom: env(safe-area-inset-bottom);
