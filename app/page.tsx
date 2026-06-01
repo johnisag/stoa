@@ -39,6 +39,16 @@ import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { getActiveBackend } from "@/lib/client/backend";
+import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
+import type { Keybinding } from "@/lib/keybindings";
+
+// Global navigation shortcuts (mod = ⌘ on macOS, Ctrl elsewhere). Module-level
+// so the bindings array identity stays stable across renders.
+const NAV_KEYBINDINGS: Keybinding[] = [
+  { chord: "mod+k", action: "open-switcher", allowInInput: true },
+  { chord: "alt+arrowdown", action: "next-session" },
+  { chord: "alt+arrowup", action: "prev-session" },
+];
 
 function HomeContent() {
   // UI State
@@ -409,17 +419,8 @@ function HomeContent() {
     if (isHydrated && !isMobile) setSidebarOpen(true);
   }, [isMobile, isHydrated]);
 
-  // Keyboard shortcut: Cmd+K to open quick switcher
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setShowQuickSwitcher(true);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  // Global keyboard shortcuts are wired below (after handleSelectSession is
+  // defined), via useGlobalKeybindings + NAV_KEYBINDINGS.
 
   // Session selection handler
   const handleSelectSession = useCallback(
@@ -437,6 +438,34 @@ function HomeContent() {
     },
     [sessions, attachToSession]
   );
+
+  // Cycle to the next/previous individually-navigable session (wraps around).
+  // Worker sessions are excluded — they aren't standalone rows in the sidebar —
+  // and we cycle in the list's most-recently-active order (not the grouped
+  // sidebar layout). No-op if it would land on the already-focused session: a
+  // re-attach is destructive on tmux (sends Ctrl-C and restarts the attach).
+  const selectRelativeSession = useCallback(
+    (delta: number) => {
+      const navigable = sessions.filter((s) => !s.conductor_session_id);
+      if (navigable.length === 0) return;
+      const currentId = focusedActiveTab?.sessionId;
+      const idx = navigable.findIndex((s) => s.id === currentId);
+      // From no/unknown selection, "next" starts at the first and "prev" at the last.
+      const base = idx === -1 ? (delta > 0 ? -1 : 0) : idx;
+      const next = (base + delta + navigable.length) % navigable.length;
+      const target = navigable[next];
+      if (target.id === currentId) return;
+      handleSelectSession(target.id);
+    },
+    [sessions, focusedActiveTab?.sessionId, handleSelectSession]
+  );
+
+  // Global keyboard shortcuts: ⌘/Ctrl-K switcher, Alt+↓/↑ next/prev session.
+  useGlobalKeybindings(NAV_KEYBINDINGS, (action) => {
+    if (action === "open-switcher") setShowQuickSwitcher(true);
+    else if (action === "next-session") selectRelativeSession(1);
+    else if (action === "prev-session") selectRelativeSession(-1);
+  });
 
   // Pane renderer
   const renderPane = useCallback(
