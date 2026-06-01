@@ -37,6 +37,16 @@ describe("Hermes provider wiring", () => {
     expect(p.buildFlags({ skipPermissions: true })).toEqual(["--yolo"]);
   });
 
+  it("buildFlags (tmux path) resumes from a banner-captured session id, like claude", () => {
+    const p = getProvider("hermes");
+    const id = "20260531_133925_98d9fc";
+    expect(p.buildFlags({ sessionId: id })).toEqual([`--resume ${id}`]);
+    expect(p.buildFlags({ autoApprove: true, sessionId: id })).toEqual([
+      "--yolo",
+      `--resume ${id}`,
+    ]);
+  });
+
   it("builds argv with --yolo + free-text model via -m; prompt still not wired", () => {
     const { binary, args } = buildAgentArgs("hermes", {
       autoApprove: true,
