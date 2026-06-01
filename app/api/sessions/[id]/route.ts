@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
+import { getProject } from "@/lib/projects";
 import { deleteWorktree, isStoaWorktree } from "@/lib/worktrees";
 import { releasePort } from "@/lib/ports";
 import { killWorker } from "@/lib/orchestration";
@@ -122,8 +123,16 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     }
     if (body.projectId !== undefined) {
       // Move the session to another project (the sidebar groups flat by
-      // project_id, so this alone relocates it). Previously dropped here, which
-      // made move-to-project a silent no-op.
+      // project_id, so this alone relocates it). Validate the target exists —
+      // the FK isn't enforced (foreign_keys pragma is off), and a non-existent
+      // id (e.g. a stale client moving to a since-deleted project) would orphan
+      // the session into an un-rendered bucket. "uncategorized" is a real row.
+      if (!body.projectId || !getProject(body.projectId)) {
+        return NextResponse.json(
+          { error: "Project not found" },
+          { status: 400 }
+        );
+      }
       updates.push("project_id = ?");
       values.push(body.projectId);
     }
