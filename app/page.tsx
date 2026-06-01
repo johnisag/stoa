@@ -64,6 +64,18 @@ const NAV_KEYBINDINGS: Keybinding[] = [
     description: "Previous session",
   },
   {
+    chord: "mod+b",
+    action: "toggle-sidebar",
+    allowInInput: true,
+    description: "Toggle the sidebar",
+  },
+  {
+    chord: "mod+\\",
+    action: "split-pane",
+    allowInInput: true,
+    description: "Split the focused pane",
+  },
+  {
     chord: "shift+?",
     action: "show-help",
     description: "Show keyboard shortcuts",
@@ -90,6 +102,7 @@ function HomeContent() {
     attachSession,
     getActiveTab,
     addTab,
+    splitHorizontal,
     reconcileSessions,
   } = usePanes();
   const focusedActiveTab = getActiveTab(focusedPaneId);
@@ -486,6 +499,8 @@ function HomeContent() {
     if (action === "open-switcher") setShowQuickSwitcher(true);
     else if (action === "next-session") selectRelativeSession(1);
     else if (action === "prev-session") selectRelativeSession(-1);
+    else if (action === "toggle-sidebar") setSidebarOpen((v) => !v);
+    else if (action === "split-pane") splitHorizontal(focusedPaneId);
     else if (action === "show-help") setShowHelp(true);
   });
 
