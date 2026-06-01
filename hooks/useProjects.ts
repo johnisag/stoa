@@ -2,14 +2,12 @@ import { useCallback } from "react";
 import {
   useProjectsQuery,
   useToggleProject,
-  useDeleteProject,
   useRenameProject,
 } from "@/data/projects";
 
 export function useProjects() {
   const { data: projects = [], refetch } = useProjectsQuery();
   const toggleMutation = useToggleProject();
-  const deleteMutation = useDeleteProject();
   const renameMutation = useRenameProject();
 
   const toggleProject = useCallback(
@@ -17,19 +15,6 @@ export function useProjects() {
       await toggleMutation.mutateAsync({ projectId, expanded });
     },
     [toggleMutation]
-  );
-
-  const deleteProject = useCallback(
-    async (projectId: string) => {
-      if (
-        !confirm(
-          "Delete this project? Sessions will be moved to Uncategorized."
-        )
-      )
-        return;
-      await deleteMutation.mutateAsync(projectId);
-    },
-    [deleteMutation]
   );
 
   const renameProject = useCallback(
@@ -47,7 +32,6 @@ export function useProjects() {
     projects,
     fetchProjects,
     toggleProject,
-    deleteProject,
     renameProject,
   };
 }

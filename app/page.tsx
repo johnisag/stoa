@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { toast } from "sonner";
 
 // Debug log buffer - persists even if console is closed
 const debugLogs: string[] = [];
@@ -314,9 +315,9 @@ function HomeContent() {
         debugLog(
           `ERROR: No terminal available to attach session: ${session.name}`
         );
-        alert(
-          `[Stoa Debug] No terminal available!\n\nRun stoaLogs() in console to see debug logs.`
-        );
+        toast.error("No terminal available", {
+          description: "Run stoaLogs() in the console to see debug logs.",
+        });
         return;
       }
 

@@ -17,6 +17,7 @@ import type { editor } from "monaco-editor";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { baseName, dirName } from "@/lib/path-display";
+import { useConfirm } from "@/components/ConfirmProvider";
 import type { GitFile } from "@/lib/git-status";
 import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
 
@@ -99,6 +100,7 @@ export function FileEditDialog({
   const [copied, setCopied] = useState(false);
 
   const editorRef = useRef<editor.IStandaloneDiffEditor | null>(null);
+  const confirm = useConfirm();
 
   // For multi-repo files, use repoPath; otherwise use workingDirectory
   const baseDir =
@@ -165,8 +167,16 @@ export function FileEditDialog({
     }
   };
 
-  const handleClose = () => {
-    if (hasChanges && !confirm("Discard unsaved changes?")) return;
+  const handleClose = async () => {
+    if (
+      hasChanges &&
+      !(await confirm({
+        title: "Discard unsaved changes?",
+        description: "Your edits to this file will be lost.",
+        confirmLabel: "Discard",
+      }))
+    )
+      return;
     onOpenChange(false);
   };
 

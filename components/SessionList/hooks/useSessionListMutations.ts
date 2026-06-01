@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useConfirm } from "@/components/ConfirmProvider";
 import {
   useDeleteSession,
   useRenameSession,
@@ -29,6 +30,7 @@ export function useSessionListMutations({
   onSelectSession,
 }: UseSessionListMutationsOptions) {
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
 
   // Session mutations
   const deleteSessionMutation = useDeleteSession();
@@ -60,10 +62,18 @@ export function useSessionListMutations({
   // Session handlers
   const handleDeleteSession = useCallback(
     async (sessionId: string) => {
-      if (!confirm("Delete this session? This cannot be undone.")) return;
+      if (
+        !(await confirm({
+          title: "Delete session?",
+          description:
+            "This permanently deletes the session. It cannot be undone.",
+          confirmLabel: "Delete",
+        }))
+      )
+        return;
       await deleteSessionMutation.mutateAsync(sessionId);
     },
-    [deleteSessionMutation]
+    [confirm, deleteSessionMutation]
   );
 
   const handleRenameSession = useCallback(
@@ -107,14 +117,17 @@ export function useSessionListMutations({
   const handleDeleteProject = useCallback(
     async (projectId: string) => {
       if (
-        !confirm(
-          "Delete this project? Sessions will be moved to Uncategorized."
-        )
+        !(await confirm({
+          title: "Delete project?",
+          description:
+            "Sessions in this project will be moved to Uncategorized.",
+          confirmLabel: "Delete",
+        }))
       )
         return;
       await deleteProjectMutation.mutateAsync(projectId);
     },
-    [deleteProjectMutation]
+    [confirm, deleteProjectMutation]
   );
 
   const handleRenameProject = useCallback(
@@ -141,11 +154,17 @@ export function useSessionListMutations({
 
   const handleDeleteGroup = useCallback(
     async (path: string) => {
-      if (!confirm("Delete this group? Sessions will be moved to parent."))
+      if (
+        !(await confirm({
+          title: "Delete group?",
+          description: "Sessions in this group will be moved to the parent.",
+          confirmLabel: "Delete",
+        }))
+      )
         return;
       await deleteGroupMutation.mutateAsync(path);
     },
-    [deleteGroupMutation]
+    [confirm, deleteGroupMutation]
   );
 
   // Dev server handlers

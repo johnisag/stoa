@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ConfirmProvider } from "@/components/ConfirmProvider";
 import { createQueryClient } from "@/lib/query-client";
 import { parseTheme, getAllThemes } from "@/lib/theme-config";
 
@@ -41,7 +42,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
         themes={getAllThemes()}
       >
         <ThemeClassHandler>
-          <TooltipProvider delayDuration={200}>{children}</TooltipProvider>
+          <TooltipProvider delayDuration={200}>
+            <ConfirmProvider>{children}</ConfirmProvider>
+          </TooltipProvider>
         </ThemeClassHandler>
       </NextThemesProvider>
     </QueryClientProvider>
