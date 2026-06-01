@@ -93,12 +93,21 @@ a 5-dimension adversarial pass — see notes).
 
 ## 3. Architecture follow-ups (from the architecture review)
 
-- [ ] Collapse the `create()` dual representation: discriminated spec
-      `{kind:"argv",...} | {kind:"shell",...}`, ideally letting the tmux backend build
-      its banner from argv → unifies `buildFlags`(string) and `buildAgentArgs`(argv).
-- [ ] Centralize session-key construction (`sessionKey({kind:'agent'|'shell',...})`)
-      so the namespace is enforced in one place (today it's string-built at 5 sites).
-- [ ] Finish converting `lib/pr.ts` remaining `execSync` reads to `execFile` argv arrays.
+- [ ] **Deferred — needs human verification.** Collapse the `create()` dual representation:
+      discriminated spec `{kind:"argv",...} | {kind:"shell",...}`, letting the tmux backend
+      build its banner from argv → unifies `buildFlags`(string) and `buildAgentArgs`(argv).
+      **Why deferred:** `buildFlags` (tmux path) omits Hermes `--resume` while `buildAgentArgs`
+      (pty path) includes it, so unifying is NOT byte-identical — it changes the locked
+      macOS/Linux tmux path (Hermes gains tmux resume) and must re-fold the init-script route's
+      root `IS_SANDBOX`/`PATH` env. CI runs no real tmux/agents, so this falls under the §1
+      human-in-the-loop gate. Plan: implement test-first (argv→banner byte-identity for
+      claude/codex) and flag the Hermes/root deltas for a real Mac/Linux check before merge.
+- [x] Centralize session-key construction (`sessionKey({kind:'agent'|'shell',...})`) — done
+      (PR #5). One constructor in `lib/providers/registry.ts`; all 13 string-built sites
+      migrated; byte-identical (format/round-trip tests); also fixed a non-Claude-worker prefix bug.
+- [x] Finish converting `lib/pr.ts` `execSync` reads to `execFile` argv arrays — done (PR #5).
+      Also fixed a latent bug: `getCommitsSinceBase` returned `[]` for all real `git log` output,
+      so generated PR bodies never listed commits.
 
 ## 4. Security / product decisions (from the security review — pre-existing posture)
 
@@ -130,8 +139,13 @@ fit cleanly on the native backend.
       can't alert when the tab is fully closed; add a service-worker push path
       (VAPID + subscription store + server emitter on status transitions). Large;
       iOS-Safari needs PWA-standalone. Do after the foreground path proves out.
-- [ ] Session search / fuzzy switch across conversations.
-- [ ] Export conversation to Markdown/JSON.
+- [x] Session search / fuzzy switch across conversations — the ⌘/Ctrl-K QuickSwitcher
+      already existed; its plain substring filter is now a real **ranked fuzzy matcher**
+      (`lib/session-search.ts`, subsequence scoring with prefix/word-boundary/contiguity
+      bonuses) over name, path, agent, and branch (deliberately not the deprecated
+      group_path, whose "sessions" default would match everything).
+- [x] Export conversation to Markdown/JSON — done (PR #6): pure formatters +
+      `/api/sessions/[id]/export?format=md|json` route + an Export submenu in SessionCard.
 - [ ] Keyboard shortcuts for navigation.
 - [ ] Live-tear-down a pane's terminal when its session is deleted. The reconcile
       in PaneContext already detaches the tab in state (so it clears on reload),

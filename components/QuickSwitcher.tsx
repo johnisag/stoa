@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,7 @@ import { Terminal, GitBranch, Clock, Check } from "lucide-react";
 import type { Session } from "@/lib/db";
 import { CodeSearchResults } from "@/components/CodeSearch/CodeSearchResults";
 import { useRipgrepAvailable } from "@/data/code-search";
+import { searchSessions } from "@/lib/session-search";
 
 interface QuickSwitcherProps {
   sessions: Session[];
@@ -46,16 +47,11 @@ export function QuickSwitcher({
   // Check if ripgrep is available
   const { data: ripgrepAvailable } = useRipgrepAvailable();
 
-  // Filter sessions based on search query
-  const filteredSessions = sessions.filter((session) => {
-    if (!query) return true;
-    const q = query.toLowerCase();
-    return (
-      session.name?.toLowerCase().includes(q) ||
-      session.working_directory?.toLowerCase().includes(q) ||
-      session.agent_type?.toLowerCase().includes(q)
-    );
-  });
+  // Fuzzy-match + rank sessions by the query (name, path, agent, branch, group).
+  const filteredSessions = useMemo(
+    () => searchSessions(sessions, query),
+    [sessions, query]
+  );
 
   // Reset state when dialog opens
   useEffect(() => {
@@ -78,6 +74,15 @@ export function QuickSwitcher({
   useEffect(() => {
     setSelectedIndex(0);
   }, [query]);
+
+  // Clamp the selection if the result list shrank — e.g. a background `sessions`
+  // refresh dropped a match — so the highlight and Enter never point past the
+  // end. Keyed on length (not identity) so a mere re-rank keeps the position.
+  useEffect(() => {
+    setSelectedIndex((i) =>
+      Math.min(i, Math.max(0, filteredSessions.length - 1))
+    );
+  }, [filteredSessions.length]);
 
   // Handle keyboard navigation
   const handleKeyDown = useCallback(
