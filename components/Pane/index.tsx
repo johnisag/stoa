@@ -31,6 +31,7 @@ import { GitDrawer } from "@/components/GitDrawer";
 import { ShellDrawer } from "@/components/ShellDrawer";
 import { useSnapshot } from "valtio";
 import { fileOpenStore, fileOpenActions } from "@/stores/fileOpen";
+import { paneCommandStore, paneCommandActions } from "@/stores/paneCommands";
 
 // Dynamic imports for client-only components with loading states
 const Terminal = dynamic(
@@ -151,6 +152,8 @@ export const Pane = memo(function Pane({
 
   // Watch for file open requests
   const { request: fileOpenRequest } = useSnapshot(fileOpenStore);
+  // Watch for keyboard pane-commands (view/drawer/tab nav) aimed at the focused pane.
+  const { request: paneCommand } = useSnapshot(paneCommandStore);
 
   // Reset view mode and file editor when session changes
   useEffect(() => {
@@ -179,6 +182,36 @@ export const Pane = memo(function Pane({
       // TODO: Scroll to line (requires FileEditor enhancement)
     }
   }, [fileOpenRequest, isFocused, session, fileEditor]);
+
+  // Handle keyboard pane-commands — only the focused pane reacts, then clears
+  // the request (mirrors the fileOpen handler above). Lets global chords drive
+  // this pane's drawers / tab navigation without lifting its local state up.
+  useEffect(() => {
+    if (!paneCommand || !isFocused) return;
+    switch (paneCommand.command) {
+      case "toggle-git":
+        setRightDrawer((d) => (d === "git" ? null : "git"));
+        break;
+      case "toggle-files":
+        setRightDrawer((d) => (d === "files" ? null : "files"));
+        break;
+      case "toggle-shell":
+        setShellDrawerOpen((prev) => !prev);
+        break;
+      case "next-tab":
+      case "prev-tab": {
+        const { tabs, activeTabId } = paneData;
+        if (tabs.length > 1) {
+          const idx = tabs.findIndex((t) => t.id === activeTabId);
+          const delta = paneCommand.command === "next-tab" ? 1 : -1;
+          const next = tabs[(idx + delta + tabs.length) % tabs.length];
+          if (next) switchTab(paneId, next.id);
+        }
+        break;
+      }
+    }
+    paneCommandActions.clear();
+  }, [paneCommand, isFocused, paneData, paneId, switchTab]);
 
   const handleFocus = useCallback(() => {
     focusPane(paneId);

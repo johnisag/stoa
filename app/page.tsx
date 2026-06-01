@@ -39,6 +39,7 @@ import { sessionKey } from "@/lib/providers/registry";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
+import { paneCommandActions } from "@/stores/paneCommands";
 import { getActiveBackend } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
@@ -76,6 +77,37 @@ const NAV_KEYBINDINGS: Keybinding[] = [
     chord: "mod+\\",
     action: "split-pane",
     description: "Split the focused pane",
+  },
+  // Focused-pane view/drawer toggles + tab nav. Like mod+b above, these are not
+  // allowInInput, so the .xterm guard lets the keystrokes reach a focused
+  // terminal; they fire from the rest of the UI. mod+shift+letter / +arrow are
+  // chosen to dodge browser-reserved chords (⌘T reopen-tab, ⌘1..9 browser tabs)
+  // and shifted-punctuation normalization. Routed to the focused pane via
+  // paneCommandStore (a global handler can't reach a pane's local state).
+  {
+    chord: "mod+shift+g",
+    action: "pane-toggle-git",
+    description: "Toggle the Git panel (focused pane)",
+  },
+  {
+    chord: "mod+shift+e",
+    action: "pane-toggle-files",
+    description: "Toggle the file explorer (focused pane)",
+  },
+  {
+    chord: "mod+shift+s",
+    action: "pane-toggle-shell",
+    description: "Toggle the shell drawer (focused pane)",
+  },
+  {
+    chord: "mod+shift+arrowright",
+    action: "pane-next-tab",
+    description: "Next tab (focused pane)",
+  },
+  {
+    chord: "mod+shift+arrowleft",
+    action: "pane-prev-tab",
+    description: "Previous tab (focused pane)",
   },
   {
     chord: "shift+?",
@@ -503,6 +535,14 @@ function HomeContent() {
     else if (action === "prev-session") selectRelativeSession(-1);
     else if (action === "toggle-sidebar") setSidebarOpen((v) => !v);
     else if (action === "split-pane") splitHorizontal(focusedPaneId);
+    else if (action === "pane-toggle-git")
+      paneCommandActions.send("toggle-git");
+    else if (action === "pane-toggle-files")
+      paneCommandActions.send("toggle-files");
+    else if (action === "pane-toggle-shell")
+      paneCommandActions.send("toggle-shell");
+    else if (action === "pane-next-tab") paneCommandActions.send("next-tab");
+    else if (action === "pane-prev-tab") paneCommandActions.send("prev-tab");
     else if (action === "show-help") setShowHelp(true);
   });
 
