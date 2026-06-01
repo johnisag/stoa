@@ -41,6 +41,7 @@ export function DesktopView({
   setShowNotificationSettings,
   showQuickSwitcher,
   setShowQuickSwitcher,
+  onShowShortcuts,
   notificationSettings,
   permissionGranted,
   updateSettings,
@@ -84,7 +85,7 @@ export function DesktopView({
             />
           </div>
 
-          <SidebarFooter />
+          <SidebarFooter onShowShortcuts={onShowShortcuts} />
         </div>
       </div>
 

@@ -29,6 +29,7 @@ export interface ViewProps {
   setShowNotificationSettings: (show: boolean) => void;
   showQuickSwitcher: boolean;
   setShowQuickSwitcher: (show: boolean) => void;
+  onShowShortcuts: () => void;
 
   // Notification settings
   notificationSettings: NotificationSettings;

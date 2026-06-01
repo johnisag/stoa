@@ -1,16 +1,41 @@
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { Keyboard } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-export function SidebarFooter() {
+interface SidebarFooterProps {
+  /** Opens the keyboard-shortcut cheatsheet (also bound to `?`). */
+  onShowShortcuts?: () => void;
+}
+
+export function SidebarFooter({ onShowShortcuts }: SidebarFooterProps = {}) {
   return (
     <div className="mt-auto px-3 pt-2 pb-3">
       <div className="flex items-center justify-between">
         <span className="text-muted-foreground text-xs">Theme</span>
-        <ThemeToggle />
+        <div className="flex items-center gap-1">
+          {onShowShortcuts && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={onShowShortcuts}
+                  aria-label="Keyboard shortcuts"
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
+                >
+                  <Keyboard className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Keyboard shortcuts (?)</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+          <ThemeToggle />
+        </div>
       </div>
       <div className="text-muted-foreground/50 mt-2 text-center text-[10px]">
         <Tooltip>
