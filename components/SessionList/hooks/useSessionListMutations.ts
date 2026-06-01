@@ -32,27 +32,35 @@ export function useSessionListMutations({
   const queryClient = useQueryClient();
   const confirm = useConfirm();
 
-  // Session mutations
-  const deleteSessionMutation = useDeleteSession();
-  const renameSessionMutation = useRenameSession();
-  const forkSessionMutation = useForkSession();
+  // Destructure the stable `mutateAsync` from each mutation rather than holding
+  // the whole result object. react-query's useMutation returns a fresh
+  // `{ ...result, mutate, mutateAsync }` object on EVERY render, but
+  // `mutateAsync` itself is a single observer-bound method whose identity never
+  // changes. Depending on `mutateAsync` (not the object) keeps the handlers
+  // below referentially stable across the ~5s status poll — which is what lets
+  // SessionCard's React.memo actually skip unchanged cards. (summarize keeps its
+  // full object too, for the isPending/variables it reads below.)
+  const { mutateAsync: deleteSession } = useDeleteSession();
+  const { mutateAsync: renameSession } = useRenameSession();
+  const { mutateAsync: forkSession } = useForkSession();
   const summarizeSessionMutation = useSummarizeSession();
-  const moveSessionToProjectMutation = useMoveSessionToProject();
+  const { mutateAsync: summarizeSession } = summarizeSessionMutation;
+  const { mutateAsync: moveSessionToProject } = useMoveSessionToProject();
 
   // Project mutations
-  const toggleProjectMutation = useToggleProject();
-  const deleteProjectMutation = useDeleteProject();
-  const renameProjectMutation = useRenameProject();
+  const { mutateAsync: toggleProject } = useToggleProject();
+  const { mutateAsync: deleteProject } = useDeleteProject();
+  const { mutateAsync: renameProject } = useRenameProject();
 
   // Group mutations
-  const toggleGroupMutation = useToggleGroup();
-  const createGroupMutation = useCreateGroup();
-  const deleteGroupMutation = useDeleteGroup();
+  const { mutateAsync: toggleGroup } = useToggleGroup();
+  const { mutateAsync: createGroup } = useCreateGroup();
+  const { mutateAsync: deleteGroup } = useDeleteGroup();
 
   // Dev server mutations
-  const stopDevServerMutation = useStopDevServer();
-  const restartDevServerMutation = useRestartDevServer();
-  const removeDevServerMutation = useRemoveDevServer();
+  const { mutateAsync: stopDevServer } = useStopDevServer();
+  const { mutateAsync: restartDevServer } = useRestartDevServer();
+  const { mutateAsync: removeDevServer } = useRemoveDevServer();
 
   // Derived state
   const summarizingSessionId = summarizeSessionMutation.isPending
@@ -71,47 +79,47 @@ export function useSessionListMutations({
         }))
       )
         return;
-      await deleteSessionMutation.mutateAsync(sessionId);
+      await deleteSession(sessionId);
     },
-    [confirm, deleteSessionMutation]
+    [confirm, deleteSession]
   );
 
   const handleRenameSession = useCallback(
     async (sessionId: string, newName: string) => {
-      await renameSessionMutation.mutateAsync({ sessionId, newName });
+      await renameSession({ sessionId, newName });
     },
-    [renameSessionMutation]
+    [renameSession]
   );
 
   const handleForkSession = useCallback(
     async (sessionId: string) => {
-      const forkedSession = await forkSessionMutation.mutateAsync(sessionId);
+      const forkedSession = await forkSession(sessionId);
       if (forkedSession) onSelectSession(forkedSession.id);
     },
-    [forkSessionMutation, onSelectSession]
+    [forkSession, onSelectSession]
   );
 
   const handleSummarize = useCallback(
     async (sessionId: string) => {
-      const newSession = await summarizeSessionMutation.mutateAsync(sessionId);
+      const newSession = await summarizeSession(sessionId);
       if (newSession) onSelectSession(newSession.id);
     },
-    [summarizeSessionMutation, onSelectSession]
+    [summarizeSession, onSelectSession]
   );
 
   const handleMoveSessionToProject = useCallback(
     async (sessionId: string, projectId: string) => {
-      await moveSessionToProjectMutation.mutateAsync({ sessionId, projectId });
+      await moveSessionToProject({ sessionId, projectId });
     },
-    [moveSessionToProjectMutation]
+    [moveSessionToProject]
   );
 
   // Project handlers
   const handleToggleProject = useCallback(
     async (projectId: string, expanded: boolean) => {
-      await toggleProjectMutation.mutateAsync({ projectId, expanded });
+      await toggleProject({ projectId, expanded });
     },
-    [toggleProjectMutation]
+    [toggleProject]
   );
 
   const handleDeleteProject = useCallback(
@@ -125,31 +133,31 @@ export function useSessionListMutations({
         }))
       )
         return;
-      await deleteProjectMutation.mutateAsync(projectId);
+      await deleteProject(projectId);
     },
-    [confirm, deleteProjectMutation]
+    [confirm, deleteProject]
   );
 
   const handleRenameProject = useCallback(
     async (projectId: string, newName: string) => {
-      await renameProjectMutation.mutateAsync({ projectId, newName });
+      await renameProject({ projectId, newName });
     },
-    [renameProjectMutation]
+    [renameProject]
   );
 
   // Group handlers
   const handleToggleGroup = useCallback(
     async (path: string, expanded: boolean) => {
-      await toggleGroupMutation.mutateAsync({ path, expanded });
+      await toggleGroup({ path, expanded });
     },
-    [toggleGroupMutation]
+    [toggleGroup]
   );
 
   const handleCreateGroup = useCallback(
     async (name: string, parentPath?: string) => {
-      await createGroupMutation.mutateAsync({ name, parentPath });
+      await createGroup({ name, parentPath });
     },
-    [createGroupMutation]
+    [createGroup]
   );
 
   const handleDeleteGroup = useCallback(
@@ -162,31 +170,31 @@ export function useSessionListMutations({
         }))
       )
         return;
-      await deleteGroupMutation.mutateAsync(path);
+      await deleteGroup(path);
     },
-    [confirm, deleteGroupMutation]
+    [confirm, deleteGroup]
   );
 
   // Dev server handlers
   const handleStopDevServer = useCallback(
     async (serverId: string) => {
-      await stopDevServerMutation.mutateAsync(serverId);
+      await stopDevServer(serverId);
     },
-    [stopDevServerMutation]
+    [stopDevServer]
   );
 
   const handleRestartDevServer = useCallback(
     async (serverId: string) => {
-      await restartDevServerMutation.mutateAsync(serverId);
+      await restartDevServer(serverId);
     },
-    [restartDevServerMutation]
+    [restartDevServer]
   );
 
   const handleRemoveDevServer = useCallback(
     async (serverId: string) => {
-      await removeDevServerMutation.mutateAsync(serverId);
+      await removeDevServer(serverId);
     },
-    [removeDevServerMutation]
+    [removeDevServer]
   );
 
   // Bulk delete handler
