@@ -40,14 +40,33 @@ import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { getActiveBackend } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
+import { ShortcutsHelp } from "@/components/ShortcutsHelp";
 import type { Keybinding } from "@/lib/keybindings";
 
 // Global navigation shortcuts (mod = ⌘ on macOS, Ctrl elsewhere). Module-level
 // so the bindings array identity stays stable across renders.
 const NAV_KEYBINDINGS: Keybinding[] = [
-  { chord: "mod+k", action: "open-switcher", allowInInput: true },
-  { chord: "alt+arrowdown", action: "next-session" },
-  { chord: "alt+arrowup", action: "prev-session" },
+  {
+    chord: "mod+k",
+    action: "open-switcher",
+    allowInInput: true,
+    description: "Open the session / code switcher",
+  },
+  {
+    chord: "alt+arrowdown",
+    action: "next-session",
+    description: "Next session",
+  },
+  {
+    chord: "alt+arrowup",
+    action: "prev-session",
+    description: "Previous session",
+  },
+  {
+    chord: "shift+?",
+    action: "show-help",
+    description: "Show keyboard shortcuts",
+  },
 ];
 
 function HomeContent() {
@@ -60,6 +79,7 @@ function HomeContent() {
   const [showNotificationSettings, setShowNotificationSettings] =
     useState(false);
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [copiedSessionId, setCopiedSessionId] = useState(false);
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
 
@@ -465,6 +485,7 @@ function HomeContent() {
     if (action === "open-switcher") setShowQuickSwitcher(true);
     else if (action === "next-session") selectRelativeSession(1);
     else if (action === "prev-session") selectRelativeSession(-1);
+    else if (action === "show-help") setShowHelp(true);
   });
 
   // Pane renderer
@@ -601,11 +622,21 @@ function HomeContent() {
     renderPane,
   };
 
-  if (isMobile) {
-    return <MobileView {...viewProps} />;
-  }
-
-  return <DesktopView {...viewProps} />;
+  return (
+    <>
+      {isMobile ? (
+        <MobileView {...viewProps} />
+      ) : (
+        <DesktopView {...viewProps} />
+      )}
+      {/* Global keyboard-shortcuts cheatsheet (opened via the `?` shortcut). */}
+      <ShortcutsHelp
+        bindings={NAV_KEYBINDINGS}
+        open={showHelp}
+        onOpenChange={setShowHelp}
+      />
+    </>
+  );
 }
 
 export default function Home() {
