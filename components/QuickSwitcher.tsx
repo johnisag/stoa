@@ -12,9 +12,26 @@ import { cn } from "@/lib/utils";
 import { baseName } from "@/lib/path-display";
 import { Terminal, GitBranch, Clock, Check } from "lucide-react";
 import type { Session } from "@/lib/db";
-import { CodeSearchResults } from "@/components/CodeSearch/CodeSearchResults";
+import dynamic from "next/dynamic";
 import { useRipgrepAvailable } from "@/data/code-search";
 import { searchSessions } from "@/lib/session-search";
+
+// react-syntax-highlighter is heavy; load the code-search results lazily so it
+// stays out of the eager bundle (only needed once a code search runs).
+const CodeSearchResults = dynamic(
+  () =>
+    import("@/components/CodeSearch/CodeSearchResults").then(
+      (m) => m.CodeSearchResults
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="text-muted-foreground p-4 text-center text-sm">
+        Loading…
+      </div>
+    ),
+  }
+);
 
 interface QuickSwitcherProps {
   sessions: Session[];
