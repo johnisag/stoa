@@ -15,6 +15,7 @@ import { useHomePath } from "@/hooks/useHomePath";
 
 import { useNewSessionForm } from "./hooks/useNewSessionForm";
 import { AgentSelector } from "./AgentSelector";
+import { ModelSelector } from "./ModelSelector";
 import { WorkingDirectoryInput } from "./WorkingDirectoryInput";
 import { WorktreeSection } from "./WorktreeSection";
 import { ProjectSelector } from "./ProjectSelector";
@@ -69,6 +70,12 @@ export function NewSessionDialog({
             <AgentSelector
               value={form.agentType}
               onChange={form.handleAgentTypeChange}
+            />
+
+            <ModelSelector
+              agentType={form.agentType}
+              value={form.model}
+              onChange={form.setModel}
             />
 
             <div className="space-y-2">
