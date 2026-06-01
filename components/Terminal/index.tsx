@@ -201,7 +201,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             selectMode && "ring-primary ring-2 ring-inset",
             isDragging && "ring-primary ring-2 ring-inset"
           )}
-          onClick={focus}
+          onClick={() => {
+            // Don't re-focus when text is selected: the focus() fired by the
+            // click that completes a drag-select was clearing the selection on
+            // mouse-up (so it couldn't be copied). Plain clicks still focus.
+            if (!xtermRef.current?.hasSelection()) focus();
+          }}
           onTouchStart={selectMode ? (e) => e.stopPropagation() : undefined}
           onTouchEnd={selectMode ? (e) => e.stopPropagation() : undefined}
         />
