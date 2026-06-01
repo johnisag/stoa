@@ -605,6 +605,7 @@ function HomeContent() {
     setShowNotificationSettings,
     showQuickSwitcher,
     setShowQuickSwitcher,
+    onShowShortcuts: () => setShowHelp(true),
     notificationSettings,
     permissionGranted,
     updateSettings,
