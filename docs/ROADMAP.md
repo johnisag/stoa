@@ -146,17 +146,32 @@ fit cleanly on the native backend.
       group_path, whose "sessions" default would match everything).
 - [x] Export conversation to Markdown/JSON — done (PR #6): pure formatters +
       `/api/sessions/[id]/export?format=md|json` route + an Export submenu in SessionCard.
-- [ ] Keyboard shortcuts for navigation.
+- [x] Keyboard shortcuts for navigation — done (PR #8): a pure keybindings core
+      (`lib/keybindings.ts`: chord normalization, an input/terminal focus guard,
+      auto-repeat suppression) + `useGlobalKeybindings`. ⌘/Ctrl-K opens the
+      switcher; Alt+↓/↑ cycle next/prev (non-worker) session.
 - [ ] Live-tear-down a pane's terminal when its session is deleted. The reconcile
       in PaneContext already detaches the tab in state (so it clears on reload),
       but the mounted `<Terminal>` keeps its WS until remount. Needs a terminal
       `detach()` triggered on the set→null transition — without regressing the
       imperative session-switch path (which reuses the same attach handle).
 
+> **Note:** the clean, low-risk near-term items above are now shipped
+> (notifications, export, fuzzy search, keyboard nav). The remaining backlog
+> below is larger and/or riskier — Web Push (large; iOS-PWA), live terminal
+> teardown (touches the WS/terminal lifecycle; browser-only to verify),
+> tool-call persistence (fragile agent-output parsing), multiple cwd / MCP
+> toggle (backend). Pick deliberately; several want human-in-the-loop verification.
+
 **Session management:**
 
-- [ ] Session templates — pre-configured sessions for common tasks.
+- [ ] Session templates — pre-configured sessions for common tasks. _(Largely
+      subsumed by Projects: a project already pre-sets agent_type / default_model
+      / initial_prompt and `useNewSessionForm` prefills from it. Only worth doing
+      as a lighter, cross-project quick-preset if that proves desirable.)_
 - [ ] Session groups / folders — organize sessions by project, not just by path.
+      _(Largely subsumed by Projects + `project_id`; the legacy `group_path` is
+      deprecated.)_
 - [ ] Session snapshots — save/restore session state.
 - [ ] Tool-call persistence — store tool calls in the database.
 - [ ] Multiple working directories per session.
