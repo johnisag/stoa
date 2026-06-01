@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { FileChanges } from "@/components/GitPanel/FileChanges";
 import { CommitForm } from "@/components/GitPanel/CommitForm";
-import { FileEditDialog } from "./FileEditDialog";
+import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import { baseName } from "@/lib/path-display";
 import { useDrawerAnimation } from "@/hooks/useDrawerAnimation";
@@ -41,6 +41,20 @@ import {
 import type { GitFile } from "@/lib/git-status";
 import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
 import type { ProjectRepository } from "@/lib/db";
+
+// Monaco is heavy (~half the eager JS). Load the diff viewer only when a file is
+// actually opened, keeping it out of cold start.
+const FileEditDialog = dynamic(
+  () => import("./FileEditDialog").then((m) => m.FileEditDialog),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <Loader2 className="text-muted-foreground h-6 w-6 animate-spin" />
+      </div>
+    ),
+  }
+);
 
 interface GitDrawerProps {
   open: boolean;
