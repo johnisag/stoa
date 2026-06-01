@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback } from "react";
 import { SessionList } from "@/components/SessionList";
 import { NewSessionDialog } from "@/components/NewSessionDialog";
 import { StartServerDialog } from "@/components/DevServers/StartServerDialog";
@@ -36,6 +37,25 @@ export function MobileView({
   setStartDevServerProjectId,
   renderPane,
 }: ViewProps) {
+  // Stable id→session handlers (see DesktopView): keep SessionCard's React.memo
+  // effective across the ~5s status poll instead of minting fresh inline arrows.
+  const handleSelect = useCallback(
+    (id: string) => {
+      const session = sessions.find((s) => s.id === id);
+      if (session) attachToSession(session);
+      setSidebarOpen(false);
+    },
+    [sessions, attachToSession, setSidebarOpen]
+  );
+  const handleOpenInTab = useCallback(
+    (id: string) => {
+      const session = sessions.find((s) => s.id === id);
+      if (session) openSessionInNewTab(session);
+      setSidebarOpen(false);
+    },
+    [sessions, openSessionInNewTab, setSidebarOpen]
+  );
+
   return (
     <main className="bg-background h-app flex flex-col overflow-hidden">
       {/* h-app (not h-screen): tracks visualViewport via useViewportHeight so
@@ -49,16 +69,8 @@ export function MobileView({
             <SessionList
               activeSessionId={focusedActiveTab?.sessionId || undefined}
               sessionStatuses={sessionStatuses}
-              onSelect={(id) => {
-                const session = sessions.find((s) => s.id === id);
-                if (session) attachToSession(session);
-                setSidebarOpen(false);
-              }}
-              onOpenInTab={(id) => {
-                const session = sessions.find((s) => s.id === id);
-                if (session) openSessionInNewTab(session);
-                setSidebarOpen(false);
-              }}
+              onSelect={handleSelect}
+              onOpenInTab={handleOpenInTab}
               onNewSessionInProject={handleNewSessionInProject}
               onOpenTerminal={handleOpenTerminal}
               onStartDevServer={handleStartDevServer}

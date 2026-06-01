@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback } from "react";
 import { SessionList } from "@/components/SessionList";
 import { NewSessionDialog } from "@/components/NewSessionDialog";
 import { NotificationSettings } from "@/components/NotificationSettings";
@@ -58,6 +59,25 @@ export function DesktopView({
   setStartDevServerProjectId,
   renderPane,
 }: ViewProps) {
+  // Stable id→session handlers: the session list re-renders on every status
+  // poll (~5s); minting these inline would give SessionCard fresh props each
+  // poll and defeat its React.memo. `sessions` is a separate query key the
+  // status poll doesn't touch, so these refs stay stable between polls.
+  const handleSelect = useCallback(
+    (id: string) => {
+      const session = sessions.find((s) => s.id === id);
+      if (session) attachToSession(session);
+    },
+    [sessions, attachToSession]
+  );
+  const handleOpenInTab = useCallback(
+    (id: string) => {
+      const session = sessions.find((s) => s.id === id);
+      if (session) openSessionInNewTab(session);
+    },
+    [sessions, openSessionInNewTab]
+  );
+
   return (
     <div className="bg-background flex h-screen overflow-hidden">
       {/* Desktop Sidebar */}
@@ -70,14 +90,8 @@ export function DesktopView({
             <SessionList
               activeSessionId={focusedActiveTab?.sessionId || undefined}
               sessionStatuses={sessionStatuses}
-              onSelect={(id) => {
-                const session = sessions.find((s) => s.id === id);
-                if (session) attachToSession(session);
-              }}
-              onOpenInTab={(id) => {
-                const session = sessions.find((s) => s.id === id);
-                if (session) openSessionInNewTab(session);
-              }}
+              onSelect={handleSelect}
+              onOpenInTab={handleOpenInTab}
               onNewSessionInProject={handleNewSessionInProject}
               onOpenTerminal={handleOpenTerminal}
               onStartDevServer={handleStartDevServer}

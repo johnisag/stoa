@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { memo, useReducer, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import {
   GitFork,
@@ -57,20 +57,31 @@ interface SessionCardProps {
   // Selection props
   isSelected?: boolean;
   isInSelectMode?: boolean;
-  onToggleSelect?: (shiftKey: boolean) => void;
+  // Callbacks are id-threaded (the card passes its own session.id) so callers
+  // can hand down the same stable function reference for every card instead of
+  // minting a fresh `() => fn(session.id)` closure per row. That stability is
+  // what lets React.memo (below) skip re-rendering unchanged cards when the
+  // status/sessions polls refresh the list.
+  onToggleSelect?: (id: string, shiftKey: boolean) => void;
   // Navigation
-  onClick?: () => void;
-  onOpenInTab?: () => void;
-  onMove?: (groupPath: string) => void;
-  onMoveToProject?: (projectId: string) => void;
-  onFork?: () => void;
-  onSummarize?: () => void;
-  onDelete?: () => void;
-  onRename?: (newName: string) => void;
-  onCreatePR?: () => void;
-  onHoverStart?: (rect: DOMRect) => void;
+  onSelect?: (id: string) => void;
+  onOpenInTab?: (id: string) => void;
+  onMove?: (id: string, groupPath: string) => void;
+  onMoveToProject?: (id: string, projectId: string) => void;
+  onFork?: (id: string) => void;
+  onSummarize?: (id: string) => void;
+  onDelete?: (id: string) => void;
+  onRename?: (id: string, newName: string) => void;
+  onCreatePR?: (id: string) => void;
+  onHoverStart?: (session: Session, rect: DOMRect) => void;
   onHoverEnd?: () => void;
 }
+
+// Module-level stable empty arrays for the optional list props. Using a fresh
+// `[]` default per render would defeat React.memo's shallow prop compare for
+// any card not passed groups/projects (e.g. worker rows).
+const EMPTY_GROUPS: Group[] = [];
+const EMPTY_PROJECTS: ProjectWithDevServers[] = [];
 
 const statusConfig: Record<
   TmuxStatus,
@@ -103,17 +114,17 @@ const statusConfig: Record<
   },
 };
 
-export function SessionCard({
+function SessionCardComponent({
   session,
   isActive,
   isSummarizing,
   tmuxStatus,
-  groups = [],
-  projects = [],
+  groups = EMPTY_GROUPS,
+  projects = EMPTY_PROJECTS,
   isSelected,
   isInSelectMode,
   onToggleSelect,
-  onClick,
+  onSelect,
   onOpenInTab,
   onMove,
   onMoveToProject,
@@ -125,7 +136,6 @@ export function SessionCard({
   onHoverStart,
   onHoverEnd,
 }: SessionCardProps) {
-  const timeAgo = getTimeAgo(session.updated_at);
   const status = tmuxStatus || "dead";
   const config = statusConfig[status];
   const [isEditing, setIsEditing] = useState(false);
@@ -141,7 +151,7 @@ export function SessionCard({
     // Debounce hover to avoid flickering
     hoverTimeoutRef.current = setTimeout(() => {
       if (cardRef.current && !menuOpen) {
-        onHoverStart(cardRef.current.getBoundingClientRect());
+        onHoverStart(session, cardRef.current.getBoundingClientRect());
       }
     }, 300);
   };
@@ -188,7 +198,7 @@ export function SessionCard({
     if (justStartedEditingRef.current) return;
 
     if (editName.trim() && editName !== session.name && onRename) {
-      onRename(editName.trim());
+      onRename(session.id, editName.trim());
     }
     setIsEditing(false);
   };
@@ -213,7 +223,7 @@ export function SessionCard({
     if (isInSelectMode && onToggleSelect) {
       e.preventDefault();
       e.stopPropagation();
-      onToggleSelect(e.shiftKey);
+      onToggleSelect(session.id, e.shiftKey);
       return;
     }
 
@@ -221,18 +231,18 @@ export function SessionCard({
     if (e.shiftKey && onToggleSelect) {
       e.preventDefault();
       e.stopPropagation();
-      onToggleSelect(false);
+      onToggleSelect(session.id, false);
       return;
     }
 
     // Normal click - navigate to session
-    onClick?.();
+    onSelect?.(session.id);
   };
 
   // Handle checkbox click
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onToggleSelect?.(e.shiftKey);
+    onToggleSelect?.(session.id, e.shiftKey);
   };
 
   // Shared menu items renderer for both context menu and dropdown
@@ -262,7 +272,7 @@ export function SessionCard({
           </>
         )}
         {onOpenInTab && (
-          <MenuItem onClick={() => onOpenInTab()}>
+          <MenuItem onClick={() => onOpenInTab(session.id)}>
             <ExternalLink className="mr-2 h-3 w-3" />
             Open in new tab
           </MenuItem>
@@ -274,13 +284,16 @@ export function SessionCard({
           </MenuItem>
         )}
         {onFork && session.agent_type === "claude" && (
-          <MenuItem onClick={() => onFork()}>
+          <MenuItem onClick={() => onFork(session.id)}>
             <Copy className="mr-2 h-3 w-3" />
             Fork session
           </MenuItem>
         )}
         {onSummarize && (
-          <MenuItem onClick={() => onSummarize()} disabled={isSummarizing}>
+          <MenuItem
+            onClick={() => onSummarize(session.id)}
+            disabled={isSummarizing}
+          >
             {isSummarizing ? (
               <Loader2 className="mr-2 h-3 w-3 animate-spin" />
             ) : (
@@ -309,7 +322,7 @@ export function SessionCard({
               if (session.pr_url) {
                 window.open(session.pr_url, "_blank");
               } else {
-                onCreatePR();
+                onCreatePR(session.id);
               }
             }}
           >
@@ -329,7 +342,7 @@ export function SessionCard({
                 .map((project) => (
                   <MenuItem
                     key={project.id}
-                    onClick={() => onMoveToProject(project.id)}
+                    onClick={() => onMoveToProject(session.id, project.id)}
                   >
                     {project.name}
                   </MenuItem>
@@ -347,7 +360,10 @@ export function SessionCard({
               {groups
                 .filter((g) => g.path !== session.group_path)
                 .map((group) => (
-                  <MenuItem key={group.path} onClick={() => onMove(group.path)}>
+                  <MenuItem
+                    key={group.path}
+                    onClick={() => onMove(session.id, group.path)}
+                  >
                     {group.name}
                   </MenuItem>
                 ))}
@@ -358,7 +374,7 @@ export function SessionCard({
           <>
             <MenuSeparator />
             <MenuItem
-              onClick={() => onDelete()}
+              onClick={() => onDelete(session.id)}
               className="text-red-500 focus:text-red-500"
             >
               <Trash2 className="mr-2 h-3 w-3" />
@@ -476,7 +492,7 @@ export function SessionCard({
 
       {/* Time ago */}
       <span className="text-muted-foreground hidden flex-shrink-0 text-[10px] group-hover:hidden sm:block">
-        {timeAgo}
+        <TimeAgo updatedAt={session.updated_at} />
       </span>
 
       {/* Actions menu (button) */}
@@ -507,6 +523,26 @@ export function SessionCard({
       <ContextMenuContent>{renderMenuItems(true)}</ContextMenuContent>
     </ContextMenu>
   );
+}
+
+// Memoized: the session list re-renders on every status/sessions poll (~5–10s).
+// With id-threaded, referentially-stable callbacks from the callers, a shallow
+// prop compare lets every card whose own data didn't change skip re-rendering —
+// only the session(s) that actually changed status repaint.
+export const SessionCard = memo(SessionCardComponent);
+
+// Relative timestamp on its own ~30s ticker. Because SessionCard is memoized,
+// an idle card never re-renders and its "Xm ago" would freeze. Living in a
+// separate (non-memoized) component with local state lets just this label
+// repaint on the tick while the heavy card body stays put — a child's own
+// state update isn't suppressed by the parent's memo.
+function TimeAgo({ updatedAt }: { updatedAt: string }) {
+  const [, tick] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const id = setInterval(tick, 30000);
+    return () => clearInterval(id);
+  }, []);
+  return <>{getTimeAgo(updatedAt)}</>;
 }
 
 function getTimeAgo(dateStr: string): string {
