@@ -167,7 +167,7 @@ export function FileEditDialog({
     }
   };
 
-  const handleClose = async () => {
+  const handleClose = useCallback(async () => {
     if (
       hasChanges &&
       !(await confirm({
@@ -178,7 +178,17 @@ export function FileEditDialog({
     )
       return;
     onOpenChange(false);
-  };
+  }, [hasChanges, confirm, onOpenChange]);
+
+  // Esc closes the modal (this is a hand-rolled overlay, not a Radix dialog).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") void handleClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, handleClose]);
 
   const handleEditorMount = useCallback((ed: editor.IStandaloneDiffEditor) => {
     editorRef.current = ed;
@@ -306,6 +316,8 @@ export function FileEditDialog({
                   setCopied(true);
                   setTimeout(() => setCopied(false), 2000);
                 }}
+                aria-label={copied ? "Copied" : "Copy file path"}
+                title={copied ? "Copied" : "Copy file path"}
                 className="text-muted-foreground hover:text-foreground"
               >
                 {copied ? (
@@ -350,7 +362,12 @@ export function FileEditDialog({
                 )}
                 Save
               </Button>
-              <Button variant="ghost" size="icon" onClick={handleClose}>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleClose}
+                aria-label="Close"
+              >
                 <X className="h-4 w-4" />
               </Button>
             </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { FolderOpen, RefreshCw, Loader2, AlertCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -54,25 +55,37 @@ export function FileExplorerDrawer({
     reset,
   } = fileEditor;
 
-  const loadFiles = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/files?path=${encodeURIComponent(workingDirectory)}`
-      );
-      const data = await res.json();
-      if (data.error) setError(data.error);
-      else setFiles(data.files || []);
-    } catch {
-      setError("Failed to load directory");
-    } finally {
-      setLoading(false);
-    }
-  }, [workingDirectory]);
+  // `token` guards against out-of-order responses: a fast working-dir switch
+  // (the drawer stays mounted across tab switches) can otherwise land an older
+  // /api/files response after a newer one. The effect cancels the prior run.
+  const loadFiles = useCallback(
+    async (token?: { cancelled: boolean }) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/files?path=${encodeURIComponent(workingDirectory)}`
+        );
+        const data = await res.json();
+        if (token?.cancelled) return;
+        if (data.error) setError(data.error);
+        else setFiles(data.files || []);
+      } catch {
+        if (!token?.cancelled) setError("Failed to load directory");
+      } finally {
+        if (!token?.cancelled) setLoading(false);
+      }
+    },
+    [workingDirectory]
+  );
 
   useEffect(() => {
-    if (open) loadFiles();
+    if (!open) return;
+    const token = { cancelled: false };
+    loadFiles(token);
+    return () => {
+      token.cancelled = true;
+    };
   }, [open, loadFiles]);
 
   const activeFile = activeFilePath ? getFile(activeFilePath) : undefined;
@@ -113,7 +126,10 @@ export function FileExplorerDrawer({
 
   const handleSave = useCallback(
     async (path: string) => {
-      await saveFile(path);
+      const res = await saveFile(path);
+      if (!res.success) {
+        toast.error("Couldn't save file", { description: res.error });
+      }
     },
     [saveFile]
   );
@@ -140,8 +156,9 @@ export function FileExplorerDrawer({
             <Button
               variant="ghost"
               size="icon"
-              onClick={loadFiles}
+              onClick={() => loadFiles()}
               disabled={loading}
+              aria-label="Refresh files"
               className="h-7 w-7"
             >
               <RefreshCw
@@ -152,6 +169,7 @@ export function FileExplorerDrawer({
               variant="ghost"
               size="icon"
               onClick={() => onOpenChange(false)}
+              aria-label="Close files"
               className="h-7 w-7"
             >
               <X className="h-3.5 w-3.5" />
@@ -169,7 +187,7 @@ export function FileExplorerDrawer({
             <div className="flex flex-col items-center gap-2 py-8 text-center">
               <AlertCircle className="h-8 w-8 text-red-500" />
               <p className="text-muted-foreground text-sm">{error}</p>
-              <Button variant="outline" size="sm" onClick={loadFiles}>
+              <Button variant="outline" size="sm" onClick={() => loadFiles()}>
                 Retry
               </Button>
             </div>
