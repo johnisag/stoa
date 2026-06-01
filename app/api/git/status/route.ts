@@ -4,6 +4,7 @@ import {
   isGitRepo,
   getFileDiff,
   getUntrackedFileDiff,
+  getWorktreeBaseChanges,
   expandPath,
 } from "@/lib/git-status";
 
@@ -36,8 +37,10 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ diff });
     }
 
-    // Otherwise return full status
+    // Otherwise return full status, plus any changes stranded in the base
+    // checkout when this path is a linked worktree (surfaced as a warning).
     const status = getGitStatus(path);
+    status.baseWorktree = getWorktreeBaseChanges(path);
     return NextResponse.json(status);
   } catch (error) {
     return NextResponse.json(

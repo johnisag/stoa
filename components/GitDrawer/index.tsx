@@ -111,6 +111,12 @@ export function GitDrawer({
     ? multiRepoQuery.refetch
     : singleRepoQuery.refetch;
 
+  // For a linked-worktree session, changes that landed in the base checkout
+  // (a common agent misstep) instead of this worktree — surfaced as a warning.
+  const baseWorktree = isMultiRepo
+    ? undefined
+    : singleRepoQuery.data?.baseWorktree;
+
   // For PR status, use the primary repo or first repo in multi-repo mode
   const primaryRepoPath = isMultiRepo
     ? repositories.find((r) => r.is_primary)?.path ||
@@ -318,6 +324,26 @@ export function GitDrawer({
             </div>
           )}
         </div>
+
+        {/* Stranded base-checkout changes (worktree sessions) */}
+        {baseWorktree && baseWorktree.count > 0 && (
+          <div className="mx-3 mb-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            <span>
+              <strong>{baseWorktree.count}</strong> uncommitted change
+              {baseWorktree.count > 1 ? "s" : ""} in the base checkout
+              {baseWorktree.branch ? (
+                <>
+                  {" "}
+                  (branch{" "}
+                  <code className="font-mono">{baseWorktree.branch}</code>)
+                </>
+              ) : null}
+              , outside this worktree — the agent may have edited the base repo
+              instead.
+            </span>
+          </div>
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto py-2">
