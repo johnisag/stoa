@@ -36,7 +36,10 @@ export function MobileView({
   renderPane,
 }: ViewProps) {
   return (
-    <main className="bg-background flex h-screen flex-col overflow-hidden">
+    <main className="bg-background h-app flex flex-col overflow-hidden">
+      {/* h-app (not h-screen): tracks visualViewport via useViewportHeight so
+          the terminal + toolbar shrink above the on-screen keyboard instead of
+          sliding under it. Desktop stays h-screen (DesktopView). */}
       {/* Swipe sidebar */}
       <SwipeSidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)}>
         <div className="flex h-full flex-col">
