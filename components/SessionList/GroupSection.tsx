@@ -217,16 +217,12 @@ export function GroupSection({
                         isSummarizing={summarizingSessionId === session.id}
                         tmuxStatus={sessionStatuses?.[session.id]?.status}
                         groups={groups}
-                        onClick={() => onSelectSession(session.id)}
-                        onFork={() => onForkSession(session.id)}
-                        onSummarize={() => onSummarize(session.id)}
-                        onDelete={() => onDeleteSession(session.id)}
-                        onRename={(newName) =>
-                          onRenameSession(session.id, newName)
-                        }
-                        onHoverStart={(rect) =>
-                          hoverHandlers.onHoverStart(session, rect)
-                        }
+                        onSelect={onSelectSession}
+                        onFork={onForkSession}
+                        onSummarize={onSummarize}
+                        onDelete={onDeleteSession}
+                        onRename={onRenameSession}
+                        onHoverStart={hoverHandlers.onHoverStart}
                         onHoverEnd={hoverHandlers.onHoverEnd}
                       />
                     </div>
@@ -246,14 +242,10 @@ export function GroupSection({
                           isActive={worker.id === activeSessionId}
                           tmuxStatus={sessionStatuses?.[worker.id]?.status}
                           groups={groups}
-                          onClick={() => onSelectSession(worker.id)}
-                          onDelete={() => onDeleteSession(worker.id)}
-                          onRename={(newName) =>
-                            onRenameSession(worker.id, newName)
-                          }
-                          onHoverStart={(rect) =>
-                            hoverHandlers.onHoverStart(worker, rect)
-                          }
+                          onSelect={onSelectSession}
+                          onDelete={onDeleteSession}
+                          onRename={onRenameSession}
+                          onHoverStart={hoverHandlers.onHoverStart}
                           onHoverEnd={hoverHandlers.onHoverEnd}
                         />
                       ))}

@@ -247,52 +247,16 @@ export function ProjectsSection({
                               projects={projects}
                               isSelected={selectedIds.has(session.id)}
                               isInSelectMode={isInSelectMode}
-                              onToggleSelect={(shiftKey) =>
-                                handleToggleSelect(session.id, shiftKey)
-                              }
-                              onClick={() => onSelectSession(session.id)}
-                              onOpenInTab={
-                                onOpenSessionInTab
-                                  ? () => onOpenSessionInTab(session.id)
-                                  : undefined
-                              }
-                              onMoveToProject={
-                                onMoveSession
-                                  ? (projectId) =>
-                                      onMoveSession(session.id, projectId)
-                                  : undefined
-                              }
-                              onFork={
-                                onForkSession
-                                  ? () => onForkSession(session.id)
-                                  : undefined
-                              }
-                              onSummarize={
-                                onSummarize
-                                  ? () => onSummarize(session.id)
-                                  : undefined
-                              }
-                              onDelete={
-                                onDeleteSession
-                                  ? () => onDeleteSession(session.id)
-                                  : undefined
-                              }
-                              onRename={
-                                onRenameSession
-                                  ? (newName) =>
-                                      onRenameSession(session.id, newName)
-                                  : undefined
-                              }
-                              onCreatePR={
-                                onCreatePR
-                                  ? () => onCreatePR(session.id)
-                                  : undefined
-                              }
-                              onHoverStart={
-                                onHoverStart
-                                  ? (rect) => onHoverStart(session, rect)
-                                  : undefined
-                              }
+                              onToggleSelect={handleToggleSelect}
+                              onSelect={onSelectSession}
+                              onOpenInTab={onOpenSessionInTab}
+                              onMoveToProject={onMoveSession}
+                              onFork={onForkSession}
+                              onSummarize={onSummarize}
+                              onDelete={onDeleteSession}
+                              onRename={onRenameSession}
+                              onCreatePR={onCreatePR}
+                              onHoverStart={onHoverStart}
                               onHoverEnd={onHoverEnd}
                             />
                           </div>
@@ -319,31 +283,12 @@ export function ProjectsSection({
                                 projects={projects}
                                 isSelected={selectedIds.has(worker.id)}
                                 isInSelectMode={isInSelectMode}
-                                onToggleSelect={(shiftKey) =>
-                                  handleToggleSelect(worker.id, shiftKey)
-                                }
-                                onClick={() => onSelectSession(worker.id)}
-                                onOpenInTab={
-                                  onOpenSessionInTab
-                                    ? () => onOpenSessionInTab(worker.id)
-                                    : undefined
-                                }
-                                onDelete={
-                                  onDeleteSession
-                                    ? () => onDeleteSession(worker.id)
-                                    : undefined
-                                }
-                                onRename={
-                                  onRenameSession
-                                    ? (newName) =>
-                                        onRenameSession(worker.id, newName)
-                                    : undefined
-                                }
-                                onHoverStart={
-                                  onHoverStart
-                                    ? (rect) => onHoverStart(worker, rect)
-                                    : undefined
-                                }
+                                onToggleSelect={handleToggleSelect}
+                                onSelect={onSelectSession}
+                                onOpenInTab={onOpenSessionInTab}
+                                onDelete={onDeleteSession}
+                                onRename={onRenameSession}
+                                onHoverStart={onHoverStart}
                                 onHoverEnd={onHoverEnd}
                               />
                             ))}

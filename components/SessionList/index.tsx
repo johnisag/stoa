@@ -284,9 +284,7 @@ export function SessionList({
               onRestartDevServer={mutations.handleRestartDevServer}
               onRemoveDevServer={mutations.handleRemoveDevServer}
               onViewDevServerLogs={setLogsServerId}
-              onHoverStart={(session, rect) =>
-                hoverHandlers.onHoverStart(session, rect)
-              }
+              onHoverStart={hoverHandlers.onHoverStart}
               onHoverEnd={hoverHandlers.onHoverEnd}
             />
           )}
