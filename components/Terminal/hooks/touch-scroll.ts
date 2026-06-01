@@ -6,10 +6,17 @@ import type { RefObject } from "react";
 interface TouchScrollConfig {
   term: XTerm;
   selectModeRef: RefObject<boolean>;
+  isMobile: boolean;
 }
 
 export function setupTouchScroll(config: TouchScrollConfig): () => void {
-  const { term, selectModeRef } = config;
+  const { term, selectModeRef, isMobile } = config;
+
+  // Touch-scroll converts finger drags into wheel events for mobile. On desktop
+  // it must NOT run: it forces `.xterm-viewport { overflow-y: hidden }` (hiding
+  // the scrollbar) and `user-select: none` on `.xterm-screen`, which breaks
+  // mouse scrolling and text selection. Desktop uses xterm's native handling.
+  if (!isMobile) return () => {};
 
   if (!term.element) return () => {};
 
