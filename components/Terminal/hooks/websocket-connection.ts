@@ -10,6 +10,8 @@ export interface WebSocketCallbacks {
     state: "connecting" | "connected" | "disconnected" | "reconnecting"
   ) => void;
   onSetConnected: (connected: boolean) => void;
+  /** Fired after each "output" message is written (incl. the attach snapshot). */
+  onOutput?: () => void;
 }
 
 export interface WebSocketManager {
@@ -127,6 +129,8 @@ export function createWebSocketConnection(
         const wasAtBottom = scrollYBefore >= buffer.baseY;
 
         term.write(msg.data);
+        // Signal the first real output arrived (clears any "attaching" overlay).
+        callbacks.onOutput?.();
 
         // After write, check if scroll jumped to top unexpectedly
         // Give it a moment for the write to complete

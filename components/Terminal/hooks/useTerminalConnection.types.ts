@@ -35,6 +35,8 @@ export interface UseTerminalConnectionProps {
 export interface UseTerminalConnectionReturn {
   connected: boolean;
   connectionState: "connecting" | "connected" | "disconnected" | "reconnecting";
+  /** True briefly while switching to another session (between reset + first paint). */
+  isAttaching: boolean;
   isAtBottom: boolean;
   xtermRef: RefObject<XTerm | null>;
   searchAddonRef: RefObject<SearchAddon | null>;

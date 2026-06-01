@@ -73,6 +73,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
     const {
       connectionState,
+      isAttaching,
       isAtBottom,
       xtermRef,
       searchAddonRef,
@@ -300,6 +301,15 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           <div className="absolute top-4 left-4 flex items-center gap-2 rounded bg-amber-500/20 px-2 py-1 text-xs text-amber-400">
             <div className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
             Reconnecting...
+          </div>
+        )}
+
+        {/* Switching to another session: cover the blank reset until the
+            incoming snapshot paints (cleared on first output / 2s fallback). */}
+        {connectionState === "connected" && isAttaching && (
+          <div className="bg-background pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-3">
+            <div className="bg-primary h-2 w-2 animate-pulse rounded-full" />
+            <span className="text-muted-foreground text-sm">Switching…</span>
           </div>
         )}
 
