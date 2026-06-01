@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState, useRef, useEffect } from "react";
+import { memo, useReducer, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import {
   GitFork,
@@ -136,7 +136,6 @@ function SessionCardComponent({
   onHoverStart,
   onHoverEnd,
 }: SessionCardProps) {
-  const timeAgo = getTimeAgo(session.updated_at);
   const status = tmuxStatus || "dead";
   const config = statusConfig[status];
   const [isEditing, setIsEditing] = useState(false);
@@ -493,7 +492,7 @@ function SessionCardComponent({
 
       {/* Time ago */}
       <span className="text-muted-foreground hidden flex-shrink-0 text-[10px] group-hover:hidden sm:block">
-        {timeAgo}
+        <TimeAgo updatedAt={session.updated_at} />
       </span>
 
       {/* Actions menu (button) */}
@@ -531,6 +530,20 @@ function SessionCardComponent({
 // prop compare lets every card whose own data didn't change skip re-rendering —
 // only the session(s) that actually changed status repaint.
 export const SessionCard = memo(SessionCardComponent);
+
+// Relative timestamp on its own ~30s ticker. Because SessionCard is memoized,
+// an idle card never re-renders and its "Xm ago" would freeze. Living in a
+// separate (non-memoized) component with local state lets just this label
+// repaint on the tick while the heavy card body stays put — a child's own
+// state update isn't suppressed by the parent's memo.
+function TimeAgo({ updatedAt }: { updatedAt: string }) {
+  const [, tick] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const id = setInterval(tick, 30000);
+    return () => clearInterval(id);
+  }, []);
+  return <>{getTimeAgo(updatedAt)}</>;
+}
 
 function getTimeAgo(dateStr: string): string {
   const date = new Date(dateStr + "Z"); // Assume UTC
