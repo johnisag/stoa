@@ -11,6 +11,8 @@ import {
   Plus,
   Minus,
   Edit3,
+  Eye,
+  Code2,
 } from "lucide-react";
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
@@ -18,6 +20,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { baseName, dirName } from "@/lib/path-display";
 import { useConfirm } from "@/components/ConfirmProvider";
+import { MarkdownRenderer } from "@/components/FileExplorer/MarkdownRenderer";
+import { HtmlRenderer } from "@/components/FileExplorer/HtmlRenderer";
 import type { GitFile } from "@/lib/git-status";
 import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
 
@@ -98,6 +102,8 @@ export function FileEditDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Rendered preview (markdown/HTML) vs the diff editor.
+  const [previewMode, setPreviewMode] = useState(false);
 
   const editorRef = useRef<editor.IStandaloneDiffEditor | null>(null);
   const confirm = useConfirm();
@@ -112,11 +118,16 @@ export function FileEditDialog({
   const fileName = baseName(file.path);
   const repoName = "repoName" in file ? file.repoName : null;
   const hasChanges = modifiedContent !== initialModified;
+  const language = getLanguageFromPath(file.path);
+  const isMarkdown = language === "markdown";
+  const isHtml = language === "html";
+  const hasPreview = isMarkdown || isHtml;
 
   useEffect(() => {
     if (!open) return;
     setLoading(true);
     setError(null);
+    setPreviewMode(false); // start on the diff when (re)opening / switching files
 
     // Use baseDir for git operations (repo path for multi-repo, working directory otherwise)
     const gitBasePath = baseDir;
@@ -333,6 +344,22 @@ export function FileEditDialog({
               )}
             </div>
             <div className="flex items-center gap-2">
+              {hasPreview && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPreviewMode((p) => !p)}
+                  aria-label={previewMode ? "Show diff" : "Preview rendered"}
+                  title={previewMode ? "Show diff" : "Preview rendered"}
+                >
+                  {previewMode ? (
+                    <Code2 className="mr-1 h-3.5 w-3.5" />
+                  ) : (
+                    <Eye className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  {previewMode ? "Diff" : "Preview"}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -385,11 +412,15 @@ export function FileEditDialog({
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="text-muted-foreground h-8 w-8 animate-spin" />
               </div>
+            ) : previewMode && isMarkdown ? (
+              <MarkdownRenderer content={modifiedContent} />
+            ) : previewMode && isHtml ? (
+              <HtmlRenderer content={modifiedContent} />
             ) : (
               <DiffEditor
                 original={originalContent}
                 modified={modifiedContent}
-                language={getLanguageFromPath(file.path)}
+                language={language}
                 theme="stoaDiff"
                 onMount={handleEditorMount}
                 beforeMount={handleBeforeMount}
