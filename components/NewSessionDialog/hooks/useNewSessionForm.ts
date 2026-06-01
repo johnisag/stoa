@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { getProviderDefinition, type AgentType } from "@/lib/providers";
-import { resolveModelForAgent } from "@/lib/model-catalog";
+import {
+  resolveModelForAgent,
+  getDefaultModelForAgent,
+  nextModelOnAgentChange,
+} from "@/lib/model-catalog";
 import type { ProjectWithDevServers } from "@/lib/projects";
 import { setPendingPrompt } from "@/stores/initialPrompt";
 import { useCreateSession } from "@/data/sessions";
@@ -44,6 +48,11 @@ export function useNewSessionForm({
   const [workingDirectory, setWorkingDirectory] = useState("~");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [agentType, setAgentType] = useState<AgentType>("claude");
+  // Per-session model. Defaults from the selected project / agent; the picker
+  // overrides it. For free-text agents (Hermes) blank = the agent's own default.
+  const [model, setModel] = useState<string>(() =>
+    getDefaultModelForAgent("claude")
+  );
   const [skipPermissions, setSkipPermissions] = useState(false);
   const [useTmux, setUseTmux] = useState(true);
   const [initialPrompt, setInitialPrompt] = useState("");
@@ -69,6 +78,18 @@ export function useNewSessionForm({
 
   // Recent directories
   const [recentDirs, setRecentDirs] = useState<string[]>([]);
+
+  // The selected project's default model — the per-session model's starting point.
+  const projectDefaultModel = projects.find(
+    (p) => p.id === projectId
+  )?.default_model;
+
+  // Keep the model defaulted to the agent/project: reset to the resolved default
+  // whenever the agent or project changes. A user pick (via the ModelSelector)
+  // changes `model` only, so it persists until the agent/project changes again.
+  useEffect(() => {
+    setModel(resolveModelForAgent(agentType, projectDefaultModel));
+  }, [agentType, projectId, projectDefaultModel]);
 
   // Check if working directory is a git repo
   const checkGitRepo = useCallback(async (path: string) => {
@@ -244,10 +265,7 @@ export function useNewSessionForm({
       }, 2000);
     }
 
-    const projectDefaultModel = projects.find(
-      (project) => project.id === projectId
-    )?.default_model;
-    const resolvedModel = resolveModelForAgent(agentType, projectDefaultModel);
+    const resolvedModel = resolveModelForAgent(agentType, model);
 
     createSession.mutate(
       {
@@ -336,6 +354,8 @@ export function useNewSessionForm({
     setWorkingDirectory,
     projectId,
     agentType,
+    model,
+    setModel,
     skipPermissions,
     useTmux,
     initialPrompt,
