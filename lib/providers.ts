@@ -216,6 +216,13 @@ export const hermesProvider: AgentProvider = {
     ) {
       flags.push(def.autoApproveFlag);
     }
+    // Resume from the banner-captured session id (the status route persists it
+    // into claude_session_id). This is what brings the conversation back after
+    // a restart on the TMUX backend — the pty path (buildAgentArgs) already
+    // wires it. Hermes has no fork, so no fork branch.
+    if (options.sessionId && def.resumeFlag) {
+      flags.push(`${def.resumeFlag} ${options.sessionId}`);
+    }
     if (options.model && def.modelFlag) {
       flags.push(`${def.modelFlag} ${options.model}`);
     }
