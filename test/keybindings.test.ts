@@ -116,6 +116,33 @@ describe("resolveShortcut", () => {
     );
     expect(hit?.action).toBe("open-switcher");
   });
+
+  it("suppresses a terminal-conflicting chord when focus is inside the xterm terminal", () => {
+    // ⌘/Ctrl+B (tmux prefix) and ⌘/Ctrl+\ (SIGQUIT) must NOT be allowInInput:
+    // the .xterm guard has to let those keystrokes reach the terminal.
+    const paneBindings: Keybinding[] = [
+      { chord: "mod+b", action: "toggle-sidebar" },
+      { chord: "mod+\\", action: "split-pane" },
+    ];
+    const inTerminal = (key: string) => ({
+      key,
+      ctrlKey: true,
+      target: {
+        tagName: "TEXTAREA",
+        closest: (s: string) => (s === ".xterm" ? {} : null),
+      },
+    });
+    expect(resolveShortcut(inTerminal("b"), paneBindings, false)).toBeNull();
+    expect(resolveShortcut(inTerminal("\\"), paneBindings, false)).toBeNull();
+    // ...but they still fire from app chrome (not a text/terminal surface).
+    expect(
+      resolveShortcut(
+        { key: "b", ctrlKey: true, target: { tagName: "DIV" } },
+        paneBindings,
+        false
+      )?.action
+    ).toBe("toggle-sidebar");
+  });
 });
 
 describe("formatChord", () => {

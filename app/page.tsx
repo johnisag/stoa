@@ -64,15 +64,17 @@ const NAV_KEYBINDINGS: Keybinding[] = [
     description: "Previous session",
   },
   {
+    // No allowInInput: these are app-chrome actions, and on the tmux backend
+    // `mod` is Ctrl — so ⌘/Ctrl+B would otherwise collide with the tmux prefix
+    // (and ⌘/Ctrl+\ with SIGQUIT) while typing. The .xterm guard suppresses them
+    // when the terminal is focused; they still fire from the rest of the UI.
     chord: "mod+b",
     action: "toggle-sidebar",
-    allowInInput: true,
     description: "Toggle the sidebar",
   },
   {
     chord: "mod+\\",
     action: "split-pane",
-    allowInInput: true,
     description: "Split the focused pane",
   },
   {
