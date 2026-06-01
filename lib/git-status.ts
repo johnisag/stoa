@@ -5,7 +5,7 @@ import {
 import { unlinkSync } from "fs";
 import { join } from "path";
 import { devNull } from "os";
-import { expandHome } from "./platform";
+import { expandHome, isWindows } from "./platform";
 
 /**
  * Expand ~ to home directory in paths
@@ -67,6 +67,104 @@ export interface GitStatus {
   staged: GitFile[];
   unstaged: GitFile[];
   untracked: GitFile[];
+  /**
+   * When this directory is a LINKED git worktree, uncommitted changes that live
+   * in the base/main worktree instead (or null). Lets the UI warn when an agent
+   * edited the base checkout rather than the worktree it was given.
+   */
+  baseWorktree?: { path: string; branch: string | null; count: number } | null;
+}
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string | null;
+  bare: boolean;
+}
+
+/**
+ * Parse `git worktree list --porcelain`. Entries are blank-line separated; the
+ * first entry is the main worktree. Pure (no I/O) so it's unit-testable.
+ */
+export function parseWorktreeList(output: string): WorktreeInfo[] {
+  const entries: WorktreeInfo[] = [];
+  let cur: WorktreeInfo | null = null;
+  const flush = () => {
+    if (cur) entries.push(cur);
+    cur = null;
+  };
+  for (const raw of output.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (line === "") {
+      flush();
+    } else if (line.startsWith("worktree ")) {
+      flush();
+      cur = { path: line.slice("worktree ".length), branch: null, bare: false };
+    } else if (!cur) {
+      continue;
+    } else if (line === "bare") {
+      cur.bare = true;
+    } else if (line === "detached") {
+      cur.branch = null;
+    } else if (line.startsWith("branch ")) {
+      cur.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
+    }
+  }
+  flush();
+  return entries;
+}
+
+/** Normalize a path for comparison (forward slashes, no trailing sep, folded on Windows). */
+function normalizePathForCompare(p: string): string {
+  const n = p.replace(/\\/g, "/").replace(/\/+$/, "");
+  return isWindows ? n.toLowerCase() : n;
+}
+
+/**
+ * Given a parsed worktree list and the current directory, return the BASE/main
+ * worktree iff `workingDir` is a *different*, linked worktree — else null (no
+ * linked worktrees, or `workingDir` already IS the main). Pure (no I/O), so the
+ * path-comparison + main-detection logic is unit-testable.
+ */
+export function findBaseWorktree(
+  list: WorktreeInfo[],
+  workingDir: string
+): WorktreeInfo | null {
+  if (list.length < 2) return null; // only the main worktree exists
+  const main = list.find((w) => !w.bare); // `git worktree list` puts main first
+  if (!main) return null;
+  if (
+    normalizePathForCompare(main.path) === normalizePathForCompare(workingDir)
+  ) {
+    return null; // the current dir IS the main worktree — nothing to flag
+  }
+  return main;
+}
+
+/**
+ * If `workingDir` is a LINKED worktree, return the base/main worktree's path,
+ * branch, and uncommitted-change count; null otherwise (incl. when it IS the
+ * main worktree). Used to flag changes that landed in the base checkout.
+ */
+export function getWorktreeBaseChanges(
+  workingDir: string
+): { path: string; branch: string | null; count: number } | null {
+  let list: WorktreeInfo[];
+  try {
+    list = parseWorktreeList(
+      git(["worktree", "list", "--porcelain"], workingDir, { stdio: "pipe" })
+    );
+  } catch {
+    return null;
+  }
+  const main = findBaseWorktree(list, workingDir);
+  if (!main) return null;
+  try {
+    const st = getGitStatus(main.path);
+    const count = st.staged.length + st.unstaged.length + st.untracked.length;
+    return { path: main.path, branch: main.branch, count };
+  } catch {
+    return null;
+  }
 }
 
 /**

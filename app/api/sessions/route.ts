@@ -206,6 +206,18 @@ export async function POST(request: NextRequest) {
       combinedPrompt = sessionInitialPrompt;
     }
 
+    // Worktree sessions: prepend a boundary note so the agent edits inside the
+    // worktree (its cwd) rather than reaching back to the base checkout via
+    // absolute paths — the common cause of "changes don't show in the drawer".
+    if (worktreePath) {
+      const note =
+        `[Stoa] You are working inside a git worktree at ${worktreePath}` +
+        (branchName ? ` on branch "${branchName}"` : "") +
+        `. Make ALL file edits inside this directory — do not edit the base ` +
+        `checkout or any other branch.`;
+      combinedPrompt = combinedPrompt ? `${note}\n\n${combinedPrompt}` : note;
+    }
+
     // Include setup result and initial prompt in response
     const response: {
       session: Session;
