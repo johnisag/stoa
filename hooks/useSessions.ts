@@ -2,7 +2,6 @@ import { useCallback } from "react";
 import type { Session } from "@/lib/db";
 import {
   useSessionsQuery,
-  useDeleteSession,
   useRenameSession,
   useForkSession,
   useSummarizeSession,
@@ -18,7 +17,6 @@ export function useSessions() {
   // Guards pane reconciliation so we never detach restored tabs mid-load.
   const loaded = data !== undefined;
 
-  const deleteMutation = useDeleteSession();
   const renameMutation = useRenameSession();
   const forkMutation = useForkSession();
   const summarizeMutation = useSummarizeSession();
@@ -28,14 +26,6 @@ export function useSessions() {
   const fetchSessions = useCallback(async () => {
     await refetch();
   }, [refetch]);
-
-  const deleteSession = useCallback(
-    async (sessionId: string) => {
-      if (!confirm("Delete this session? This cannot be undone.")) return;
-      await deleteMutation.mutateAsync(sessionId);
-    },
-    [deleteMutation]
-  );
 
   const renameSession = useCallback(
     async (sessionId: string, newName: string) => {
@@ -80,7 +70,6 @@ export function useSessions() {
       ? (summarizeMutation.variables as string)
       : null,
     fetchSessions,
-    deleteSession,
     renameSession,
     forkSession,
     summarizeSession,
