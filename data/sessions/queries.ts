@@ -193,12 +193,22 @@ export function useMoveSessionToProject() {
       if (!res.ok) throw new Error("Failed to move session");
       return res.json();
     },
-    // NOT optimistic: the PATCH route currently ignores `projectId` (it only
-    // handles name/status/workingDirectory/systemPrompt/groupPath), so the move
-    // doesn't persist server-side. An optimistic patch would visibly move the
-    // session and then snap it back on invalidation. Left as plain invalidate
-    // until the server accepts projectId — see ROADMAP Priority A.
-    onSuccess: () => {
+    onMutate: async ({ sessionId, projectId }) => {
+      await queryClient.cancelQueries({ queryKey: sessionKeys.list() });
+      const previous = queryClient.getQueryData<SessionsResponse>(
+        sessionKeys.list()
+      );
+      queryClient.setQueryData<SessionsResponse>(sessionKeys.list(), (old) =>
+        patchSessionInCache(old, sessionId, { project_id: projectId })
+      );
+      return { previous };
+    },
+    onError: (_, __, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(sessionKeys.list(), context.previous);
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
     },
   });

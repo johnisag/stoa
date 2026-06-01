@@ -120,6 +120,13 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       updates.push("group_path = ?");
       values.push(body.groupPath);
     }
+    if (body.projectId !== undefined) {
+      // Move the session to another project (the sidebar groups flat by
+      // project_id, so this alone relocates it). Previously dropped here, which
+      // made move-to-project a silent no-op.
+      updates.push("project_id = ?");
+      values.push(body.projectId);
+    }
 
     if (updates.length > 0) {
       updates.push("updated_at = datetime('now')");
