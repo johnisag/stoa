@@ -40,13 +40,14 @@ interface DesktopTabBarProps {
   canSplit: boolean;
   canClose: boolean;
   hasAttachedTmux: boolean;
-  gitDrawerOpen: boolean;
+  rightDrawer: "git" | "files" | null;
   shellDrawerOpen: boolean;
   onTabSwitch: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
   onTabAdd: () => void;
   onViewModeChange: (mode: ViewMode) => void;
   onGitDrawerToggle: () => void;
+  onFilesDrawerToggle: () => void;
   onShellDrawerToggle: () => void;
   onSplitHorizontal: () => void;
   onSplitVertical: () => void;
@@ -66,13 +67,14 @@ export function DesktopTabBar({
   canSplit,
   canClose,
   hasAttachedTmux,
-  gitDrawerOpen,
+  rightDrawer,
   shellDrawerOpen,
   onTabSwitch,
   onTabClose,
   onTabAdd,
   onViewModeChange,
   onGitDrawerToggle,
+  onFilesDrawerToggle,
   onShellDrawerToggle,
   onSplitHorizontal,
   onSplitVertical,
@@ -170,11 +172,11 @@ export function DesktopTabBar({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onViewModeChange("files");
+                  onFilesDrawerToggle();
                 }}
                 className={cn(
                   "rounded px-2 py-1 transition-colors",
-                  viewMode === "files"
+                  rightDrawer === "files"
                     ? "bg-secondary text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
@@ -193,7 +195,7 @@ export function DesktopTabBar({
                 }}
                 className={cn(
                   "rounded px-2 py-1 transition-colors",
-                  gitDrawerOpen
+                  rightDrawer === "git"
                     ? "bg-secondary text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
