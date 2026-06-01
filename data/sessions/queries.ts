@@ -2,11 +2,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Session, Group } from "@/lib/db";
 import type { AgentType } from "@/lib/providers";
 import { sessionKeys } from "./keys";
+import {
+  removeSessionFromCache,
+  patchSessionInCache,
+  type SessionsCache,
+} from "./optimistic";
 
-interface SessionsResponse {
-  sessions: Session[];
-  groups: Group[];
-}
+type SessionsResponse = SessionsCache;
 
 async function fetchSessions(): Promise<SessionsResponse> {
   const res = await fetch("/api/sessions");
@@ -34,7 +36,22 @@ export function useDeleteSession() {
       if (!res.ok) throw new Error("Failed to delete session");
       return res.json();
     },
-    onSuccess: () => {
+    onMutate: async (sessionId) => {
+      await queryClient.cancelQueries({ queryKey: sessionKeys.list() });
+      const previous = queryClient.getQueryData<SessionsResponse>(
+        sessionKeys.list()
+      );
+      queryClient.setQueryData<SessionsResponse>(sessionKeys.list(), (old) =>
+        removeSessionFromCache(old, sessionId)
+      );
+      return { previous };
+    },
+    onError: (_, __, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(sessionKeys.list(), context.previous);
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
     },
   });
@@ -65,14 +82,7 @@ export function useRenameSession() {
         sessionKeys.list()
       );
       queryClient.setQueryData<SessionsResponse>(sessionKeys.list(), (old) =>
-        old
-          ? {
-              ...old,
-              sessions: old.sessions.map((s) =>
-                s.id === sessionId ? { ...s, name: newName } : s
-              ),
-            }
-          : old
+        patchSessionInCache(old, sessionId, { name: newName })
       );
       return { previous };
     },
@@ -143,7 +153,22 @@ export function useMoveSessionToGroup() {
       if (!res.ok) throw new Error("Failed to move session");
       return res.json();
     },
-    onSuccess: () => {
+    onMutate: async ({ sessionId, groupPath }) => {
+      await queryClient.cancelQueries({ queryKey: sessionKeys.list() });
+      const previous = queryClient.getQueryData<SessionsResponse>(
+        sessionKeys.list()
+      );
+      queryClient.setQueryData<SessionsResponse>(sessionKeys.list(), (old) =>
+        patchSessionInCache(old, sessionId, { group_path: groupPath })
+      );
+      return { previous };
+    },
+    onError: (_, __, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(sessionKeys.list(), context.previous);
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
     },
   });
@@ -168,6 +193,11 @@ export function useMoveSessionToProject() {
       if (!res.ok) throw new Error("Failed to move session");
       return res.json();
     },
+    // NOT optimistic: the PATCH route currently ignores `projectId` (it only
+    // handles name/status/workingDirectory/systemPrompt/groupPath), so the move
+    // doesn't persist server-side. An optimistic patch would visibly move the
+    // session and then snap it back on invalidation. Left as plain invalidate
+    // until the server accepts projectId — see ROADMAP Priority A.
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
     },
