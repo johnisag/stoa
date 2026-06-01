@@ -6,13 +6,23 @@ import {
   GitBranch,
   MoreHorizontal,
   Trash2,
+  AlertCircle,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface SessionListHeaderProps {
   onNewProject: () => void;
   onOpenProject: () => void;
   onCloneFromGithub: () => void;
   onKillAll: () => void;
+  /** Count of sessions waiting/errored; renders a clickable badge when > 0. */
+  attentionCount?: number;
+  /** Jump to the next session needing attention (badge click). */
+  onJumpToAttention?: () => void;
 }
 
 export function SessionListHeader({
@@ -20,6 +30,8 @@ export function SessionListHeader({
   onOpenProject,
   onCloneFromGithub,
   onKillAll,
+  attentionCount = 0,
+  onJumpToAttention,
 }: SessionListHeaderProps) {
   return (
     <div className="flex items-center justify-between px-3 py-2">
@@ -42,6 +54,29 @@ export function SessionListHeader({
           <path d="M9 13v2" />
         </svg>
         <h2 className="font-semibold">Stoa</h2>
+        {attentionCount > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onJumpToAttention}
+                aria-label={`${attentionCount} session${
+                  attentionCount > 1 ? "s" : ""
+                } need attention — jump to next`}
+                className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-500 transition-colors hover:bg-amber-500/25"
+              >
+                <AlertCircle className="h-3 w-3" />
+                {attentionCount}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <p>
+                {attentionCount} session{attentionCount > 1 ? "s" : ""} need
+                attention — click to jump
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
       <div className="flex gap-1">
         <ADropdownMenu
