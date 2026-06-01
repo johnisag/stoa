@@ -65,6 +65,24 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   REDUCED MOTION — honor the OS "Reduce Motion" accessibility setting.
+   Neutralize decorative motion (transitions, sidebar/drawer slides, pulse
+   skeletons, Radix/tw-animate enter–exit animations) while exempting
+   `.animate-spin` so loading spinners still convey progress.
+   ═══════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *:not(.animate-spin),
+  *:not(.animate-spin)::before,
+  *:not(.animate-spin)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    MOBILE LAYOUT STYLES
    ═══════════════════════════════════════════════════════════════════════ */
 
