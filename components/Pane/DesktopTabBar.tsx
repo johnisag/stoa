@@ -18,6 +18,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 import type { Session } from "@/lib/db";
 
 type ViewMode = "terminal" | "files" | "git" | "workers";
@@ -53,6 +54,48 @@ interface DesktopTabBarProps {
   onSplitVertical: () => void;
   onClose: () => void;
   onDetach: () => void;
+}
+
+// A view-toggle icon button: labelled + focus-ringed in one place so every
+// toggle is keyboard-accessible (icon-only buttons otherwise announce as "button").
+function ViewToggleButton({
+  label,
+  active,
+  onClick,
+  className,
+  children,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClick();
+          }}
+          aria-label={label}
+          aria-pressed={active}
+          className={cn(
+            "focus-visible:ring-ring/60 rounded px-2 py-1 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset",
+            active
+              ? "bg-secondary text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+            className
+          )}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 export function DesktopTabBar({
@@ -120,7 +163,8 @@ export function DesktopTabBar({
                   e.stopPropagation();
                   onTabClose(tab.id);
                 }}
-                className="hover:text-foreground ml-1 opacity-0 group-hover:opacity-100"
+                aria-label="Close tab"
+                className="hover:text-foreground focus-visible:ring-ring/60 ml-1 rounded opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -136,6 +180,7 @@ export function DesktopTabBar({
                 e.stopPropagation();
                 onTabAdd();
               }}
+              aria-label="New tab"
               className="mx-1 h-6 w-6"
             >
               <Plus className="h-3 w-3" />
@@ -148,105 +193,47 @@ export function DesktopTabBar({
       {/* View Toggle */}
       {session?.working_directory && (
         <div className="bg-accent/50 mx-2 flex items-center rounded-md p-0.5">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onViewModeChange("terminal");
-                }}
-                className={cn(
-                  "rounded px-2 py-1 transition-colors",
-                  viewMode === "terminal"
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Home className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Terminal</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onFilesDrawerToggle();
-                }}
-                className={cn(
-                  "rounded px-2 py-1 transition-colors",
-                  rightDrawer === "files"
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <FolderOpen className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Files</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onGitDrawerToggle();
-                }}
-                className={cn(
-                  "rounded px-2 py-1 transition-colors",
-                  rightDrawer === "git"
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <GitBranch className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Git</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onShellDrawerToggle();
-                }}
-                className={cn(
-                  "rounded px-2 py-1 font-mono text-xs transition-colors",
-                  shellDrawerOpen
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {">_"}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Shell</TooltipContent>
-          </Tooltip>
+          <ViewToggleButton
+            label="Terminal"
+            active={viewMode === "terminal"}
+            onClick={() => onViewModeChange("terminal")}
+          >
+            <Home className="h-3.5 w-3.5" />
+          </ViewToggleButton>
+          <ViewToggleButton
+            label="Files"
+            active={rightDrawer === "files"}
+            onClick={onFilesDrawerToggle}
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+          </ViewToggleButton>
+          <ViewToggleButton
+            label="Git"
+            active={rightDrawer === "git"}
+            onClick={onGitDrawerToggle}
+          >
+            <GitBranch className="h-3.5 w-3.5" />
+          </ViewToggleButton>
+          <ViewToggleButton
+            label="Shell"
+            active={shellDrawerOpen}
+            onClick={onShellDrawerToggle}
+            className="font-mono text-xs"
+          >
+            {">_"}
+          </ViewToggleButton>
           {isConductor && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onViewModeChange("workers");
-                  }}
-                  className={cn(
-                    "relative rounded px-2 py-1 transition-colors",
-                    viewMode === "workers"
-                      ? "bg-secondary text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <Users className="h-3.5 w-3.5" />
-                  <span className="bg-primary text-primary-foreground absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full text-[9px] font-medium">
-                    {workerCount}
-                  </span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>Workers</TooltipContent>
-            </Tooltip>
+            <ViewToggleButton
+              label="Workers"
+              active={viewMode === "workers"}
+              onClick={() => onViewModeChange("workers")}
+              className="relative"
+            >
+              <Users className="h-3.5 w-3.5" />
+              <span className="bg-primary text-primary-foreground absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full text-[9px] font-medium">
+                {workerCount}
+              </span>
+            </ViewToggleButton>
           )}
         </div>
       )}
@@ -263,6 +250,7 @@ export function DesktopTabBar({
                   e.stopPropagation();
                   onDetach();
                 }}
+                aria-label="Detach from tmux"
                 className="h-6 w-6"
               >
                 <Unplug className="h-3 w-3" />
@@ -281,6 +269,7 @@ export function DesktopTabBar({
                 onSplitHorizontal();
               }}
               disabled={!canSplit}
+              aria-label="Split pane horizontally"
               className="h-6 w-6"
             >
               <SplitSquareHorizontal className="h-3 w-3" />
@@ -298,6 +287,7 @@ export function DesktopTabBar({
                 onSplitVertical();
               }}
               disabled={!canSplit}
+              aria-label="Split pane vertically"
               className="h-6 w-6"
             >
               <SplitSquareVertical className="h-3 w-3" />
@@ -315,6 +305,7 @@ export function DesktopTabBar({
                 onClose();
               }}
               disabled={!canClose}
+              aria-label="Close pane"
               className="h-6 w-6"
             >
               <X className="h-3 w-3" />

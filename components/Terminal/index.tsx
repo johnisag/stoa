@@ -263,8 +263,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         {!isMobile && showImageButton && (
           <button
             onClick={() => setShowFilePicker(true)}
-            className="bg-secondary hover:bg-accent absolute top-3 right-3 z-40 flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition-all"
+            className="bg-secondary hover:bg-accent focus-visible:ring-ring absolute top-3 right-3 z-40 flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition-all outline-none focus-visible:ring-2"
             title="Attach file"
+            aria-label="Attach file"
           >
             <Paperclip className="h-4 w-4" />
           </button>
