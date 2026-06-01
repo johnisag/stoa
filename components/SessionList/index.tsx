@@ -22,6 +22,10 @@ import type { Session } from "@/lib/db";
 import type { ProjectWithRepositories } from "@/lib/projects";
 import { useViewport } from "@/hooks/useViewport";
 import { baseName } from "@/lib/path-display";
+import {
+  countNeedsAttention,
+  nextAttentionSessionId,
+} from "@/lib/session-attention";
 
 // Data hooks
 import { useSessionsQuery } from "@/data/sessions";
@@ -64,6 +68,21 @@ export function SessionList({
 
   const sessions = sessionsData?.sessions ?? [];
   const groups = sessionsData?.groups ?? [];
+
+  // Count of sessions needing attention (waiting/error) for the header badge,
+  // and a click handler that jumps to the next one.
+  const attentionCount = useMemo(
+    () => countNeedsAttention(sessionStatuses),
+    [sessionStatuses]
+  );
+  const handleJumpToAttention = useCallback(() => {
+    const id = nextAttentionSessionId(
+      sessions,
+      sessionStatuses,
+      activeSessionId
+    );
+    if (id) onSelect(id);
+  }, [sessions, sessionStatuses, activeSessionId, onSelect]);
 
   // All mutations via custom hook
   const mutations = useSessionListMutations({ onSelectSession: onSelect });
@@ -162,6 +181,8 @@ export function SessionList({
           setShowNewProjectDialog(true);
         }}
         onKillAll={() => setShowKillAllConfirm(true)}
+        attentionCount={attentionCount}
+        onJumpToAttention={handleJumpToAttention}
       />
 
       {/* Kill All Confirmation */}
