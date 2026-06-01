@@ -191,7 +191,7 @@ export function FileExplorerDrawer({
       <Dialog open={!!activeFilePath} onOpenChange={handleModalOpenChange}>
         <DialogContent
           showCloseButton={false}
-          className="flex h-[85vh] w-[92vw] max-w-5xl flex-col gap-0 overflow-hidden p-0"
+          className="flex h-[95vh] w-[95vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
         >
           <DialogTitle className="sr-only">
             {activeFilePath ? baseName(activeFilePath) : "File viewer"}
