@@ -43,6 +43,14 @@ const FileExplorer = dynamic(
   { ssr: false, loading: () => <FileExplorerSkeleton /> }
 );
 
+const FileExplorerDrawer = dynamic(
+  () =>
+    import("@/components/FileExplorer/FileExplorerDrawer").then(
+      (mod) => mod.FileExplorerDrawer
+    ),
+  { ssr: false, loading: () => <FileExplorerSkeleton /> }
+);
+
 const GitPanel = dynamic(
   () => import("@/components/GitPanel").then((mod) => mod.GitPanel),
   { ssr: false, loading: () => <GitPanelSkeleton /> }
@@ -89,10 +97,15 @@ export const Pane = memo(function Pane({
   } = usePanes();
 
   const [viewMode, setViewMode] = useState<ViewMode>("terminal");
-  const [gitDrawerOpen, setGitDrawerOpen] = useState(() => {
-    if (typeof window === "undefined") return true;
-    const stored = localStorage.getItem("gitDrawerOpen");
-    return stored === null ? true : stored === "true";
+  // The right-side drawer shows Git OR Files — never both. Persisted per-pane
+  // (paneId is stable across reloads); migrates the old global `gitDrawerOpen`
+  // boolean on first run.
+  const [rightDrawer, setRightDrawer] = useState<"git" | "files" | null>(() => {
+    if (typeof window === "undefined") return "git";
+    const stored = localStorage.getItem(`rightDrawer:${paneId}`);
+    if (stored === "git" || stored === "files") return stored;
+    if (stored === "none") return null;
+    return localStorage.getItem("gitDrawerOpen") === "false" ? null : "git";
   });
   const [shellDrawerOpen, setShellDrawerOpen] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -147,8 +160,8 @@ export const Pane = memo(function Pane({
 
   // Persist drawer states
   useEffect(() => {
-    localStorage.setItem("gitDrawerOpen", String(gitDrawerOpen));
-  }, [gitDrawerOpen]);
+    localStorage.setItem(`rightDrawer:${paneId}`, rightDrawer ?? "none");
+  }, [rightDrawer, paneId]);
 
   useEffect(() => {
     localStorage.setItem("shellDrawerOpen", String(shellDrawerOpen));
@@ -352,13 +365,18 @@ export const Pane = memo(function Pane({
           canSplit={canSplit}
           canClose={canClose}
           hasAttachedTmux={!!activeTab?.attachedTmux}
-          gitDrawerOpen={gitDrawerOpen}
+          rightDrawer={rightDrawer}
           shellDrawerOpen={shellDrawerOpen}
           onTabSwitch={(tabId) => switchTab(paneId, tabId)}
           onTabClose={(tabId) => closeTab(paneId, tabId)}
           onTabAdd={() => addTab(paneId)}
           onViewModeChange={setViewMode}
-          onGitDrawerToggle={() => setGitDrawerOpen((prev) => !prev)}
+          onGitDrawerToggle={() =>
+            setRightDrawer((d) => (d === "git" ? null : "git"))
+          }
+          onFilesDrawerToggle={() =>
+            setRightDrawer((d) => (d === "files" ? null : "files"))
+          }
           onShellDrawerToggle={() => setShellDrawerOpen((prev) => !prev)}
           onSplitHorizontal={() => splitHorizontal(paneId)}
           onSplitVertical={() => splitVertical(paneId)}
@@ -451,7 +469,7 @@ export const Pane = memo(function Pane({
           className="min-h-0 flex-1"
         >
           {/* Left column: Main content + Shell drawer */}
-          <ResizablePanel defaultSize={gitDrawerOpen ? 70 : 100} minSize={20}>
+          <ResizablePanel defaultSize={rightDrawer ? 70 : 100} minSize={20}>
             <ResizablePanelGroup orientation="vertical" className="h-full">
               {/* Main content */}
               <ResizablePanel
@@ -540,18 +558,26 @@ export const Pane = memo(function Pane({
             </ResizablePanelGroup>
           </ResizablePanel>
 
-          {/* Git drawer - right side, full height */}
-          {gitDrawerOpen && session?.working_directory && (
+          {/* Right drawer - Git OR Files (mutually exclusive), full height */}
+          {rightDrawer && session?.working_directory && (
             <>
               <ResizablePanelHandle className="bg-border/30 hover:bg-primary/30 active:bg-primary/50 w-px cursor-col-resize transition-colors" />
               <ResizablePanel defaultSize={30} minSize={10}>
-                <GitDrawer
-                  open={true}
-                  onOpenChange={setGitDrawerOpen}
-                  workingDirectory={session.working_directory}
-                  projectId={currentProject?.id}
-                  repositories={projectRepositories}
-                />
+                {rightDrawer === "git" ? (
+                  <GitDrawer
+                    open={true}
+                    onOpenChange={(o) => !o && setRightDrawer(null)}
+                    workingDirectory={session.working_directory}
+                    projectId={currentProject?.id}
+                    repositories={projectRepositories}
+                  />
+                ) : (
+                  <FileExplorerDrawer
+                    open={true}
+                    onOpenChange={(o) => !o && setRightDrawer(null)}
+                    workingDirectory={session.working_directory}
+                  />
+                )}
               </ResizablePanel>
             </>
           )}

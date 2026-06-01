@@ -8,9 +8,19 @@ import {
   Folder,
   FolderOpen,
   Loader2,
+  Copy,
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { FileNode } from "@/lib/file-utils";
+import { relativePath } from "@/lib/path-display";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 interface FileTreeProps {
   nodes: FileNode[];
@@ -35,6 +45,16 @@ export function FileTree({
     new Map()
   );
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
+  const { copy } = useCopyToClipboard();
+
+  const handleCopyPath = useCallback(
+    async (text: string) => {
+      const ok = await copy(text);
+      if (ok) toast.success("Copied to clipboard", { description: text });
+      else toast.error("Couldn't copy to clipboard");
+    },
+    [copy]
+  );
 
   const fetchChildren = useCallback(
     async (dirPath: string) => {
@@ -95,64 +115,82 @@ export function FileTree({
         return (
           <div key={node.path}>
             {/* File/Directory item */}
-            <button
-              onClick={() => {
-                if (isDirectory) {
-                  toggleExpand(node.path);
-                } else {
-                  onFileClick(node.path);
-                }
-              }}
-              className={cn(
-                "hover:bg-accent flex w-full items-center gap-2 px-2 py-2 text-left transition-colors",
-                "min-h-[40px] md:min-h-[32px]", // Touch target
-                "text-sm"
-              )}
-              style={{ paddingLeft: `${depth * 12 + 8}px` }}
-            >
-              {/* Expand/collapse icon */}
-              {isDirectory && (
-                <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
-                  {isLoading ? (
-                    <Loader2 className="text-muted-foreground h-3 w-3 animate-spin" />
-                  ) : isExpanded ? (
-                    <ChevronDown className="text-muted-foreground h-4 w-4" />
-                  ) : (
-                    <ChevronRight className="text-muted-foreground h-4 w-4" />
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <button
+                  onClick={() => {
+                    if (isDirectory) {
+                      toggleExpand(node.path);
+                    } else {
+                      onFileClick(node.path);
+                    }
+                  }}
+                  className={cn(
+                    "hover:bg-accent flex w-full items-center gap-2 px-2 py-2 text-left transition-colors",
+                    "min-h-[40px] md:min-h-[32px]", // Touch target
+                    "text-sm"
                   )}
-                </span>
-              )}
+                  style={{ paddingLeft: `${depth * 12 + 8}px` }}
+                >
+                  {/* Expand/collapse icon */}
+                  {isDirectory && (
+                    <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
+                      {isLoading ? (
+                        <Loader2 className="text-muted-foreground h-3 w-3 animate-spin" />
+                      ) : isExpanded ? (
+                        <ChevronDown className="text-muted-foreground h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="text-muted-foreground h-4 w-4" />
+                      )}
+                    </span>
+                  )}
 
-              {/* Icon */}
-              <span className="flex-shrink-0">
-                {isDirectory ? (
-                  isExpanded ? (
-                    <FolderOpen className="h-4 w-4 text-blue-400" />
-                  ) : (
-                    <Folder className="h-4 w-4 text-blue-400" />
-                  )
-                ) : (
-                  <FileIcon extension={node.extension || ""} />
-                )}
-              </span>
+                  {/* Icon */}
+                  <span className="flex-shrink-0">
+                    {isDirectory ? (
+                      isExpanded ? (
+                        <FolderOpen className="h-4 w-4 text-blue-400" />
+                      ) : (
+                        <Folder className="h-4 w-4 text-blue-400" />
+                      )
+                    ) : (
+                      <FileIcon extension={node.extension || ""} />
+                    )}
+                  </span>
 
-              {/* Name */}
-              <span
-                className={cn(
-                  "flex-1 truncate",
-                  isDirectory ? "font-medium" : "text-muted-foreground"
-                )}
-              >
-                {node.name}
-              </span>
+                  {/* Name */}
+                  <span
+                    className={cn(
+                      "flex-1 truncate",
+                      isDirectory ? "font-medium" : "text-muted-foreground"
+                    )}
+                  >
+                    {node.name}
+                  </span>
 
-              {/* Size (files only, on desktop) */}
-              {!isDirectory && node.size !== undefined && (
-                <span className="text-muted-foreground hidden flex-shrink-0 text-xs md:block">
-                  {formatFileSize(node.size)}
-                </span>
-              )}
-            </button>
+                  {/* Size (files only, on desktop) */}
+                  {!isDirectory && node.size !== undefined && (
+                    <span className="text-muted-foreground hidden flex-shrink-0 text-xs md:block">
+                      {formatFileSize(node.size)}
+                    </span>
+                  )}
+                </button>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem onSelect={() => handleCopyPath(node.path)}>
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy path
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onSelect={() =>
+                    handleCopyPath(relativePath(node.path, basePath))
+                  }
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy relative path
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
 
             {/* Children (if expanded) */}
             {isDirectory && isExpanded && children && children.length > 0 && (
