@@ -37,6 +37,10 @@ export function useTerminalConnection({
   const [connectionState, setConnectionState] = useState<
     "connecting" | "connected" | "disconnected" | "reconnecting"
   >("connecting");
+  // Brief overlay while switching to a DIFFERENT session in this same terminal,
+  // covering the gap between reset() and the incoming snapshot's first paint.
+  const [isAttaching, setIsAttaching] = useState(false);
+  const attachTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Last attach request, re-sent on every (re)connect so the native pty session
@@ -86,25 +90,47 @@ export function useTerminalConnection({
     }
   }, []);
 
-  const attachSession = useCallback((payload: AttachPayload) => {
-    const prev = attachPayloadRef.current;
-    attachPayloadRef.current = payload;
-    // Switching to a DIFFERENT session in this same terminal: clear the screen
-    // and scrollback so the incoming session's snapshot repaints cleanly rather
-    // than layering on top of the previous session's output.
-    if (prev?.key !== payload.key) {
-      xtermRef.current?.reset();
+  // Tear down the transient "attaching" overlay (on first output or timeout).
+  const clearAttaching = useCallback(() => {
+    if (attachTimerRef.current) {
+      clearTimeout(attachTimerRef.current);
+      attachTimerRef.current = null;
     }
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: "attach",
-          key: payload.key,
-          spawn: payload.spawn,
-        })
-      );
-    }
+    setIsAttaching(false);
   }, []);
+
+  const attachSession = useCallback(
+    (payload: AttachPayload) => {
+      const prev = attachPayloadRef.current;
+      attachPayloadRef.current = payload;
+      // Switching to a DIFFERENT session in this same terminal: clear the screen
+      // and scrollback so the incoming session's snapshot repaints cleanly rather
+      // than layering on top of the previous session's output.
+      if (prev?.key !== payload.key) {
+        const term = xtermRef.current;
+        term?.reset();
+        // Cover the freshly-cleared (black) screen with a brief overlay until the
+        // incoming session's first output paints — no blank flash on switch.
+        // Cleared by the WS onOutput callback below (the snapshot arrives as an
+        // "output" message), or this 2s safety timeout if the session is silent.
+        clearAttaching();
+        if (term) {
+          setIsAttaching(true);
+          attachTimerRef.current = setTimeout(() => clearAttaching(), 2000);
+        }
+      }
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "attach",
+            key: payload.key,
+            spawn: payload.spawn,
+          })
+        );
+      }
+    },
+    [clearAttaching]
+  );
 
   const focus = useCallback(() => xtermRef.current?.focus(), []);
 
@@ -222,6 +248,15 @@ export function useTerminalConnection({
           onDisconnected: () => callbacksRef.current.onDisconnected?.(),
           onConnectionStateChange: setConnectionState,
           onSetConnected: setConnected,
+          // First output after a session switch (the snapshot) clears the
+          // transient "attaching" overlay; only does work while one is pending.
+          onOutput: () => {
+            if (attachTimerRef.current) {
+              clearTimeout(attachTimerRef.current);
+              attachTimerRef.current = null;
+              setIsAttaching(false);
+            }
+          },
         },
         wsRef,
         reconnectTimeoutRef,
@@ -266,6 +301,12 @@ export function useTerminalConnection({
       cleanupTouchScroll?.();
       cleanupTerminal?.();
 
+      // Dispose the transient attach-overlay timer.
+      if (attachTimerRef.current) {
+        clearTimeout(attachTimerRef.current);
+        attachTimerRef.current = null;
+      }
+
       // Reset refs
       reconnectDelayRef.current = WS_RECONNECT_BASE_DELAY;
 
@@ -306,6 +347,7 @@ export function useTerminalConnection({
   return {
     connected,
     connectionState,
+    isAttaching,
     isAtBottom,
     xtermRef,
     searchAddonRef,
