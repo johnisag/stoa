@@ -72,8 +72,8 @@ export function SessionList({
   // Count of sessions needing attention (waiting/error) for the header badge,
   // and a click handler that jumps to the next one.
   const attentionCount = useMemo(
-    () => countNeedsAttention(sessionStatuses),
-    [sessionStatuses]
+    () => countNeedsAttention(sessions, sessionStatuses),
+    [sessions, sessionStatuses]
   );
   const handleJumpToAttention = useCallback(() => {
     const id = nextAttentionSessionId(

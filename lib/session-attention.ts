@@ -25,14 +25,18 @@ export function needsAttention(
   return status === "waiting" || status === "error";
 }
 
-/** How many sessions currently need attention (waiting or error). */
-export function countNeedsAttention(statuses: StatusMap | undefined): number {
+/**
+ * How many of the given sessions currently need attention (waiting or error).
+ * Counts over the `sessions` list — the same set `nextAttentionSessionId` jumps
+ * across — so the badge count never exceeds the reachable jump targets (the
+ * raw status map can hold stale/orphaned entries not in the rendered list).
+ */
+export function countNeedsAttention(
+  sessions: Session[],
+  statuses: StatusMap | undefined
+): number {
   if (!statuses) return 0;
-  let n = 0;
-  for (const s of Object.values(statuses)) {
-    if (s && needsAttention(s.status)) n++;
-  }
-  return n;
+  return sessions.filter((s) => needsAttention(statuses[s.id]?.status)).length;
 }
 
 /**

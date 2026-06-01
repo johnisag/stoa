@@ -52,14 +52,21 @@ describe("needsAttention", () => {
 });
 
 describe("countNeedsAttention", () => {
-  it("counts waiting + error, ignoring others and undefined entries", () => {
-    expect(
-      countNeedsAttention(
-        statuses({ a: "waiting", b: "running", c: "error", d: "idle" })
-      )
-    ).toBe(2);
-    expect(countNeedsAttention({})).toBe(0);
-    expect(countNeedsAttention({ a: undefined })).toBe(0);
+  const sessions = ["a", "b", "c", "d"].map((id) => mkSession(id));
+
+  it("counts sessions whose status is waiting or error, ignoring others", () => {
+    const st = statuses({ a: "waiting", b: "running", c: "error", d: "idle" });
+    expect(countNeedsAttention(sessions, st)).toBe(2);
+    expect(countNeedsAttention(sessions, {})).toBe(0);
+    expect(countNeedsAttention([], st)).toBe(0);
+    expect(countNeedsAttention(sessions, undefined)).toBe(0);
+  });
+
+  it("counts only statuses backed by a session in the list (no orphans)", () => {
+    // "c" (error) has a status entry but no session row -> not counted, so the
+    // badge can't exceed what the jump can reach.
+    const st = statuses({ a: "waiting", c: "error" });
+    expect(countNeedsAttention([mkSession("a")], st)).toBe(1);
   });
 });
 
