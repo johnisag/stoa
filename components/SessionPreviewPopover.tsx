@@ -149,7 +149,15 @@ export function SessionPreviewPopover({
     <div
       style={{
         position: "fixed",
-        left: position.x + 16,
+        // Clamp both axes so the 720px-wide popover never overflows off-screen
+        // (e.g. a narrow/split window); 736 = width + the 16px gutter.
+        left: Math.max(
+          16,
+          Math.min(
+            position.x + 16,
+            typeof window !== "undefined" ? window.innerWidth - 736 : 1280
+          )
+        ),
         top: Math.max(
           16,
           Math.min(

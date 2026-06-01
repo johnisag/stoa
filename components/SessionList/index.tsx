@@ -296,8 +296,10 @@ export function SessionList({
         </div>
       </ScrollArea>
 
-      {/* Session Preview Popover (desktop only) - temporarily disabled */}
-      {/* {!isMobile && (
+      {/* Session Preview Popover (desktop only): live ANSI snapshot on hover,
+          via /api/sessions/[id]/preview (backend-agnostic capture). Re-enabled —
+          the migration-era reason it was shelved (capture path in flux) is gone. */}
+      {!isMobile && (
         <SessionPreviewPopover
           session={hoveredSession}
           status={
@@ -307,7 +309,7 @@ export function SessionList({
           }
           position={hoverPosition}
         />
-      )} */}
+      )}
 
       {/* Server Logs Modal */}
       {logsServer && (
