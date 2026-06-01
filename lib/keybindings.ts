@@ -24,6 +24,8 @@ export interface Keybinding {
    * command palette). Defaults to false: navigation keys must NOT hijack typing.
    */
   allowInInput?: boolean;
+  /** Human-readable label shown in the shortcuts cheatsheet (omit to hide). */
+  description?: string;
 }
 
 /** The slice of a KeyboardEvent we read (kept minimal for testability). */
@@ -119,4 +121,39 @@ export function isMacPlatform(): boolean {
   if (typeof navigator === "undefined") return false;
   const s = `${navigator.platform || ""} ${navigator.userAgent || ""}`;
   return /\bmac/i.test(s);
+}
+
+const MOD_GLYPHS_MAC: Record<string, string> = {
+  mod: "⌘",
+  alt: "⌥",
+  shift: "⇧",
+};
+const MOD_GLYPHS_OTHER: Record<string, string> = {
+  mod: "Ctrl",
+  alt: "Alt",
+  shift: "Shift",
+};
+const KEY_GLYPHS: Record<string, string> = {
+  arrowup: "↑",
+  arrowdown: "↓",
+  arrowleft: "←",
+  arrowright: "→",
+  space: "Space",
+  enter: "↵",
+  escape: "Esc",
+};
+
+/**
+ * Format a chord for display in the cheatsheet, e.g. "mod+k" -> "⌘K" on macOS,
+ * "Ctrl+K" elsewhere; "alt+arrowdown" -> "⌥↓" / "Alt+↓". Pure + testable.
+ */
+export function formatChord(chord: string, isMac: boolean): string {
+  const mods = isMac ? MOD_GLYPHS_MAC : MOD_GLYPHS_OTHER;
+  const parts = chord.split("+").map((p) => {
+    if (p in mods) return mods[p];
+    if (p in KEY_GLYPHS) return KEY_GLYPHS[p];
+    return p.length === 1 ? p.toUpperCase() : p;
+  });
+  // macOS convention concatenates glyphs (⌘K); elsewhere join with "+" (Ctrl+K).
+  return parts.join(isMac ? "" : "+");
 }

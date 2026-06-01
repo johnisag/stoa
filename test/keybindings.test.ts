@@ -3,6 +3,7 @@ import {
   eventToChord,
   isEditableTarget,
   resolveShortcut,
+  formatChord,
   type Keybinding,
 } from "@/lib/keybindings";
 
@@ -114,5 +115,23 @@ describe("resolveShortcut", () => {
       true
     );
     expect(hit?.action).toBe("open-switcher");
+  });
+});
+
+describe("formatChord", () => {
+  it("uses mac glyphs concatenated, platform words joined with + elsewhere", () => {
+    expect(formatChord("mod+k", true)).toBe("⌘K");
+    expect(formatChord("mod+k", false)).toBe("Ctrl+K");
+  });
+
+  it("renders arrow keys as glyphs", () => {
+    expect(formatChord("alt+arrowdown", true)).toBe("⌥↓");
+    expect(formatChord("alt+arrowdown", false)).toBe("Alt+↓");
+  });
+
+  it("keeps single-character keys (uppercased) and punctuation", () => {
+    expect(formatChord("shift+?", false)).toBe("Shift+?");
+    expect(formatChord("shift+?", true)).toBe("⇧?");
+    expect(formatChord("mod+/", false)).toBe("Ctrl+/");
   });
 });
