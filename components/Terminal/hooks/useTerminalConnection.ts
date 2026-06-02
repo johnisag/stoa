@@ -322,7 +322,17 @@ export function useTerminalConnection({
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-  }, [isMobile, terminalRef, theme]);
+    // Build the terminal + WebSocket ONCE per mount. `isMobile` and `theme` are
+    // deliberately excluded: re-running this effect tears down the socket and
+    // disposes the xterm, which forces a pty re-attach — and if the backend
+    // session isn't alive, a re-spawn that reprints the agent's startup banner
+    // at the new width (the "stacked banners on resize / theme switch" bug).
+    // Crossing the 768px breakpoint flips `isMobile` constantly while dragging,
+    // so this would fire repeatedly. Live updates for both are handled without a
+    // rebuild by the dedicated effects below (updateTerminalForMobile /
+    // updateTerminalTheme). `terminalRef` is a stable ref object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminalRef]);
 
   // Handle isMobile changes dynamically
   useEffect(() => {
