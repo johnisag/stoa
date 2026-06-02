@@ -66,3 +66,7 @@ CLAUDE.local.md
 master.md
 progress.md
 .git-evening
+
+# Next.js auto-generates this on every build; never track it (avoids a
+# perpetually-dirty tree that blocks `stoa update`).
+next-env.d.ts
