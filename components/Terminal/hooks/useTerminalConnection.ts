@@ -41,6 +41,9 @@ export function useTerminalConnection({
   // covering the gap between reset() and the incoming snapshot's first paint.
   const [isAttaching, setIsAttaching] = useState(false);
   const attachTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // True once the agent process exits ("exit" message). Drives the Relaunch
+  // overlay and (via sessionEndedRef) suppresses auto-reconnect respawn.
+  const [sessionEnded, setSessionEnded] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Last attach request, re-sent on every (re)connect so the native pty session
@@ -55,6 +58,13 @@ export function useTerminalConnection({
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectDelayRef = useRef<number>(WS_RECONNECT_BASE_DELAY);
   const intentionalCloseRef = useRef<boolean>(false);
+  // Mirrors `sessionEnded` for synchronous reads in WS callbacks (which capture
+  // stale state). Set on agent exit; cleared on explicit relaunch / new attach.
+  const sessionEndedRef = useRef<boolean>(false);
+  // One-shot: skip the pre-attach reset() on the next re-attach so an explicit
+  // relaunch keeps the prior scrollback ([Session ended] + history) instead of
+  // wiping it; the respawned agent's output then appends below.
+  const preserveOnReattachRef = useRef<boolean>(false);
 
   // Store callbacks and state in refs
   const callbacksRef = useRef({ onConnected, onDisconnected, onBeforeUnmount });
@@ -109,6 +119,9 @@ export function useTerminalConnection({
       if (prev?.key !== payload.key) {
         const term = xtermRef.current;
         term?.reset();
+        // Switching sessions clears any prior "ended" gate.
+        sessionEndedRef.current = false;
+        setSessionEnded(false);
         // Cover the freshly-cleared (black) screen with a brief overlay until the
         // incoming session's first output paints — no blank flash on switch.
         // Cleared by the WS onOutput callback below (the snapshot arrives as an
@@ -177,6 +190,33 @@ export function useTerminalConnection({
     reconnectFnRef.current?.();
   }, []);
 
+  // Explicit relaunch after the agent exited: clear the "ended" gate and
+  // re-attach WITH spawn (reusing the stored payload) so the server respawns a
+  // fresh agent. This is the ONLY path that respawns an exited session — auto-
+  // reconnect stays suppressed while ended.
+  const relaunch = useCallback(() => {
+    sessionEndedRef.current = false;
+    setSessionEnded(false);
+    const payload = attachPayloadRef.current;
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN && payload) {
+      // Keep the existing scrollback (no reset): the respawned agent's output
+      // appends below the prior history + [Session ended] marker.
+      ws.send(
+        JSON.stringify({
+          type: "attach",
+          key: payload.key,
+          spawn: payload.spawn,
+        })
+      );
+    } else {
+      // Socket dropped — reconnect; tell onConnected to keep scrollback when it
+      // re-attaches (so relaunch preserves history on the reconnect path too).
+      preserveOnReattachRef.current = true;
+      reconnectFnRef.current?.();
+    }
+  }, []);
+
   // Main setup effect
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -217,6 +257,10 @@ export function useTerminalConnection({
         term,
         {
           onConnected: () => {
+            // An exited session must not auto-re-attach (which would respawn).
+            // Auto-reconnect is already suppressed at the WS layer; this guards
+            // any in-flight connect. Relaunch clears `ended` before reconnecting.
+            if (sessionEndedRef.current) return;
             callbacksRef.current.onConnected?.();
             // Re-attach to the native pty session after (re)connect so the
             // server re-subscribes this socket and repaints scrollback.
@@ -225,7 +269,12 @@ export function useTerminalConnection({
               // Reset before re-attaching so the incoming snapshot repaints
               // cleanly. Without this, a same-key socket reconnect layers a
               // fresh snapshot on top of existing content (duplicated scrollback).
-              xtermRef.current?.reset();
+              // Skip once on an explicit relaunch so prior history is preserved.
+              if (preserveOnReattachRef.current) {
+                preserveOnReattachRef.current = false;
+              } else {
+                xtermRef.current?.reset();
+              }
               wsRef.current.send(
                 JSON.stringify({
                   type: "attach",
@@ -257,11 +306,18 @@ export function useTerminalConnection({
               setIsAttaching(false);
             }
           },
+          // Agent process exited: mark ended so auto-reconnect stops respawning
+          // and the Terminal shows a Relaunch affordance.
+          onExit: () => {
+            sessionEndedRef.current = true;
+            setSessionEnded(true);
+          },
         },
         wsRef,
         reconnectTimeoutRef,
         reconnectDelayRef,
-        intentionalCloseRef
+        intentionalCloseRef,
+        sessionEndedRef
       );
       cleanupWebSocket = wsManager.cleanup;
       reconnectFnRef.current = wsManager.reconnect;
@@ -371,5 +427,7 @@ export function useTerminalConnection({
     restoreScrollState,
     triggerResize,
     reconnect,
+    sessionEnded,
+    relaunch,
   };
 }

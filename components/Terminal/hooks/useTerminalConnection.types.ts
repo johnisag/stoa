@@ -50,4 +50,8 @@ export interface UseTerminalConnectionReturn {
   restoreScrollState: (state: TerminalScrollState) => void;
   triggerResize: () => void;
   reconnect: () => void;
+  /** True after the agent process exits; surfaces a Relaunch affordance. */
+  sessionEnded: boolean;
+  /** Explicitly respawn an exited session (the only path that respawns it). */
+  relaunch: () => void;
 }

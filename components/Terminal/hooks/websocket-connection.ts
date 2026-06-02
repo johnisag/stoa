@@ -12,6 +12,8 @@ export interface WebSocketCallbacks {
   onSetConnected: (connected: boolean) => void;
   /** Fired after each "output" message is written (incl. the attach snapshot). */
   onOutput?: () => void;
+  /** Fired when the agent process exits (server "exit" message). */
+  onExit?: () => void;
 }
 
 export interface WebSocketManager {
@@ -29,7 +31,10 @@ export function createWebSocketConnection(
   wsRef: React.MutableRefObject<WebSocket | null>,
   reconnectTimeoutRef: React.MutableRefObject<NodeJS.Timeout | null>,
   reconnectDelayRef: React.MutableRefObject<number>,
-  intentionalCloseRef: React.MutableRefObject<boolean>
+  intentionalCloseRef: React.MutableRefObject<boolean>,
+  // When the agent has exited, suppress auto-reconnect so a dropped/refocused
+  // socket never silently respawns a fresh agent. Cleared on explicit relaunch.
+  endedRef: React.MutableRefObject<boolean>
 ): WebSocketManager {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${protocol}//${window.location.host}/ws/terminal`);
@@ -63,7 +68,7 @@ export function createWebSocketConnection(
   };
 
   const forceReconnect = () => {
-    if (intentionalCloseRef.current) return;
+    if (intentionalCloseRef.current || endedRef.current) return;
 
     // Clear any pending reconnect
     if (reconnectTimeoutRef.current) {
@@ -103,7 +108,7 @@ export function createWebSocketConnection(
 
   // Soft reconnect - only if not already connected
   const attemptReconnect = () => {
-    if (intentionalCloseRef.current) return;
+    if (intentionalCloseRef.current || endedRef.current) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
     forceReconnect();
   };
@@ -146,6 +151,7 @@ export function createWebSocketConnection(
         });
       } else if (msg.type === "exit") {
         term.write("\r\n\x1b[33m[Session ended]\x1b[0m\r\n");
+        callbacks.onExit?.();
       }
     } catch {
       term.write(event.data);
