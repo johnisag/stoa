@@ -36,6 +36,14 @@ export interface AgentProvider {
   runningPatterns: RegExp[];
   idlePatterns: RegExp[];
 
+  // Orchestration readiness (consulted by spawnWorker's wait loop): how a
+  // freshly spawned worker signals it's ready for its first prompt, and any
+  // trust/permission prompt to auto-accept while waiting (workers auto-approve,
+  // so trust handling is mostly defensive). An empty/unmatched readyPatterns
+  // falls back to sending after the timeout, so an unknown agent still runs.
+  readyPatterns: RegExp[];
+  trustPromptPatterns: RegExp[];
+
   // Session ID detection (optional - not all CLIs support this)
   getSessionId?: (projectPath: string) => string | null;
 
@@ -134,6 +142,16 @@ export const claudeProvider: AgentProvider = {
     /✻\s*Sautéed/i, // Claude finished processing
     /✻\s*Done/i,
   ],
+
+  // Unchanged from the original hardcoded orchestration strings: ready on the
+  // "? for shortcuts" / "?>" prompt; auto-accept the "Ready to code here?" /
+  // "Yes, continue" trust menu.
+  readyPatterns: [/\? for shortcuts/i, /\?>/],
+  trustPromptPatterns: [
+    /ready to code here/i,
+    /yes, continue/i,
+    /need permission to work/i,
+  ],
 };
 
 /**
@@ -188,6 +206,12 @@ export const codexProvider: AgentProvider = {
   runningPatterns: [/thinking/i, /processing/i, /generating/i, SPINNER_CHARS],
 
   idlePatterns: [/^>\s*$/m, /codex.*>\s*$/im, /\$\s*$/m],
+
+  // Codex auto-bypasses approvals (no trust prompt). Its interactive-TUI ready
+  // cue is TODO from a live `codex` spawn; until filled, the wait loop falls
+  // back to sending the task after the timeout (works, just not instant).
+  readyPatterns: [],
+  trustPromptPatterns: [],
 };
 
 /**
@@ -249,6 +273,11 @@ export const hermesProvider: AgentProvider = {
   ],
   runningPatterns: [SPINNER_CHARS, /esc to interrupt/i, /tokens/i],
   idlePatterns: [],
+
+  // Ready on the startup "Session: <YYYYMMDD_HHMMSS_hex>" banner (the same cue
+  // the status detector captures); --yolo means no trust prompt to accept.
+  readyPatterns: [/Session:\s*\d{8}_\d{6}/],
+  trustPromptPatterns: [],
 };
 
 /**
@@ -272,6 +301,8 @@ export const shellProvider: AgentProvider = {
   waitingPatterns: [],
   runningPatterns: [],
   idlePatterns: [/\$\s*$/m, />\s*$/m, /%\s*$/m],
+  readyPatterns: [],
+  trustPromptPatterns: [],
 };
 
 // Provider registry
