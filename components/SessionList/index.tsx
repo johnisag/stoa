@@ -45,6 +45,7 @@ export function SessionList({
   onOpenTerminal,
   onStartDevServer,
   onCreateDevServer,
+  onCollapse,
 }: SessionListProps) {
   const { isMobile } = useViewport();
 
@@ -183,6 +184,7 @@ export function SessionList({
         onKillAll={() => setShowKillAllConfirm(true)}
         attentionCount={attentionCount}
         onJumpToAttention={handleJumpToAttention}
+        onCollapse={onCollapse}
       />
 
       {/* Kill All Confirmation */}

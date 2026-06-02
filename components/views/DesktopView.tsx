@@ -6,6 +6,7 @@ import { NewSessionDialog } from "@/components/NewSessionDialog";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { StartServerDialog } from "@/components/DevServers/StartServerDialog";
 import { SidebarFooter } from "@/components/SidebarFooter";
+import { SidebarRail } from "@/components/SidebarRail";
 import { Button } from "@/components/ui/button";
 import {
   PanelLeftClose,
@@ -80,27 +81,42 @@ export function DesktopView({
 
   return (
     <div className="bg-background flex h-screen overflow-hidden">
-      {/* Desktop Sidebar */}
+      {/* Desktop Sidebar — full list (w-60) or a thin icon rail (w-12). The
+          container animates the width; the inner content is fixed-width so it
+          slides cleanly instead of squishing during the transition. */}
       <div
-        className={` ${sidebarOpen ? "w-60" : "w-0"} bg-sidebar-background flex-shrink-0 overflow-hidden shadow-xl shadow-black/10 transition-all duration-200 dark:shadow-black/30`}
+        className={` ${sidebarOpen ? "w-60" : "w-12"} bg-sidebar-background flex-shrink-0 overflow-hidden shadow-xl shadow-black/10 transition-all duration-200 dark:shadow-black/30`}
       >
-        <div className="flex h-full flex-col">
-          {/* Session list */}
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <SessionList
-              activeSessionId={focusedActiveTab?.sessionId || undefined}
-              sessionStatuses={sessionStatuses}
-              onSelect={handleSelect}
-              onOpenInTab={handleOpenInTab}
-              onNewSessionInProject={handleNewSessionInProject}
-              onOpenTerminal={handleOpenTerminal}
-              onStartDevServer={handleStartDevServer}
-              onCreateDevServer={handleCreateDevServer}
-            />
-          </div>
+        {sidebarOpen ? (
+          <div className="flex h-full w-60 flex-col">
+            {/* Session list */}
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <SessionList
+                activeSessionId={focusedActiveTab?.sessionId || undefined}
+                sessionStatuses={sessionStatuses}
+                onSelect={handleSelect}
+                onOpenInTab={handleOpenInTab}
+                onNewSessionInProject={handleNewSessionInProject}
+                onOpenTerminal={handleOpenTerminal}
+                onStartDevServer={handleStartDevServer}
+                onCreateDevServer={handleCreateDevServer}
+                onCollapse={() => setSidebarOpen(false)}
+              />
+            </div>
 
-          <SidebarFooter onShowShortcuts={onShowShortcuts} />
-        </div>
+            <SidebarFooter onShowShortcuts={onShowShortcuts} />
+          </div>
+        ) : (
+          <SidebarRail
+            sessions={sessions}
+            projects={projects}
+            sessionStatuses={sessionStatuses}
+            activeSessionId={focusedActiveTab?.sessionId || undefined}
+            onSelect={handleSelect}
+            onExpand={() => setSidebarOpen(true)}
+            onNewSession={() => setShowNewSessionDialog(true)}
+          />
+        )}
       </div>
 
       {/* Main content */}
