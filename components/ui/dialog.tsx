@@ -50,9 +50,17 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  sheet = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
+  /**
+   * Mobile bottom-sheet variant: anchored to the bottom edge with a rounded
+   * top, slides up, and pads for the safe-area inset — so an autofocused input
+   * + action buttons sit above the on-screen keyboard instead of being
+   * center-shoved/clipped. Default (false) is the centered dialog, unchanged.
+   */
+  sheet?: boolean;
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
@@ -60,7 +68,10 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 outline-none sm:max-w-lg",
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed z-50 grid w-full gap-4 border p-6 shadow-lg duration-200 outline-none",
+          sheet
+            ? "data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 mx-auto max-h-[90vh] overflow-y-auto rounded-t-xl border-b-0 pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
+            : "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 top-[50%] left-[50%] max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] rounded-lg sm:max-w-lg",
           className
         )}
         {...props}

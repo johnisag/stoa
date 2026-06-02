@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { FolderPicker } from "@/components/FolderPicker";
 import { useHomePath } from "@/hooks/useHomePath";
+import { useViewport } from "@/hooks/useViewport";
 
 import { useNewSessionForm } from "./hooks/useNewSessionForm";
 import { AgentSelector } from "./AgentSelector";
@@ -32,6 +33,7 @@ export function NewSessionDialog({
   onCreateProject,
 }: NewSessionDialogProps) {
   const { toTildePath } = useHomePath();
+  const { isMobile } = useViewport();
   const form = useNewSessionForm({
     open,
     projects,
@@ -48,6 +50,7 @@ export function NewSessionDialog({
         onOpenChange={(o) => !o && !form.isLoading && form.handleClose()}
       >
         <DialogContent
+          sheet={isMobile}
           className="max-h-[85vh] overflow-y-auto"
           onKeyDown={(e) => {
             if (e.key === "Enter" && e.shiftKey && !form.isLoading) {
