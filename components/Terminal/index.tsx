@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useTheme } from "next-themes";
 import "@xterm/xterm/css/xterm.css";
-import { Paperclip, WifiOff, Upload, Loader2 } from "lucide-react";
+import { Paperclip, WifiOff, Upload, Loader2, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
 import { ScrollToBottomButton } from "./ScrollToBottomButton";
@@ -86,6 +86,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       getScrollState,
       restoreScrollState,
       reconnect,
+      sessionEnded,
+      relaunch,
     } = useTerminalConnection({
       terminalRef,
       onConnected,
@@ -319,8 +321,24 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           </div>
         )}
 
+        {/* Session-ended bar — the agent process exited. A bottom bar (not a
+            full overlay) keeps the final output readable; auto-reconnect won't
+            silently respawn, so relaunch is explicit. */}
+        {sessionEnded && (
+          <div className="border-border bg-background/95 absolute inset-x-0 bottom-0 z-30 flex items-center justify-center gap-3 border-t px-3 py-2 backdrop-blur-sm">
+            <span className="text-muted-foreground text-sm">Session ended</span>
+            <button
+              onClick={relaunch}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Relaunch
+            </button>
+          </div>
+        )}
+
         {/* Disconnected overlay - shows tap to reconnect button */}
-        {connectionState === "disconnected" && (
+        {connectionState === "disconnected" && !sessionEnded && (
           <button
             onClick={reconnect}
             className="bg-background/80 active:bg-background/90 absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 backdrop-blur-sm transition-all"
