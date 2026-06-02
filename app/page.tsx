@@ -40,6 +40,7 @@ import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
+import { getSwitchableSessionOrder } from "@/lib/session-navigation";
 import { getActiveBackend } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
@@ -507,25 +508,25 @@ function HomeContent() {
     [sessions, attachToSession]
   );
 
-  // Cycle to the next/previous individually-navigable session (wraps around).
-  // Worker sessions are excluded — they aren't standalone rows in the sidebar —
-  // and we cycle in the list's most-recently-active order (not the grouped
-  // sidebar layout). No-op if it would land on the already-focused session: a
-  // re-attach is destructive on tmux (sends Ctrl-C and restarts the attach).
+  // Cycle to the next/previous individually-navigable session (wraps around),
+  // over the shared sidebar order (getSwitchableSessionOrder) so Alt+arrows,
+  // mobile chevrons, and the pane swipe all agree. Workers are excluded — they
+  // aren't standalone rows. No-op if it would land on the already-focused
+  // session: a re-attach is destructive on tmux (sends Ctrl-C, restarts attach).
   const selectRelativeSession = useCallback(
     (delta: number) => {
-      const navigable = sessions.filter((s) => !s.conductor_session_id);
-      if (navigable.length === 0) return;
+      const order = getSwitchableSessionOrder(sessions, projects);
+      if (order.length === 0) return;
       const currentId = focusedActiveTab?.sessionId;
-      const idx = navigable.findIndex((s) => s.id === currentId);
+      const idx = currentId ? order.indexOf(currentId) : -1;
       // From no/unknown selection, "next" starts at the first and "prev" at the last.
       const base = idx === -1 ? (delta > 0 ? -1 : 0) : idx;
-      const next = (base + delta + navigable.length) % navigable.length;
-      const target = navigable[next];
-      if (target.id === currentId) return;
-      handleSelectSession(target.id);
+      const next = (base + delta + order.length) % order.length;
+      const targetId = order[next];
+      if (targetId === currentId) return;
+      handleSelectSession(targetId);
     },
-    [sessions, focusedActiveTab?.sessionId, handleSelectSession]
+    [sessions, projects, focusedActiveTab?.sessionId, handleSelectSession]
   );
 
   // Global keyboard shortcuts: ⌘/Ctrl-K switcher, Alt+↓/↑ next/prev session.
