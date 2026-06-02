@@ -94,6 +94,49 @@ describe("provider registry integrity", () => {
   });
 });
 
+// Locks the per-provider readiness contract that spawnWorker's wait loop
+// consumes (lib/orchestration.ts): each provider declares how a freshly-spawned
+// worker signals "ready" and any trust prompt to auto-accept. Claude must stay
+// byte-identical to the strings the loop used to hardcode.
+describe("orchestration readiness contract", () => {
+  it("every provider declares readyPatterns + trustPromptPatterns arrays", () => {
+    for (const id of PROVIDER_IDS) {
+      const p = getProvider(id);
+      expect(Array.isArray(p.readyPatterns)).toBe(true);
+      expect(Array.isArray(p.trustPromptPatterns)).toBe(true);
+    }
+  });
+
+  it("Claude's cues match the old hardcoded strings (byte-identical)", () => {
+    const p = getProvider("claude");
+    expect(p.readyPatterns.some((r) => r.test("  │ ? for shortcuts"))).toBe(
+      true
+    );
+    expect(p.readyPatterns.some((r) => r.test("?>"))).toBe(true);
+    expect(
+      p.trustPromptPatterns.some((r) => r.test("Ready to code here?"))
+    ).toBe(true);
+    expect(p.trustPromptPatterns.some((r) => r.test("❯ Yes, continue"))).toBe(
+      true
+    );
+    expect(
+      p.trustPromptPatterns.some((r) => r.test("I need permission to work"))
+    ).toBe(true);
+  });
+
+  it("Hermes is ready on its 'Session:' banner; --yolo means no trust prompt", () => {
+    const p = getProvider("hermes");
+    expect(
+      p.readyPatterns.some((r) => r.test("   Session: 20260531_133925_98d9fc"))
+    ).toBe(true);
+    // a still-initializing screen must NOT read as ready
+    expect(
+      p.readyPatterns.some((r) => r.test("Initializing agent…\nLoading tools"))
+    ).toBe(false);
+    expect(p.trustPromptPatterns).toEqual([]);
+  });
+});
+
 // sessionKey() is the single constructor for the `{provider}-{id}` namespace;
 // these lock its format and that it stays the exact inverse of the parsers so
 // the migration from 13 hand-built sites is byte-identical.

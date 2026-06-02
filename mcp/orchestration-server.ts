@@ -94,10 +94,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 "Whether to create an isolated worktree (default: true)",
               default: true,
             },
+            agentType: {
+              type: "string",
+              enum: ["claude", "codex", "hermes"],
+              description:
+                "Which agent to run the worker as: claude (default), codex, or hermes. Lets a conductor delegate to a different agent than itself.",
+              default: "claude",
+            },
             model: {
               type: "string",
-              description: "Model to use (sonnet, opus, haiku)",
-              default: "sonnet",
+              description:
+                "Optional model for the worker — agent-specific (e.g. a Claude model, or a 'provider/model' string for hermes). Omit for the agent's own default.",
             },
           },
           required: ["task", "workingDirectory"],
@@ -239,7 +246,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             workingDirectory: args?.workingDirectory,
             branchName: args?.branchName,
             useWorktree: args?.useWorktree ?? true,
-            model: args?.model || "sonnet",
+            agentType: args?.agentType || "claude",
+            // Omit → the route's resolveModelForAgent picks the agent's default
+            // (forcing "sonnet" would push an invalid model at codex/hermes).
+            model: args?.model,
           }),
         });
         return {

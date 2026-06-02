@@ -193,15 +193,20 @@ export async function spawnWorker(
       args,
     });
 
-    // Wait for Claude to be ready by checking for the input prompt
-    // Poll every 2 seconds for up to 30 seconds
+    // Wait for the agent's prompt before sending the task, auto-accepting any
+    // trust prompt. Cues are per-provider (provider.readyPatterns /
+    // trustPromptPatterns) so codex/hermes workers aren't judged by Claude's
+    // banners; an empty/unmatched readyPatterns falls back to sending after the
+    // timeout, so an unknown agent still runs (just a touch slower).
+    // Poll every 2 seconds for up to 30 seconds.
     const maxWaitMs = 30000;
     const pollIntervalMs = 2000;
     let waited = 0;
     let ready = false;
+    const { readyPatterns, trustPromptPatterns } = provider;
 
     console.log(
-      `[orchestration] Waiting for Claude to initialize in ${tmuxSessionName}...`
+      `[orchestration] Waiting for ${provider.id} to initialize in ${tmuxSessionName}...`
     );
 
     while (waited < maxWaitMs && !ready) {
@@ -210,15 +215,9 @@ export async function spawnWorker(
 
       try {
         const stdout = await backend.capture(tmuxSessionName, { lines: 10 });
-        const content = stdout.toLowerCase();
 
-        // Check for trust/permissions prompt and auto-accept
-        // Claude shows "Ready to code here?" with "Yes, continue" option - just press Enter
-        if (
-          content.includes("ready to code here") ||
-          content.includes("yes, continue") ||
-          content.includes("need permission to work")
-        ) {
+        // Auto-accept a trust/permission prompt (defensive — workers auto-approve).
+        if (trustPromptPatterns.some((p) => p.test(stdout))) {
           console.log(
             `[orchestration] Trust prompt detected, pressing Enter to accept`
           );
@@ -226,15 +225,13 @@ export async function spawnWorker(
           continue; // Keep waiting for the real prompt
         }
 
-        // Look for Claude's ready state - the "? for shortcuts" line indicates fully loaded
-        const lines = stdout.trim().split("\n");
-        const lastFewLines = lines.slice(-3).join("\n");
+        // Ready once the agent's prompt/banner cue appears in the captured screen.
         if (
-          lastFewLines.includes("? for shortcuts") ||
-          lastFewLines.includes("?>")
+          readyPatterns.length > 0 &&
+          readyPatterns.some((p) => p.test(stdout))
         ) {
           ready = true;
-          console.log(`[orchestration] Claude ready after ${waited}ms`);
+          console.log(`[orchestration] ${provider.id} ready after ${waited}ms`);
         }
       } catch {
         // Session might not be ready yet
@@ -243,7 +240,7 @@ export async function spawnWorker(
 
     if (!ready) {
       console.log(
-        `[orchestration] Timed out waiting for Claude, sending task anyway after ${waited}ms`
+        `[orchestration] Timed out waiting for ${provider.id}, sending task anyway after ${waited}ms`
       );
     }
 
