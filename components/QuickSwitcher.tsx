@@ -15,6 +15,7 @@ import type { Session } from "@/lib/db";
 import dynamic from "next/dynamic";
 import { useRipgrepAvailable } from "@/data/code-search";
 import { searchSessions } from "@/lib/session-search";
+import { useViewport } from "@/hooks/useViewport";
 
 // react-syntax-highlighter is heavy; load the code-search results lazily so it
 // stays out of the eager bundle (only needed once a code search runs).
@@ -56,6 +57,7 @@ export function QuickSwitcher({
   currentSessionId,
   activeSessionWorkingDir,
 }: QuickSwitcherProps) {
+  const { isMobile } = useViewport();
   const [mode, setMode] = useState<"sessions" | "code">("sessions");
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -156,7 +158,10 @@ export function QuickSwitcher({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md">
+      <DialogContent
+        sheet={isMobile}
+        className="gap-0 overflow-hidden p-0 sm:max-w-md"
+      >
         <DialogHeader className="sr-only">
           <DialogTitle>Switch Session / Search Code</DialogTitle>
         </DialogHeader>
