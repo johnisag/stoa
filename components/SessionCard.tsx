@@ -408,7 +408,7 @@ function SessionCardComponent({
       {isInSelectMode && onToggleSelect && (
         <button
           onClick={handleCheckboxClick}
-          aria-label={isSelected ? "Deselect session" : "Select session"}
+          aria-label="Select session"
           aria-pressed={isSelected}
           className="text-primary hover:text-primary/80 -m-1 flex-shrink-0 p-1"
         >
