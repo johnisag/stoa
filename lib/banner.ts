@@ -32,13 +32,14 @@ tmux set-option status-position bottom 2>/dev/null
 # Clear and show banner
 clear
 
+# Banner — "Stoa" (figlet standard). The art is passed as a single-quoted %s arg
+# so backslashes / backticks stay literal and don't get reinterpreted by bash.
 printf "\\n"
-printf "\${C_PURPLE}     _                    _    ___  ____  \${C_RESET}\\n"
-printf "\${C_PURPLE}    / \\\\   __ _  ___ _ __ | |_ / _ \\\\/ ___| \${C_RESET}\\n"
-printf "\${C_PURPLE2}   / _ \\\\ / _\\\` |/ _ \\\\ '_ \\\\| __| | | \\\\___ \\\\ \${C_RESET}\\n"
-printf "\${C_PURPLE2}  / ___ \\\\ (_| |  __/ | | | |_| |_| |___) |\${C_RESET}\\n"
-printf "\${C_PINK} /_/   \\\\_\\\\__, |\\\\___|_| |_|\\\\__|\\\\___/|____/ \${C_RESET}\\n"
-printf "\${C_PINK}         |___/                            \${C_RESET}\\n"
+printf '%s%s%s\\n' "\${C_PURPLE}" '      ____  _' "\${C_RESET}"
+printf '%s%s%s\\n' "\${C_PURPLE}" '     / ___|| |_ ___   __ _' "\${C_RESET}"
+printf '%s%s%s\\n' "\${C_PURPLE2}" '     \\___ \\| __/ _ \\ / _\` |' "\${C_RESET}"
+printf '%s%s%s\\n' "\${C_PURPLE2}" '      ___) | || (_) | (_| |' "\${C_RESET}"
+printf '%s%s%s\\n' "\${C_PINK}" '     |____/ \\__\\___/ \\__,_|' "\${C_RESET}"
 printf "\\n"
 printf "\${C_MUTED}         AI Coding Session Manager\${C_RESET}\\n"
 printf "\\n"
@@ -69,12 +70,11 @@ export function wrapWithBanner(agentCommand: string): string {
  */
 export function getBanner(): string {
   return `
-     _                    _    ___  ____
-    / \\   __ _  ___ _ __ | |_ / _ \\/ ___|
-   / _ \\ / _\` |/ _ \\ '_ \\| __| | | \\___ \\
-  / ___ \\ (_| |  __/ | | | |_| |_| |___) |
- /_/   \\_\\__, |\\___|_| |_|\\__|\\___/|____/
-         |___/
+      ____  _
+     / ___|| |_ ___   __ _
+     \\___ \\| __/ _ \\ / _\` |
+      ___) | || (_) | (_| |
+     |____/ \\__\\___/ \\__,_|
 
          AI Coding Session Manager
 `;

@@ -13,6 +13,10 @@ function ScrollArea({
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
+      // Default to "auto": show the scrollbar whenever content overflows
+      // (native-like), instead of Radix's hover-only default which left the
+      // session list with no visible scroll affordance. Callers can override.
+      type="auto"
       className={cn("relative overflow-hidden", className)}
       {...props}
     >
@@ -44,7 +48,7 @@ function ScrollBar({
       )}
       {...props}
     >
-      <ScrollAreaPrimitive.ScrollAreaThumb className="bg-border relative flex-1 rounded-full" />
+      <ScrollAreaPrimitive.ScrollAreaThumb className="bg-muted-foreground/40 relative flex-1 rounded-full" />
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   );
 }
