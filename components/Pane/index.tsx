@@ -258,7 +258,21 @@ export const Pane = memo(function Pane({
         : undefined;
       const sessionName = session?.tmux_name || tab.attachedTmux;
 
-      if (!sessionName) return;
+      // Blank tab (the "+") → a scratch shell so the pane isn't an empty box.
+      // pty: spawn a real shell keyed by the tab id (empty binary => the
+      // transport's spawnShellSession). The tmux path already lands in a shell,
+      // so leave it untouched.
+      if (!sessionName) {
+        void getActiveBackend().then((backend) => {
+          if (backend === "pty") {
+            handle.attachSession({
+              key: sessionKey({ kind: "shell", id: tab.id }),
+              spawn: { binary: "", args: [], cwd: "~" },
+            });
+          }
+        });
+        return;
+      }
 
       void getActiveBackend().then((backend) => {
         if (backend === "pty") {
@@ -463,6 +477,9 @@ export const Pane = memo(function Pane({
                         }
                       : undefined
                   }
+                  // 📎 inserts a file path into the agent's prompt — only useful
+                  // when the tab is attached to a session (a scratch shell isn't).
+                  showImageButton={!!(tab.sessionId || tab.attachedTmux)}
                 />
               </div>
             );
@@ -550,6 +567,9 @@ export const Pane = memo(function Pane({
                                   baseY: 0,
                                 }
                               : undefined
+                          }
+                          showImageButton={
+                            !!(tab.sessionId || tab.attachedTmux)
                           }
                         />
                       </div>
