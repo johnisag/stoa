@@ -23,7 +23,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { Session, Group } from "@/lib/db";
-import type { SessionStatus, SessionHoverHandlers } from "./SessionList.types";
+import type { SessionStatus } from "./SessionList.types";
 
 interface GroupSectionProps {
   groups: Group[];
@@ -40,7 +40,6 @@ interface GroupSectionProps {
   onSummarize: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, newName: string) => void;
-  hoverHandlers: SessionHoverHandlers;
 }
 
 export function GroupSection({
@@ -58,7 +57,6 @@ export function GroupSection({
   onSummarize,
   onDeleteSession,
   onRenameSession,
-  hoverHandlers,
 }: GroupSectionProps) {
   const [newGroupName, setNewGroupName] = useState("");
   const [showNewGroupInput, setShowNewGroupInput] = useState<string | null>(
@@ -222,8 +220,6 @@ export function GroupSection({
                         onSummarize={onSummarize}
                         onDelete={onDeleteSession}
                         onRename={onRenameSession}
-                        onHoverStart={hoverHandlers.onHoverStart}
-                        onHoverEnd={hoverHandlers.onHoverEnd}
                       />
                     </div>
                     {hasWorkers && (
@@ -245,8 +241,6 @@ export function GroupSection({
                           onSelect={onSelectSession}
                           onDelete={onDeleteSession}
                           onRename={onRenameSession}
-                          onHoverStart={hoverHandlers.onHoverStart}
-                          onHoverEnd={hoverHandlers.onHoverEnd}
                         />
                       ))}
                     </div>
