@@ -117,6 +117,37 @@ describe("resolveShortcut", () => {
     expect(hit?.action).toBe("open-switcher");
   });
 
+  it("resolves the focused-pane view/tab chords from app chrome but suppresses them in the terminal", () => {
+    const paneBindings: Keybinding[] = [
+      { chord: "mod+shift+g", action: "pane-toggle-git" },
+      { chord: "mod+shift+arrowright", action: "pane-next-tab" },
+    ];
+    // Fire from ordinary app chrome.
+    expect(
+      resolveShortcut(
+        { key: "G", ctrlKey: true, shiftKey: true, target: { tagName: "DIV" } },
+        paneBindings,
+        false
+      )?.action
+    ).toBe("pane-toggle-git");
+    // Suppressed inside the terminal (not allowInInput), like mod+b.
+    expect(
+      resolveShortcut(
+        {
+          key: "ArrowRight",
+          ctrlKey: true,
+          shiftKey: true,
+          target: {
+            tagName: "TEXTAREA",
+            closest: (s: string) => (s === ".xterm" ? {} : null),
+          },
+        },
+        paneBindings,
+        false
+      )
+    ).toBeNull();
+  });
+
   it("suppresses a terminal-conflicting chord when focus is inside the xterm terminal", () => {
     // ⌘/Ctrl+B (tmux prefix) and ⌘/Ctrl+\ (SIGQUIT) must NOT be allowInInput:
     // the .xterm guard has to let those keystrokes reach the terminal.
@@ -160,5 +191,12 @@ describe("formatChord", () => {
     expect(formatChord("shift+?", false)).toBe("Shift+?");
     expect(formatChord("shift+?", true)).toBe("⇧?");
     expect(formatChord("mod+/", false)).toBe("Ctrl+/");
+  });
+
+  it("formats the focused-pane chords (letters + arrows, two modifiers)", () => {
+    expect(formatChord("mod+shift+g", true)).toBe("⌘⇧G");
+    expect(formatChord("mod+shift+g", false)).toBe("Ctrl+Shift+G");
+    expect(formatChord("mod+shift+arrowright", true)).toBe("⌘⇧→");
+    expect(formatChord("mod+shift+arrowright", false)).toBe("Ctrl+Shift+→");
   });
 });
