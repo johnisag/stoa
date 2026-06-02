@@ -7,7 +7,13 @@ import { useState, useEffect } from "react";
  * Breakpoint: 768px (md in Tailwind)
  */
 export function useViewport() {
-  const [isMobile, setIsMobile] = useState(false);
+  // Lazy-init from the real width on the client so the first post-hydration
+  // render already has the correct value (no extra effect-driven flip). SSR has
+  // no window, so it falls back to false — but the view is gated on `isHydrated`
+  // (see app/page.tsx), so that SSR default is never shown as a wrong view.
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth < 768 : false
+  );
   const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {

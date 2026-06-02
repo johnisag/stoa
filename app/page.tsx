@@ -684,7 +684,15 @@ function HomeContent() {
 
   return (
     <>
-      {isMobile ? (
+      {/* Gate the view on isHydrated so phones never flash DesktopView for a
+          frame before snapping to mobile. SSR and the first client render both
+          show this neutral shell (so they match — no hydration mismatch); once
+          hydrated, isMobile is already correct and the right view renders. */}
+      {!isHydrated ? (
+        <div className="bg-background flex h-screen w-screen items-center justify-center">
+          <div className="border-muted-foreground/30 border-t-foreground h-6 w-6 animate-spin rounded-full border-2" />
+        </div>
+      ) : isMobile ? (
         <MobileView {...viewProps} />
       ) : (
         <DesktopView {...viewProps} />
