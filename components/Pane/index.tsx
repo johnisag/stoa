@@ -262,13 +262,11 @@ export const Pane = memo(function Pane({
 
       void getActiveBackend().then((backend) => {
         if (backend === "pty") {
-          // Native: (re)attach to the registry session. spawn lets the server
-          // respawn it if it isn't running (e.g. after a server restart).
+          // Native: (re)attach immediately — the WS is already open (this fires
+          // from onConnected), so the old 100ms delay was dead time. spawn lets
+          // the server respawn the session if it isn't running.
           const spawn = session ? buildSpawnForSession(session) : undefined;
-          setTimeout(
-            () => handle.attachSession({ key: sessionName, spawn }),
-            100
-          );
+          handle.attachSession({ key: sessionName, spawn });
         } else {
           setTimeout(
             () => handle.sendCommand(`tmux attach -t ${sessionName}`),

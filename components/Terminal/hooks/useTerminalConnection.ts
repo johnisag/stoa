@@ -229,8 +229,20 @@ export function useTerminalConnection({
     let cleanupWebSocket: (() => void) | null = null;
     let cleanupTerminal: (() => void) | null = null;
 
-    const connectTimeout = setTimeout(() => {
+    let rafId = 0;
+    let sizeWaitFrames = 0;
+    // Replaces the old fixed 150ms delay: create the terminal as soon as its
+    // container is laid out (driven by rAF), not after a magic constant. Wait a
+    // few frames for a non-zero size so fit() gets real cols/rows, then proceed
+    // regardless (the ResizeObserver refit corrects any later size change).
+    const init = () => {
       if (cancelled || !terminalRef.current) return;
+      const el = terminalRef.current;
+      if (el.offsetWidth === 0 && el.offsetHeight === 0 && sizeWaitFrames < 5) {
+        sizeWaitFrames++;
+        rafId = requestAnimationFrame(init);
+        return;
+      }
 
       // Initialize terminal
       const { term, fitAddon, searchAddon, cleanup } = createTerminal(
@@ -330,11 +342,12 @@ export function useTerminalConnection({
         isMobile,
         sendResize: wsManager.sendResize,
       });
-    }, 150);
+    };
+    rafId = requestAnimationFrame(init);
 
     return () => {
       cancelled = true;
-      clearTimeout(connectTimeout);
+      cancelAnimationFrame(rafId);
       intentionalCloseRef.current = true;
 
       // Save scroll state before unmount
