@@ -1,5 +1,3 @@
-import type { Session, Group } from "@/lib/db";
-
 export interface SessionStatus {
   sessionName: string;
   status: "idle" | "running" | "waiting" | "error" | "dead";
@@ -24,9 +22,4 @@ export interface SessionListProps {
   }) => Promise<void>;
   /** Collapse the sidebar to its icon rail (renders a chevron in the header). */
   onCollapse?: () => void;
-}
-
-export interface SessionHoverHandlers {
-  onHoverStart: (session: Session, rect: DOMRect) => void;
-  onHoverEnd: () => void;
 }

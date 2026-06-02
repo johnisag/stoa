@@ -42,8 +42,6 @@ interface ProjectsSectionProps {
   onRestartDevServer?: (serverId: string) => Promise<void>;
   onRemoveDevServer?: (serverId: string) => Promise<void>;
   onViewDevServerLogs?: (serverId: string) => void;
-  onHoverStart?: (session: Session, rect: DOMRect) => void;
-  onHoverEnd?: () => void;
 }
 
 export function ProjectsSection({
@@ -73,8 +71,6 @@ export function ProjectsSection({
   onRestartDevServer,
   onRemoveDevServer,
   onViewDevServerLogs,
-  onHoverStart,
-  onHoverEnd,
 }: ProjectsSectionProps) {
   const { selectedIds } = useSnapshot(selectionStore);
   const isInSelectMode = selectedIds.size > 0;
@@ -256,8 +252,6 @@ export function ProjectsSection({
                               onDelete={onDeleteSession}
                               onRename={onRenameSession}
                               onCreatePR={onCreatePR}
-                              onHoverStart={onHoverStart}
-                              onHoverEnd={onHoverEnd}
                             />
                           </div>
                           {/* Workers badge */}
@@ -288,8 +282,6 @@ export function ProjectsSection({
                                 onOpenInTab={onOpenSessionInTab}
                                 onDelete={onDeleteSession}
                                 onRename={onRenameSession}
-                                onHoverStart={onHoverStart}
-                                onHoverEnd={onHoverEnd}
                               />
                             ))}
                           </div>

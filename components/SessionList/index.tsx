@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useMemo, useRef, useCallback } from "react";
-import { SessionPreviewPopover } from "@/components/SessionPreviewPopover";
+import { useState, useMemo, useCallback } from "react";
 import { ServerLogsModal } from "@/components/DevServers";
 import {
   ProjectsSection,
@@ -20,7 +19,6 @@ import { ProjectSectionSkeleton } from "@/components/ui/skeleton";
 import { Plus, FolderPlus, Loader2, AlertCircle } from "lucide-react";
 import type { Session } from "@/lib/db";
 import type { ProjectWithRepositories } from "@/lib/projects";
-import { useViewport } from "@/hooks/useViewport";
 import { baseName } from "@/lib/path-display";
 import {
   countNeedsAttention,
@@ -47,8 +45,6 @@ export function SessionList({
   onCreateDevServer,
   onCollapse,
 }: SessionListProps) {
-  const { isMobile } = useViewport();
-
   // Fetch data directly with loading states
   const {
     data: sessionsData,
@@ -98,8 +94,6 @@ export function SessionList({
   const [editingProject, setEditingProject] =
     useState<ProjectWithRepositories | null>(null);
   const [showKillAllConfirm, setShowKillAllConfirm] = useState(false);
-  const [hoveredSession, setHoveredSession] = useState<Session | null>(null);
-  const [hoverPosition, setHoverPosition] = useState({ x: 0, y: 0 });
   const [logsServerId, setLogsServerId] = useState<string | null>(null);
 
   // Use projects if available
@@ -129,44 +123,6 @@ export function SessionList({
   const logsServer = logsServerId
     ? devServers.find((s) => s.id === logsServerId)
     : null;
-
-  // Handle hover on session card (desktop only) with delay
-  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const pendingHoverRef = useRef<{ session: Session; rect: DOMRect } | null>(
-    null
-  );
-
-  const hoverHandlers = {
-    onHoverStart: useCallback(
-      (session: Session, rect: DOMRect) => {
-        if (isMobile) return;
-        // Clear any pending hover
-        if (hoverTimeoutRef.current) {
-          clearTimeout(hoverTimeoutRef.current);
-        }
-        // Store pending hover data and start delay
-        pendingHoverRef.current = { session, rect };
-        hoverTimeoutRef.current = setTimeout(() => {
-          if (pendingHoverRef.current) {
-            setHoveredSession(pendingHoverRef.current.session);
-            setHoverPosition({
-              x: pendingHoverRef.current.rect.right,
-              y: pendingHoverRef.current.rect.top,
-            });
-          }
-        }, 400);
-      },
-      [isMobile]
-    ),
-    onHoverEnd: useCallback(() => {
-      if (hoverTimeoutRef.current) {
-        clearTimeout(hoverTimeoutRef.current);
-        hoverTimeoutRef.current = null;
-      }
-      pendingHoverRef.current = null;
-      setHoveredSession(null);
-    }, []),
-  };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -286,8 +242,6 @@ export function SessionList({
               onRestartDevServer={mutations.handleRestartDevServer}
               onRemoveDevServer={mutations.handleRemoveDevServer}
               onViewDevServerLogs={setLogsServerId}
-              onHoverStart={hoverHandlers.onHoverStart}
-              onHoverEnd={hoverHandlers.onHoverEnd}
             />
           )}
 
@@ -311,26 +265,10 @@ export function SessionList({
                 onSummarize={mutations.handleSummarize}
                 onDeleteSession={mutations.handleDeleteSession}
                 onRenameSession={mutations.handleRenameSession}
-                hoverHandlers={hoverHandlers}
               />
             )}
         </div>
       </ScrollArea>
-
-      {/* Session Preview Popover (desktop only): live ANSI snapshot on hover,
-          via /api/sessions/[id]/preview (backend-agnostic capture). Re-enabled —
-          the migration-era reason it was shelved (capture path in flux) is gone. */}
-      {!isMobile && (
-        <SessionPreviewPopover
-          session={hoveredSession}
-          status={
-            hoveredSession
-              ? sessionStatuses?.[hoveredSession.id]?.status
-              : undefined
-          }
-          position={hoverPosition}
-        />
-      )}
 
       {/* Server Logs Modal */}
       {logsServer && (

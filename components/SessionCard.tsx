@@ -73,8 +73,6 @@ interface SessionCardProps {
   onDelete?: (id: string) => void;
   onRename?: (id: string, newName: string) => void;
   onCreatePR?: (id: string) => void;
-  onHoverStart?: (session: Session, rect: DOMRect) => void;
-  onHoverEnd?: () => void;
 }
 
 // Module-level stable empty arrays for the optional list props. Using a fresh
@@ -133,8 +131,6 @@ function SessionCardComponent({
   onDelete,
   onRename,
   onCreatePR,
-  onHoverStart,
-  onHoverEnd,
 }: SessionCardProps) {
   const status = tmuxStatus || "dead";
   const config = statusConfig[status];
@@ -142,38 +138,10 @@ function SessionCardComponent({
   const [editName, setEditName] = useState(session.name);
   const [menuOpen, setMenuOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const cardRef = useRef<HTMLDivElement>(null);
-  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const justStartedEditingRef = useRef(false);
-
-  const handleMouseEnter = () => {
-    if (!onHoverStart || !cardRef.current || menuOpen) return;
-    // Debounce hover to avoid flickering
-    hoverTimeoutRef.current = setTimeout(() => {
-      if (cardRef.current && !menuOpen) {
-        onHoverStart(session, cardRef.current.getBoundingClientRect());
-      }
-    }, 300);
-  };
-
-  const handleMouseLeave = () => {
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current);
-      hoverTimeoutRef.current = null;
-    }
-    onHoverEnd?.();
-  };
 
   const handleMenuOpenChange = (open: boolean) => {
     setMenuOpen(open);
-    if (open) {
-      // Cancel hover preview when menu opens
-      if (hoverTimeoutRef.current) {
-        clearTimeout(hoverTimeoutRef.current);
-        hoverTimeoutRef.current = null;
-      }
-      onHoverEnd?.();
-    }
   };
 
   useEffect(() => {
@@ -388,10 +356,7 @@ function SessionCardComponent({
 
   const cardContent = (
     <div
-      ref={cardRef}
       onClick={handleCardClick}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
       className={cn(
         "group flex w-full cursor-pointer items-center gap-2 overflow-hidden rounded-md px-2 py-1.5 text-left transition-colors",
         "min-h-[44px] md:min-h-0", // 44px tap target on mobile; compact on desktop
