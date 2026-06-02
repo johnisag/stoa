@@ -394,7 +394,7 @@ function SessionCardComponent({
       onMouseLeave={handleMouseLeave}
       className={cn(
         "group flex w-full cursor-pointer items-center gap-2 overflow-hidden rounded-md px-2 py-1.5 text-left transition-colors",
-        "min-h-[36px] md:min-h-0", // Compact touch target
+        "min-h-[44px] md:min-h-0", // 44px tap target on mobile; compact on desktop
         isSelected
           ? "bg-primary/20"
           : isActive
@@ -408,7 +408,9 @@ function SessionCardComponent({
       {isInSelectMode && onToggleSelect && (
         <button
           onClick={handleCheckboxClick}
-          className="text-primary hover:text-primary/80 flex-shrink-0"
+          aria-label="Select session"
+          aria-pressed={isSelected}
+          className="text-primary hover:text-primary/80 -m-1 flex-shrink-0 p-1"
         >
           {isSelected ? (
             <CheckSquare className="h-4 w-4" />
@@ -478,6 +480,7 @@ function SessionCardComponent({
             session.pr_status === "closed" && "bg-red-500/20 text-red-400"
           )}
           title={`PR #${session.pr_number}: ${session.pr_status}`}
+          aria-label={`Pull request #${session.pr_number}, ${session.pr_status}`}
         >
           <GitPullRequest className="h-2.5 w-2.5" />
           <span>
@@ -502,7 +505,8 @@ function SessionCardComponent({
             <Button
               variant="ghost"
               size="icon-sm"
-              className="h-6 w-6 flex-shrink-0 opacity-100 md:h-5 md:w-5 md:opacity-0 md:group-hover:opacity-100"
+              aria-label="Session actions"
+              className="h-9 w-9 flex-shrink-0 opacity-100 md:h-5 md:w-5 md:opacity-0 md:group-hover:opacity-100"
             >
               <MoreHorizontal className="h-3 w-3" />
             </Button>

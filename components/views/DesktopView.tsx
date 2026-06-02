@@ -111,6 +111,7 @@ export function DesktopView({
             <Button
               variant="ghost"
               size="icon-sm"
+              aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
               onClick={() => setSidebarOpen(!sidebarOpen)}
             >
               {sidebarOpen ? (
@@ -133,6 +134,7 @@ export function DesktopView({
                     <Button
                       variant="ghost"
                       size="icon-sm"
+                      aria-label="Copy session ID"
                       className="h-6 w-6"
                       onClick={async () => {
                         try {
@@ -182,6 +184,7 @@ export function DesktopView({
                 <Button
                   variant="ghost"
                   size="icon-sm"
+                  aria-label="Quick switch (Cmd/Ctrl+K)"
                   onClick={() => setShowQuickSwitcher(true)}
                 >
                   <Command className="h-4 w-4" />

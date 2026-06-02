@@ -6,6 +6,18 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@layer base {
+  /* Global keyboard focus ring. Lives in @layer base so shadcn components
+     (which set `outline-none` + their own ring via utilities) override it — no
+     double ring. This only surfaces a focus state on raw interactive elements
+     that had none (e.g. SessionCard's checkbox/PR-badge, bare <a>/<button>).
+     Outline (not box-shadow) so it never affects layout. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}
+
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
