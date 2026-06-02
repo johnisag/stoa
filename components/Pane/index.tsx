@@ -10,6 +10,7 @@ import type {
 } from "@/components/Terminal";
 import type { Session, Project } from "@/lib/db";
 import { sessionKey } from "@/lib/providers/registry";
+import { getSwitchableSessionOrder } from "@/lib/session-navigation";
 import { sessionRegistry } from "@/lib/client/session-registry";
 import { getActiveBackend, buildSpawnForSession } from "@/lib/client/backend";
 import { cn } from "@/lib/utils";
@@ -332,11 +333,15 @@ export const Pane = memo(function Pane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneId, onRegisterTerminal]);
 
-  // Swipe gesture handling for mobile session switching (terminal view only)
+  // Swipe gesture handling for mobile session switching (terminal view only).
+  // Cycle over the shared sidebar order so swipe agrees with the chevrons and
+  // Alt+arrows (worker sessions excluded).
   const touchStartX = useRef<number | null>(null);
-  const currentIndex = session
-    ? sessions.findIndex((s) => s.id === session.id)
-    : -1;
+  const switchOrder = useMemo(
+    () => getSwitchableSessionOrder(sessions, projects),
+    [sessions, projects]
+  );
+  const currentIndex = session ? switchOrder.indexOf(session.id) : -1;
   const SWIPE_THRESHOLD = 120;
 
   const handleTouchStart = useCallback(
@@ -356,12 +361,13 @@ export const Pane = memo(function Pane({
 
       if (Math.abs(diff) <= SWIPE_THRESHOLD) return;
 
+      if (currentIndex === -1) return;
       const nextIndex = diff > 0 ? currentIndex - 1 : currentIndex + 1;
-      if (nextIndex >= 0 && nextIndex < sessions.length) {
-        onSelectSession?.(sessions[nextIndex].id);
+      if (nextIndex >= 0 && nextIndex < switchOrder.length) {
+        onSelectSession?.(switchOrder[nextIndex]);
       }
     },
-    [viewMode, currentIndex, sessions, onSelectSession]
+    [viewMode, currentIndex, switchOrder, onSelectSession]
   );
 
   return (

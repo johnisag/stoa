@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -20,6 +20,8 @@ import {
   Circle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getSwitchableSessionOrder } from "@/lib/session-navigation";
+import { getActiveBackend } from "@/lib/client/backend";
 import type { Session, Project } from "@/lib/db";
 import type { LucideIcon } from "lucide-react";
 
@@ -83,17 +85,20 @@ export function MobileTabBar({
   onViewModeChange,
   onSelectSession,
 }: MobileTabBarProps) {
-  // Find current session index and calculate prev/next
-  const currentIndex = session
-    ? sessions.findIndex((s) => s.id === session.id)
-    : -1;
+  // Shared sidebar order (worker sessions excluded) so the chevrons, the
+  // dropdown, the pane swipe, and Alt+arrows all switch in the same order.
+  const order = useMemo(
+    () => getSwitchableSessionOrder(sessions, projects),
+    [sessions, projects]
+  );
+  const currentIndex = session ? order.indexOf(session.id) : -1;
 
   // Get project name for current session
   const projectName = session?.project_id
     ? projects.find((p) => p.id === session.project_id)?.name
     : null;
   const hasPrev = currentIndex > 0;
-  const hasNext = currentIndex >= 0 && currentIndex < sessions.length - 1;
+  const hasNext = currentIndex >= 0 && currentIndex < order.length - 1;
 
   // Debounce to prevent rapid clicking causing command interference
   const [isNavigating, setIsNavigating] = useState(false);
@@ -106,11 +111,13 @@ export function MobileTabBar({
       setIsNavigating(true);
       onSelectSession(sessionId);
 
-      // Allow next navigation after delay (tmux commands need time)
+      // Release the lock once the re-attach settles. pty re-attach is fast; tmux
+      // needs its detach/attach ceremony, so keep the longer guard there.
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        setIsNavigating(false);
-      }, 500);
+      void getActiveBackend().then((backend) => {
+        const delay = backend === "pty" ? 150 : 500;
+        debounceRef.current = setTimeout(() => setIsNavigating(false), delay);
+      });
     },
     [isNavigating, onSelectSession]
   );
@@ -119,7 +126,7 @@ export function MobileTabBar({
     e.preventDefault();
     e.stopPropagation();
     if (hasPrev && !isNavigating) {
-      handleNavigate(sessions[currentIndex - 1].id);
+      handleNavigate(order[currentIndex - 1]);
     }
   };
 
@@ -127,7 +134,7 @@ export function MobileTabBar({
     e.preventDefault();
     e.stopPropagation();
     if (hasNext && !isNavigating) {
-      handleNavigate(sessions[currentIndex + 1].id);
+      handleNavigate(order[currentIndex + 1]);
     }
   };
 
@@ -188,41 +195,41 @@ export function MobileTabBar({
             align="center"
             className="max-h-[300px] min-w-[200px] overflow-y-auto"
           >
-            {sessions
-              .filter((s) => !s.conductor_session_id)
-              .map((s) => {
-                const sessionProject = s.project_id
-                  ? projects.find((p) => p.id === s.project_id)
-                  : null;
-                const isActive = s.id === session?.id;
+            {order.map((id) => {
+              const s = sessions.find((x) => x.id === id);
+              if (!s) return null;
+              const sessionProject = s.project_id
+                ? projects.find((p) => p.id === s.project_id)
+                : null;
+              const isActive = s.id === session?.id;
 
-                return (
-                  <DropdownMenuItem
-                    key={s.id}
-                    onSelect={() => onSelectSession?.(s.id)}
+              return (
+                <DropdownMenuItem
+                  key={s.id}
+                  onSelect={() => onSelectSession?.(s.id)}
+                  className={cn(
+                    "flex items-center gap-2",
+                    isActive && "bg-accent"
+                  )}
+                >
+                  <Circle
                     className={cn(
-                      "flex items-center gap-2",
-                      isActive && "bg-accent"
+                      "h-2 w-2",
+                      isActive
+                        ? "fill-primary text-primary"
+                        : "text-muted-foreground"
                     )}
-                  >
-                    <Circle
-                      className={cn(
-                        "h-2 w-2",
-                        isActive
-                          ? "fill-primary text-primary"
-                          : "text-muted-foreground"
-                      )}
-                    />
-                    <span className="flex-1 truncate">{s.name}</span>
-                    {sessionProject &&
-                      sessionProject.name !== "Uncategorized" && (
-                        <span className="text-muted-foreground text-xs">
-                          [{sessionProject.name}]
-                        </span>
-                      )}
-                  </DropdownMenuItem>
-                );
-              })}
+                  />
+                  <span className="flex-1 truncate">{s.name}</span>
+                  {sessionProject &&
+                    sessionProject.name !== "Uncategorized" && (
+                      <span className="text-muted-foreground text-xs">
+                        [{sessionProject.name}]
+                      </span>
+                    )}
+                </DropdownMenuItem>
+              );
+            })}
           </DropdownMenuContent>
         </DropdownMenu>
 
