@@ -6,29 +6,42 @@ import { cn } from "@/lib/utils";
 interface SwipeSidebarProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpen: () => void;
   children: ReactNode;
 }
 
+/** px from the left screen edge that starts an open-swipe when closed. */
+const EDGE_ZONE = 20;
+/** px a drag must travel to commit (open or close). */
+const COMMIT_THRESHOLD = 50;
+
 /**
  * Mobile sidebar with swipe gestures
- * Slides in from left, backdrop dismissal
+ * Slides in from left, backdrop dismissal. Swipe left to close; swipe right
+ * from the left screen edge to open (the only other open path is the hamburger).
  */
-export function SwipeSidebar({ isOpen, onClose, children }: SwipeSidebarProps) {
+export function SwipeSidebar({
+  isOpen,
+  onClose,
+  onOpen,
+  children,
+}: SwipeSidebarProps) {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const touchStartX = useRef<number | null>(null);
   const touchCurrentX = useRef<number | null>(null);
 
-  // Handle swipe to close
+  // Handle swipe-to-close (when open) and edge-swipe-to-open (when closed).
   useEffect(() => {
-    if (!isOpen) return;
-
     const handleTouchStart = (e: TouchEvent) => {
-      if (!sidebarRef.current) return;
-      const sidebar = sidebarRef.current;
       const touch = e.touches[0];
-
-      // Only start tracking if touch is within sidebar
-      if (touch.clientX <= sidebar.offsetWidth) {
+      if (isOpen) {
+        // Close: only start if the touch begins within the open sidebar.
+        const sidebar = sidebarRef.current;
+        if (sidebar && touch.clientX <= sidebar.offsetWidth) {
+          touchStartX.current = touch.clientX;
+        }
+      } else if (touch.clientX < EDGE_ZONE) {
+        // Open: only start from the left screen edge.
         touchStartX.current = touch.clientX;
       }
     };
@@ -36,11 +49,18 @@ export function SwipeSidebar({ isOpen, onClose, children }: SwipeSidebarProps) {
     const handleTouchMove = (e: TouchEvent) => {
       if (touchStartX.current === null) return;
       touchCurrentX.current = e.touches[0].clientX;
-
-      // If swiping left, apply transform
       const diff = touchCurrentX.current - touchStartX.current;
-      if (diff < 0 && sidebarRef.current) {
-        sidebarRef.current.style.transform = `translateX(${diff}px)`;
+      const sidebar = sidebarRef.current;
+      if (!sidebar) return;
+
+      if (isOpen) {
+        // Drag left to peel the open sidebar off-screen (rubber-band).
+        if (diff < 0) sidebar.style.transform = `translateX(${diff}px)`;
+      } else if (diff > 0) {
+        // Drag right to pull the closed sidebar in from -100% (clamped).
+        const w = sidebar.offsetWidth || 280;
+        const shown = Math.min(diff, w);
+        sidebar.style.transform = `translateX(${shown - w}px)`;
       }
     };
 
@@ -52,17 +72,11 @@ export function SwipeSidebar({ isOpen, onClose, children }: SwipeSidebarProps) {
       }
 
       const diff = touchCurrentX.current - touchStartX.current;
+      if (isOpen && diff < -COMMIT_THRESHOLD) onClose();
+      else if (!isOpen && diff > COMMIT_THRESHOLD) onOpen();
 
-      // If swiped more than 50px left, close sidebar
-      if (diff < -50) {
-        onClose();
-      }
-
-      // Reset transform
-      if (sidebarRef.current) {
-        sidebarRef.current.style.transform = "";
-      }
-
+      // Reset inline transform → falls back to the open/closed CSS class.
+      if (sidebarRef.current) sidebarRef.current.style.transform = "";
       touchStartX.current = null;
       touchCurrentX.current = null;
     };
@@ -78,7 +92,7 @@ export function SwipeSidebar({ isOpen, onClose, children }: SwipeSidebarProps) {
       document.removeEventListener("touchmove", handleTouchMove);
       document.removeEventListener("touchend", handleTouchEnd);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, onOpen]);
 
   // Prevent body scroll when open
   useEffect(() => {
