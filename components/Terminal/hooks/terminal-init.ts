@@ -4,8 +4,8 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
-import { CanvasAddon } from "@xterm/addon-canvas";
 import { getTerminalThemeForApp } from "../constants";
+import { loadRenderer } from "./terminal-renderer";
 
 export interface TerminalInstance {
   term: XTerm;
@@ -48,7 +48,8 @@ export function createTerminal(
   term.loadAddon(new WebLinksAddon());
   term.loadAddon(searchAddon);
   term.open(container);
-  term.loadAddon(new CanvasAddon());
+  // GPU renderer (WebGL, with canvas/DOM fallback) — must load after open().
+  loadRenderer(term);
   fitAddon.fit();
 
   // Helper to copy text to clipboard with fallback
