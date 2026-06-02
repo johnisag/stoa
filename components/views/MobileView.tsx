@@ -62,7 +62,11 @@ export function MobileView({
           the terminal + toolbar shrink above the on-screen keyboard instead of
           sliding under it. Desktop stays h-screen (DesktopView). */}
       {/* Swipe sidebar */}
-      <SwipeSidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)}>
+      <SwipeSidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        onOpen={() => setSidebarOpen(true)}
+      >
         <div className="flex h-full flex-col">
           {/* Session list */}
           <div className="min-h-0 flex-1 overflow-hidden">
