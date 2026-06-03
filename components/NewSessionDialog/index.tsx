@@ -159,6 +159,8 @@ export function NewSessionDialog({
               onUseTmuxChange={form.handleUseTmuxChange}
               skipPermissions={form.skipPermissions}
               onSkipPermissionsChange={form.handleSkipPermissionsChange}
+              enableOrchestration={form.enableOrchestration}
+              onEnableOrchestrationChange={form.setEnableOrchestration}
             />
 
             {form.error && <p className="text-sm text-red-500">{form.error}</p>}

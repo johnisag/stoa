@@ -224,6 +224,7 @@ export interface CreateSessionInput {
   featureName: string | null;
   baseBranch: string | null;
   autoApprove: boolean;
+  enableOrchestration: boolean;
   useTmux: boolean;
   initialPrompt: string | null;
 }

@@ -10,6 +10,8 @@ interface AdvancedSettingsProps {
   onUseTmuxChange: (checked: boolean) => void;
   skipPermissions: boolean;
   onSkipPermissionsChange: (checked: boolean) => void;
+  enableOrchestration: boolean;
+  onEnableOrchestrationChange: (checked: boolean) => void;
 }
 
 export function AdvancedSettings({
@@ -20,6 +22,8 @@ export function AdvancedSettings({
   onUseTmuxChange,
   skipPermissions,
   onSkipPermissionsChange,
+  enableOrchestration,
+  onEnableOrchestrationChange,
 }: AdvancedSettingsProps) {
   const provider = getProviderDefinition(agentType);
   const supportsAutoApprove = Boolean(provider.autoApproveFlag);
@@ -68,6 +72,24 @@ export function AdvancedSettings({
                 {supportsAutoApprove
                   ? `(${provider.autoApproveFlag})`
                   : "(not supported)"}
+              </span>
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="enableOrchestration"
+              checked={enableOrchestration}
+              onChange={(e) => onEnableOrchestrationChange(e.target.checked)}
+              className="border-border bg-background accent-primary h-4 w-4 rounded"
+            />
+            <label
+              htmlFor="enableOrchestration"
+              className="cursor-pointer text-sm"
+            >
+              Enable orchestration
+              <span className="text-muted-foreground ml-1">
+                (conductor — can spawn worker sessions via spawn_worker)
               </span>
             </label>
           </div>
