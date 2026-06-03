@@ -3,8 +3,32 @@
 import { useCodeSearch } from "@/data/code-search";
 import { Loader2, FileCode, Search } from "lucide-react";
 import { useState, useEffect } from "react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
+import vscDarkPlus from "react-syntax-highlighter/dist/esm/styles/prism/vsc-dark-plus";
+import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
+import javascript from "react-syntax-highlighter/dist/esm/languages/prism/javascript";
+import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
+import markdown from "react-syntax-highlighter/dist/esm/languages/prism/markdown";
+import css from "react-syntax-highlighter/dist/esm/languages/prism/css";
+import markup from "react-syntax-highlighter/dist/esm/languages/prism/markup";
+import python from "react-syntax-highlighter/dist/esm/languages/prism/python";
+import ruby from "react-syntax-highlighter/dist/esm/languages/prism/ruby";
+import go from "react-syntax-highlighter/dist/esm/languages/prism/go";
+import rust from "react-syntax-highlighter/dist/esm/languages/prism/rust";
+
+// Register ONLY the languages getLanguageFromPath maps (PrismLight bundles no
+// grammars by default) — drops the 625KB full-refractor chunk to <100KB. Any
+// other extension falls back to "text" (renders plain, which is correct).
+SyntaxHighlighter.registerLanguage("typescript", typescript);
+SyntaxHighlighter.registerLanguage("javascript", javascript);
+SyntaxHighlighter.registerLanguage("json", json);
+SyntaxHighlighter.registerLanguage("markdown", markdown);
+SyntaxHighlighter.registerLanguage("css", css);
+SyntaxHighlighter.registerLanguage("html", markup); // Prism models HTML as markup
+SyntaxHighlighter.registerLanguage("python", python);
+SyntaxHighlighter.registerLanguage("ruby", ruby);
+SyntaxHighlighter.registerLanguage("go", go);
+SyntaxHighlighter.registerLanguage("rust", rust);
 import { cn } from "@/lib/utils";
 import { baseName, dirName } from "@/lib/path-display";
 import type { FormattedMatch } from "@/lib/code-search";
