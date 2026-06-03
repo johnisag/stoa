@@ -88,6 +88,15 @@ export function useTerminalConnection({
     return false;
   }, []);
 
+  // Whether the terminal currently holds a text selection. The xterm selection
+  // is its own model (not a DOM Selection — the canvas/WebGL renderer paints it),
+  // so callers can't use window.getSelection() to detect it. Used to avoid
+  // stealing focus on the click that completes a drag-select (focus() clears it).
+  const hasSelection = useCallback(
+    () => xtermRef.current?.hasSelection() ?? false,
+    []
+  );
+
   const sendInput = useCallback((data: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "input", data }));
@@ -432,6 +441,7 @@ export function useTerminalConnection({
     searchAddonRef,
     scrollToBottom,
     copySelection,
+    hasSelection,
     sendInput,
     sendCommand,
     attachSession,

@@ -95,7 +95,11 @@ export function PaneProvider({ children }: { children: ReactNode }) {
   }, [state, hydrated]);
 
   const focusPane = useCallback((paneId: string) => {
-    setState((prev) => ({ ...prev, focusedPaneId: paneId }));
+    // Bail when already focused — otherwise every click rebuilds the state
+    // object and re-renders all PaneContext consumers for no change.
+    setState((prev) =>
+      prev.focusedPaneId === paneId ? prev : { ...prev, focusedPaneId: paneId }
+    );
   }, []);
 
   const splitHorizontal = useCallback((paneId: string) => {

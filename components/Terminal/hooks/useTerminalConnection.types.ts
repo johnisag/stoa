@@ -42,6 +42,7 @@ export interface UseTerminalConnectionReturn {
   searchAddonRef: RefObject<SearchAddon | null>;
   scrollToBottom: () => void;
   copySelection: () => boolean;
+  hasSelection: () => boolean;
   sendInput: (data: string) => void;
   sendCommand: (command: string) => void;
   attachSession: (payload: AttachPayload) => void;

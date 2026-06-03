@@ -18,6 +18,7 @@ import { ConductorPanel } from "@/components/ConductorPanel";
 import { useFileEditor } from "@/hooks/useFileEditor";
 import { MobileTabBar } from "./MobileTabBar";
 import { DesktopTabBar } from "./DesktopTabBar";
+import { shouldFocusPaneOnClick } from "./focus-guard";
 import {
   TerminalSkeleton,
   FileExplorerSkeleton,
@@ -215,8 +216,13 @@ export const Pane = memo(function Pane({
   }, [paneCommand, isFocused, paneData, paneId, switchTab]);
 
   const handleFocus = useCallback(() => {
+    // Don't steal focus on the click that completes a drag-select in this pane's
+    // terminal — focus() clears the xterm selection on mouse-up (so it can't be
+    // copied). Mirrors the guard on the terminal host div in
+    // components/Terminal/index.tsx. A plain click (no selection) still focuses.
+    if (!shouldFocusPaneOnClick(terminalRef)) return;
     focusPane(paneId);
-  }, [focusPane, paneId]);
+  }, [focusPane, paneId, terminalRef]);
 
   const handleDetach = useCallback(() => {
     void getActiveBackend().then((backend) => {

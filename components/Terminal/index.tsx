@@ -30,6 +30,7 @@ export interface TerminalHandle {
   sendInput: (data: string) => void;
   attachSession: (payload: AttachPayload) => void;
   focus: () => void;
+  hasSelection: () => boolean;
   getScrollState: () => TerminalScrollState | null;
   restoreScrollState: (state: TerminalScrollState) => void;
 }
@@ -79,6 +80,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       searchAddonRef,
       scrollToBottom,
       copySelection,
+      hasSelection,
       sendInput,
       sendCommand,
       attachSession,
@@ -151,6 +153,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       sendInput,
       attachSession,
       focus,
+      hasSelection,
       getScrollState,
       restoreScrollState,
     }));
