@@ -15,6 +15,11 @@ import {
 } from "./lib/session-backend/pty/transport";
 import { AttachSession } from "./lib/session-backend/pty/attach-session";
 import { getHostClient } from "./lib/session-backend/pty/host-client";
+import {
+  computeManagedStatuses,
+  diffStatuses,
+  snapshotStatuses,
+} from "./lib/session-status";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
@@ -41,6 +46,8 @@ app.prepare().then(() => {
 
   // Terminal WebSocket server
   const terminalWss = new WebSocketServer({ noServer: true });
+  // Live status-events server: pushes session status deltas to the UI.
+  const eventsWss = new WebSocketServer({ noServer: true });
 
   // Handle WebSocket upgrades
   server.on("upgrade", (request, socket, head) => {
@@ -49,6 +56,10 @@ app.prepare().then(() => {
     if (pathname === "/ws/terminal") {
       terminalWss.handleUpgrade(request, socket, head, (ws) => {
         terminalWss.emit("connection", ws, request);
+      });
+    } else if (pathname === "/ws/events") {
+      eventsWss.handleUpgrade(request, socket, head, (ws) => {
+        eventsWss.emit("connection", ws, request);
       });
     }
     // Let HMR and other WebSocket connections pass through to Next.js
@@ -72,6 +83,49 @@ app.prepare().then(() => {
       : new LocalTransport();
     handlePtyTerminal(ws, transport);
   });
+
+  // ── live status events (/ws/events) ──
+  // Push session status deltas so the board updates instantly, as a safety-net
+  // ALONGSIDE the client's 5s poll (which still backstops missed ticks + removed
+  // sessions). The ticker only does work while a client is listening.
+  const eventClients = new Set<WebSocket>();
+  let lastStatusSnapshot = new Map<string, string>();
+
+  const broadcastEvent = (obj: unknown) => {
+    const data = JSON.stringify(obj);
+    for (const ws of eventClients) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    }
+  };
+
+  eventsWss.on("connection", (ws: WebSocket) => {
+    eventClients.add(ws);
+    // Force the next tick to re-broadcast everything so the just-connected
+    // client gets the current state (it merges deltas into its status cache).
+    lastStatusSnapshot = new Map();
+    ws.on("close", () => eventClients.delete(ws));
+    ws.on("error", () => eventClients.delete(ws));
+  });
+
+  let statusTickBusy = false;
+  setInterval(async () => {
+    if (eventClients.size === 0) {
+      if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
+      return;
+    }
+    if (statusTickBusy) return; // don't stack ticks if a capture runs slow
+    statusTickBusy = true;
+    try {
+      const curr = await computeManagedStatuses();
+      const deltas = diffStatuses(lastStatusSnapshot, curr);
+      lastStatusSnapshot = snapshotStatuses(curr);
+      if (deltas.length) broadcastEvent({ type: "status", deltas });
+    } catch (err) {
+      console.error("status events tick failed:", err);
+    } finally {
+      statusTickBusy = false;
+    }
+  }, 2500);
 
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
   function handleTmuxConnection(ws: WebSocket) {
