@@ -11,6 +11,7 @@ import { killWorker } from "@/lib/orchestration";
 import { generateBranchName, getCurrentBranch, renameBranch } from "@/lib/git";
 import { runInBackground } from "@/lib/async-operations";
 import { getSessionBackend } from "@/lib/session-backend";
+import { backendKeyForSession } from "@/lib/providers/registry";
 
 // Sanitize a name for use as tmux session name
 function sanitizeTmuxName(name: string): string {
@@ -181,6 +182,18 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
         console.error(`Failed to kill worker ${worker.id}:`, error);
       }
       queries.deleteSession(db).run(worker.id);
+    }
+
+    // Kill this session's OWN agent process — not just its workers. Without it a
+    // "deleted" agent lingers in the pty-host daemon (Tier-2/Windows default):
+    // holding a CLI/auth seat, blocking idle-shutdown, resurrectable by key, and
+    // leaving the client on a live ghost pane. Best-effort + backend-agnostic; a
+    // missing/already-dead session must not fail the delete.
+    const backendKey = backendKeyForSession(existing);
+    try {
+      await getSessionBackend().kill(backendKey);
+    } catch (error) {
+      console.error(`Failed to kill session pty ${backendKey}:`, error);
     }
 
     // Release port if this session had one assigned

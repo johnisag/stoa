@@ -208,3 +208,24 @@ export function sessionKey(input: SessionKeyInput): string {
   const provider = input.kind === "shell" ? "shell" : input.provider;
   return `${provider}-${input.id}`;
 }
+
+/**
+ * The backend session key for a session row: its stored `tmux_name`, else the
+ * canonical `{provider}-{id}`. Single source for "which key addresses this
+ * session's pty/tmux" — status detection, orchestration, and delete all need it
+ * (and tmux_name can be null for non-tmux sessions).
+ */
+export function backendKeyForSession(session: {
+  id: string;
+  tmux_name?: string | null;
+  agent_type?: string | null;
+}): string {
+  if (session.tmux_name) return session.tmux_name;
+  // Match getProvider()'s fallback: null/empty/unknown agent_type → claude, so
+  // the computed key can never be malformed (e.g. "-<id>") and miss the pty.
+  const provider =
+    session.agent_type && isValidProviderId(session.agent_type)
+      ? session.agent_type
+      : "claude";
+  return sessionKey({ kind: "agent", provider, id: session.id });
+}
