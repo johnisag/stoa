@@ -156,6 +156,14 @@ export function useTerminalConnection({
 
   const focus = useCallback(() => xtermRef.current?.focus(), []);
 
+  // Paste via xterm so bracketed-paste mode is honored: a multi-line paste goes
+  // in as ONE paste (wrapped in ESC[200~/201~ when the app supports it) instead
+  // of each newline executing as a separate command.
+  const paste = useCallback(
+    (text: string) => xtermRef.current?.paste(text),
+    []
+  );
+
   const getScrollState = useCallback((): TerminalScrollState | null => {
     if (!xtermRef.current || !terminalRef.current) return null;
     const buffer = xtermRef.current.buffer.active;
@@ -446,6 +454,7 @@ export function useTerminalConnection({
     sendCommand,
     attachSession,
     focus,
+    paste,
     getScrollState,
     restoreScrollState,
     triggerResize,

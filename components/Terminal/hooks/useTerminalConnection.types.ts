@@ -47,6 +47,7 @@ export interface UseTerminalConnectionReturn {
   sendCommand: (command: string) => void;
   attachSession: (payload: AttachPayload) => void;
   focus: () => void;
+  paste: (text: string) => void;
   getScrollState: () => TerminalScrollState | null;
   restoreScrollState: (state: TerminalScrollState) => void;
   triggerResize: () => void;
