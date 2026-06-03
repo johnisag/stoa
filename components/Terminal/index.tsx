@@ -10,7 +10,15 @@ import {
 } from "react";
 import { useTheme } from "next-themes";
 import "@xterm/xterm/css/xterm.css";
-import { Paperclip, WifiOff, Upload, Loader2, RotateCcw } from "lucide-react";
+import {
+  Paperclip,
+  WifiOff,
+  Upload,
+  Loader2,
+  RotateCcw,
+  ClipboardPaste,
+  Copy,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
 import { ScrollToBottomButton } from "./ScrollToBottomButton";
@@ -85,6 +93,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       sendCommand,
       attachSession,
       focus,
+      paste,
       getScrollState,
       restoreScrollState,
       reconnect,
@@ -146,6 +155,21 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       handleFileDrop,
       { disabled: isUploading || showFilePicker }
     );
+
+    // Paste the clipboard into the terminal through xterm so bracketed-paste
+    // mode is honored (multi-line text goes in as one paste, not executed line
+    // by line). Used by the desktop Paste button.
+    const handlePasteFromClipboard = useCallback(async () => {
+      try {
+        const text = await navigator.clipboard?.readText?.();
+        if (text) {
+          paste(text);
+          focus();
+        }
+      } catch {
+        // Clipboard read blocked/unavailable — no-op (user can still ⌘V).
+      }
+    }, [paste, focus]);
 
     // Expose imperative methods
     useImperativeHandle(ref, () => ({
@@ -224,13 +248,28 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             onTouchEnd={(e) => e.stopPropagation()}
           >
             <div className="bg-primary text-primary-foreground flex items-center justify-between px-3 py-2 text-xs font-medium">
-              <span>Select text below, then tap Copy</span>
-              <button
-                onClick={() => setSelectMode(false)}
-                className="bg-primary-foreground/20 rounded px-2 py-0.5 text-xs"
-              >
-                Done
-              </button>
+              <span>Select text, then Copy</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const sel = window.getSelection()?.toString();
+                    const text = sel && sel.length > 0 ? sel : terminalText;
+                    if (text && navigator.clipboard?.writeText) {
+                      navigator.clipboard.writeText(text).catch(() => {});
+                    }
+                    setSelectMode(false);
+                  }}
+                  className="bg-primary-foreground/20 rounded px-2 py-0.5 text-xs"
+                >
+                  Copy
+                </button>
+                <button
+                  onClick={() => setSelectMode(false)}
+                  className="bg-primary-foreground/20 rounded px-2 py-0.5 text-xs"
+                >
+                  Done
+                </button>
+              </div>
             </div>
             <pre
               className="flex-1 overflow-auto p-3 font-mono text-xs break-all whitespace-pre-wrap select-text"
@@ -264,16 +303,37 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           </div>
         )}
 
-        {/* File picker button - desktop only, for agent terminals */}
-        {!isMobile && showImageButton && (
-          <button
-            onClick={() => setShowFilePicker(true)}
-            className="bg-secondary hover:bg-accent focus-visible:ring-ring absolute top-3 right-3 z-40 flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition-all outline-none focus-visible:ring-2"
-            title="Attach file"
-            aria-label="Attach file"
-          >
-            <Paperclip className="h-4 w-4" />
-          </button>
+        {/* Desktop terminal actions (top-right): select/copy text, paste, attach.
+            Mobile uses the bottom TerminalToolbar instead. */}
+        {!isMobile && (
+          <div className="absolute top-3 right-3 z-40 flex items-center gap-2">
+            <button
+              onClick={() => setSelectMode(true)}
+              className="bg-secondary hover:bg-accent focus-visible:ring-ring flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition-all outline-none focus-visible:ring-2"
+              title="Select text to copy (TUIs grab the mouse; ⌥-drag also works)"
+              aria-label="Select text to copy"
+            >
+              <Copy className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handlePasteFromClipboard}
+              className="bg-secondary hover:bg-accent focus-visible:ring-ring flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition-all outline-none focus-visible:ring-2"
+              title="Paste from clipboard"
+              aria-label="Paste from clipboard"
+            >
+              <ClipboardPaste className="h-4 w-4" />
+            </button>
+            {showImageButton && (
+              <button
+                onClick={() => setShowFilePicker(true)}
+                className="bg-secondary hover:bg-accent focus-visible:ring-ring flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition-all outline-none focus-visible:ring-2"
+                title="Attach file"
+                aria-label="Attach file"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         )}
 
         {/* Image picker modal */}

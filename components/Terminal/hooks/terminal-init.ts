@@ -38,6 +38,10 @@ export function createTerminal(
     cursorStyle: "bar",
     cursorWidth: 2,
     allowProposedApi: true,
+    // Agent TUIs (Claude Code, Hermes, …) enable mouse tracking, which makes
+    // xterm forward drags to the app instead of selecting text. Option+drag
+    // forces a local selection on macOS so users can still select to copy.
+    macOptionClickForcesSelection: true,
     theme: terminalTheme,
   });
 
