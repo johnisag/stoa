@@ -22,6 +22,10 @@ function git(
   return execFileAsync("git", args, { cwd, timeout });
 }
 
+// Shared shell-free git runner for other modules (e.g. lib/worktrees.ts) so all
+// git invocation goes through one execFile seam — no shell quoting/redirects.
+export { git as runGit };
+
 /**
  * Check if a directory is a git repository
  */

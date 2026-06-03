@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getProject } from "@/lib/projects";
-import { deleteWorktree, isStoaWorktree } from "@/lib/worktrees";
+import {
+  deleteWorktree,
+  isStoaWorktree,
+  getMainRepoPath,
+} from "@/lib/worktrees";
 import { releasePort } from "@/lib/ports";
 import { killWorker } from "@/lib/orchestration";
 import { generateBranchName, getCurrentBranch, renameBranch } from "@/lib/git";
@@ -191,18 +195,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     if (existing.worktree_path && isStoaWorktree(existing.worktree_path)) {
       const worktreePath = existing.worktree_path; // Capture for closure
       runInBackground(async () => {
-        const { exec } = await import("child_process");
-        const { promisify } = await import("util");
-        const execAsync = promisify(exec);
-
-        const { stdout } = await execAsync(
-          `git -C "${worktreePath}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo ""`,
-          { timeout: 5000 }
-        );
-        const gitCommonDir = stdout.trim().replace(/\/.git$/, "");
-
-        if (gitCommonDir) {
-          await deleteWorktree(worktreePath, gitCommonDir, false);
+        const mainRepoPath = await getMainRepoPath(worktreePath);
+        if (mainRepoPath) {
+          await deleteWorktree(worktreePath, mainRepoPath, false);
         }
       }, `cleanup-worktree-${id}`);
     }
@@ -214,18 +209,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
           const worktreePath = worker.worktree_path; // Capture for closure
           const workerId = worker.id; // Capture ID for task name
           runInBackground(async () => {
-            const { exec } = await import("child_process");
-            const { promisify } = await import("util");
-            const execAsync = promisify(exec);
-
-            const { stdout } = await execAsync(
-              `git -C "${worktreePath}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo ""`,
-              { timeout: 5000 }
-            );
-            const gitCommonDir = stdout.trim().replace(/\/.git$/, "");
-
-            if (gitCommonDir) {
-              await deleteWorktree(worktreePath, gitCommonDir, false);
+            const mainRepoPath = await getMainRepoPath(worktreePath);
+            if (mainRepoPath) {
+              await deleteWorktree(worktreePath, mainRepoPath, false);
             }
           }, `cleanup-worker-worktree-${workerId}`);
         }
