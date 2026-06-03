@@ -19,7 +19,13 @@ import {
   computeManagedStatuses,
   diffStatuses,
   snapshotStatuses,
+  detectPushEvents,
+  statusById,
+  type PushEvent,
 } from "./lib/session-status";
+import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
+import { getDb, queries, type Session } from "./lib/db";
+import type { SessionStatus } from "./lib/status-detector";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
@@ -90,6 +96,44 @@ app.prepare().then(() => {
   // sessions). The ticker only does work while a client is listening.
   const eventClients = new Set<WebSocket>();
   let lastStatusSnapshot = new Map<string, string>();
+  // Separate status-only snapshot for Web Push transition detection (runs even
+  // with no WS client connected, so closed-tab pushes still fire).
+  let lastPushStatusById = new Map<string, SessionStatus>();
+  // Per-(session,event) cooldown so a flapping agent doesn't spam pushes
+  // (mirrors the in-app checkStateChanges cooldown).
+  const lastPushAt = new Map<string, number>();
+  const PUSH_COOLDOWN_MS = 15000;
+  const shouldPush = (ev: PushEvent): boolean => {
+    const key = `${ev.id}-${ev.kind}`;
+    const now = Date.now();
+    if (now - (lastPushAt.get(key) ?? 0) < PUSH_COOLDOWN_MS) return false;
+    lastPushAt.set(key, now);
+    return true;
+  };
+
+  // Friendly session name for a push body (falls back to the backend key).
+  const pushFor = (ev: PushEvent) => {
+    let name = ev.name;
+    try {
+      name =
+        (queries.getSession(getDb()).get(ev.id) as Session | undefined)?.name ??
+        ev.name;
+    } catch {
+      // DB unavailable — use the backend key
+    }
+    const verb =
+      ev.kind === "waiting"
+        ? "needs your input"
+        : ev.kind === "error"
+          ? "hit an error"
+          : "finished";
+    return sendPushToAll({
+      title: "Stoa",
+      body: `${name} ${verb}`,
+      tag: `${ev.id}-${ev.kind}`,
+      url: "/",
+    });
+  };
 
   const broadcastEvent = (obj: unknown) => {
     const data = JSON.stringify(obj);
@@ -109,17 +153,38 @@ app.prepare().then(() => {
 
   let statusTickBusy = false;
   setInterval(async () => {
-    if (eventClients.size === 0) {
+    const wsListening = eventClients.size > 0;
+    // Web Push must fire with no tab open, so the ticker also runs whenever a
+    // push subscription exists (computeManagedStatuses is cheap when idle).
+    const pushEnabled = hasPushSubscriptions();
+    if (!wsListening && !pushEnabled) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
+      if (lastPushStatusById.size) lastPushStatusById = new Map();
       return;
     }
     if (statusTickBusy) return; // don't stack ticks if a capture runs slow
     statusTickBusy = true;
     try {
       const curr = await computeManagedStatuses();
-      const deltas = diffStatuses(lastStatusSnapshot, curr);
-      lastStatusSnapshot = snapshotStatuses(curr);
-      if (deltas.length) broadcastEvent({ type: "status", deltas });
+      if (wsListening) {
+        const deltas = diffStatuses(lastStatusSnapshot, curr);
+        lastStatusSnapshot = snapshotStatuses(curr);
+        if (deltas.length) broadcastEvent({ type: "status", deltas });
+      }
+      if (pushEnabled) {
+        const events = detectPushEvents(lastPushStatusById, curr);
+        // Keep the snapshot fresh even while a tab is open, so closing the tab
+        // doesn't replay a backlog of transitions as a push flood.
+        lastPushStatusById = statusById(curr);
+        // Web Push is the CLOSED-TAB path: only send when no tab is open (a
+        // connected WS client means the in-app notification already fires for
+        // this transition — avoids double-notifying), and throttle per-event.
+        if (!wsListening) {
+          for (const ev of events) {
+            if (shouldPush(ev)) await pushFor(ev);
+          }
+        }
+      }
     } catch (err) {
       console.error("status events tick failed:", err);
     } finally {

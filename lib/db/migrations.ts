@@ -193,6 +193,22 @@ const migrations: Migration[] = [
       db.exec(`ALTER TABLE sessions ADD COLUMN mcp_launch_args TEXT`);
     },
   },
+  {
+    id: 15,
+    name: "add_push_subscriptions_table",
+    up: (db) => {
+      // Web Push subscriptions (closed-tab notifications). Keyed by endpoint so
+      // a re-subscribe upserts rather than duplicating.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          endpoint TEXT PRIMARY KEY,
+          p256dh TEXT NOT NULL,
+          auth TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
