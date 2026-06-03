@@ -275,8 +275,8 @@ export async function listWorktrees(projectPath: string): Promise<
  * (silently hiding every worktree from the attach picker + delete gate).
  */
 export function isStoaWorktree(worktreePath: string): boolean {
-  const base = normalizePath(WORKTREES_DIR);
-  return normalizePath(worktreePath).startsWith(base);
+  const base = normalizeWorktreePath(WORKTREES_DIR);
+  return normalizeWorktreePath(worktreePath).startsWith(base);
 }
 
 export interface AnnotatedWorktree {
@@ -290,7 +290,7 @@ export interface AnnotatedWorktree {
 }
 
 /** Normalize a path for comparison (expand ~, resolve, case-fold on Windows). */
-function normalizePath(p: string): string {
+export function normalizeWorktreePath(p: string): string {
   const resolved = path.resolve(resolvePath(p));
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
@@ -306,11 +306,12 @@ export function annotateWorktrees(
   sessionWorkingDirs: Iterable<string>
 ): AnnotatedWorktree[] {
   const attachedDirs = new Set<string>();
-  for (const dir of sessionWorkingDirs) attachedDirs.add(normalizePath(dir));
+  for (const dir of sessionWorkingDirs)
+    attachedDirs.add(normalizeWorktreePath(dir));
   return worktrees.map((w) => ({
     ...w,
     isStoa: isStoaWorktree(w.path),
-    attached: attachedDirs.has(normalizePath(w.path)),
+    attached: attachedDirs.has(normalizeWorktreePath(w.path)),
   }));
 }
 
