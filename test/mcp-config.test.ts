@@ -21,6 +21,8 @@ import {
   buildCodexOrchestrationArgs,
   buildHermesRegisterArgs,
   writeConductorMarker,
+  removeConductorMarker,
+  planHermesRegistration,
 } from "@/lib/mcp-config";
 import { CONDUCTOR_MARKER_FILE } from "@/lib/conductor-marker";
 
@@ -123,6 +125,72 @@ describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
     // Single-quoted (literal) — never double-quoted, which would mangle `\m`.
     expect(argsToken).not.toContain('"');
     expect(argsToken).toContain("'tsx'");
+  });
+
+  it("escapes a value containing a single quote as a double-quoted TOML string (F6)", () => {
+    // A single-quoted literal can't hold a `'`, so a checkout under …/o'brien/…
+    // (or any quoted value) must emit a valid double-quoted basic string instead
+    // of broken TOML that makes Codex drop the stoa server.
+    const args = buildCodexOrchestrationArgs("ses'x");
+    const idToken = args.find((s) =>
+      s.startsWith("mcp_servers.stoa.env.CONDUCTOR_SESSION_ID=")
+    )!;
+    expect(idToken).toBe('mcp_servers.stoa.env.CONDUCTOR_SESSION_ID="ses\'x"');
+  });
+});
+
+describe("planHermesRegistration — stale-path self-correction (F3)", () => {
+  const cur = "/abs/stoa/mcp/orchestration-server.ts";
+
+  it("skips when listed AND recorded at the current path", () => {
+    expect(planHermesRegistration(true, cur, cur)).toEqual({
+      skip: true,
+      removeFirst: false,
+    });
+  });
+
+  it("re-points (remove-first) when listed at a STALE path", () => {
+    expect(planHermesRegistration(true, "/old/path/server.ts", cur)).toEqual({
+      skip: false,
+      removeFirst: true,
+    });
+  });
+
+  it("re-registers (remove-first) when listed but the path is unknown", () => {
+    expect(planHermesRegistration(true, null, cur)).toEqual({
+      skip: false,
+      removeFirst: true,
+    });
+  });
+
+  it("adds fresh (no remove) when not listed at all", () => {
+    expect(planHermesRegistration(false, null, cur)).toEqual({
+      skip: false,
+      removeFirst: false,
+    });
+  });
+});
+
+describe("removeConductorMarker (F5)", () => {
+  it("deletes the .stoa-conductor marker so a reused dir can't inherit a dead id", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "stoa-cond-"));
+    try {
+      writeConductorMarker(dir, "sess-1");
+      expect(existsSync(path.join(dir, CONDUCTOR_MARKER_FILE))).toBe(true);
+      removeConductorMarker(dir);
+      expect(existsSync(path.join(dir, CONDUCTOR_MARKER_FILE))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is a no-op (no throw) when there's no marker", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "stoa-cond-"));
+    try {
+      expect(() => removeConductorMarker(dir)).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
