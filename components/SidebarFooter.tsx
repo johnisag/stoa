@@ -5,6 +5,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { WorktreesButton } from "@/components/Worktrees/WorktreesButton";
 
 interface SidebarFooterProps {
   /** Opens the keyboard-shortcut cheatsheet (also bound to `?`). */
@@ -34,6 +35,7 @@ export function SidebarFooter({ onShowShortcuts }: SidebarFooterProps = {}) {
               </TooltipContent>
             </Tooltip>
           )}
+          <WorktreesButton />
           <ThemeToggle />
         </div>
       </div>
