@@ -32,25 +32,36 @@ export function getVapidKeys(): VapidKeys {
     return cached;
   }
 
-  try {
-    if (existsSync(VAPID_PATH)) {
-      const parsed = JSON.parse(
-        readFileSync(VAPID_PATH, "utf-8")
-      ) as Partial<VapidKeys>;
+  if (existsSync(VAPID_PATH)) {
+    // The file is the source of truth. Distinguish a transient READ failure
+    // (Windows file lock / AV scan / partial write) from genuine corruption: a
+    // read error must NOT regenerate, because overwriting a still-valid file
+    // would invalidate every existing push subscription. Only a parsed-but-bad
+    // file falls through to regenerate.
+    let raw: string;
+    try {
+      raw = readFileSync(VAPID_PATH, "utf-8");
+    } catch (err) {
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+    try {
+      const parsed = JSON.parse(raw) as Partial<VapidKeys>;
       if (parsed.publicKey && parsed.privateKey) {
         cached = { publicKey: parsed.publicKey, privateKey: parsed.privateKey };
         return cached;
       }
+    } catch {
+      // Corrupt JSON — fall through to regenerate (it's unparseable anyway).
     }
-  } catch {
-    // fall through to regenerate
   }
 
   const keys = webpush.generateVAPIDKeys();
   cached = { publicKey: keys.publicKey, privateKey: keys.privateKey };
   try {
     mkdirSync(path.dirname(VAPID_PATH), { recursive: true });
-    // 0600 — the private key must not be world-readable on shared hosts.
+    // Best-effort owner-only perms on POSIX. NOTE: ignored on Windows (NTFS uses
+    // ACLs, not POSIX mode bits) — the key inherits the ~/.stoa dir ACL there,
+    // so this isn't a hard guarantee on a shared Windows host.
     writeFileSync(VAPID_PATH, JSON.stringify(cached, null, 2), { mode: 0o600 });
   } catch (err) {
     console.error("Failed to persist VAPID keys:", err);
@@ -114,7 +125,11 @@ export async function sendPushToAll(payload: PushPayload): Promise<void> {
       try {
         await webpush.sendNotification(
           { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-          data
+          data,
+          // Bound each send: web-push has no default timeout, so a hung push
+          // endpoint would otherwise block on the OS socket timeout (minutes)
+          // and stall the status ticker that drives it.
+          { timeout: 10000 }
         );
       } catch (err: unknown) {
         const code = (err as { statusCode?: number })?.statusCode;
