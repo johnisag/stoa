@@ -12,8 +12,8 @@ import {
   LocalTransport,
   HostTransport,
   type PtyTransport,
-  type AttachHandle,
 } from "./lib/session-backend/pty/transport";
+import { AttachSession } from "./lib/session-backend/pty/attach-session";
 import { getHostClient } from "./lib/session-backend/pty/host-client";
 
 const dev = process.env.NODE_ENV !== "production";
@@ -154,54 +154,34 @@ app.prepare().then(() => {
   // resize/detach handle; we repaint then stream, with no await between the
   // snapshot and listener registration so no live bytes are dropped/dup'd.
   function handlePtyTerminal(ws: WebSocket, transport: PtyTransport) {
-    let currentKey: string | null = null;
-    let handle: AttachHandle | null = null;
-    let lastSize = { cols: 80, rows: 24 };
-
     const send = (obj: unknown) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
     };
 
-    const attach = async (
-      key: string,
-      spawn?: { binary?: string; args?: string[]; cwd?: string }
-    ) => {
-      handle?.detach();
-      handle = null;
-      currentKey = key;
-      try {
-        const h = await transport.attachStream({
-          key,
-          spawn,
-          cols: lastSize.cols,
-          rows: lastSize.rows,
-          onOutput: (data) => send({ type: "output", data }),
-          onExit: (code) => send({ type: "exit", code }),
-        });
-        handle = h;
-        if (h.snapshot) send({ type: "output", data: h.snapshot });
-      } catch (err) {
-        console.error("pty attach failed:", err);
-        send({ type: "error", message: "Failed to attach session" });
-      }
-    };
+    // The attach state machine (incl. the sequence guard that stops a racing
+    // re-attach from double-subscribing) lives in AttachSession; this handler
+    // just maps WebSocket frames onto it.
+    const session = new AttachSession(transport, {
+      output: (data) => send({ type: "output", data }),
+      exit: (code) => send({ type: "exit", code }),
+      error: (message) => send({ type: "error", message }),
+    });
 
     ws.on("message", (message: Buffer) => {
       try {
         const msg = JSON.parse(message.toString());
         switch (msg.type) {
           case "attach":
-            void attach(msg.key, msg.spawn);
+            void session.attach(msg.key, msg.spawn);
             break;
           case "input":
-            if (currentKey) transport.write(currentKey, msg.data);
+            session.write(msg.data);
             break;
           case "command":
-            if (currentKey) transport.write(currentKey, msg.data + "\r");
+            session.write(msg.data + "\r");
             break;
           case "resize":
-            lastSize = { cols: msg.cols, rows: msg.rows };
-            handle?.resize(msg.cols, msg.rows);
+            session.resize(msg.cols, msg.rows);
             break;
         }
       } catch (err) {
@@ -210,10 +190,10 @@ app.prepare().then(() => {
     });
 
     // Disconnect detaches this client but leaves the session running.
-    ws.on("close", () => handle?.detach());
+    ws.on("close", () => session.detach());
     ws.on("error", (err) => {
       console.error("WebSocket error:", err);
-      handle?.detach();
+      session.detach();
     });
   }
 
