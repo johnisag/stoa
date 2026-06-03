@@ -9,7 +9,7 @@ import { setupWorktree, type SetupResult } from "@/lib/env-setup";
 import { findAvailablePort } from "@/lib/ports";
 import { runInBackground } from "@/lib/async-operations";
 import { getProject } from "@/lib/projects";
-import { ensureMcpConfig } from "@/lib/mcp-config";
+import { ensureMcpConfig, buildCodexOrchestrationArgs } from "@/lib/mcp-config";
 import { expandHome } from "@/lib/platform";
 
 // GET /api/sessions - List all sessions and groups
@@ -209,7 +209,17 @@ export async function POST(request: NextRequest) {
       getProviderDefinition(agentType).supportsOrchestration
     ) {
       try {
-        ensureMcpConfig(expandHome(actualWorkingDirectory), id);
+        if (agentType === "codex") {
+          // Codex has no on-disk project config; persist the per-launch
+          // `-c mcp_servers.stoa.*` flags so the client replays them on every
+          // spawn (session-scoped, nothing written to ~/.codex).
+          queries
+            .updateSessionMcpArgs(db)
+            .run(JSON.stringify(buildCodexOrchestrationArgs(id)), id);
+        } else {
+          // Claude reads a project .mcp.json on launch.
+          ensureMcpConfig(expandHome(actualWorkingDirectory), id);
+        }
       } catch (err) {
         console.error("Failed to write orchestration MCP config:", err);
       }

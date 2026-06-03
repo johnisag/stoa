@@ -55,6 +55,12 @@ export const queries = {
       `UPDATE sessions SET worktree_path = ?, branch_name = ?, base_branch = ?, dev_server_port = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  updateSessionMcpArgs: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE sessions SET mcp_launch_args = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
   updateSessionPR: (db: Database.Database) =>
     getStmt(
       db,

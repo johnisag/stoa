@@ -136,18 +136,20 @@ describe("orchestration readiness contract", () => {
     expect(p.trustPromptPatterns).toEqual([]);
   });
 
-  // "Enable orchestration" writes a `.mcp.json`, which only Claude reads. The
-  // New Session box + the create route both gate on this flag so the toggle
-  // can't silently no-op for Codex/Hermes. Flip a provider on here only when
-  // its own MCP convention is actually wired.
-  it("only Claude advertises supportsOrchestration today", () => {
+  // "Enable orchestration" wires the stoa MCP server per provider convention:
+  // Claude reads a project .mcp.json; Codex gets per-launch `-c mcp_servers.stoa.*`
+  // flags. The New Session box + the create route both gate on this flag. Flip a
+  // provider on here only when its own MCP convention is actually wired (Hermes
+  // is still pending).
+  it("Claude and Codex advertise supportsOrchestration; Hermes/shell do not yet", () => {
     expect(getProviderDefinition("claude").supportsOrchestration).toBe(true);
-    for (const id of PROVIDER_IDS) {
-      if (id === "claude") continue;
-      expect(Boolean(getProviderDefinition(id).supportsOrchestration)).toBe(
-        false
-      );
-    }
+    expect(getProviderDefinition("codex").supportsOrchestration).toBe(true);
+    expect(Boolean(getProviderDefinition("hermes").supportsOrchestration)).toBe(
+      false
+    );
+    expect(Boolean(getProviderDefinition("shell").supportsOrchestration)).toBe(
+      false
+    );
   });
 });
 

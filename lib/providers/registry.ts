@@ -77,6 +77,9 @@ export const PROVIDERS: ProviderDefinition[] = [
     supportsFork: false,
     modelFlag: "--model",
     initialPromptFlag: "", // Positional argument
+    // Wired via per-launch `-c mcp_servers.stoa.*` flags (buildCodexOrchestrationArgs),
+    // replayed from the session's mcp_launch_args — no global config pollution.
+    supportsOrchestration: true,
   },
   {
     id: "hermes",

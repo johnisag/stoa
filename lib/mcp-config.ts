@@ -113,6 +113,32 @@ function ensureGitExcluded(workingDirectory: string, entry: string): void {
 }
 
 /**
+ * Build the Codex launch flags that wire the stoa MCP server into a Codex
+ * CONDUCTOR session.
+ *
+ * Codex has no project-local config file — only global `~/.codex/config.toml`
+ * or per-launch `-c key=value` overrides — so we inline a COMPLETE server
+ * definition with `-c mcp_servers.stoa.*`. This is session-scoped (nothing is
+ * written to the user's global config, unlike `codex mcp add`) and bakes THIS
+ * conductor's CONDUCTOR_SESSION_ID directly into the server's env.
+ *
+ * Values are parsed as TOML; single-quoted literals keep Windows backslashes in
+ * the absolute server path intact (a double-quoted TOML string would treat `\m`
+ * as an invalid escape). Returned as clean argv tokens — the pty path passes
+ * them through verbatim and the tmux path shell-quotes them.
+ */
+export function buildCodexOrchestrationArgs(sessionId: string): string[] {
+  const serverPath = path.join(process.cwd(), "mcp", "orchestration-server.ts");
+  const set = (kv: string): string[] => ["-c", kv];
+  return [
+    ...set(`mcp_servers.stoa.command='npx'`),
+    ...set(`mcp_servers.stoa.args=['tsx','${serverPath}']`),
+    ...set(`mcp_servers.stoa.env.STOA_URL='${STOA_URL}'`),
+    ...set(`mcp_servers.stoa.env.CONDUCTOR_SESSION_ID='${sessionId}'`),
+  ];
+}
+
+/**
  * Check if .mcp.json exists and has stoa configured
  */
 export function hasMcpConfig(workingDirectory: string): boolean {

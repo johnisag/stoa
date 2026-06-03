@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildAgentArgs } from "@/lib/providers";
+import { buildAgentArgs, shellQuoteArg } from "@/lib/providers";
 
 describe("buildAgentArgs", () => {
   it("claude: plain launch has no args", () => {
@@ -85,5 +85,46 @@ describe("buildAgentArgs", () => {
     const { binary, args } = buildAgentArgs("shell", {});
     expect(binary).toBe("");
     expect(args).toEqual([]);
+  });
+
+  it("codex: conductor extraArgs pass through as clean tokens", () => {
+    const extra = ["-c", "mcp_servers.stoa.command='npx'"];
+    const { args } = buildAgentArgs("codex", {
+      autoApprove: true,
+      extraArgs: extra,
+    });
+    expect(args).toEqual([
+      "--dangerously-bypass-approvals-and-sandbox",
+      ...extra,
+    ]);
+  });
+
+  it("codex: extraArgs come BEFORE the positional prompt", () => {
+    const { args } = buildAgentArgs("codex", {
+      extraArgs: ["-c", "x=1"],
+      initialPrompt: "do the thing",
+    });
+    expect(args).toEqual(["-c", "x=1", "do the thing"]);
+  });
+});
+
+describe("shellQuoteArg — tmux exec quoting for conductor tokens", () => {
+  it("passes word-safe tokens through unquoted", () => {
+    expect(shellQuoteArg("-c")).toBe("-c");
+    expect(shellQuoteArg("--model")).toBe("--model");
+  });
+
+  it("double-quotes tokens with TOML literals / brackets / commas", () => {
+    const token = "mcp_servers.stoa.args=['tsx','/p/x.ts']";
+    expect(shellQuoteArg(token)).toBe(`"${token}"`);
+    // Single quotes survive literally inside the double quotes.
+    expect(shellQuoteArg("mcp_servers.stoa.command='npx'")).toBe(
+      `"mcp_servers.stoa.command='npx'"`
+    );
+  });
+
+  it("escapes shell-significant chars when quoting", () => {
+    expect(shellQuoteArg('a"b')).toBe('"a\\"b"');
+    expect(shellQuoteArg("a$b")).toBe('"a\\$b"');
   });
 });

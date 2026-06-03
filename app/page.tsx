@@ -34,7 +34,7 @@ import { useDevServersManager } from "@/hooks/useDevServersManager";
 import { useSessionStatuses } from "@/hooks/useSessionStatuses";
 import type { Session } from "@/lib/db";
 import type { TerminalHandle } from "@/components/Terminal";
-import { getProvider, buildAgentArgs } from "@/lib/providers";
+import { getProvider, buildAgentArgs, shellQuoteArg } from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
@@ -288,15 +288,35 @@ function HomeContent() {
         clearPendingPrompt(session.id);
       }
 
+      // Conductor MCP wiring persisted on the session (e.g. Codex's
+      // `-c mcp_servers.stoa.*`), replayed verbatim on every spawn. NULL for
+      // non-conductors and file-configured providers (Claude's .mcp.json).
+      let extraArgs: string[] = [];
+      if (session.mcp_launch_args) {
+        try {
+          const parsed = JSON.parse(session.mcp_launch_args);
+          if (Array.isArray(parsed)) extraArgs = parsed.map(String);
+        } catch {
+          // Malformed — spawn without the conductor flags rather than fail.
+        }
+      }
+
       const buildFlagsOptions = {
         sessionId: session.claude_session_id,
         parentSessionId,
         autoApprove: session.auto_approve,
         model: session.model,
         initialPrompt: initialPrompt || undefined,
+        extraArgs,
       };
 
-      const flags = provider.buildFlags(buildFlagsOptions);
+      // tmux execs a shell command, so shell-quote the conductor tokens here
+      // (buildFlags itself doesn't emit extraArgs); the pty path gets them as
+      // clean argv via buildAgentArgs below.
+      const flags = [
+        ...provider.buildFlags(buildFlagsOptions),
+        ...extraArgs.map(shellQuoteArg),
+      ];
       const flagsStr = flags.join(" ");
 
       const agentCmd = `${provider.command} ${flagsStr}`;

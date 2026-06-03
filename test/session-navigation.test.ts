@@ -29,6 +29,7 @@ function mk(id: string, over: Partial<Session> = {}): Session {
     conductor_session_id: null,
     worker_task: null,
     worker_status: null,
+    mcp_launch_args: null,
     ...over,
   };
 }
