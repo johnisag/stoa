@@ -173,16 +173,14 @@ app.prepare().then(() => {
       }
       if (pushEnabled) {
         const events = detectPushEvents(lastPushStatusById, curr);
-        // Keep the snapshot fresh even while a tab is open, so closing the tab
-        // doesn't replay a backlog of transitions as a push flood.
         lastPushStatusById = statusById(curr);
-        // Web Push is the CLOSED-TAB path: only send when no tab is open (a
-        // connected WS client means the in-app notification already fires for
-        // this transition — avoids double-notifying), and throttle per-event.
-        if (!wsListening) {
-          for (const ev of events) {
-            if (shouldPush(ev)) await pushFor(ev);
-          }
+        // Fan out to every subscription, throttled per-event. The "don't
+        // double-notify while a tab is watching" decision is made PER-DEVICE in
+        // the service worker (it suppresses the push only if a Stoa tab is
+        // visible on that device) — the old server-side `!wsListening` gate was
+        // global, so one open tab silenced push to every other device.
+        for (const ev of events) {
+          if (shouldPush(ev)) await pushFor(ev);
         }
       }
     } catch (err) {
