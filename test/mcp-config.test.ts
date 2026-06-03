@@ -19,7 +19,10 @@ import {
   ensureMcpConfig,
   hasMcpConfig,
   buildCodexOrchestrationArgs,
+  buildHermesRegisterArgs,
+  writeConductorMarker,
 } from "@/lib/mcp-config";
+import { CONDUCTOR_MARKER_FILE } from "@/lib/conductor-marker";
 
 describe("ensureMcpConfig", () => {
   let dir: string;
@@ -120,5 +123,53 @@ describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
     // Single-quoted (literal) — never double-quoted, which would mangle `\m`.
     expect(argsToken).not.toContain('"');
     expect(argsToken).toContain("'tsx'");
+  });
+});
+
+describe("Hermes conductor wiring", () => {
+  it("buildHermesRegisterArgs registers the stoa stdio server (command/args only)", () => {
+    const args = buildHermesRegisterArgs("/abs/orchestration-server.ts");
+    expect(args).toEqual([
+      "mcp",
+      "add",
+      "stoa",
+      "--command",
+      "npx",
+      "--args",
+      "tsx",
+      "/abs/orchestration-server.ts",
+    ]);
+    // No per-session env baked into the global registration — the id rides the
+    // marker file, so multiple conductors don't clobber each other.
+    expect(args).not.toContain("--env");
+  });
+
+  it("writeConductorMarker drops the session id in a .stoa-conductor file", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "stoa-cond-"));
+    try {
+      writeConductorMarker(dir, "sess-77");
+      const marker = readFileSync(
+        path.join(dir, CONDUCTOR_MARKER_FILE),
+        "utf-8"
+      );
+      expect(marker.trim()).toBe("sess-77");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("git-excludes the marker so it never pollutes the repo", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "stoa-cond-"));
+    try {
+      execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
+      writeConductorMarker(dir, "s1");
+      const exclude = readFileSync(
+        path.join(dir, ".git", "info", "exclude"),
+        "utf-8"
+      );
+      expect(exclude.split(/\r?\n/)).toContain(CONDUCTOR_MARKER_FILE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -8,8 +8,15 @@
 import { writeFileSync, existsSync, readFileSync, mkdirSync } from "fs";
 import { execFileSync } from "child_process";
 import path from "path";
+import { resolveBinary } from "./platform";
+import { CONDUCTOR_MARKER_FILE } from "./conductor-marker";
 
 const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
+
+/** Absolute path to the orchestration MCP server entrypoint (server cwd-based). */
+function getOrchestrationServerPath(): string {
+  return path.join(process.cwd(), "mcp", "orchestration-server.ts");
+}
 
 interface McpConfig {
   mcpServers: Record<
@@ -30,11 +37,7 @@ export function ensureMcpConfig(
   sessionId: string
 ): void {
   const configPath = path.join(workingDirectory, ".mcp.json");
-  const orchestrationServerPath = path.join(
-    process.cwd(),
-    "mcp",
-    "orchestration-server.ts"
-  );
+  const orchestrationServerPath = getOrchestrationServerPath();
 
   let config: McpConfig = { mcpServers: {} };
 
@@ -128,7 +131,7 @@ function ensureGitExcluded(workingDirectory: string, entry: string): void {
  * them through verbatim and the tmux path shell-quotes them.
  */
 export function buildCodexOrchestrationArgs(sessionId: string): string[] {
-  const serverPath = path.join(process.cwd(), "mcp", "orchestration-server.ts");
+  const serverPath = getOrchestrationServerPath();
   const set = (kv: string): string[] => ["-c", kv];
   return [
     ...set(`mcp_servers.stoa.command='npx'`),
@@ -136,6 +139,69 @@ export function buildCodexOrchestrationArgs(sessionId: string): string[] {
     ...set(`mcp_servers.stoa.env.STOA_URL='${STOA_URL}'`),
     ...set(`mcp_servers.stoa.env.CONDUCTOR_SESSION_ID='${sessionId}'`),
   ];
+}
+
+/**
+ * Write the conductor marker file (`.stoa-conductor`, containing the session id)
+ * into the working dir, and git-exclude it. This is how a HERMES conductor's
+ * session id reaches the stoa MCP server: Hermes strips arbitrary env vars from
+ * MCP children and has no project-local config, but the stdio MCP server
+ * inherits the conductor's cwd, so it reads the id from this file. Best-effort:
+ * a write failure is the caller's to log (orchestration never blocks create).
+ */
+export function writeConductorMarker(
+  workingDirectory: string,
+  sessionId: string
+): void {
+  writeFileSync(
+    path.join(workingDirectory, CONDUCTOR_MARKER_FILE),
+    sessionId + "\n"
+  );
+  ensureGitExcluded(workingDirectory, CONDUCTOR_MARKER_FILE);
+}
+
+/** argv for `hermes mcp add` registering the stoa stdio server (command + args
+ * only — no per-session env; the id comes from the cwd marker). */
+export function buildHermesRegisterArgs(serverPath: string): string[] {
+  return [
+    "mcp",
+    "add",
+    "stoa",
+    "--command",
+    "npx",
+    "--args",
+    "tsx",
+    serverPath,
+  ];
+}
+
+/**
+ * Register the stoa MCP server in Hermes' GLOBAL config ONCE (command/args only,
+ * no per-session data) so a Hermes conductor exposes spawn_worker. Idempotent:
+ * skips if `stoa` is already listed. `hermes mcp add` is interactive ("Enable
+ * all N tools?") and discovery-first (it spawns the server to list tools), so we
+ * auto-confirm via stdin and rely on the running Stoa server. Best-effort —
+ * never throws (orchestration must not block session create).
+ */
+export function ensureHermesMcpRegistered(): void {
+  try {
+    const hermes = resolveBinary("hermes") || "hermes";
+    const list = execFileSync(hermes, ["mcp", "list"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (/(^|\s)stoa(\s|$)/m.test(list)) return; // already registered
+    execFileSync(
+      hermes,
+      buildHermesRegisterArgs(getOrchestrationServerPath()),
+      {
+        input: "y\n", // auto-accept the "Enable all tools?" prompt
+        stdio: ["pipe", "ignore", "ignore"],
+      }
+    );
+  } catch {
+    // Hermes missing / not configured / add failed — leave it unregistered.
+  }
 }
 
 /**

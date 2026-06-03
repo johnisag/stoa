@@ -28,11 +28,14 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { resolveConductorSessionId } from "../lib/conductor-marker";
 
 const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
 
-// Optional: Get conductor session ID from environment (can also be passed per-call)
-const DEFAULT_CONDUCTOR_ID = process.env.CONDUCTOR_SESSION_ID || "";
+// Conductor session ID: from CONDUCTOR_SESSION_ID (Claude/Codex bake it into the
+// MCP config env) or a `.stoa-conductor` marker in our cwd (Hermes, which strips
+// env vars from MCP children). Can still be overridden per tool call.
+const DEFAULT_CONDUCTOR_ID = resolveConductorSessionId(process.cwd());
 
 async function apiCall(path: string, options?: RequestInit) {
   const url = `${STOA_URL}${path}`;
