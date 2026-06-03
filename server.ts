@@ -99,6 +99,17 @@ app.prepare().then(() => {
   // Separate status-only snapshot for Web Push transition detection (runs even
   // with no WS client connected, so closed-tab pushes still fire).
   let lastPushStatusById = new Map<string, SessionStatus>();
+  // Per-(session,event) cooldown so a flapping agent doesn't spam pushes
+  // (mirrors the in-app checkStateChanges cooldown).
+  const lastPushAt = new Map<string, number>();
+  const PUSH_COOLDOWN_MS = 15000;
+  const shouldPush = (ev: PushEvent): boolean => {
+    const key = `${ev.id}-${ev.kind}`;
+    const now = Date.now();
+    if (now - (lastPushAt.get(key) ?? 0) < PUSH_COOLDOWN_MS) return false;
+    lastPushAt.set(key, now);
+    return true;
+  };
 
   // Friendly session name for a push body (falls back to the backend key).
   const pushFor = (ev: PushEvent) => {
@@ -162,8 +173,17 @@ app.prepare().then(() => {
       }
       if (pushEnabled) {
         const events = detectPushEvents(lastPushStatusById, curr);
+        // Keep the snapshot fresh even while a tab is open, so closing the tab
+        // doesn't replay a backlog of transitions as a push flood.
         lastPushStatusById = statusById(curr);
-        for (const ev of events) await pushFor(ev);
+        // Web Push is the CLOSED-TAB path: only send when no tab is open (a
+        // connected WS client means the in-app notification already fires for
+        // this transition — avoids double-notifying), and throttle per-event.
+        if (!wsListening) {
+          for (const ev of events) {
+            if (shouldPush(ev)) await pushFor(ev);
+          }
+        }
       }
     } catch (err) {
       console.error("status events tick failed:", err);

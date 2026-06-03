@@ -50,7 +50,8 @@ export function getVapidKeys(): VapidKeys {
   cached = { publicKey: keys.publicKey, privateKey: keys.privateKey };
   try {
     mkdirSync(path.dirname(VAPID_PATH), { recursive: true });
-    writeFileSync(VAPID_PATH, JSON.stringify(cached, null, 2));
+    // 0600 — the private key must not be world-readable on shared hosts.
+    writeFileSync(VAPID_PATH, JSON.stringify(cached, null, 2), { mode: 0o600 });
   } catch (err) {
     console.error("Failed to persist VAPID keys:", err);
   }
