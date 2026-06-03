@@ -32,6 +32,7 @@ import { useSessions } from "@/hooks/useSessions";
 import { useProjects } from "@/hooks/useProjects";
 import { useDevServersManager } from "@/hooks/useDevServersManager";
 import { useSessionStatuses } from "@/hooks/useSessionStatuses";
+import { useStatusEventStream } from "@/data/statuses";
 import type { Session } from "@/lib/db";
 import type { TerminalHandle } from "@/components/Terminal";
 import { getProvider, buildAgentArgs, shellQuoteArg } from "@/lib/providers";
@@ -502,6 +503,9 @@ function HomeContent() {
     activeSessionId: focusedActiveTab?.sessionId,
     checkStateChanges,
   });
+  // Live status push (/ws/events) merges transitions into the same cache the
+  // poll above fills — instant board updates; the poll stays as the backstop.
+  useStatusEventStream();
 
   // Set initial sidebar state based on viewport (only after hydration)
   useEffect(() => {
