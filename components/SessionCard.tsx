@@ -1,7 +1,8 @@
 "use client";
 
-import { memo, useReducer, useState, useRef, useEffect } from "react";
+import { memo, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
+import { useTick30s } from "@/hooks/useSharedTicker";
 import {
   GitFork,
   GitBranch,
@@ -527,11 +528,7 @@ export const SessionCard = memo(SessionCardComponent);
 // repaint on the tick while the heavy card body stays put — a child's own
 // state update isn't suppressed by the parent's memo.
 function TimeAgo({ updatedAt }: { updatedAt: string }) {
-  const [, tick] = useReducer((n: number) => n + 1, 0);
-  useEffect(() => {
-    const id = setInterval(tick, 30000);
-    return () => clearInterval(id);
-  }, []);
+  useTick30s(); // shared ~30s ticker — one interval for all cards, not N
   return <>{getTimeAgo(updatedAt)}</>;
 }
 
