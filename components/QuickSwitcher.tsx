@@ -11,7 +11,9 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { baseName } from "@/lib/path-display";
 import { Terminal, GitBranch, Clock, Check } from "lucide-react";
+import { statusGlyph } from "@/components/status-glyph";
 import type { Session } from "@/lib/db";
+import type { SessionStatus } from "@/components/views/types";
 import dynamic from "next/dynamic";
 import { useRipgrepAvailable } from "@/data/code-search";
 import { searchSessions } from "@/lib/session-search";
@@ -42,6 +44,9 @@ interface QuickSwitcherProps {
   onSelectFile?: (file: string, line: number) => void;
   currentSessionId?: string;
   activeSessionWorkingDir?: string;
+  /** Live status per session id, so the switcher shows what each agent is doing
+   * (glyph + a one-line preview) instead of being status-blind. */
+  sessionStatuses?: Record<string, SessionStatus>;
 }
 
 /**
@@ -56,6 +61,7 @@ export function QuickSwitcher({
   onSelectFile,
   currentSessionId,
   activeSessionWorkingDir,
+  sessionStatuses,
 }: QuickSwitcherProps) {
   const { isMobile } = useViewport();
   const [mode, setMode] = useState<"sessions" | "code">("sessions");
@@ -220,6 +226,12 @@ export function QuickSwitcher({
             ) : (
               filteredSessions.map((session, index) => {
                 const isCurrent = session.id === currentSessionId;
+                const st = sessionStatuses?.[session.id];
+                const preview =
+                  (st?.status === "running" || st?.status === "waiting") &&
+                  st.lastLine?.trim()
+                    ? st.lastLine.trim()
+                    : null;
                 return (
                   <button
                     key={session.id}
@@ -254,6 +266,9 @@ export function QuickSwitcher({
                     {/* Content */}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
+                        <span className="flex-shrink-0">
+                          {statusGlyph(st?.status)}
+                        </span>
                         <span className="truncate font-medium">
                           {session.name || "Unnamed Session"}
                         </span>
@@ -261,17 +276,26 @@ export function QuickSwitcher({
                           <Check className="text-primary h-3.5 w-3.5 flex-shrink-0" />
                         )}
                       </div>
-                      <div className="text-muted-foreground flex items-center gap-2 text-xs">
-                        <span className="truncate">
-                          {session.working_directory
-                            ? baseName(session.working_directory)
-                            : "~"}
-                        </span>
-                        <span>•</span>
-                        <span className="capitalize">
-                          {session.agent_type || "claude"}
-                        </span>
-                      </div>
+                      {preview ? (
+                        <div
+                          className="text-muted-foreground truncate text-xs"
+                          title={preview}
+                        >
+                          {preview}
+                        </div>
+                      ) : (
+                        <div className="text-muted-foreground flex items-center gap-2 text-xs">
+                          <span className="truncate">
+                            {session.working_directory
+                              ? baseName(session.working_directory)
+                              : "~"}
+                          </span>
+                          <span>•</span>
+                          <span className="capitalize">
+                            {session.agent_type || "claude"}
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Time */}
