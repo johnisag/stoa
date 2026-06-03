@@ -135,6 +135,20 @@ describe("orchestration readiness contract", () => {
     ).toBe(false);
     expect(p.trustPromptPatterns).toEqual([]);
   });
+
+  // "Enable orchestration" writes a `.mcp.json`, which only Claude reads. The
+  // New Session box + the create route both gate on this flag so the toggle
+  // can't silently no-op for Codex/Hermes. Flip a provider on here only when
+  // its own MCP convention is actually wired.
+  it("only Claude advertises supportsOrchestration today", () => {
+    expect(getProviderDefinition("claude").supportsOrchestration).toBe(true);
+    for (const id of PROVIDER_IDS) {
+      if (id === "claude") continue;
+      expect(Boolean(getProviderDefinition(id).supportsOrchestration)).toBe(
+        false
+      );
+    }
+  });
 });
 
 // sessionKey() is the single constructor for the `{provider}-{id}` namespace;

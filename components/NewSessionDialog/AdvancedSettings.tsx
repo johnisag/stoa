@@ -27,6 +27,7 @@ export function AdvancedSettings({
 }: AdvancedSettingsProps) {
   const provider = getProviderDefinition(agentType);
   const supportsAutoApprove = Boolean(provider.autoApproveFlag);
+  const supportsOrchestration = Boolean(provider.supportsOrchestration);
 
   return (
     <div className="border-border rounded-lg border">
@@ -79,9 +80,10 @@ export function AdvancedSettings({
             <input
               type="checkbox"
               id="enableOrchestration"
-              checked={enableOrchestration}
+              checked={supportsOrchestration && enableOrchestration}
+              disabled={!supportsOrchestration}
               onChange={(e) => onEnableOrchestrationChange(e.target.checked)}
-              className="border-border bg-background accent-primary h-4 w-4 rounded"
+              className="border-border bg-background accent-primary h-4 w-4 rounded disabled:cursor-not-allowed disabled:opacity-50"
             />
             <label
               htmlFor="enableOrchestration"
@@ -89,7 +91,9 @@ export function AdvancedSettings({
             >
               Enable orchestration
               <span className="text-muted-foreground ml-1">
-                (conductor — can spawn worker sessions via spawn_worker)
+                {supportsOrchestration
+                  ? "(conductor — can spawn worker sessions via spawn_worker)"
+                  : "(Claude only for now)"}
               </span>
             </label>
           </div>

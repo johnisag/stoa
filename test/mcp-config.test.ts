@@ -49,6 +49,17 @@ describe("ensureMcpConfig", () => {
     expect(cfg.mcpServers.stoa).toBeTruthy(); // added
   });
 
+  it("recovers from a malformed array .mcp.json instead of dropping stoa", () => {
+    // A top-level JSON array survives JSON.parse but JSON.stringify([]) === "[]"
+    // would silently drop the stoa server — start fresh instead.
+    writeFileSync(path.join(dir, ".mcp.json"), "[]");
+    ensureMcpConfig(dir, "s1");
+    const cfg = JSON.parse(readFileSync(path.join(dir, ".mcp.json"), "utf-8"));
+    expect(Array.isArray(cfg)).toBe(false);
+    expect(cfg.mcpServers.stoa).toBeTruthy();
+    expect(hasMcpConfig(dir)).toBe(true);
+  });
+
   it("git-excludes .mcp.json locally so it doesn't pollute the repo", () => {
     // Make the temp dir a git repo so the exclude path resolves.
     execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });

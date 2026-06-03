@@ -24,6 +24,13 @@ export interface ProviderDefinition {
   // Auto-approve configuration
   autoApproveFlag?: string; // Flag to skip permission prompts
 
+  // Orchestration (conductor): can this provider pick up the stoa MCP server
+  // that "Enable orchestration" writes? Today that wiring is a `.mcp.json`,
+  // which is Claude Code's convention only — Codex (`~/.codex/config.toml`) and
+  // Hermes (`hermes mcp add`) use their own stores, so the box must not pretend
+  // to work for them. Flip this on per provider once its convention is wired.
+  supportsOrchestration?: boolean;
+
   // Session management
   supportsResume: boolean;
   supportsFork: boolean;
@@ -57,6 +64,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     resumeFlag: "--resume",
     modelFlag: undefined, // Claude doesn't expose model flag
     initialPromptFlag: "", // Positional argument
+    supportsOrchestration: true, // reads project .mcp.json on launch
   },
   {
     id: "codex",

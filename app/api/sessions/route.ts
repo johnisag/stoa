@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session, type Group } from "@/lib/db";
 import { isValidAgentType, type AgentType } from "@/lib/providers";
-import { sessionKey } from "@/lib/providers/registry";
+import { sessionKey, getProviderDefinition } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
 import { createWorktree } from "@/lib/worktrees";
 import { setupWorktree, type SetupResult } from "@/lib/env-setup";
@@ -201,7 +201,13 @@ export async function POST(request: NextRequest) {
     // dir BEFORE the client attaches/spawns the agent, so the agent reads
     // spawn_worker on first launch. ensureMcpConfig also git-excludes the file
     // so it doesn't pollute the repo. Best-effort — never blocks session create.
-    if (enableOrchestration) {
+    // Gated on the provider: `.mcp.json` is Claude's convention, so writing it
+    // for Codex/Hermes would silently do nothing — the UI disables the box for
+    // them, and this guard protects direct API callers too.
+    if (
+      enableOrchestration &&
+      getProviderDefinition(agentType).supportsOrchestration
+    ) {
       try {
         ensureMcpConfig(expandHome(actualWorkingDirectory), id);
       } catch (err) {

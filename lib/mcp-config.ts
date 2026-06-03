@@ -41,10 +41,15 @@ export function ensureMcpConfig(
   // Read existing config if present
   if (existsSync(configPath)) {
     try {
-      const existing = readFileSync(configPath, "utf-8");
-      config = JSON.parse(existing);
-      if (!config.mcpServers) {
-        config.mcpServers = {};
+      const parsed = JSON.parse(readFileSync(configPath, "utf-8"));
+      // Only adopt a plain object — an array/null/primitive would survive
+      // JSON.parse but then silently drop our `stoa` server on stringify
+      // (e.g. JSON.stringify([]) === "[]"), breaking orchestration.
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        config = parsed as McpConfig;
+        if (!config.mcpServers) {
+          config.mcpServers = {};
+        }
       }
     } catch {
       // Invalid JSON, start fresh
