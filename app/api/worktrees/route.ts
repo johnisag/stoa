@@ -143,11 +143,14 @@ export async function DELETE(request: NextRequest) {
 
     const mainRepoPath = await getMainRepoPath(worktreePath);
     // No main repo (broken worktree) → deleteWorktree's manual-rm fallback still
-    // cleans the directory; pass the worktree's parent as a harmless project arg.
+    // cleans the directory. Only delete the branch when we actually resolved the
+    // owning repo: otherwise git would run with cwd = the worktrees dir, and if
+    // ~/.stoa happens to sit inside a git repo, `branch -D` would hit the WRONG
+    // repo. Without a repo we can't identify the branch's owner, so skip it.
     await deleteWorktree(
       worktreePath,
       mainRepoPath ?? path.dirname(worktreePath),
-      true
+      mainRepoPath !== null
     );
     return NextResponse.json({ success: true });
   } catch (error) {

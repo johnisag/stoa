@@ -7,8 +7,11 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { calls } = vi.hoisted(() => ({
+const { calls, state } = vi.hoisted(() => ({
   calls: [] as Array<{ cmd: string; args: string[] }>,
+  // The branch `rev-parse --abbrev-ref HEAD` reports — varied per test so we can
+  // exercise the branch-deletion safety gate.
+  state: { headBranch: "feature/feat" },
 }));
 
 vi.mock("child_process", () => ({
@@ -26,7 +29,7 @@ vi.mock("child_process", () => ({
         "worktree /Users/me/proj\nHEAD aaa\nbranch refs/heads/main\n\n" +
         "worktree /Users/me/.stoa/worktrees/proj-feat\nHEAD bbb\nbranch refs/heads/feature/feat\n\n";
     } else if (args.includes("--abbrev-ref")) {
-      stdout = "feature/feat\n";
+      stdout = `${state.headBranch}\n`;
     }
     callback(null, { stdout, stderr: "" });
   },
@@ -47,6 +50,7 @@ const argvOf = (pred: (a: string[]) => boolean) =>
 
 beforeEach(() => {
   calls.length = 0;
+  state.headBranch = "feature/feat";
 });
 
 describe("worktree git invocations — shell-free execFile argv", () => {
@@ -99,6 +103,20 @@ describe("worktree git invocations — shell-free execFile argv", () => {
       "feature/feat",
     ]);
   });
+
+  it("does NOT force-delete a branch Stoa didn't create (e.g. develop)", async () => {
+    // A worktree manually repointed to a real branch must not lose unmerged
+    // commits to `branch -D` on reclaim (F9).
+    state.headBranch = "develop";
+    await deleteWorktree("/Users/me/wt", "/Users/me/proj", true);
+    expect(argvOf((a) => a[0] === "branch")).toBeUndefined();
+  });
+
+  it("does NOT delete a non-`main` default branch like trunk", async () => {
+    state.headBranch = "trunk";
+    await deleteWorktree("/Users/me/wt", "/Users/me/proj", true);
+    expect(argvOf((a) => a[0] === "branch")).toBeUndefined();
+  });
 });
 
 describe("annotateWorktrees — attach-picker join (pure)", () => {
@@ -139,5 +157,15 @@ describe("annotateWorktrees — attach-picker join (pure)", () => {
     // git prints forward slashes even on Windows — must still match.
     expect(isStoaWorktree(stoaWt.replace(/\\/g, "/"))).toBe(true);
     expect(isStoaWorktree("/somewhere/else/proj")).toBe(false);
+  });
+
+  it("rejects a same-prefixed sibling of the worktrees dir (F4 boundary)", () => {
+    // The destructive-delete gate must require a separator boundary, not a bare
+    // prefix — else `…/worktrees-evil` would pass and reach rm/branch -D.
+    const sibling = getWorktreesDir() + "-evil";
+    expect(isStoaWorktree(sibling)).toBe(false);
+    expect(isStoaWorktree(path.join(sibling, "x"))).toBe(false);
+    // the worktrees dir itself is not a worktree
+    expect(isStoaWorktree(getWorktreesDir())).toBe(false);
   });
 });
