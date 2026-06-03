@@ -54,6 +54,25 @@ export function createTerminal(
   term.open(container);
   // GPU renderer (WebGL, with canvas/DOM fallback) — must load after open().
   loadRenderer(term);
+
+  // On mobile, the soft keyboard auto-capitalizes/corrects/spellchecks the
+  // hidden xterm input by default, silently corrupting shell commands
+  // (`git status` → `Git status`). Turn that off on the helper textarea xterm
+  // creates during open(). Desktop is untouched (the attrs only affect virtual
+  // keyboards), but gate on isMobile to keep the desktop path byte-identical.
+  if (isMobile) {
+    const textarea = container.querySelector(
+      ".xterm-helper-textarea"
+    ) as HTMLTextAreaElement | null;
+    if (textarea) {
+      textarea.setAttribute("autocapitalize", "off");
+      textarea.setAttribute("autocorrect", "off");
+      textarea.setAttribute("autocomplete", "off");
+      textarea.setAttribute("spellcheck", "false");
+      textarea.setAttribute("enterkeyhint", "send");
+    }
+  }
+
   fitAddon.fit();
 
   // Helper to copy text to clipboard with fallback
