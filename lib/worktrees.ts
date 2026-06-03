@@ -269,11 +269,14 @@ export async function listWorktrees(projectPath: string): Promise<
 }
 
 /**
- * Check if a path is inside an Stoa worktree
+ * Check if a path is inside an Stoa worktree. Normalizes both sides first —
+ * git emits forward-slash paths even on Windows, while WORKTREES_DIR uses
+ * path.join backslashes, so a raw startsWith would never match on Windows
+ * (silently hiding every worktree from the attach picker + delete gate).
  */
 export function isStoaWorktree(worktreePath: string): boolean {
-  const resolvedPath = resolvePath(worktreePath);
-  return resolvedPath.startsWith(WORKTREES_DIR);
+  const base = normalizePath(WORKTREES_DIR);
+  return normalizePath(worktreePath).startsWith(base);
 }
 
 export interface AnnotatedWorktree {

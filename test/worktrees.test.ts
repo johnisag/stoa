@@ -38,6 +38,7 @@ import {
   getMainRepoPath,
   deleteWorktree,
   annotateWorktrees,
+  isStoaWorktree,
   getWorktreesDir,
 } from "@/lib/worktrees";
 
@@ -131,5 +132,12 @@ describe("annotateWorktrees — attach-picker join (pure)", () => {
       [] // no sessions
     );
     expect(out[0]).toMatchObject({ isStoa: true, attached: false });
+  });
+
+  it("isStoaWorktree matches git's forward-slash paths (Windows fix)", () => {
+    expect(isStoaWorktree(stoaWt)).toBe(true);
+    // git prints forward slashes even on Windows — must still match.
+    expect(isStoaWorktree(stoaWt.replace(/\\/g, "/"))).toBe(true);
+    expect(isStoaWorktree("/somewhere/else/proj")).toBe(false);
   });
 });
