@@ -52,6 +52,9 @@ interface SessionCardProps {
   isActive?: boolean;
   isSummarizing?: boolean;
   tmuxStatus?: TmuxStatus;
+  /** Last rendered terminal line — a live one-line preview for running/waiting
+   * agents. A primitive string so React.memo only repaints when it changes. */
+  lastLine?: string;
   groups?: Group[];
   projects?: ProjectWithDevServers[];
   // Selection props
@@ -117,6 +120,7 @@ function SessionCardComponent({
   isActive,
   isSummarizing,
   tmuxStatus,
+  lastLine,
   groups = EMPTY_GROUPS,
   projects = EMPTY_PROJECTS,
   isSelected,
@@ -134,6 +138,13 @@ function SessionCardComponent({
 }: SessionCardProps) {
   const status = tmuxStatus || "dead";
   const config = statusConfig[status];
+  // Live one-line preview of what the agent is doing/saying — only while it's
+  // active (running/waiting), so idle/dead cards stay a clean single line.
+  const preview = lastLine?.trim();
+  const showPreview =
+    !!preview &&
+    !isInSelectMode &&
+    (status === "running" || status === "waiting");
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(session.name);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -418,7 +429,17 @@ function SessionCardComponent({
           className="border-primary min-w-0 flex-1 border-b bg-transparent text-sm outline-none"
         />
       ) : (
-        <span className="min-w-0 flex-1 truncate text-sm">{session.name}</span>
+        <div className="flex min-w-0 flex-1 flex-col justify-center">
+          <span className="truncate text-sm leading-tight">{session.name}</span>
+          {showPreview && (
+            <span
+              className="text-muted-foreground truncate text-[11px] leading-tight"
+              title={preview}
+            >
+              {preview}
+            </span>
+          )}
+        </div>
       )}
 
       {/* Fork indicator */}

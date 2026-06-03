@@ -239,6 +239,7 @@ export function ProjectsSection({
                                 summarizingSessionId === session.id
                               }
                               tmuxStatus={sessionStatuses?.[session.id]?.status}
+                              lastLine={sessionStatuses?.[session.id]?.lastLine}
                               groups={groups}
                               projects={projects}
                               isSelected={selectedIds.has(session.id)}
@@ -272,6 +273,9 @@ export function ProjectsSection({
                                 isActive={worker.id === activeSessionId}
                                 tmuxStatus={
                                   sessionStatuses?.[worker.id]?.status
+                                }
+                                lastLine={
+                                  sessionStatuses?.[worker.id]?.lastLine
                                 }
                                 groups={groups}
                                 projects={projects}
