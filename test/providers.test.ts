@@ -14,6 +14,7 @@ import {
   getSessionIdFromName,
   isValidProviderId,
   sessionKey,
+  backendKeyForSession,
 } from "@/lib/providers/registry";
 import { AGENT_OPTIONS } from "@/components/NewSessionDialog/NewSessionDialog.types";
 
@@ -193,5 +194,18 @@ describe("sessionKey() — centralized session-name construction", () => {
         if (a !== b) expect(`${a}-`.startsWith(`${b}-`)).toBe(false);
       }
     }
+  });
+
+  // backendKeyForSession resolves the pty/tmux key DELETE (and status/orchestration)
+  // use to address a session's process — tmux_name, else the computed key.
+  it("backendKeyForSession prefers tmux_name, falls back to {provider}-{id}", () => {
+    expect(backendKeyForSession({ id: "x", tmux_name: "claude-x" })).toBe(
+      "claude-x"
+    );
+    expect(
+      backendKeyForSession({ id: "x", tmux_name: null, agent_type: "codex" })
+    ).toBe("codex-x");
+    expect(backendKeyForSession({ id: "x", tmux_name: "" })).toBe("claude-x");
+    expect(backendKeyForSession({ id: "x" })).toBe("claude-x");
   });
 });
