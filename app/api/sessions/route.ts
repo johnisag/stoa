@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { existsSync } from "fs";
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session, type Group } from "@/lib/db";
 import { isValidAgentType, type AgentType } from "@/lib/providers";
@@ -76,6 +77,10 @@ export async function POST(request: NextRequest) {
       useWorktree = false,
       featureName = null,
       baseBranch = "main",
+      // Attach to an existing worktree (recover a deleted session's work)
+      // instead of creating a new one.
+      existingWorktreePath = null,
+      existingWorktreeBranch = null,
       // Tmux option
       useTmux = true,
       // Initial prompt to send when session starts
@@ -110,7 +115,25 @@ export async function POST(request: NextRequest) {
     let port: number | null = null;
     let setupResult: SetupResult | null = null;
 
-    if (useWorktree && featureName) {
+    if (useWorktree && existingWorktreePath) {
+      // Attach to an existing worktree: it's already on disk (with its files +
+      // branch + installed deps), so skip createWorktree and setupWorktree —
+      // just point the session at it and allocate a dev-server port.
+      const attachPath = expandHome(existingWorktreePath);
+      if (!existsSync(attachPath)) {
+        return NextResponse.json(
+          { error: `Worktree no longer exists: ${existingWorktreePath}` },
+          { status: 400 }
+        );
+      }
+      worktreePath = attachPath;
+      branchName =
+        typeof existingWorktreeBranch === "string" && existingWorktreeBranch
+          ? existingWorktreeBranch
+          : null;
+      actualWorkingDirectory = attachPath;
+      port = await findAvailablePort();
+    } else if (useWorktree && featureName) {
       try {
         const worktreeInfo = await createWorktree({
           projectPath: workingDirectory,

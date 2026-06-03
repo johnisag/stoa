@@ -76,12 +76,22 @@ export function generateFeatureName(): string {
   return `${adj}-${noun}`;
 }
 
+// An existing worktree offered for "attach" at New Session.
+export interface ExistingWorktree {
+  path: string;
+  branch: string;
+  head: string;
+  isStoa: boolean;
+  attached: boolean;
+}
+
 // Git info from API
 export interface GitInfo {
   isGitRepo: boolean;
   branches: string[];
   defaultBranch: string | null;
   currentBranch: string | null;
+  worktrees?: ExistingWorktree[];
 }
 
 // Agent type options

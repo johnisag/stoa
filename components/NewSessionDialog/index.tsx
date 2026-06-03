@@ -113,6 +113,10 @@ export function NewSessionDialog({
                 onFeatureNameChange={form.setFeatureName}
                 baseBranch={form.baseBranch}
                 onBaseBranchChange={form.setBaseBranch}
+                worktreeMode={form.worktreeMode}
+                onWorktreeModeChange={form.setWorktreeMode}
+                existingWorktreePath={form.existingWorktreePath}
+                onExistingWorktreeChange={form.setExistingWorktree}
               />
             )}
 

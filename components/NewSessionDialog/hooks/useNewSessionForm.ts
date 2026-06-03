@@ -62,8 +62,17 @@ export function useNewSessionForm({
 
   // Worktree state
   const [useWorktree, setUseWorktree] = useState(false);
+  // "new" = create a worktree+branch; "existing" = attach to a worktree already
+  // on disk (recover a deleted session's work).
+  const [worktreeMode, setWorktreeMode] = useState<"new" | "existing">("new");
   const [featureName, setFeatureName] = useState("");
   const [baseBranch, setBaseBranch] = useState("main");
+  const [existingWorktreePath, setExistingWorktreePath] = useState("");
+  const [existingWorktreeBranch, setExistingWorktreeBranch] = useState("");
+  const setExistingWorktree = (path: string, branch: string) => {
+    setExistingWorktreePath(path);
+    setExistingWorktreeBranch(branch);
+  };
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
   const [checkingGit, setCheckingGit] = useState(false);
 
@@ -248,11 +257,13 @@ export function useNewSessionForm({
     createSession.reset(); // Clear any previous errors
 
     if (useWorktree) {
-      if (!featureName.trim()) {
-        return; // Validation handled by button disabled state
-      }
       if (!gitInfo?.isGitRepo) {
         return;
+      }
+      if (worktreeMode === "existing") {
+        if (!existingWorktreePath) return; // pick a worktree
+      } else if (!featureName.trim()) {
+        return; // Validation handled by button disabled state
       }
     }
 
@@ -278,8 +289,17 @@ export function useNewSessionForm({
         model: resolvedModel,
         agentType,
         useWorktree,
-        featureName: useWorktree ? featureName.trim() : null,
-        baseBranch: useWorktree ? baseBranch : null,
+        featureName:
+          useWorktree && worktreeMode === "new" ? featureName.trim() : null,
+        baseBranch: useWorktree && worktreeMode === "new" ? baseBranch : null,
+        existingWorktreePath:
+          useWorktree && worktreeMode === "existing"
+            ? existingWorktreePath
+            : null,
+        existingWorktreeBranch:
+          useWorktree && worktreeMode === "existing"
+            ? existingWorktreeBranch || null
+            : null,
         autoApprove: skipPermissions,
         enableOrchestration,
         useTmux,
@@ -337,7 +357,10 @@ export function useNewSessionForm({
     setWorkingDirectory("~");
     setProjectId(null);
     setUseWorktree(false);
+    setWorktreeMode("new");
     setFeatureName("");
+    setExistingWorktreePath("");
+    setExistingWorktreeBranch("");
     setInitialPrompt("");
     setEnableOrchestration(false);
     setShowNewProject(false);
@@ -370,10 +393,14 @@ export function useNewSessionForm({
     // Worktree
     useWorktree,
     setUseWorktree,
+    worktreeMode,
+    setWorktreeMode,
     featureName,
     setFeatureName,
     baseBranch,
     setBaseBranch,
+    existingWorktreePath,
+    setExistingWorktree,
     gitInfo,
     checkingGit,
     // UI

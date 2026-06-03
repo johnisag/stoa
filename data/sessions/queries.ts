@@ -223,6 +223,10 @@ export interface CreateSessionInput {
   useWorktree: boolean;
   featureName: string | null;
   baseBranch: string | null;
+  // Attach to an existing worktree instead of creating one (recover a deleted
+  // session's work). When set, the route skips createWorktree.
+  existingWorktreePath?: string | null;
+  existingWorktreeBranch?: string | null;
   autoApprove: boolean;
   enableOrchestration: boolean;
   useTmux: boolean;

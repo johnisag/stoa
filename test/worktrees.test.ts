@@ -32,10 +32,13 @@ vi.mock("child_process", () => ({
   },
 }));
 
+import path from "path";
 import {
   listWorktrees,
   getMainRepoPath,
   deleteWorktree,
+  annotateWorktrees,
+  getWorktreesDir,
 } from "@/lib/worktrees";
 
 const argvOf = (pred: (a: string[]) => boolean) =>
@@ -94,5 +97,39 @@ describe("worktree git invocations — shell-free execFile argv", () => {
       "-D",
       "feature/feat",
     ]);
+  });
+});
+
+describe("annotateWorktrees — attach-picker join (pure)", () => {
+  const stoaWt = path.join(getWorktreesDir(), "proj-feat");
+  const mainRepo = "/some/main/repo"; // not under the Stoa worktrees dir
+
+  it("flags Stoa worktrees and ones a live session already owns", () => {
+    const out = annotateWorktrees(
+      [
+        { path: stoaWt, branch: "feature/x", head: "a" },
+        { path: mainRepo, branch: "main", head: "b" },
+      ],
+      [stoaWt] // one live session points at the Stoa worktree
+    );
+    const by = Object.fromEntries(out.map((w) => [w.path, w]));
+    expect(by[stoaWt]).toMatchObject({ isStoa: true, attached: true });
+    expect(by[mainRepo]).toMatchObject({ isStoa: false, attached: false });
+  });
+
+  it("expands ~ when matching a session's recorded working dir", () => {
+    const out = annotateWorktrees(
+      [{ path: stoaWt, branch: "x", head: "a" }],
+      ["~/.stoa/worktrees/proj-feat"]
+    );
+    expect(out[0].attached).toBe(true);
+  });
+
+  it("an orphaned Stoa worktree (no session) is the attach target", () => {
+    const out = annotateWorktrees(
+      [{ path: stoaWt, branch: "x", head: "a" }],
+      [] // no sessions
+    );
+    expect(out[0]).toMatchObject({ isStoa: true, attached: false });
   });
 });
