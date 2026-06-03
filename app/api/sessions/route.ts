@@ -9,7 +9,12 @@ import { setupWorktree, type SetupResult } from "@/lib/env-setup";
 import { findAvailablePort } from "@/lib/ports";
 import { runInBackground } from "@/lib/async-operations";
 import { getProject } from "@/lib/projects";
-import { ensureMcpConfig, buildCodexOrchestrationArgs } from "@/lib/mcp-config";
+import {
+  ensureMcpConfig,
+  buildCodexOrchestrationArgs,
+  writeConductorMarker,
+  ensureHermesMcpRegistered,
+} from "@/lib/mcp-config";
 import { expandHome } from "@/lib/platform";
 
 // GET /api/sessions - List all sessions and groups
@@ -216,6 +221,12 @@ export async function POST(request: NextRequest) {
           queries
             .updateSessionMcpArgs(db)
             .run(JSON.stringify(buildCodexOrchestrationArgs(id)), id);
+        } else if (agentType === "hermes") {
+          // Hermes reads MCP servers only from its global config and strips env
+          // vars from MCP children, so register the stoa server once (global,
+          // idempotent) and drop this conductor's id in a cwd marker file.
+          ensureHermesMcpRegistered();
+          writeConductorMarker(expandHome(actualWorkingDirectory), id);
         } else {
           // Claude reads a project .mcp.json on launch.
           ensureMcpConfig(expandHome(actualWorkingDirectory), id);

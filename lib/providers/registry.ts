@@ -106,6 +106,10 @@ export const PROVIDERS: ProviderDefinition[] = [
     modelFlag: "-m",
     supportsResume: true,
     supportsFork: false,
+    // Wired via a one-time global `hermes mcp add` + a `.stoa-conductor` marker
+    // in the working dir (Hermes strips env vars from MCP children, so the
+    // conductor id can't ride the process env). See lib/mcp-config.ts.
+    supportsOrchestration: true,
   },
   {
     id: "shell",

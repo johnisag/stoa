@@ -138,15 +138,12 @@ describe("orchestration readiness contract", () => {
 
   // "Enable orchestration" wires the stoa MCP server per provider convention:
   // Claude reads a project .mcp.json; Codex gets per-launch `-c mcp_servers.stoa.*`
-  // flags. The New Session box + the create route both gate on this flag. Flip a
-  // provider on here only when its own MCP convention is actually wired (Hermes
-  // is still pending).
-  it("Claude and Codex advertise supportsOrchestration; Hermes/shell do not yet", () => {
+  // flags; Hermes gets a global `mcp add` + a cwd marker file. The New Session box
+  // and the create route both gate on this flag — only `shell` stays off.
+  it("every agent provider advertises supportsOrchestration; shell does not", () => {
     expect(getProviderDefinition("claude").supportsOrchestration).toBe(true);
     expect(getProviderDefinition("codex").supportsOrchestration).toBe(true);
-    expect(Boolean(getProviderDefinition("hermes").supportsOrchestration)).toBe(
-      false
-    );
+    expect(getProviderDefinition("hermes").supportsOrchestration).toBe(true);
     expect(Boolean(getProviderDefinition("shell").supportsOrchestration)).toBe(
       false
     );
