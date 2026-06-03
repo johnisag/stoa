@@ -2,13 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session, type Group } from "@/lib/db";
 import { isValidAgentType, type AgentType } from "@/lib/providers";
-import { sessionKey } from "@/lib/providers/registry";
+import { sessionKey, getProviderDefinition } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
 import { createWorktree } from "@/lib/worktrees";
 import { setupWorktree, type SetupResult } from "@/lib/env-setup";
 import { findAvailablePort } from "@/lib/ports";
 import { runInBackground } from "@/lib/async-operations";
 import { getProject } from "@/lib/projects";
+import { ensureMcpConfig } from "@/lib/mcp-config";
+import { expandHome } from "@/lib/platform";
 
 // GET /api/sessions - List all sessions and groups
 export async function GET() {
@@ -73,6 +75,9 @@ export async function POST(request: NextRequest) {
       useTmux = true,
       // Initial prompt to send when session starts
       initialPrompt = null,
+      // Conductor: write the orchestration MCP (.mcp.json) so this session can
+      // spawn worker sessions via the stoa MCP's spawn_worker tool.
+      enableOrchestration = false,
     } = body;
 
     // Validate agent type
@@ -191,6 +196,24 @@ export async function POST(request: NextRequest) {
     }
 
     const session = queries.getSession(db).get(id) as Session;
+
+    // Conductor: write the orchestration MCP config into the session's working
+    // dir BEFORE the client attaches/spawns the agent, so the agent reads
+    // spawn_worker on first launch. ensureMcpConfig also git-excludes the file
+    // so it doesn't pollute the repo. Best-effort — never blocks session create.
+    // Gated on the provider: `.mcp.json` is Claude's convention, so writing it
+    // for Codex/Hermes would silently do nothing — the UI disables the box for
+    // them, and this guard protects direct API callers too.
+    if (
+      enableOrchestration &&
+      getProviderDefinition(agentType).supportsOrchestration
+    ) {
+      try {
+        ensureMcpConfig(expandHome(actualWorkingDirectory), id);
+      } catch (err) {
+        console.error("Failed to write orchestration MCP config:", err);
+      }
+    }
 
     // Get project's initial prompt if available
     const projectInitialPrompt = project?.initial_prompt?.trim();

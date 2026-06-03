@@ -54,6 +54,9 @@ export function useNewSessionForm({
     getDefaultModelForAgent("claude")
   );
   const [skipPermissions, setSkipPermissions] = useState(false);
+  // Conductor: writes the orchestration MCP into the session so it can
+  // spawn_worker. Plain toggle (no persistence, unlike skipPermissions).
+  const [enableOrchestration, setEnableOrchestration] = useState(false);
   const [useTmux, setUseTmux] = useState(true);
   const [initialPrompt, setInitialPrompt] = useState("");
 
@@ -278,6 +281,7 @@ export function useNewSessionForm({
         featureName: useWorktree ? featureName.trim() : null,
         baseBranch: useWorktree ? baseBranch : null,
         autoApprove: skipPermissions,
+        enableOrchestration,
         useTmux,
         initialPrompt: initialPrompt.trim() || null,
       },
@@ -335,6 +339,7 @@ export function useNewSessionForm({
     setUseWorktree(false);
     setFeatureName("");
     setInitialPrompt("");
+    setEnableOrchestration(false);
     setShowNewProject(false);
     setNewProjectName("");
     setCreationStep("creating");
@@ -357,6 +362,8 @@ export function useNewSessionForm({
     model,
     setModel,
     skipPermissions,
+    enableOrchestration,
+    setEnableOrchestration,
     useTmux,
     initialPrompt,
     setInitialPrompt,
