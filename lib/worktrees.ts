@@ -269,11 +269,49 @@ export async function listWorktrees(projectPath: string): Promise<
 }
 
 /**
- * Check if a path is inside an Stoa worktree
+ * Check if a path is inside an Stoa worktree. Normalizes both sides first —
+ * git emits forward-slash paths even on Windows, while WORKTREES_DIR uses
+ * path.join backslashes, so a raw startsWith would never match on Windows
+ * (silently hiding every worktree from the attach picker + delete gate).
  */
 export function isStoaWorktree(worktreePath: string): boolean {
-  const resolvedPath = resolvePath(worktreePath);
-  return resolvedPath.startsWith(WORKTREES_DIR);
+  const base = normalizePath(WORKTREES_DIR);
+  return normalizePath(worktreePath).startsWith(base);
+}
+
+export interface AnnotatedWorktree {
+  path: string;
+  branch: string;
+  head: string;
+  /** Lives under Stoa's worktrees dir (created/managed by Stoa). */
+  isStoa: boolean;
+  /** A live session already points here (so it's NOT an orphan to attach to). */
+  attached: boolean;
+}
+
+/** Normalize a path for comparison (expand ~, resolve, case-fold on Windows). */
+function normalizePath(p: string): string {
+  const resolved = path.resolve(resolvePath(p));
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * Annotate raw worktree entries with `isStoa` and whether a live session already
+ * owns each (`attached`) — given the set of session working directories. Pure
+ * (no git/db), so the join logic is unit-testable. Drives the New Session
+ * "attach to existing worktree" picker (offer the orphaned Stoa worktrees).
+ */
+export function annotateWorktrees(
+  worktrees: Array<{ path: string; branch: string; head: string }>,
+  sessionWorkingDirs: Iterable<string>
+): AnnotatedWorktree[] {
+  const attachedDirs = new Set<string>();
+  for (const dir of sessionWorkingDirs) attachedDirs.add(normalizePath(dir));
+  return worktrees.map((w) => ({
+    ...w,
+    isStoa: isStoaWorktree(w.path),
+    attached: attachedDirs.has(normalizePath(w.path)),
+  }));
 }
 
 /**

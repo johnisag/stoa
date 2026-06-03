@@ -5,6 +5,12 @@ import {
   getDefaultBranch,
   getCurrentBranch,
 } from "@/lib/git";
+import {
+  listWorktrees,
+  annotateWorktrees,
+  type AnnotatedWorktree,
+} from "@/lib/worktrees";
+import { getDb, queries, type Session } from "@/lib/db";
 
 /**
  * POST /api/git/check
@@ -31,18 +37,35 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Get branch info
-    const [branches, defaultBranch, currentBranch] = await Promise.all([
-      getBranches(dirPath),
-      getDefaultBranch(dirPath),
-      getCurrentBranch(dirPath),
-    ]);
+    // Get branch info + existing worktrees
+    const [branches, defaultBranch, currentBranch, rawWorktrees] =
+      await Promise.all([
+        getBranches(dirPath),
+        getDefaultBranch(dirPath),
+        getCurrentBranch(dirPath),
+        listWorktrees(dirPath),
+      ]);
+
+    // Annotate Stoa-managed worktrees with whether a live session already owns
+    // each — orphans (isStoa && !attached) are the "attach to recover" targets.
+    let worktrees: AnnotatedWorktree[] = [];
+    try {
+      const db = getDb();
+      const sessions = queries.getAllSessions(db).all() as Session[];
+      worktrees = annotateWorktrees(
+        rawWorktrees,
+        sessions.map((s) => s.working_directory)
+      ).filter((w) => w.isStoa);
+    } catch {
+      worktrees = [];
+    }
 
     return NextResponse.json({
       isGitRepo: true,
       branches,
       defaultBranch,
       currentBranch,
+      worktrees,
     });
   } catch (error) {
     console.error("Error checking git repo:", error);
