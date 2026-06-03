@@ -218,14 +218,14 @@ export function sessionKey(input: SessionKeyInput): string {
 export function backendKeyForSession(session: {
   id: string;
   tmux_name?: string | null;
-  agent_type?: ProviderId | null;
+  agent_type?: string | null;
 }): string {
-  return (
-    session.tmux_name ||
-    sessionKey({
-      kind: "agent",
-      provider: session.agent_type ?? "claude",
-      id: session.id,
-    })
-  );
+  if (session.tmux_name) return session.tmux_name;
+  // Match getProvider()'s fallback: null/empty/unknown agent_type → claude, so
+  // the computed key can never be malformed (e.g. "-<id>") and miss the pty.
+  const provider =
+    session.agent_type && isValidProviderId(session.agent_type)
+      ? session.agent_type
+      : "claude";
+  return sessionKey({ kind: "agent", provider, id: session.id });
 }

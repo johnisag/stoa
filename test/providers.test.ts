@@ -207,5 +207,10 @@ describe("sessionKey() — centralized session-name construction", () => {
     ).toBe("codex-x");
     expect(backendKeyForSession({ id: "x", tmux_name: "" })).toBe("claude-x");
     expect(backendKeyForSession({ id: "x" })).toBe("claude-x");
+    // null/empty/unknown agent_type → claude (never a malformed "-<id>" key).
+    expect(backendKeyForSession({ id: "x", agent_type: "" })).toBe("claude-x");
+    expect(backendKeyForSession({ id: "x", agent_type: "bogus" })).toBe(
+      "claude-x"
+    );
   });
 });
