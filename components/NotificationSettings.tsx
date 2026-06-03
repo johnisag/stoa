@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { useWebPush } from "@/hooks/useWebPush";
 import type { NotificationSettings as NotificationSettingsType } from "@/lib/notifications";
 
 interface WaitingSession {
@@ -40,6 +41,7 @@ export function NotificationSettings({
   onSelectSession,
 }: NotificationSettingsProps) {
   const waitingCount = waitingSessions.length;
+  const webPush = useWebPush();
 
   return (
     <DropdownMenu open={open} onOpenChange={onOpenChange}>
@@ -161,6 +163,35 @@ export function NotificationSettings({
           >
             <Bell className="mr-2 h-3 w-3" />
             <span className="text-xs">Enable browser alerts</span>
+          </DropdownMenuItem>
+        )}
+
+        {/* Closed-tab (Web Push) notifications — once browser alerts are on and
+            the SW/secure-context is available. */}
+        {permissionGranted && webPush.supported && (
+          <DropdownMenuItem
+            onSelect={(e) => {
+              e.preventDefault();
+              if (webPush.busy) return;
+              if (webPush.subscribed) void webPush.unsubscribe();
+              else void webPush.subscribe();
+            }}
+            className="flex items-center justify-between"
+          >
+            <span className="text-xs">Notify even when tab is closed</span>
+            <span
+              className={cn(
+                "relative h-4 w-8 rounded-full transition-colors",
+                webPush.subscribed ? "bg-primary" : "bg-muted"
+              )}
+            >
+              <span
+                className={cn(
+                  "bg-background absolute top-0.5 h-3 w-3 rounded-full transition-transform",
+                  webPush.subscribed ? "translate-x-4" : "translate-x-0.5"
+                )}
+              />
+            </span>
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>

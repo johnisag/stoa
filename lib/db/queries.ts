@@ -324,4 +324,21 @@ export const queries = {
 
   deleteDevServersByProject: (db: Database.Database) =>
     getStmt(db, `DELETE FROM dev_servers WHERE project_id = ?`),
+
+  // Web Push subscriptions (closed-tab notifications)
+  upsertPushSubscription: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO push_subscriptions (endpoint, p256dh, auth) VALUES (?, ?, ?)
+       ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth`
+    ),
+
+  deletePushSubscription: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM push_subscriptions WHERE endpoint = ?`),
+
+  getAllPushSubscriptions: (db: Database.Database) =>
+    getStmt(db, `SELECT endpoint, p256dh, auth FROM push_subscriptions`),
+
+  countPushSubscriptions: (db: Database.Database) =>
+    getStmt(db, `SELECT COUNT(*) AS n FROM push_subscriptions`),
 };

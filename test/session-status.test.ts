@@ -7,6 +7,8 @@ import { describe, it, expect } from "vitest";
 import {
   diffStatuses,
   snapshotStatuses,
+  detectPushEvents,
+  statusById,
   type ManagedStatus,
 } from "@/lib/session-status";
 
@@ -50,5 +52,42 @@ describe("diffStatuses", () => {
     expect(deltas).toEqual([
       { id: "b", name: "claude-b", status: "idle", lastLine: "" },
     ]);
+  });
+});
+
+describe("detectPushEvents", () => {
+  it("skips the initial tick (no previous status)", () => {
+    expect(detectPushEvents(new Map(), [wt("a", "waiting")])).toEqual([]);
+  });
+
+  it("pushes on running -> waiting (needs input)", () => {
+    const prev = statusById([wt("a", "running")]);
+    expect(detectPushEvents(prev, [wt("a", "waiting")])).toEqual([
+      { id: "a", name: "claude-a", kind: "waiting" },
+    ]);
+  });
+
+  it("pushes done on running/waiting -> idle", () => {
+    expect(
+      detectPushEvents(statusById([wt("a", "running")]), [wt("a", "idle")])
+    ).toEqual([{ id: "a", name: "claude-a", kind: "done" }]);
+    expect(
+      detectPushEvents(statusById([wt("a", "waiting")]), [wt("a", "idle")])
+    ).toEqual([{ id: "a", name: "claude-a", kind: "done" }]);
+  });
+
+  it("pushes on -> error", () => {
+    expect(
+      detectPushEvents(statusById([wt("a", "running")]), [wt("a", "error")])
+    ).toEqual([{ id: "a", name: "claude-a", kind: "error" }]);
+  });
+
+  it("does NOT push on unchanged or idle -> running", () => {
+    expect(
+      detectPushEvents(statusById([wt("a", "waiting")]), [wt("a", "waiting")])
+    ).toEqual([]);
+    expect(
+      detectPushEvents(statusById([wt("a", "idle")]), [wt("a", "running")])
+    ).toEqual([]);
   });
 });
