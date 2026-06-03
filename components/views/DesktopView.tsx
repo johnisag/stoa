@@ -262,6 +262,7 @@ export function DesktopView({
         sessions={sessions}
         open={showQuickSwitcher}
         onOpenChange={setShowQuickSwitcher}
+        sessionStatuses={sessionStatuses}
         currentSessionId={focusedActiveTab?.sessionId ?? undefined}
         activeSessionWorkingDir={activeSession?.working_directory ?? undefined}
         onSelectSession={(sessionId) => {
