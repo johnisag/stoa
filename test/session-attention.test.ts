@@ -34,6 +34,7 @@ function mkSession(id: string): Session {
     conductor_session_id: null,
     worker_task: null,
     worker_status: null,
+    mcp_launch_args: null,
   };
 }
 

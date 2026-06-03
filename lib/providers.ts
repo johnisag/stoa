@@ -58,6 +58,10 @@ export interface BuildFlagsOptions {
   autoApprove?: boolean; // Use auto-approve flag from registry
   model?: string;
   initialPrompt?: string; // Initial prompt to send to agent
+  // Extra launch tokens appended before the positional prompt — used to wire a
+  // conductor's MCP server (e.g. Codex's `-c mcp_servers.stoa.*`). Clean argv
+  // tokens; buildAgentArgs passes them through, the tmux caller shell-quotes.
+  extraArgs?: string[];
 }
 
 // Common spinner characters used across CLIs
@@ -360,6 +364,8 @@ export function buildAgentArgs(
     args.push(def.resumeFlag, options.parentSessionId);
     if (def.supportsFork) args.push("--fork-session");
   }
+  // Conductor MCP wiring (clean tokens), before the positional prompt.
+  if (options.extraArgs?.length) args.push(...options.extraArgs);
   if (options.initialPrompt?.trim() && def.initialPromptFlag !== undefined) {
     const prompt = options.initialPrompt.trim();
     if (def.initialPromptFlag === "") {
@@ -370,6 +376,18 @@ export function buildAgentArgs(
   }
 
   return { binary: def.cli, args };
+}
+
+/**
+ * Shell-quote a single clean argv token for the tmux backend's `exec <cmd>`
+ * line (the pty backend spawns argv directly and needs no quoting). Bare
+ * word-safe tokens pass through; anything else is wrapped in double quotes with
+ * `\ " $ \`` escaped — enough for the conductor `-c mcp_servers.stoa.*` tokens
+ * (which contain TOML single-quotes, brackets, commas, and `=`).
+ */
+export function shellQuoteArg(token: string): string {
+  if (/^[A-Za-z0-9_./=:-]+$/.test(token)) return token;
+  return `"${token.replace(/(["\\$`])/g, "\\$1")}"`;
 }
 
 // Type guard (use registry)

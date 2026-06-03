@@ -15,7 +15,11 @@ import {
 import { execFileSync } from "child_process";
 import { tmpdir } from "os";
 import path from "path";
-import { ensureMcpConfig, hasMcpConfig } from "@/lib/mcp-config";
+import {
+  ensureMcpConfig,
+  hasMcpConfig,
+  buildCodexOrchestrationArgs,
+} from "@/lib/mcp-config";
 
 describe("ensureMcpConfig", () => {
   let dir: string;
@@ -88,5 +92,33 @@ describe("ensureMcpConfig", () => {
   it("is a no-op-safe write on a non-git dir (no throw, config still written)", () => {
     expect(() => ensureMcpConfig(dir, "s1")).not.toThrow();
     expect(existsSync(path.join(dir, ".mcp.json"))).toBe(true);
+  });
+});
+
+describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
+  it("emits a complete inline stoa server with this session's id", () => {
+    const args = buildCodexOrchestrationArgs("sess-123");
+    // Tokens come in (-c, key=value) pairs.
+    expect(args.length % 2).toBe(0);
+    for (let i = 0; i < args.length; i += 2) expect(args[i]).toBe("-c");
+
+    const kv = args.filter((_, i) => i % 2 === 1);
+    expect(kv).toContain("mcp_servers.stoa.command='npx'");
+    expect(kv.some((s) => /^mcp_servers\.stoa\.args=\['tsx',/.test(s))).toBe(
+      true
+    );
+    expect(kv).toContain(
+      "mcp_servers.stoa.env.CONDUCTOR_SESSION_ID='sess-123'"
+    );
+    // Points npx tsx at the orchestration server entrypoint.
+    expect(args.join(" ")).toContain("orchestration-server.ts");
+  });
+
+  it("uses TOML single-quoted literals (keeps Windows backslashes intact)", () => {
+    const args = buildCodexOrchestrationArgs("s1");
+    const argsToken = args.find((s) => s.startsWith("mcp_servers.stoa.args="))!;
+    // Single-quoted (literal) — never double-quoted, which would mangle `\m`.
+    expect(argsToken).not.toContain('"');
+    expect(argsToken).toContain("'tsx'");
   });
 });

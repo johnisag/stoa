@@ -183,6 +183,16 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 14,
+    name: "add_mcp_launch_args_to_sessions",
+    up: (db) => {
+      // Conductor wiring for providers with no on-disk config (e.g. Codex's
+      // `-c mcp_servers.stoa.*`): a JSON array of extra argv tokens replayed at
+      // every spawn. NULL for non-conductors and file-configured providers.
+      db.exec(`ALTER TABLE sessions ADD COLUMN mcp_launch_args TEXT`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
