@@ -22,6 +22,7 @@ import {
   Download,
   GitCompare,
   History,
+  ListPlus,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -48,6 +49,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SessionQuickActions } from "./SessionQuickActions";
 import { SessionDiffModal } from "./SessionDiffModal";
 import { SnapshotTimeline } from "./SnapshotTimeline";
+import { PromptQueueModal } from "./PromptQueueModal";
 import { cardActionsForStatus } from "@/lib/notification-actions";
 import type { Session, Group } from "@/lib/db";
 import type { ProjectWithDevServers } from "@/lib/projects";
@@ -161,6 +163,7 @@ function SessionCardComponent({
   const [menuOpen, setMenuOpen] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showQueue, setShowQueue] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const justStartedEditingRef = useRef(false);
 
@@ -294,6 +297,7 @@ function SessionCardComponent({
             {isSummarizing ? "Summarizing..." : "Fresh start"}
           </MenuItem>
         )}
+        <MenuSeparator />
         <MenuItem onClick={() => setShowDiff(true)}>
           <GitCompare className="mr-2 h-3 w-3" />
           Review changes
@@ -301,6 +305,10 @@ function SessionCardComponent({
         <MenuItem onClick={() => setShowHistory(true)}>
           <History className="mr-2 h-3 w-3" />
           Turn history
+        </MenuItem>
+        <MenuItem onClick={() => setShowQueue(true)}>
+          <ListPlus className="mr-2 h-3 w-3" />
+          Queue tasks
         </MenuItem>
         <MenuSub>
           <MenuSubTrigger>
@@ -558,6 +566,13 @@ function SessionCardComponent({
           name={session.name}
           status={status}
           onClose={() => setShowHistory(false)}
+        />
+      )}
+      {showQueue && (
+        <PromptQueueModal
+          sessionId={session.id}
+          name={session.name}
+          onClose={() => setShowQueue(false)}
         />
       )}
     </>

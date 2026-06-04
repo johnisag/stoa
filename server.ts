@@ -27,6 +27,7 @@ import {
 import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
 import { actionsForKind } from "./lib/notification-actions";
 import { captureSnapshot } from "./lib/snapshots";
+import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
 import { computeSessionCosts } from "./lib/session-cost";
 import {
   getBudgetConfig,
@@ -37,7 +38,7 @@ import {
 } from "./lib/budget";
 import { backendKeyForSession } from "./lib/providers/registry";
 import { getDb, queries, type Session } from "./lib/db";
-import type { SessionStatus } from "./lib/status-detector";
+import { statusDetector, type SessionStatus } from "./lib/status-detector";
 import {
   getServerToken,
   trustLoopback,
@@ -204,6 +205,9 @@ app.prepare().then(() => {
   // snapshot only on a running→settled turn boundary.
   const SNAPSHOTS_ENABLED = process.env.STOA_SNAPSHOTS === "1";
   let lastSnapStatusById = new Map<string, SessionStatus>();
+  // Sessions with a queued prompt already sent this idle period (cleared when the
+  // session next goes non-idle) — so one prompt dispatches per idle, not per tick.
+  const queueDispatched = new Set<string>();
   if (SNAPSHOTS_ENABLED) {
     console.log(
       "> Per-turn snapshots on (STOA_SNAPSHOTS=1): the status ticker runs continuously and writes refs/stoa/snap/* at each turn boundary."
@@ -266,10 +270,12 @@ app.prepare().then(() => {
     // Web Push must fire with no tab open, so the ticker also runs whenever a
     // push subscription exists (computeManagedStatuses is cheap when idle).
     const pushEnabled = hasPushSubscriptions();
-    if (!wsListening && !pushEnabled && !SNAPSHOTS_ENABLED) {
+    const queuesPending = hasAnyQueued();
+    if (!wsListening && !pushEnabled && !SNAPSHOTS_ENABLED && !queuesPending) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
       if (lastPushStatusById.size) lastPushStatusById = new Map();
       if (lastSnapStatusById.size) lastSnapStatusById = new Map();
+      if (queueDispatched.size) queueDispatched.clear();
       return;
     }
     if (statusTickBusy) return; // don't stack ticks if a capture runs slow
@@ -329,6 +335,45 @@ app.prepare().then(() => {
           }
         }
         lastSnapStatusById = statusById(curr);
+      }
+      // Prompt queue: drain the next queued prompt when a session is genuinely
+      // ready. A finished turn and a permission prompt are BOTH "waiting"; only a
+      // finished turn flips to "idle" when acknowledged (a real prompt keeps
+      // matching the waiting patterns). So acknowledge waiting+queued sessions to
+      // disambiguate, then dispatch only on "idle" — never pasting a task into a
+      // pending permission dialog. Fire-and-forget; dequeue on a successful send.
+      const liveIds = new Set(curr.map((s) => s.id));
+      for (const id of [...queueDispatched])
+        if (!liveIds.has(id)) queueDispatched.delete(id);
+      for (const s of curr) {
+        const next = peekPrompt(s.id);
+        if (
+          next == null ||
+          s.status === "running" ||
+          s.status === "error" ||
+          s.status === "dead"
+        ) {
+          queueDispatched.delete(s.id);
+          continue;
+        }
+        if (s.status === "waiting") {
+          // Promote a settled turn to "idle" next tick; a real permission prompt
+          // stays "waiting" and is left for the user to answer.
+          statusDetector.acknowledge(s.name);
+          continue;
+        }
+        // idle → ready for the next instruction.
+        if (queueDispatched.has(s.id)) continue;
+        queueDispatched.add(s.id);
+        void getSessionBackend()
+          .pasteText(s.name, next, { enter: true })
+          .then(() => {
+            dequeuePrompt(s.id);
+          })
+          .catch((err) => {
+            queueDispatched.delete(s.id); // let the next tick retry
+            console.error("queue dispatch failed:", err);
+          });
       }
     } catch (err) {
       console.error("status events tick failed:", err);
