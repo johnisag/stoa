@@ -30,12 +30,21 @@ export type WorkerStatus =
 export interface WorkerInfo {
   id: string;
   name: string;
+  /** Which agent runs this worker — "claude" | "codex" | "hermes". */
+  agentType: string;
   task: string;
   status: WorkerStatus;
   worktreePath: string | null;
   branchName: string | null;
   createdAt: string;
 }
+
+// Per-agent tint so two workers with the SAME task are distinguishable at a glance.
+const AGENT_BADGE: Record<string, string> = {
+  claude: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  codex: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  hermes: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
+};
 
 interface WorkerCardProps {
   worker: WorkerInfo;
@@ -121,7 +130,16 @@ export function WorkerCard({
             <span className="truncate text-sm font-medium">{worker.name}</span>
             <span
               className={cn(
-                "rounded px-1.5 py-0.5 text-xs",
+                "flex-shrink-0 rounded px-1.5 py-0.5 text-xs font-medium",
+                AGENT_BADGE[worker.agentType] ??
+                  "bg-muted text-muted-foreground"
+              )}
+            >
+              {worker.agentType}
+            </span>
+            <span
+              className={cn(
+                "flex-shrink-0 rounded px-1.5 py-0.5 text-xs",
                 config.color,
                 "bg-current/10"
               )}

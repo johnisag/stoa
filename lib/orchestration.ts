@@ -36,6 +36,8 @@ export interface SpawnWorkerOptions {
 export interface WorkerInfo {
   id: string;
   name: string;
+  /** Which agent runs this worker — "claude" | "codex" | "hermes". */
+  agentType: string;
   task: string;
   status:
     | "pending"
@@ -326,6 +328,7 @@ export async function getWorkers(
     workerInfos.push({
       id: worker.id,
       name: worker.name,
+      agentType: provider.id,
       task: worker.worker_task || "",
       status,
       worktreePath: worker.worktree_path,
