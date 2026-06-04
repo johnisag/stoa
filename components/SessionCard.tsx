@@ -93,6 +93,14 @@ interface SessionCardProps {
 const EMPTY_GROUPS: Group[] = [];
 const EMPTY_PROJECTS: ProjectWithDevServers[] = [];
 
+// Per-agent tint for the worker badge, so two workers with the SAME task name
+// (e.g. both "Review …") are distinguishable in the sidebar.
+const AGENT_BADGE: Record<string, string> = {
+  claude: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  codex: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  hermes: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
+};
+
 const statusConfig: Record<
   TmuxStatus,
   { color: string; label: string; icon: React.ReactNode }
@@ -147,6 +155,8 @@ function SessionCardComponent({
 }: SessionCardProps) {
   const status = tmuxStatus || "dead";
   const config = statusConfig[status];
+  // Worker sessions share their task as a name; show which agent runs each.
+  const isWorker = !!session.conductor_session_id;
   // Quick-action buttons take the row's right edge for actionable statuses; drop
   // the (lower-value) timestamp then so the row doesn't crowd on a phone.
   const hasQuickActions =
@@ -459,7 +469,20 @@ function SessionCardComponent({
         />
       ) : (
         <div className="flex min-w-0 flex-1 flex-col justify-center">
-          <span className="truncate text-sm leading-tight">{session.name}</span>
+          <span className="flex items-center gap-1.5 text-sm leading-tight">
+            {isWorker && (
+              <span
+                className={cn(
+                  "flex-shrink-0 rounded px-1 text-[10px] font-medium",
+                  AGENT_BADGE[session.agent_type] ??
+                    "bg-muted text-muted-foreground"
+                )}
+              >
+                {session.agent_type}
+              </span>
+            )}
+            <span className="truncate">{session.name}</span>
+          </span>
           {showPreview && (
             <span
               className="text-muted-foreground truncate text-[11px] leading-tight"
