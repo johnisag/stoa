@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { backendKeyForSession } from "@/lib/providers/registry";
 import { getSessionBackend } from "@/lib/session-backend";
-import { isRespondAction, planResponse } from "@/lib/notification-actions";
+import { isRespondAction, applyResponse } from "@/lib/notification-actions";
 
 // POST /api/sessions/[id]/respond — act on a session straight from a push
 // notification's action button (approve → Enter, reject → Escape, stop → kill).
@@ -36,10 +36,7 @@ export async function POST(
       );
     }
 
-    const op = planResponse(action);
-    if (op === "enter") await backend.sendEnter(name);
-    else if (op === "escape") await backend.sendEscape(name);
-    else await backend.kill(name);
+    await applyResponse(backend, name, action);
 
     return NextResponse.json({ ok: true, action });
   } catch (error) {

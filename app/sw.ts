@@ -95,6 +95,8 @@ self.addEventListener("notificationclick", (event) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
+        // Don't let a hung server hold the SW open — fall back to opening the app.
+        signal: AbortSignal.timeout(10000),
       })
         .then((res) => (res.ok ? undefined : focusOrOpen(url)))
         .catch(() => focusOrOpen(url))

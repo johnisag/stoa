@@ -67,3 +67,30 @@ export function planResponse(action: RespondAction): ResponseOp {
       return "kill";
   }
 }
+
+/**
+ * What applyResponse needs from a backend — a structural subset of
+ * SessionBackend, so this module stays free of any backend import and the
+ * action→op→call dispatch is unit-testable with a plain spy.
+ */
+export interface ResponseTarget {
+  sendEnter(name: string): Promise<void>;
+  sendEscape(name: string): Promise<void>;
+  kill(name: string): Promise<void>;
+}
+
+/** Route an action to the matching terminal op on `target` for session `name`. */
+export function applyResponse(
+  target: ResponseTarget,
+  name: string,
+  action: RespondAction
+): Promise<void> {
+  switch (planResponse(action)) {
+    case "enter":
+      return target.sendEnter(name);
+    case "escape":
+      return target.sendEscape(name);
+    case "kill":
+      return target.kill(name);
+  }
+}

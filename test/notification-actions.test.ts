@@ -4,6 +4,8 @@ import {
   isRespondAction,
   actionsForKind,
   planResponse,
+  applyResponse,
+  type ResponseTarget,
 } from "../lib/notification-actions";
 
 describe("isRespondAction", () => {
@@ -50,5 +52,37 @@ describe("planResponse", () => {
     expect(planResponse("approve")).toBe("enter");
     expect(planResponse("reject")).toBe("escape");
     expect(planResponse("stop")).toBe("kill");
+  });
+});
+
+describe("applyResponse", () => {
+  // A spy backend records which op fired + the name it got — locks the dispatch
+  // (a swapped Enter/Escape or a mis-wired kill fails here, not silently).
+  function spy() {
+    const calls: Array<[string, string]> = [];
+    const target: ResponseTarget = {
+      sendEnter: async (n) => void calls.push(["enter", n]),
+      sendEscape: async (n) => void calls.push(["escape", n]),
+      kill: async (n) => void calls.push(["kill", n]),
+    };
+    return { calls, target };
+  }
+
+  it("routes each action to the matching backend op, with the name", async () => {
+    const { calls, target } = spy();
+    await applyResponse(target, "claude-a", "approve");
+    await applyResponse(target, "claude-b", "reject");
+    await applyResponse(target, "claude-c", "stop");
+    expect(calls).toEqual([
+      ["enter", "claude-a"],
+      ["escape", "claude-b"],
+      ["kill", "claude-c"],
+    ]);
+  });
+
+  it("calls exactly one op per action", async () => {
+    const { calls, target } = spy();
+    await applyResponse(target, "s", "approve");
+    expect(calls).toHaveLength(1);
   });
 });
