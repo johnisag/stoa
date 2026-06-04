@@ -4,6 +4,7 @@
 import { defaultCache } from "@serwist/turbopack/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
 import { Serwist } from "serwist";
+import { shouldSuppressPush } from "@/lib/push-visibility";
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -26,6 +27,9 @@ serwist.addEventListeners();
 // ── Web Push ──
 // Show a notification when the server pushes a session event (fires even with
 // the Stoa tab closed). Payload is the JSON from lib/push.sendPushToAll.
+// The server pushes to EVERY device; we dedupe per-device here — if a Stoa tab
+// is actively visible on THIS device the in-app path already alerts, so skip
+// the push (other devices, e.g. a phone with the tab closed, still get it).
 self.addEventListener("push", (event) => {
   let payload: { title?: string; body?: string; tag?: string; url?: string } =
     {};
@@ -37,12 +41,19 @@ self.addEventListener("push", (event) => {
     }
   }
   event.waitUntil(
-    self.registration.showNotification(payload.title || "Stoa", {
-      body: payload.body || "",
-      tag: payload.tag,
-      icon: "/icon.svg",
-      data: { url: payload.url || "/" },
-    })
+    (async () => {
+      const windows = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      if (shouldSuppressPush(windows)) return;
+      await self.registration.showNotification(payload.title || "Stoa", {
+        body: payload.body || "",
+        tag: payload.tag,
+        icon: "/icon.svg",
+        data: { url: payload.url || "/" },
+      });
+    })()
   );
 });
 
