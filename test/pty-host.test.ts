@@ -136,6 +136,45 @@ describe("pty-host daemon (Tier 2)", () => {
     await client.kill("host-recon");
     client.close();
   });
+
+  it("tracks observer vs sizing attaches per key (drives the resubscribe flag)", async () => {
+    // After a reconnect, resubscribeAll must re-send the right observer flag:
+    // observer-only keys re-attach as observers (no sizing client), but a key
+    // with any real viewer re-attaches as a sizing client. This locks the
+    // per-key bookkeeping that decides that.
+    const client = new HostClient();
+    await client.spawn("host-obs", {
+      binary: "node",
+      args: ["-e", "setInterval(()=>{},1000)"],
+      cwd: process.cwd(),
+    });
+    const probe = client as unknown as {
+      observerForKey(k: string): boolean;
+    };
+
+    const obs = await client.attach(
+      "host-obs",
+      () => {},
+      () => {},
+      true
+    );
+    expect(probe.observerForKey("host-obs")).toBe(true); // observer-only
+
+    const viewer = await client.attach(
+      "host-obs",
+      () => {},
+      () => {},
+      false
+    );
+    expect(probe.observerForKey("host-obs")).toBe(false); // a sizing client exists
+
+    viewer.detach();
+    expect(probe.observerForKey("host-obs")).toBe(true); // back to observer-only
+
+    obs.detach();
+    await client.kill("host-obs");
+    client.close();
+  });
 });
 
 function client_close(c: HostClient) {

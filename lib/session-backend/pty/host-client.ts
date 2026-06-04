@@ -53,7 +53,21 @@ export class HostClient {
   private pending = new Map<number, Pending>();
   private outputListeners = new Map<string, Set<(data: string) => void>>();
   private exitListeners = new Map<string, Set<(code: number) => void>>();
+  // Per-key count of NON-observer (sizing) attaches, so resubscribeAll can
+  // re-send the right observer flag after a reconnect (else an observer-only
+  // key would silently re-register as a sizing client on the daemon).
+  private sizingCounts = new Map<string, number>();
   private spawnedThisCycle = false;
+
+  /** Whether the daemon should treat this key's (re)attach as observer-only. */
+  private observerForKey(key: string): boolean {
+    return (this.sizingCounts.get(key) ?? 0) === 0;
+  }
+  private decSizing(key: string): void {
+    const n = (this.sizingCounts.get(key) ?? 0) - 1;
+    if (n <= 0) this.sizingCounts.delete(key);
+    else this.sizingCounts.set(key, n);
+  }
 
   private route(msg: HostMessage) {
     if (msg.t === "res") {
@@ -201,6 +215,7 @@ export class HostClient {
         const res = await this.requestNoRetry<{ snapshot: string }>({
           t: "attach",
           key,
+          observer: this.observerForKey(key),
         });
         const snap = res?.snapshot;
         if (snap) this.outputListeners.get(key)?.forEach((cb) => cb(snap));
@@ -294,6 +309,8 @@ export class HostClient {
     if (!exitSet) this.exitListeners.set(key, (exitSet = new Set()));
     outSet.add(onOutput);
     exitSet.add(onExit);
+    if (!observer)
+      this.sizingCounts.set(key, (this.sizingCounts.get(key) ?? 0) + 1);
 
     try {
       const res = await this.request<{ snapshot: string }>({
@@ -304,15 +321,23 @@ export class HostClient {
       const detach = () => {
         outSet!.delete(onOutput);
         exitSet!.delete(onExit);
-        if (outSet!.size === 0) this.outputListeners.delete(key);
+        if (!observer) this.decSizing(key);
+        const last = outSet!.size === 0;
+        if (last) this.outputListeners.delete(key);
         if (exitSet!.size === 0) this.exitListeners.delete(key);
-        void this.fireAndForget({ t: "detach", key });
+        // Only tell the daemon to detach when the LAST local listener for this
+        // key is gone. All browser sockets share one daemon connection with a
+        // single slot per key, so an unconditional detach here would tear down
+        // the shared subscription and freeze any OTHER tab still watching the
+        // same session (e.g. a worker open full-screen AND observed).
+        if (last) void this.fireAndForget({ t: "detach", key });
       };
       return { snapshot: res?.snapshot ?? "", detach };
     } catch (err) {
       // Roll back listener registration if the attach failed.
       outSet.delete(onOutput);
       exitSet.delete(onExit);
+      if (!observer) this.decSizing(key);
       if (outSet.size === 0) this.outputListeners.delete(key);
       if (exitSet.size === 0) this.exitListeners.delete(key);
       throw err;
@@ -333,6 +358,18 @@ export class HostClient {
 
   async rename(oldKey: string, newKey: string): Promise<void> {
     await this.request<void>({ t: "rename", oldKey, newKey });
+    // Re-key local subscription bookkeeping so a post-rename reconnect
+    // resubscribes under the NEW key (and keeps the right observer/sizing flag).
+    const move = <V>(m: Map<string, V>) => {
+      const v = m.get(oldKey);
+      if (v !== undefined) {
+        m.delete(oldKey);
+        m.set(newKey, v);
+      }
+    };
+    move(this.outputListeners);
+    move(this.exitListeners);
+    move(this.sizingCounts);
   }
 
   async capture(key: string, lines?: number): Promise<string> {

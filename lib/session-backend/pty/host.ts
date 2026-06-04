@@ -94,6 +94,18 @@ function handleMessage(conn: Conn, msg: ClientMessage) {
         break;
       }
       // Detach any prior subscription for this key on this connection.
+      //
+      // KNOWN LIMITATION (Tier-2 same-key multi-viewer): all browser sockets
+      // share ONE HostClient → ONE daemon Conn, and `attached` holds a single
+      // slot per key. If two tabs attach the SAME key (e.g. a worker open
+      // full-screen AND its mini-terminal observed), this re-attach evicts the
+      // first tab's SIZING slot, so that tab's resize stops taking effect until
+      // it re-attaches. (The worse failure — a detach dropping the shared output
+      // sub and freezing the other tab — is now guarded client-side by
+      // ref-counted detach in host-client.ts.) The full fix is per-subscription
+      // slots (Map<key, Set<sub>> + a sub id in the detach protocol), tracked as
+      // a follow-up. The common mini-terminal case (observing a worker NOT also
+      // open full-screen) doesn't hit this.
       detachKey(conn, msg.key);
       const snapshot = session.serialize();
       const offOutput = session.onOutput((data) =>
