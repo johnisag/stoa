@@ -16,6 +16,13 @@
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
   }
+
+  /* Tailwind v4's reset dropped the default pointer cursor on buttons. Restore
+     the hand on every enabled button / role=button so they read as clickable. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
 }
 
 @theme inline {
