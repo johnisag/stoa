@@ -27,9 +27,9 @@ serwist.addEventListeners();
 // ── Web Push ──
 // Show a notification when the server pushes a session event (fires even with
 // the Stoa tab closed). Payload is the JSON from lib/push.sendPushToAll.
-// The server pushes to EVERY device; we dedupe per-device here — if a Stoa tab
-// is actively visible on THIS device the in-app path already alerts, so skip
-// the push (other devices, e.g. a phone with the tab closed, still get it).
+// The server pushes to EVERY device; we dedupe per-device here — if any Stoa
+// window is open on THIS device the in-app path owns the alert, so skip the
+// push (other devices, e.g. a phone with the tab closed, still get it).
 self.addEventListener("push", (event) => {
   let payload: { title?: string; body?: string; tag?: string; url?: string } =
     {};
