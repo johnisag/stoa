@@ -257,13 +257,25 @@ app.prepare().then(() => {
       if (pushEnabled) {
         const events = detectPushEvents(lastPushStatusById, curr);
         lastPushStatusById = statusById(curr);
-        // Fan out to every subscription, throttled per-event. The "don't
-        // double-notify while a tab is watching" decision is made PER-DEVICE in
-        // the service worker (it suppresses the push only if a Stoa tab is
-        // visible on that device) — the old server-side `!wsListening` gate was
-        // global, so one open tab silenced push to every other device.
+        // Bounded memory: drop cooldown entries for sessions that are gone (the
+        // sibling lastPushStatusById is fully replaced each tick; this map is not).
+        if (lastPushAt.size) {
+          const liveIds = new Set(curr.map((s) => s.id));
+          for (const key of lastPushAt.keys()) {
+            if (!liveIds.has(key.slice(0, key.lastIndexOf("-"))))
+              lastPushAt.delete(key);
+          }
+        }
+        // Fan out to every subscription, throttled per-event. FIRE-AND-FORGET:
+        // never await push I/O inside the tick, or a slow/hung endpoint would
+        // hold statusTickBusy and stall the live WS status broadcast. The
+        // "don't double-notify" decision is made PER-DEVICE in the service
+        // worker (suppress when any Stoa window is open on that device).
         for (const ev of events) {
-          if (shouldPush(ev)) await pushFor(ev);
+          if (shouldPush(ev))
+            void pushFor(ev).catch((err) =>
+              console.error("web push failed:", err)
+            );
         }
       }
     } catch (err) {

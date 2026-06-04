@@ -126,9 +126,10 @@ export async function sendPushToAll(payload: PushPayload): Promise<void> {
         await webpush.sendNotification(
           { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
           data,
-          // Bound each send: web-push has no default timeout, so a hung push
-          // endpoint would otherwise block on the OS socket timeout (minutes)
-          // and stall the status ticker that drives it.
+          // Per-send idle timeout (web-push maps this to the socket inactivity
+          // timeout, not an absolute deadline) so a dead/silent push endpoint
+          // doesn't hang forever. The status ticker fires these without awaiting
+          // them, so a slow send can't stall the live WS broadcast.
           { timeout: 10000 }
         );
       } catch (err: unknown) {
