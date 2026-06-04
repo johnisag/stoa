@@ -285,7 +285,8 @@ export class HostClient {
   async attach(
     key: string,
     onOutput: (data: string) => void,
-    onExit: (code: number) => void
+    onExit: (code: number) => void,
+    observer = false
   ): Promise<AttachResult> {
     let outSet = this.outputListeners.get(key);
     if (!outSet) this.outputListeners.set(key, (outSet = new Set()));
@@ -298,6 +299,7 @@ export class HostClient {
       const res = await this.request<{ snapshot: string }>({
         t: "attach",
         key,
+        observer,
       });
       const detach = () => {
         outSet!.delete(onOutput);

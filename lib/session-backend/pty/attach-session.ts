@@ -35,6 +35,9 @@ export class AttachSession {
   private handle: AttachHandle | null = null;
   private lastSize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
   private attachSeq = 0;
+  // Read-only observer (mini-terminal preview): ignores input + resize so it
+  // never writes to or shrinks the session it's watching.
+  private observer = false;
 
   constructor(
     private readonly transport: PtyTransport,
@@ -46,17 +49,23 @@ export class AttachSession {
     return this.currentKey;
   }
 
-  async attach(key: string, spawn?: AttachSpawn): Promise<void> {
+  async attach(
+    key: string,
+    spawn?: AttachSpawn,
+    observer = false
+  ): Promise<void> {
     const seq = ++this.attachSeq;
     // Detach any FULLY-established prior handle synchronously; the seq guard
     // below covers a prior attach that is still in flight.
     this.handle?.detach();
     this.handle = null;
     this.currentKey = key;
+    this.observer = observer;
     try {
       const h = await this.transport.attachStream({
         key,
         spawn,
+        observer,
         cols: this.lastSize.cols,
         rows: this.lastSize.rows,
         // Stream only while this attach is the newest one. A superseded handle
@@ -84,12 +93,14 @@ export class AttachSession {
     }
   }
 
-  /** Forward raw bytes (input) to the bound session. */
+  /** Forward raw bytes (input) to the bound session (no-op for observers). */
   write(data: string): void {
+    if (this.observer) return;
     if (this.currentKey) this.transport.write(this.currentKey, data);
   }
 
   resize(cols: number, rows: number): void {
+    if (this.observer) return; // observers never resize the watched session
     this.lastSize = { cols, rows };
     this.handle?.resize(cols, rows);
   }

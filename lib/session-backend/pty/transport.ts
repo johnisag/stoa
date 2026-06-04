@@ -38,6 +38,12 @@ export interface AttachRequest {
   rows: number;
   onOutput: (data: string) => void;
   onExit: (code: number) => void;
+  /**
+   * Read-only observer (e.g. a mini-terminal preview): stream output + snapshot
+   * but DON'T register as a sizing client, so it never shrinks the pty for the
+   * real viewer. resize() becomes a no-op for these.
+   */
+  observer?: boolean;
 }
 
 /** A live subscription for one client, scoped to resize/detach that client. */
@@ -125,15 +131,21 @@ export class LocalTransport implements PtyTransport {
     const snapshot = session.serialize();
     const offOutput = session.onOutput(req.onOutput);
     const offExit = session.onExit(({ exitCode }) => req.onExit(exitCode));
-    const clientId = session.addClient(req.cols, req.rows);
+    // Observers don't register a size (no shrink); everyone else is a sizing client.
+    const clientId = req.observer
+      ? null
+      : session.addClient(req.cols, req.rows);
     const live = session;
     return {
       snapshot,
-      resize: (cols, rows) => live.resizeClient(clientId, cols, rows),
+      resize:
+        clientId === null
+          ? () => {}
+          : (cols, rows) => live.resizeClient(clientId, cols, rows),
       detach: () => {
         offOutput();
         offExit();
-        live.removeClient(clientId);
+        if (clientId !== null) live.removeClient(clientId);
       },
     };
   }
@@ -195,11 +207,14 @@ export class HostTransport implements PtyTransport {
     const { snapshot, detach } = await this.client.attach(
       req.key,
       req.onOutput,
-      req.onExit
+      req.onExit,
+      req.observer
     );
     return {
       snapshot,
-      resize: (cols, rows) => this.client.resize(req.key, cols, rows),
+      resize: req.observer
+        ? () => {}
+        : (cols, rows) => this.client.resize(req.key, cols, rows),
       detach,
     };
   }
