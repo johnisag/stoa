@@ -32,10 +32,12 @@ export function isRespondAction(s: unknown): s is RespondAction {
   );
 }
 
+// Plain ASCII labels — emoji in Web Notification action buttons render as tofu
+// boxes / vertical bars on Windows (the Action Center toast), not the glyph.
 const BUTTONS: Record<RespondAction, NotificationActionButton> = {
-  approve: { action: "approve", title: "✅ Approve" },
-  reject: { action: "reject", title: "✋ Reject" },
-  stop: { action: "stop", title: "🛑 Stop" },
+  approve: { action: "approve", title: "Approve" },
+  reject: { action: "reject", title: "Reject" },
+  stop: { action: "stop", title: "Stop" },
 };
 
 /**
