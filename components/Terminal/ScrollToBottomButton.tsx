@@ -18,7 +18,9 @@ export function ScrollToBottomButton({
     <button
       onClick={onClick}
       className={cn(
-        "absolute right-6 bottom-6 p-3",
+        // z-30 so it sits above xterm's canvas layers and actually receives the
+        // click (without it the press passes through to the terminal).
+        "absolute right-6 bottom-6 z-30 p-3",
         "bg-primary/90 hover:bg-primary backdrop-blur-sm",
         "text-primary-foreground shadow-primary/30 rounded-full shadow-xl",
         "transition-all hover:scale-105 active:scale-95",

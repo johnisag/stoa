@@ -2,10 +2,7 @@
 
 import { CheckCircle2, XCircle, Square, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
-import {
-  AIconButton,
-  type AIconButtonHighlight,
-} from "@/components/a/AIconButton";
+import { cn } from "@/lib/utils";
 import {
   cardActionsForStatus,
   type RespondAction,
@@ -15,19 +12,32 @@ import { useRespondToSession } from "@/data/sessions/queries";
 
 const META: Record<
   RespondAction,
-  { icon: LucideIcon; label: string; highlight: AIconButtonHighlight }
+  { icon: LucideIcon; label: string; className: string }
 > = {
-  approve: { icon: CheckCircle2, label: "Approve", highlight: "green" },
-  reject: { icon: XCircle, label: "Reject", highlight: "orange" },
-  stop: { icon: Square, label: "Stop", highlight: "red" },
+  approve: {
+    icon: CheckCircle2,
+    label: "Approve",
+    className: "text-green-600 hover:bg-green-500/10 dark:text-green-400",
+  },
+  reject: {
+    icon: XCircle,
+    label: "Reject",
+    className: "text-orange-600 hover:bg-orange-500/10 dark:text-orange-400",
+  },
+  stop: {
+    icon: Square,
+    label: "Stop",
+    className: "text-red-600 hover:bg-red-500/10 dark:text-red-400",
+  },
 };
 
 /**
  * Per-card quick actions — approve/reject/stop a session straight from the board,
  * the in-app twin of the lock-screen notification buttons (same /respond
  * endpoint). Self-contained (reads its own mutation hook) so it doesn't thread a
- * callback through every list view and preserves the SessionCard memo. Renders
- * nothing for statuses with no actionable choice (idle/dead).
+ * callback through every list view and preserves the SessionCard memo. Labeled
+ * (icon + word) so the choice is unambiguous on touch. Renders nothing for
+ * statuses with no actionable choice (idle/dead).
  */
 export function SessionQuickActions({
   sessionId,
@@ -51,16 +61,17 @@ export function SessionQuickActions({
       onPointerDown={(e) => e.stopPropagation()}
     >
       {actions.map((action) => {
-        const { icon, label, highlight } = META[action];
+        const { icon: Icon, label, className } = META[action];
         return (
-          <AIconButton
+          <button
             key={action}
-            icon={icon}
-            size="sm"
-            tooltip={label}
-            highlight={highlight}
+            type="button"
             disabled={respond.isPending}
             aria-label={`${label} ${name}`}
+            className={cn(
+              "flex min-h-[32px] flex-shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium transition-colors outline-none disabled:opacity-50",
+              className
+            )}
             onClick={(e) => {
               e.stopPropagation();
               respond.mutate(
@@ -71,7 +82,10 @@ export function SessionQuickActions({
                 }
               );
             }}
-          />
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {label}
+          </button>
         );
       })}
     </div>
