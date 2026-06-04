@@ -10,8 +10,30 @@ import { tmpdir } from "os";
 import path from "path";
 import {
   resolveConductorSessionId,
+  pickConductorId,
   CONDUCTOR_MARKER_FILE,
 } from "@/lib/conductor-marker";
+
+describe("pickConductorId", () => {
+  it("the Stoa-baked id wins over an agent-supplied arg", () => {
+    // Newer Claude passes its own (wrong) provider session id; the baked id
+    // must win so the worker FK doesn't break.
+    expect(pickConductorId("claude-guess-id", "real-stoa-id")).toBe(
+      "real-stoa-id"
+    );
+  });
+  it("falls back to the arg only when there's no baked id", () => {
+    expect(pickConductorId("arg-id", "")).toBe("arg-id");
+    expect(pickConductorId("arg-id", null)).toBe("arg-id");
+    expect(pickConductorId("arg-id", undefined)).toBe("arg-id");
+  });
+  it("trims whitespace and returns null when neither is present", () => {
+    expect(pickConductorId("  ", "  ")).toBeNull();
+    expect(pickConductorId(undefined, null)).toBeNull();
+    expect(pickConductorId(" arg ", "")).toBe("arg");
+    expect(pickConductorId("arg", " baked ")).toBe("baked");
+  });
+});
 
 describe("resolveConductorSessionId", () => {
   let dir: string;
