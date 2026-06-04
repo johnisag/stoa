@@ -1,6 +1,8 @@
-// MUST stay `import type` — session-status pulls in server-only backend code; a
-// value import here would drag it into anything that uses this module.
+// MUST stay `import type` — these pull in server-only backend code; a value
+// import here would drag it into anything that uses this module (incl. the
+// client-side per-card quick actions).
 import type { PushEventKind } from "./session-status";
+import type { SessionStatus } from "./status-detector";
 
 /**
  * Actionable Web Push: the button set a notification carries, and how each
@@ -52,6 +54,36 @@ export function actionsForKind(
     case "done":
       return [];
   }
+}
+
+/**
+ * The same respond actions surfaced as in-app per-card quick buttons, driven by
+ * the session's live status: a waiting session gets the full decision, a running
+ * or errored one just gets stop, and idle/dead have nothing to act on. Mirrors
+ * actionsForKind (push) so the board and the lock screen offer the same choices.
+ */
+export function cardActionsForStatus(status: SessionStatus): RespondAction[] {
+  switch (status) {
+    case "waiting":
+      return ["approve", "reject", "stop"];
+    case "running":
+    case "error":
+      return ["stop"];
+    case "idle":
+    case "dead":
+      return [];
+  }
+}
+
+/**
+ * Map a failed /respond HTTP status to a user message, or null if the failure is
+ * benign. 404/409 mean the session is already gone or has moved past the prompt
+ * — the desired end state for stop/approve/reject, and it absorbs a double-tap
+ * (the second request 409s) so a successful action never shows an error.
+ */
+export function respondErrorMessage(status: number): string | null {
+  if (status === 404 || status === 409) return null;
+  return `request failed (${status})`;
 }
 
 /** The terminal operation an action resolves to (backend-agnostic). */

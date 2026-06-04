@@ -3,6 +3,8 @@ import {
   RESPOND_ACTIONS,
   isRespondAction,
   actionsForKind,
+  cardActionsForStatus,
+  respondErrorMessage,
   planResponse,
   applyResponse,
   type ResponseTarget,
@@ -44,6 +46,46 @@ describe("actionsForKind", () => {
       expect(a.title.length).toBeGreaterThan(0);
       expect(isRespondAction(a.action)).toBe(true);
     }
+  });
+});
+
+describe("cardActionsForStatus", () => {
+  it("a waiting session offers the full decision", () => {
+    expect(cardActionsForStatus("waiting")).toEqual([
+      "approve",
+      "reject",
+      "stop",
+    ]);
+  });
+  it("running and error sessions only offer stop", () => {
+    expect(cardActionsForStatus("running")).toEqual(["stop"]);
+    expect(cardActionsForStatus("error")).toEqual(["stop"]);
+  });
+  it("idle and dead sessions have no quick actions", () => {
+    expect(cardActionsForStatus("idle")).toEqual([]);
+    expect(cardActionsForStatus("dead")).toEqual([]);
+  });
+  it("only ever returns valid respond actions", () => {
+    for (const status of [
+      "waiting",
+      "running",
+      "error",
+      "idle",
+      "dead",
+    ] as const)
+      for (const a of cardActionsForStatus(status))
+        expect(isRespondAction(a)).toBe(true);
+  });
+});
+
+describe("respondErrorMessage", () => {
+  it("treats 404/409 as benign — no error to show", () => {
+    expect(respondErrorMessage(404)).toBeNull(); // session deleted
+    expect(respondErrorMessage(409)).toBeNull(); // not running / double-tap
+  });
+  it("surfaces other failures with the status code", () => {
+    expect(respondErrorMessage(500)).toBe("request failed (500)");
+    expect(respondErrorMessage(401)).toBe("request failed (401)");
   });
 });
 
