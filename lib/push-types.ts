@@ -15,4 +15,11 @@ export interface PushPayload {
   sessionId?: string;
   /** Lock-screen action buttons (approve/reject/stop); see lib/notification-actions. */
   actions?: Array<{ action: string; title: string }>;
+  /**
+   * Diagnostic test push (from /api/push/test). The SW shows it even when a tab
+   * is open on this device (the in-app suppression is skipped) so a user can
+   * verify on demand exactly how the toast renders — text and action buttons —
+   * without waiting for a session to reach "waiting".
+   */
+  test?: boolean;
 }

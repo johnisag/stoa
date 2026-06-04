@@ -47,7 +47,9 @@ self.addEventListener("push", (event) => {
         type: "window",
         includeUncontrolled: true,
       });
-      if (shouldSuppressPush(windows)) return;
+      // A diagnostic test push always shows (even with a tab open on this
+      // device) — its whole purpose is to verify rendering on demand.
+      if (!payload.test && shouldSuppressPush(windows)) return;
       await self.registration.showNotification(payload.title || "Stoa", {
         body: payload.body || "",
         tag: payload.tag,

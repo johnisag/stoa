@@ -1,6 +1,7 @@
 "use client";
 
-import { Bell, Volume2, VolumeX, AlertCircle } from "lucide-react";
+import { Bell, Volume2, VolumeX, AlertCircle, Send } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "./ui/button";
 import {
   DropdownMenu,
@@ -192,6 +193,24 @@ export function NotificationSettings({
                 )}
               />
             </span>
+          </DropdownMenuItem>
+        )}
+
+        {/* Diagnostic: fire a known test push so you can confirm on demand how a
+            closed-tab notification renders (text + action buttons) on this device. */}
+        {permissionGranted && webPush.supported && webPush.subscribed && (
+          <DropdownMenuItem
+            onSelect={(e) => {
+              e.preventDefault();
+              void webPush.sendTest().then((ok) => {
+                if (ok) toast.success("Test notification sent");
+                else toast.error("Couldn't send test notification");
+              });
+            }}
+            className="text-xs"
+          >
+            <Send className="mr-2 h-3 w-3" />
+            Send test notification
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>
