@@ -295,15 +295,10 @@ export function useTerminalConnection({
             // server re-subscribes this socket and repaints scrollback.
             const payload = attachPayloadRef.current;
             if (payload && wsRef.current?.readyState === WebSocket.OPEN) {
-              // Reset before re-attaching so the incoming snapshot repaints
-              // cleanly. Without this, a same-key socket reconnect layers a
-              // fresh snapshot on top of existing content (duplicated scrollback).
-              // Skip once on an explicit relaunch so prior history is preserved.
-              if (preserveOnReattachRef.current) {
-                preserveOnReattachRef.current = false;
-              } else {
-                xtermRef.current?.reset();
-              }
+              // The clear is now driven by the server's "reset" frame, sent
+              // atomically right before the snapshot replay (see onReset below) —
+              // so it can't race with stale output the way a client-side reset
+              // here did (which left duplicated scrollback on reconnect).
               wsRef.current.send(
                 JSON.stringify({
                   type: "attach",
@@ -333,6 +328,16 @@ export function useTerminalConnection({
               clearTimeout(attachTimerRef.current);
               attachTimerRef.current = null;
               setIsAttaching(false);
+            }
+          },
+          // Server is about to replay the snapshot — clear so it REPLACES the
+          // buffer (no layered/duplicated scrollback). Skip once on an explicit
+          // relaunch so prior on-screen history is preserved.
+          onReset: () => {
+            if (preserveOnReattachRef.current) {
+              preserveOnReattachRef.current = false;
+            } else {
+              xtermRef.current?.reset();
             }
           },
           // Agent process exited: mark ended so auto-reconnect stops respawning

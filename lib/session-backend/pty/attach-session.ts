@@ -5,6 +5,10 @@ export interface AttachSink {
   output(data: string): void;
   exit(code: number): void;
   error(message: string): void;
+  /** Clear the client's screen+scrollback right before a snapshot replay, so the
+   *  snapshot REPLACES rather than layers (prevents duplicated scrollback when a
+   *  reconnect re-attaches over existing content). */
+  reset(): void;
 }
 
 const DEFAULT_COLS = 80;
@@ -84,7 +88,13 @@ export class AttachSession {
         return;
       }
       this.handle = h;
-      if (h.snapshot) this.sink.output(h.snapshot);
+      if (h.snapshot) {
+        // Reset THEN replay, atomically from the server's side: the snapshot
+        // always replaces the client's buffer, so a reconnect can't layer a
+        // second copy of the scrollback on top of stale/raced output.
+        this.sink.reset();
+        this.sink.output(h.snapshot);
+      }
     } catch (err) {
       if (seq === this.attachSeq) {
         console.error("pty attach failed:", err);

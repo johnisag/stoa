@@ -549,6 +549,7 @@ app.prepare().then(() => {
       output: (data) => send({ type: "output", data }),
       exit: (code) => send({ type: "exit", code }),
       error: (message) => send({ type: "error", message }),
+      reset: () => send({ type: "reset" }),
     });
 
     ws.on("message", (message: Buffer) => {

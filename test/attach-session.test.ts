@@ -84,14 +84,19 @@ function makeSink() {
   const out: string[] = [];
   const errors: string[] = [];
   const exits: number[] = [];
+  // Records out.length at each reset() — so resets[0] === 0 proves the reset
+  // fired BEFORE any snapshot output (the atomic clear-then-replay).
+  const resets: number[] = [];
   return {
     out,
     errors,
     exits,
+    resets,
     sink: {
       output: (d: string) => out.push(d),
       exit: (c: number) => exits.push(c),
       error: (m: string) => errors.push(m),
+      reset: () => resets.push(out.length),
     },
   };
 }
@@ -123,6 +128,21 @@ describe("AttachSession — attach-race sequence guard", () => {
     t.recs[0].onOutput("X"); // superseded → dropped
     t.recs[1].onOutput("Y"); // winner → delivered
     expect(out).toEqual(["snap:1", "Y"]);
+  });
+
+  it("clears (reset) right BEFORE replaying the snapshot — no layering", async () => {
+    const t = new FakeTransport();
+    const { out, resets, sink } = makeSink();
+    const s = new AttachSession(t, sink);
+
+    const p = s.attach("k");
+    t.recs[0].release();
+    await p;
+
+    // Snapshot delivered once, preceded by exactly one reset that fired while no
+    // output had been sent yet (resets records out.length === 0 at reset time).
+    expect(out).toEqual(["snap:0"]);
+    expect(resets).toEqual([0]);
   });
 
   it("holds even when the winner resolves before the superseded attach", async () => {
