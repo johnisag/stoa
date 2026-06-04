@@ -2,6 +2,7 @@
 
 import { useMemo, useCallback, useState, useEffect } from "react";
 import { useSnapshot } from "valtio";
+import { useTheme } from "next-themes";
 import { ChevronRight, SquareTerminal } from "lucide-react";
 import { ProjectCard } from "./ProjectCard";
 import { SessionCard } from "@/components/SessionCard";
@@ -81,6 +82,10 @@ export function ProjectsSection({
   // Live worker mini-terminal: which worker rows are expanded. Only offered on
   // the pty backend (the observer attach is a pty-path primitive).
   const backend = useBackendType();
+  // Match the full terminal's theme resolution so the preview isn't stuck dark.
+  const { theme: currentTheme, resolvedTheme } = useTheme();
+  const terminalTheme =
+    (currentTheme === "system" ? resolvedTheme : currentTheme) || "dark";
   const [expandedWorkers, setExpandedWorkers] = useState<Set<string>>(
     new Set()
   );
@@ -354,6 +359,7 @@ export function ProjectsSection({
                                     <MiniTerminal
                                       key={worker.tmux_name}
                                       attachKey={worker.tmux_name}
+                                      theme={terminalTheme}
                                     />
                                   )}
                                 </div>

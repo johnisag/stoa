@@ -20,6 +20,10 @@ export function useBackendType(): "pty" | "tmux" | null {
     },
     staleTime: Infinity,
     gcTime: Infinity,
+    // Self-heal a transient failure: a one-shot capability probe shouldn't get
+    // wedged at null (hiding the feature) for the page's life if the first few
+    // attempts blip. Poll only WHILE we have no answer; stop once resolved.
+    refetchInterval: (query) => (query.state.data ? false : 30000),
   });
   return data ?? null;
 }
