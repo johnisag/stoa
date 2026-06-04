@@ -9,6 +9,19 @@ const execAsync = promisify(exec);
 const TIMEOUT = 10000;
 
 export async function POST(request: NextRequest) {
+  // Off by default: this runs ARBITRARY shell commands. It has no in-app callers
+  // and is a remote-code-execution surface, so it stays disabled unless the
+  // operator explicitly opts in with STOA_ENABLE_EXEC=1.
+  if (process.env.STOA_ENABLE_EXEC !== "1") {
+    return NextResponse.json(
+      {
+        error:
+          "The /api/exec endpoint is disabled. Set STOA_ENABLE_EXEC=1 to enable it.",
+      },
+      { status: 403 }
+    );
+  }
+
   try {
     const body = await request.json();
     const { command } = body;

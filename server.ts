@@ -26,9 +26,30 @@ import {
 import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
 import { getDb, queries, type Session } from "./lib/db";
 import type { SessionStatus } from "./lib/status-detector";
+import {
+  getServerToken,
+  trustLoopback,
+  configuredAllowedOrigins,
+  buildAuthCookie,
+  decideHttpAuth,
+  decideWsAuth,
+} from "./lib/auth";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
+
+// Auth (Jupyter-style token; loopback trusted unless STOA_REQUIRE_AUTH=1). The
+// Origin allowlist on WS upgrades runs even when the token gate is disabled.
+const SERVER_TOKEN = getServerToken();
+const AUTH_ENABLED = SERVER_TOKEN !== null;
+const TRUST_LOOPBACK = trustLoopback();
+const ALLOWED_ORIGINS = configuredAllowedOrigins();
+
+const AUTH_REQUIRED_HTML = `<!doctype html><meta charset="utf-8"><title>Stoa — token required</title><body style="font-family:system-ui;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#ddd;background:#111"><h1 style="font-size:1.3rem">🔒 Stoa needs a token</h1><p>This server requires an access token for non-local connections. Open the tokenized URL printed in the server console, or append <code>?token=YOUR_TOKEN</code> to the address.</p></body>`;
+
+const firstQueryValue = (
+  v: string | string[] | undefined
+): string | undefined => (Array.isArray(v) ? v[0] : v);
 
 // Support: npm run dev -- -p 3012
 const pFlagIndex = process.argv.indexOf("-p");
@@ -42,6 +63,41 @@ app.prepare().then(() => {
   const server = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url!, true);
+
+      if (AUTH_ENABLED) {
+        const decision = decideHttpAuth({
+          serverToken: SERVER_TOKEN,
+          remoteAddr: req.socket.remoteAddress,
+          trustLoopback: TRUST_LOOPBACK,
+          authHeader: req.headers.authorization,
+          cookieHeader: req.headers.cookie,
+          queryToken: firstQueryValue(parsedUrl.query.token),
+        });
+        if (decision.type === "deny") {
+          res.statusCode = 401;
+          res.setHeader("content-type", "text/html; charset=utf-8");
+          res.end(AUTH_REQUIRED_HTML);
+          return;
+        }
+        if (decision.type === "bootstrap") {
+          // Valid ?token= → set the cookie and redirect to the same URL without
+          // the token in it (so it doesn't linger in history/logs/referrers).
+          const secure = req.headers["x-forwarded-proto"] === "https";
+          delete parsedUrl.query.token;
+          const qs = new URLSearchParams(
+            parsedUrl.query as Record<string, string>
+          ).toString();
+          res.statusCode = 302;
+          res.setHeader("Set-Cookie", buildAuthCookie(decision.token, secure));
+          res.setHeader(
+            "Location",
+            (parsedUrl.pathname || "/") + (qs ? `?${qs}` : "")
+          );
+          res.end();
+          return;
+        }
+      }
+
       await handle(req, res, parsedUrl);
     } catch (err) {
       console.error("Error occurred handling", req.url, err);
@@ -57,18 +113,41 @@ app.prepare().then(() => {
 
   // Handle WebSocket upgrades
   server.on("upgrade", (request, socket, head) => {
-    const { pathname } = parse(request.url || "");
+    const { pathname, query } = parse(request.url || "", true);
 
-    if (pathname === "/ws/terminal") {
-      terminalWss.handleUpgrade(request, socket, head, (ws) => {
-        terminalWss.emit("connection", ws, request);
-      });
-    } else if (pathname === "/ws/events") {
-      eventsWss.handleUpgrade(request, socket, head, (ws) => {
-        eventsWss.emit("connection", ws, request);
-      });
+    const wss =
+      pathname === "/ws/terminal"
+        ? terminalWss
+        : pathname === "/ws/events"
+          ? eventsWss
+          : null;
+    // Let HMR and other WebSocket connections pass through to Next.js.
+    if (!wss) return;
+
+    // Origin allowlist (always — CSWSH defense) + token gate. The browser sends
+    // the auth cookie on a same-origin upgrade, so no client wiring is needed.
+    const decision = decideWsAuth({
+      serverToken: SERVER_TOKEN,
+      origin: request.headers.origin,
+      host: request.headers.host,
+      allowedOrigins: ALLOWED_ORIGINS,
+      remoteAddr: request.socket.remoteAddress,
+      trustLoopback: TRUST_LOOPBACK,
+      authHeader: request.headers.authorization,
+      cookieHeader: request.headers.cookie,
+      queryToken: firstQueryValue(query.token),
+    });
+    if (decision.type === "deny") {
+      socket.write(
+        `HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n${decision.reason}`
+      );
+      socket.destroy();
+      return;
     }
-    // Let HMR and other WebSocket connections pass through to Next.js
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
   });
 
   // Terminal connections. Two modes:
@@ -338,6 +417,19 @@ app.prepare().then(() => {
     }
     server.listen(port, () => {
       console.log(`> Stoa ready on http://${hostname}:${port}`);
+      if (AUTH_ENABLED) {
+        console.log(
+          `> Auth on${TRUST_LOOPBACK ? " (localhost trusted)" : " (token required everywhere)"}. Remote access:`
+        );
+        console.log(`>   http://<this-host>:${port}/?token=${SERVER_TOKEN}`);
+        console.log(
+          `>   STOA_AUTH=off disables it; STOA_REQUIRE_AUTH=1 requires it on localhost too.`
+        );
+      } else {
+        console.log(
+          "> Auth DISABLED (STOA_AUTH=off) — anyone who can reach this port has full access."
+        );
+      }
     });
   })();
 });
