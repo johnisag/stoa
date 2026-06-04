@@ -139,6 +139,10 @@ export class TmuxBackend implements SessionBackend {
     await execAsync(`tmux send-keys -t ${q(name)} Enter`);
   }
 
+  async sendEscape(name: string): Promise<void> {
+    await execAsync(`tmux send-keys -t ${q(name)} Escape`);
+  }
+
   async sendKeysLiteral(name: string, text: string): Promise<void> {
     // Single-quote escaping for the shell (matches the previous inline escaping).
     const escaped = text.replace(/'/g, "'\\''");

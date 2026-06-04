@@ -76,6 +76,8 @@ describe("TmuxBackend command construction (macOS/Linux path)", () => {
     expect(last()).toBe('tmux rename-session -t "a" "b"');
     await tb.sendEnter("claude-1");
     expect(last()).toBe('tmux send-keys -t "claude-1" Enter');
+    await tb.sendEscape("claude-1");
+    expect(last()).toBe('tmux send-keys -t "claude-1" Escape');
     expect(await tb.exists("claude-1")).toBe(true);
   });
 

@@ -103,12 +103,10 @@ export function hasPushSubscriptions(): boolean {
   }
 }
 
-export interface PushPayload {
-  title: string;
-  body: string;
-  tag?: string;
-  url?: string;
-}
+// PushPayload is the wire contract — defined in lib/push-types.ts (node-free) so
+// the service worker can share the exact type without importing this module.
+export type { PushPayload } from "./push-types";
+import type { PushPayload } from "./push-types";
 
 /** Send a notification to every stored subscription; prune expired ones. */
 export async function sendPushToAll(payload: PushPayload): Promise<void> {
