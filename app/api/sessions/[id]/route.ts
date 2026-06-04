@@ -13,6 +13,7 @@ import { runInBackground } from "@/lib/async-operations";
 import { getSessionBackend } from "@/lib/session-backend";
 import { backendKeyForSession } from "@/lib/providers/registry";
 import { removeConductorMarker } from "@/lib/mcp-config";
+import { clearQueue } from "@/lib/prompt-queue";
 
 // Sanitize a name for use as tmux session name
 function sanitizeTmuxName(name: string): string {
@@ -183,6 +184,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
         console.error(`Failed to kill worker ${worker.id}:`, error);
       }
       queries.deleteSession(db).run(worker.id);
+      clearQueue(worker.id);
     }
 
     // Kill this session's OWN agent process — not just its workers. Without it a
@@ -210,6 +212,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
     // Delete from database immediately for instant UI feedback
     queries.deleteSession(db).run(id);
+    clearQueue(id);
 
     // Clean up worktree in background (non-blocking)
     if (existing.worktree_path && isStoaWorktree(existing.worktree_path)) {
