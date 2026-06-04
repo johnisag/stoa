@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { CheckCircle2, XCircle, Square, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -49,8 +50,15 @@ export function SessionQuickActions({
   name: string;
 }) {
   const respond = useRespondToSession();
+  // Optimistic dismiss: hide the buttons the instant one is tapped (don't wait
+  // for a status change that may never come — e.g. a conductor that's "waiting"
+  // for your next message, not at a prompt). Reset when the status changes, so a
+  // genuinely new actionable state surfaces fresh buttons.
+  const [acted, setActed] = useState(false);
+  useEffect(() => setActed(false), [status]);
+
   const actions = cardActionsForStatus(status);
-  if (actions.length === 0) return null;
+  if (actions.length === 0 || acted) return null;
 
   return (
     <div
@@ -74,6 +82,7 @@ export function SessionQuickActions({
             )}
             onClick={(e) => {
               e.stopPropagation();
+              setActed(true); // vanish immediately on tap
               respond.mutate(
                 { sessionId, action },
                 {
