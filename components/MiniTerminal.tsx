@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css"; // base layout CSS (else .xterm-* unstyled)
 import { getTerminalThemeForApp } from "./Terminal/constants";
 
 /**
@@ -35,6 +36,7 @@ export function MiniTerminal({
     const container = containerRef.current;
     if (!container || !attachKey) return;
     let disposed = false;
+    let ended = false; // an exit/error frame already explained the close
 
     const term = new XTerm({
       fontSize: 11,
@@ -78,18 +80,30 @@ export function MiniTerminal({
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === "output") term.write(msg.data);
-        else if (msg.type === "exit")
+        else if (msg.type === "exit") {
+          ended = true;
           term.write("\r\n\x1b[33m[session ended]\x1b[0m\r\n");
-        else if (msg.type === "error")
+        } else if (msg.type === "error") {
+          ended = true;
           term.write(
             `\r\n\x1b[31m[${msg.message || "attach failed"}]\x1b[0m\r\n`
           );
+        }
       } catch {
         /* ignore malformed frame */
       }
     };
     ws.onerror = () => {
-      if (!disposed) term.write("\r\n\x1b[31m[connection error]\x1b[0m\r\n");
+      if (disposed || ended) return;
+      ended = true; // the close that follows shouldn't also write "[disconnected]"
+      term.write("\r\n\x1b[31m[connection error]\x1b[0m\r\n");
+    };
+    ws.onclose = () => {
+      // Socket dropped without an exit/error frame (server restart, idle/proxy
+      // timeout). Give feedback instead of silently freezing — read-only, so no
+      // reconnect; reopen the preview to retry.
+      if (!disposed && !ended)
+        term.write("\r\n\x1b[90m[disconnected]\x1b[0m\r\n");
     };
 
     return () => {
