@@ -11,13 +11,13 @@ import {
 import { useTheme } from "next-themes";
 import "@xterm/xterm/css/xterm.css";
 import {
-  Paperclip,
   WifiOff,
   Upload,
   Loader2,
   RotateCcw,
-  ClipboardPaste,
   Copy,
+  ClipboardPaste,
+  Paperclip,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
@@ -41,6 +41,11 @@ export interface TerminalHandle {
   hasSelection: () => boolean;
   getScrollState: () => TerminalScrollState | null;
   restoreScrollState: (state: TerminalScrollState) => void;
+  // Driven by the pane tab bar's terminal-action buttons (copy/paste/attach),
+  // which live there instead of floating over the terminal.
+  enterSelectMode: () => void;
+  pasteFromClipboard: () => void;
+  openFilePicker: () => void;
 }
 
 interface TerminalProps {
@@ -48,8 +53,12 @@ interface TerminalProps {
   onDisconnected?: () => void;
   onBeforeUnmount?: (scrollState: TerminalScrollState) => void;
   initialScrollState?: TerminalScrollState;
-  /** Show image picker button (default: true) */
+  /** Show the desktop image-picker (attach) button (default: true). */
   showImageButton?: boolean;
+  /** Render the floating copy/paste/attach buttons in the terminal's corner.
+   *  The main session pane sets this false and surfaces them in its tab bar
+   *  instead; surfaces without a tab bar (shell drawer) keep them (default). */
+  floatingActions?: boolean;
 }
 
 export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
@@ -60,6 +69,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       onBeforeUnmount,
       initialScrollState,
       showImageButton = true,
+      floatingActions = true,
     },
     ref
   ) {
@@ -180,6 +190,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       hasSelection,
       getScrollState,
       restoreScrollState,
+      enterSelectMode: () => setSelectMode(true),
+      pasteFromClipboard: handlePasteFromClipboard,
+      openFilePicker: () => setShowFilePicker(true),
     }));
 
     // Extract terminal text for select mode overlay
@@ -303,9 +316,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           </div>
         )}
 
-        {/* Desktop terminal actions (top-right): select/copy text, paste, attach.
-            Mobile uses the bottom TerminalToolbar instead. */}
-        {!isMobile && (
+        {/* Desktop copy/paste/attach. The main session pane sets
+            floatingActions={false} and renders these in its tab bar instead
+            (they used to float here and cover the select-mode Copy/Done);
+            surfaces without a tab bar (shell drawer) keep them. Hidden in select
+            mode regardless. Mobile uses the bottom TerminalToolbar. */}
+        {!isMobile && floatingActions && !selectMode && (
           <div className="absolute top-3 right-3 z-40 flex items-center gap-2">
             <button
               onClick={() => setSelectMode(true)}
