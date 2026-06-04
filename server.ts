@@ -7,6 +7,7 @@ import {
   getBackendType,
   usePtyHost,
   resetSessionBackend,
+  getSessionBackend,
 } from "./lib/session-backend";
 import {
   LocalTransport,
@@ -24,6 +25,15 @@ import {
   type PushEvent,
 } from "./lib/session-status";
 import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
+import { computeSessionCosts } from "./lib/session-cost";
+import {
+  getBudgetConfig,
+  budgetEnabled,
+  detectBudgetBreaches,
+  snapshotBudgetLevels,
+  type BudgetLevel,
+} from "./lib/budget";
+import { backendKeyForSession } from "./lib/providers/registry";
 import { getDb, queries, type Session } from "./lib/db";
 import type { SessionStatus } from "./lib/status-detector";
 import {
@@ -285,6 +295,81 @@ app.prepare().then(() => {
       statusTickBusy = false;
     }
   }, 2500);
+
+  // ── budget enforcement (opt-in via STOA_BUDGET_SOFT_USD / _HARD_USD) ──
+  // OFF by default → no interval, zero overhead. When armed: every 30s estimate
+  // each session's cost and, on a NEW crossing, Web Push (soft) or push-then-KILL
+  // (hard). The kill stops the pty (the burn) but leaves the DB row so the board
+  // shows it was budget-stopped and it can be relaunched. Push is dispatched
+  // before the kill so it's never a silent surprise. Decision logic is pure + tested.
+  const budgetCfg = getBudgetConfig();
+  if (budgetEnabled(budgetCfg)) {
+    console.log(
+      `> Budget caps on (USD/session): soft=${budgetCfg.softUsd ?? "—"} hard=${budgetCfg.hardUsd ?? "—"}`
+    );
+    if (
+      budgetCfg.softUsd !== null &&
+      budgetCfg.hardUsd !== null &&
+      budgetCfg.softUsd >= budgetCfg.hardUsd
+    ) {
+      console.warn(
+        `> Budget: soft ($${budgetCfg.softUsd}) >= hard ($${budgetCfg.hardUsd}) — sessions jump straight to the hard kill with no soft warning.`
+      );
+    }
+    let lastBudgetLevels = new Map<string, BudgetLevel>();
+    let budgetTickBusy = false;
+    setInterval(async () => {
+      if (budgetTickBusy) return; // transcript reads can run slow
+      budgetTickBusy = true;
+      try {
+        const sessions = queries.getAllSessions(getDb()).all() as Session[];
+        const costs = await computeSessionCosts(sessions);
+        const lite = Object.entries(costs).map(([id, c]) => ({
+          id,
+          costUsd: c.costUsd,
+        }));
+        const { notify, kill } = detectBudgetBreaches(
+          lastBudgetLevels,
+          lite,
+          budgetCfg
+        );
+        const nextLevels = snapshotBudgetLevels(lite, budgetCfg);
+
+        for (const b of notify) {
+          const name = costs[b.id]?.name ?? b.id;
+          const body =
+            b.level === "hard"
+              ? `${name} hit the $${budgetCfg.hardUsd} cap — stopping it`
+              : `${name} crossed $${budgetCfg.softUsd} (now $${b.costUsd.toFixed(2)})`;
+          // Fire-and-forget: never await push I/O inside the tick, or a slow/hung
+          // endpoint would hold budgetTickBusy and delay the kill below.
+          void sendPushToAll({
+            title: "Stoa · budget",
+            body,
+            tag: `budget-${b.id}-${b.level}`,
+            url: "/",
+          }).catch((err) => console.error("budget push failed:", err));
+        }
+        for (const id of kill) {
+          const s = sessions.find((x) => x.id === id);
+          if (!s) continue;
+          try {
+            await getSessionBackend().kill(backendKeyForSession(s));
+          } catch (err) {
+            // A failed kill (e.g. daemon hiccup) must not be deduped away — keep
+            // this session at its prior level so the next tick retries the kill.
+            console.error("budget kill failed:", err);
+            nextLevels.set(id, lastBudgetLevels.get(id) ?? "soft");
+          }
+        }
+        lastBudgetLevels = nextLevels;
+      } catch (err) {
+        console.error("budget tick failed:", err);
+      } finally {
+        budgetTickBusy = false;
+      }
+    }, 30000);
+  }
 
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
   function handleTmuxConnection(ws: WebSocket) {

@@ -6,7 +6,17 @@ import {
   claudeProjectDirName,
   expandHome,
 } from "./platform";
-import { ZERO_USAGE, type TokenUsage } from "./pricing";
+import { ZERO_USAGE, computeCostUsd, type TokenUsage } from "./pricing";
+import type { Session } from "./db";
+
+export interface SessionCost {
+  name: string;
+  model: string | null;
+  tokens: TokenUsage;
+  costUsd: number | null;
+  /** false for non-Claude agents (no comparable transcript) — shown as "—". */
+  supported: boolean;
+}
 
 /**
  * Token accounting from a Claude Code session transcript (the JSONL Stoa already
@@ -74,4 +84,44 @@ export async function readClaudeSessionUsage(
   } catch {
     return null;
   }
+}
+
+/**
+ * Estimated cost for every session, keyed by id (Claude-only; others
+ * supported:false). Reads transcripts concurrently. Shared by the cost API and
+ * the server-side budget enforcement loop.
+ */
+export async function computeSessionCosts(
+  sessions: Session[]
+): Promise<Record<string, SessionCost>> {
+  const entries = await Promise.all(
+    sessions.map(async (s): Promise<[string, SessionCost]> => {
+      const base = { name: s.name, model: s.model };
+      if (
+        s.agent_type !== "claude" ||
+        !s.claude_session_id ||
+        !s.working_directory
+      ) {
+        return [
+          s.id,
+          { ...base, tokens: ZERO_USAGE, costUsd: null, supported: false },
+        ];
+      }
+      const tokens =
+        (await readClaudeSessionUsage(
+          s.working_directory,
+          s.claude_session_id
+        )) ?? ZERO_USAGE;
+      return [
+        s.id,
+        {
+          ...base,
+          tokens,
+          costUsd: computeCostUsd(tokens, s.model),
+          supported: true,
+        },
+      ];
+    })
+  );
+  return Object.fromEntries(entries);
 }
