@@ -186,6 +186,21 @@ export function parseDiff(diffText: string): ParsedDiff {
 }
 
 /**
+ * Split a multi-file unified diff (one `git diff` spanning several files) into
+ * one chunk per file, each parseable by parseDiff(). Returns [] for an empty
+ * diff. Any preamble before the first `diff --git` header is dropped.
+ */
+export function splitUnifiedDiff(raw: string): string[] {
+  const start = raw.indexOf("diff --git ");
+  if (start === -1) return raw.trim() ? [raw.trim()] : [];
+  return raw
+    .slice(start)
+    .split(/\n(?=diff --git )/)
+    .map((chunk) => chunk.replace(/\s+$/, ""))
+    .filter((chunk) => chunk.length > 0);
+}
+
+/**
  * Get a summary string for a diff
  */
 export function getDiffSummary(diff: ParsedDiff): string {

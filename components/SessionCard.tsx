@@ -20,6 +20,7 @@ import {
   CheckSquare,
   ExternalLink,
   Download,
+  GitCompare,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -44,6 +45,7 @@ import {
 } from "./ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SessionQuickActions } from "./SessionQuickActions";
+import { SessionDiffModal } from "./SessionDiffModal";
 import { cardActionsForStatus } from "@/lib/notification-actions";
 import type { Session, Group } from "@/lib/db";
 import type { ProjectWithDevServers } from "@/lib/projects";
@@ -155,6 +157,7 @@ function SessionCardComponent({
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(session.name);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const justStartedEditingRef = useRef(false);
 
@@ -288,6 +291,10 @@ function SessionCardComponent({
             {isSummarizing ? "Summarizing..." : "Fresh start"}
           </MenuItem>
         )}
+        <MenuItem onClick={() => setShowDiff(true)}>
+          <GitCompare className="mr-2 h-3 w-3" />
+          Review changes
+        </MenuItem>
         <MenuSub>
           <MenuSubTrigger>
             <Download className="mr-2 h-3 w-3" />
@@ -526,10 +533,19 @@ function SessionCardComponent({
   // Always wrap with the context menu — Export is available for every session,
   // so the menu always has at least one item.
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{cardContent}</ContextMenuTrigger>
-      <ContextMenuContent>{renderMenuItems(true)}</ContextMenuContent>
-    </ContextMenu>
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{cardContent}</ContextMenuTrigger>
+        <ContextMenuContent>{renderMenuItems(true)}</ContextMenuContent>
+      </ContextMenu>
+      {showDiff && (
+        <SessionDiffModal
+          sessionId={session.id}
+          name={session.name}
+          onClose={() => setShowDiff(false)}
+        />
+      )}
+    </>
   );
 }
 
