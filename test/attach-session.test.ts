@@ -145,6 +145,29 @@ describe("AttachSession — attach-race sequence guard", () => {
     expect(resets).toEqual([0]);
   });
 
+  it("a re-attach (reconnect to same key) resets BEFORE its snapshot — no layering", async () => {
+    const t = new FakeTransport();
+    const { out, resets, sink } = makeSink();
+    const s = new AttachSession(t, sink);
+
+    // First attach, then some live output after its snapshot.
+    const p1 = s.attach("k");
+    t.recs[0].release();
+    await p1;
+    t.recs[0].onOutput("live");
+    expect(out).toEqual(["snap:0", "live"]);
+
+    // Reconnect: a SECOND attach to the same key (what onConnected sends).
+    const p2 = s.attach("k");
+    t.recs[1].release();
+    await p2;
+
+    // The re-attach reset fires AFTER the prior output (out.length 2) and BEFORE
+    // the new snapshot — so the snapshot replaces, never layers a second copy.
+    expect(resets).toEqual([0, 2]);
+    expect(out).toEqual(["snap:0", "live", "snap:1"]);
+  });
+
   it("holds even when the winner resolves before the superseded attach", async () => {
     const t = new FakeTransport();
     const { out, sink } = makeSink();

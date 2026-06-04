@@ -79,7 +79,9 @@ export function MiniTerminal({
       if (disposed) return;
       try {
         const msg = JSON.parse(e.data);
-        if (msg.type === "output") term.write(msg.data);
+        if (msg.type === "reset")
+          term.reset(); // clear before the snapshot replay
+        else if (msg.type === "output") term.write(msg.data);
         else if (msg.type === "exit") {
           ended = true;
           term.write("\r\n\x1b[33m[session ended]\x1b[0m\r\n");

@@ -334,11 +334,12 @@ export function useTerminalConnection({
           // buffer (no layered/duplicated scrollback). Skip once on an explicit
           // relaunch so prior on-screen history is preserved.
           onReset: () => {
-            if (preserveOnReattachRef.current) {
-              preserveOnReattachRef.current = false;
-            } else {
-              xtermRef.current?.reset();
-            }
+            // Always consume the flag (so a relaunch that produced no snapshot
+            // can't leave it set and skip a LATER legitimate reset); only the
+            // immediate post-relaunch reset is skipped, to preserve history.
+            const preserve = preserveOnReattachRef.current;
+            preserveOnReattachRef.current = false;
+            if (!preserve) xtermRef.current?.reset();
           },
           // Agent process exited: mark ended so auto-reconnect stops respawning
           // and the Terminal shows a Relaunch affordance.
