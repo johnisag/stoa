@@ -12,6 +12,7 @@ import { generateBranchName, getCurrentBranch, renameBranch } from "@/lib/git";
 import { runInBackground } from "@/lib/async-operations";
 import { getSessionBackend } from "@/lib/session-backend";
 import { backendKeyForSession } from "@/lib/providers/registry";
+import { removeConductorMarker } from "@/lib/mcp-config";
 
 // Sanitize a name for use as tmux session name
 function sanitizeTmuxName(name: string): string {
@@ -194,6 +195,12 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       await getSessionBackend().kill(backendKey);
     } catch (error) {
       console.error(`Failed to kill session pty ${backendKey}:`, error);
+    }
+
+    // Drop the conductor marker so a future session in this same dir can't
+    // inherit this (now-dead) conductor's id from a stale .stoa-conductor file.
+    if (existing.working_directory) {
+      removeConductorMarker(existing.working_directory);
     }
 
     // Release port if this session had one assigned

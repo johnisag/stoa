@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildAgentArgs, shellQuoteArg } from "@/lib/providers";
+import { buildAgentArgs, shellQuoteArg, buildTmuxFlags } from "@/lib/providers";
 
 describe("buildAgentArgs", () => {
   it("claude: plain launch has no args", () => {
@@ -126,5 +126,36 @@ describe("shellQuoteArg — tmux exec quoting for conductor tokens", () => {
   it("escapes shell-significant chars when quoting", () => {
     expect(shellQuoteArg('a"b')).toBe('"a\\"b"');
     expect(shellQuoteArg("a$b")).toBe('"a\\$b"');
+  });
+});
+
+describe("buildTmuxFlags — conductor extraArgs ordering on the tmux path (F7)", () => {
+  it("splices extraArgs BEFORE a trailing positional prompt (matches the pty path)", () => {
+    // Codex buildFlags emits the prompt last; the -c wiring must precede it.
+    const base = ["--dangerously-bypass-approvals-and-sandbox", "'do it'"];
+    const extra = ["-c", "x=1"];
+    expect(buildTmuxFlags(base, extra, true)).toEqual([
+      "--dangerously-bypass-approvals-and-sandbox",
+      "-c",
+      "x=1",
+      "'do it'",
+    ]);
+  });
+
+  it("appends extraArgs when there's no trailing prompt", () => {
+    expect(buildTmuxFlags(["--flag"], ["-c", "x=1"], false)).toEqual([
+      "--flag",
+      "-c",
+      "x=1",
+    ]);
+  });
+
+  it("returns baseFlags untouched when there are no extraArgs (non-conductor)", () => {
+    const base = ["--model", "o3", "'go'"];
+    expect(buildTmuxFlags(base, [], true)).toBe(base);
+  });
+
+  it("appends when a prompt is claimed but baseFlags is empty (defensive)", () => {
+    expect(buildTmuxFlags([], ["-c", "x=1"], true)).toEqual(["-c", "x=1"]);
   });
 });

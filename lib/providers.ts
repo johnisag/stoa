@@ -390,6 +390,32 @@ export function shellQuoteArg(token: string): string {
   return `"${token.replace(/(["\\$`])/g, "\\$1")}"`;
 }
 
+/**
+ * Assemble the tmux backend's flag list: the provider's buildFlags() output plus
+ * the conductor's (already shell-quoted) extraArgs, with extraArgs placed BEFORE
+ * a trailing positional prompt. buildFlags appends the positional prompt LAST
+ * (Codex), so a naive concat puts the `-c mcp_servers.stoa.*` wiring AFTER the
+ * prompt — the opposite of the pty path (buildAgentArgs inserts extraArgs before
+ * the prompt, locked by test), and Codex may then ignore the trailing flags.
+ * Only Codex conductors have extraArgs today; the splice keeps both paths
+ * ordering-identical.
+ */
+export function buildTmuxFlags(
+  baseFlags: string[],
+  quotedExtraArgs: string[],
+  hasTrailingPrompt: boolean
+): string[] {
+  if (!quotedExtraArgs.length) return baseFlags;
+  if (hasTrailingPrompt && baseFlags.length) {
+    return [
+      ...baseFlags.slice(0, -1),
+      ...quotedExtraArgs,
+      baseFlags[baseFlags.length - 1],
+    ];
+  }
+  return [...baseFlags, ...quotedExtraArgs];
+}
+
 // Type guard (use registry)
 export function isValidAgentType(value: string): value is AgentType {
   return isValidProviderId(value);

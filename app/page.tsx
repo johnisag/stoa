@@ -35,7 +35,12 @@ import { useSessionStatuses } from "@/hooks/useSessionStatuses";
 import { useStatusEventStream } from "@/data/statuses";
 import type { Session } from "@/lib/db";
 import type { TerminalHandle } from "@/components/Terminal";
-import { getProvider, buildAgentArgs, shellQuoteArg } from "@/lib/providers";
+import {
+  getProvider,
+  buildAgentArgs,
+  shellQuoteArg,
+  buildTmuxFlags,
+} from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
@@ -313,11 +318,14 @@ function HomeContent() {
 
       // tmux execs a shell command, so shell-quote the conductor tokens here
       // (buildFlags itself doesn't emit extraArgs); the pty path gets them as
-      // clean argv via buildAgentArgs below.
-      const flags = [
-        ...provider.buildFlags(buildFlagsOptions),
-        ...extraArgs.map(shellQuoteArg),
-      ];
+      // clean argv via buildAgentArgs below. extraArgs (the `-c mcp_servers.*`
+      // conductor wiring) must land BEFORE the positional prompt — same order
+      // as the pty path — so splice rather than append.
+      const flags = buildTmuxFlags(
+        provider.buildFlags(buildFlagsOptions),
+        extraArgs.map(shellQuoteArg),
+        !!buildFlagsOptions.initialPrompt?.trim()
+      );
       const flagsStr = flags.join(" ");
 
       const agentCmd = `${provider.command} ${flagsStr}`;

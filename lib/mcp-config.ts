@@ -5,9 +5,10 @@
  * automatically picks up the orchestration tools with the session ID baked in.
  */
 
-import { writeFileSync, existsSync, readFileSync, mkdirSync } from "fs";
+import { writeFileSync, existsSync, readFileSync, mkdirSync, rmSync } from "fs";
 import { execFileSync } from "child_process";
 import path from "path";
+import os from "os";
 import { resolveBinary } from "./platform";
 import { CONDUCTOR_MARKER_FILE } from "./conductor-marker";
 
@@ -134,11 +135,28 @@ export function buildCodexOrchestrationArgs(sessionId: string): string[] {
   const serverPath = getOrchestrationServerPath();
   const set = (kv: string): string[] => ["-c", kv];
   return [
-    ...set(`mcp_servers.stoa.command='npx'`),
-    ...set(`mcp_servers.stoa.args=['tsx','${serverPath}']`),
-    ...set(`mcp_servers.stoa.env.STOA_URL='${STOA_URL}'`),
-    ...set(`mcp_servers.stoa.env.CONDUCTOR_SESSION_ID='${sessionId}'`),
+    ...set(`mcp_servers.stoa.command=${tomlString("npx")}`),
+    ...set(
+      `mcp_servers.stoa.args=[${tomlString("tsx")},${tomlString(serverPath)}]`
+    ),
+    ...set(`mcp_servers.stoa.env.STOA_URL=${tomlString(STOA_URL)}`),
+    ...set(
+      `mcp_servers.stoa.env.CONDUCTOR_SESSION_ID=${tomlString(sessionId)}`
+    ),
   ];
+}
+
+/**
+ * Render a string as a TOML value. Prefers a single-quoted LITERAL (keeps
+ * Windows backslashes in a path intact — `'C:\x'` parses as-is). A literal
+ * can't contain a single quote, so a value with one (e.g. a checkout under
+ * `…/o'brien/…`) falls back to a double-quoted basic string with backslashes
+ * and quotes escaped — which would otherwise emit invalid TOML and make Codex
+ * launch without the stoa server.
+ */
+function tomlString(v: string): string {
+  if (!v.includes("'")) return `'${v}'`;
+  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /**
@@ -160,6 +178,21 @@ export function writeConductorMarker(
   ensureGitExcluded(workingDirectory, CONDUCTOR_MARKER_FILE);
 }
 
+/**
+ * Remove the conductor marker on session delete. Without this the `.stoa-conductor`
+ * file outlives its session, so a later plain Hermes session started in the SAME
+ * directory (Hermes registers stoa globally) would inherit the dead conductor's
+ * id from the stale marker and misattribute its workers. Best-effort.
+ */
+export function removeConductorMarker(workingDirectory: string): void {
+  try {
+    const markerPath = path.join(workingDirectory, CONDUCTOR_MARKER_FILE);
+    if (existsSync(markerPath)) rmSync(markerPath, { force: true });
+  } catch {
+    // Best-effort — a leftover marker is only consulted by Hermes conductors.
+  }
+}
+
 /** argv for `hermes mcp add` registering the stoa stdio server (command + args
  * only — no per-session env; the id comes from the cwd marker). */
 export function buildHermesRegisterArgs(serverPath: string): string[] {
@@ -175,32 +208,98 @@ export function buildHermesRegisterArgs(serverPath: string): string[] {
   ];
 }
 
+/** Where we record the server path last registered with Hermes, so we can tell
+ * a fresh install from a STALE one (Stoa moved) — `hermes mcp list` only shows
+ * the name, not the path, so name-presence alone can't detect a drifted path. */
+const HERMES_PATH_MARKER = path.join(
+  os.homedir(),
+  ".stoa",
+  "hermes-stoa-server-path"
+);
+
+function readRegisteredHermesPath(): string | null {
+  try {
+    if (existsSync(HERMES_PATH_MARKER))
+      return readFileSync(HERMES_PATH_MARKER, "utf-8").trim();
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function writeRegisteredHermesPath(serverPath: string): void {
+  try {
+    mkdirSync(path.dirname(HERMES_PATH_MARKER), { recursive: true });
+    writeFileSync(HERMES_PATH_MARKER, serverPath + "\n");
+  } catch {
+    // ignore — worst case we re-register once next time
+  }
+}
+
 /**
- * Register the stoa MCP server in Hermes' GLOBAL config ONCE (command/args only,
- * no per-session data) so a Hermes conductor exposes spawn_worker. Idempotent:
- * skips if `stoa` is already listed. `hermes mcp add` is interactive ("Enable
- * all N tools?") and discovery-first (it spawns the server to list tools), so we
- * auto-confirm via stdin and rely on the running Stoa server. Best-effort —
- * never throws (orchestration must not block session create).
+ * Decide what to do about the global `stoa` Hermes registration (pure, so it's
+ * unit-testable). Skip only when it's listed AND points at the current server
+ * path; otherwise (re)register, removing a stale entry first. Without the
+ * remove-first, a moved Stoa checkout would keep pointing Hermes conductors at
+ * a dead path and orchestration would silently no-op.
+ */
+export function planHermesRegistration(
+  stoaListed: boolean,
+  recordedPath: string | null,
+  currentPath: string
+): { skip: boolean; removeFirst: boolean } {
+  if (stoaListed && recordedPath === currentPath)
+    return { skip: true, removeFirst: false };
+  return { skip: false, removeFirst: stoaListed };
+}
+
+/**
+ * Register the stoa MCP server in Hermes' GLOBAL config (command/args only, no
+ * per-session data) so a Hermes conductor exposes spawn_worker. Idempotent and
+ * SELF-CORRECTING: skips when already registered at the current path, but
+ * re-points a stale registration if Stoa moved. `hermes mcp add` is interactive
+ * ("Enable all N tools?") and discovery-first (it spawns the server to list
+ * tools), so we auto-confirm via stdin. Every shell-out is bounded by a timeout
+ * + SIGKILL so a slow/hung MCP discovery can't block the session-create request.
+ * Best-effort — never throws (orchestration must not block create).
  */
 export function ensureHermesMcpRegistered(): void {
   try {
     const hermes = resolveBinary("hermes") || "hermes";
+    const serverPath = getOrchestrationServerPath();
     const list = execFileSync(hermes, ["mcp", "list"], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10000,
+      killSignal: "SIGKILL",
     });
-    if (/(^|\s)stoa(\s|$)/m.test(list)) return; // already registered
-    execFileSync(
-      hermes,
-      buildHermesRegisterArgs(getOrchestrationServerPath()),
-      {
-        input: "y\n", // auto-accept the "Enable all tools?" prompt
-        stdio: ["pipe", "ignore", "ignore"],
-      }
+    const stoaListed = /(^|\s)stoa(\s|$)/m.test(list);
+    const plan = planHermesRegistration(
+      stoaListed,
+      readRegisteredHermesPath(),
+      serverPath
     );
+    if (plan.skip) return;
+    if (plan.removeFirst) {
+      try {
+        execFileSync(hermes, ["mcp", "remove", "stoa"], {
+          stdio: "ignore",
+          timeout: 10000,
+          killSignal: "SIGKILL",
+        });
+      } catch {
+        // ignore — the add below overwrites anyway on most Hermes versions
+      }
+    }
+    execFileSync(hermes, buildHermesRegisterArgs(serverPath), {
+      input: "y\n", // auto-accept the "Enable all tools?" prompt
+      stdio: ["pipe", "ignore", "ignore"],
+      timeout: 20000,
+      killSignal: "SIGKILL",
+    });
+    writeRegisteredHermesPath(serverPath);
   } catch {
-    // Hermes missing / not configured / add failed — leave it unregistered.
+    // Hermes missing / not configured / add failed / timed out — leave it.
   }
 }
 
