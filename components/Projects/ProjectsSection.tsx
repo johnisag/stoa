@@ -1,9 +1,12 @@
 "use client";
 
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 import { useSnapshot } from "valtio";
+import { ChevronRight, SquareTerminal } from "lucide-react";
 import { ProjectCard } from "./ProjectCard";
 import { SessionCard } from "@/components/SessionCard";
+import { MiniTerminal } from "@/components/MiniTerminal";
+import { useBackendType } from "@/hooks/useBackendType";
 import { DevServerCard } from "@/components/DevServers/DevServerCard";
 import { selectionStore, selectionActions } from "@/stores/sessionSelection";
 import type { Session, Group, DevServer } from "@/lib/db";
@@ -74,6 +77,36 @@ export function ProjectsSection({
 }: ProjectsSectionProps) {
   const { selectedIds } = useSnapshot(selectionStore);
   const isInSelectMode = selectedIds.size > 0;
+
+  // Live worker mini-terminal: which worker rows are expanded. Only offered on
+  // the pty backend (the observer attach is a pty-path primitive).
+  const backend = useBackendType();
+  const [expandedWorkers, setExpandedWorkers] = useState<Set<string>>(
+    new Set()
+  );
+  const toggleWorkerTerminal = useCallback((id: string) => {
+    setExpandedWorkers((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  // Drop expanded ids for sessions that no longer exist (workers come and go),
+  // so the Set can't grow unbounded. Returns the same ref when nothing changed.
+  useEffect(() => {
+    setExpandedWorkers((prev) => {
+      if (prev.size === 0) return prev;
+      const live = new Set(sessions.map((s) => s.id));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (live.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [sessions]);
 
   // Flatten all session IDs for range selection (respecting render order)
   const allSessionIds = useMemo(() => {
@@ -266,28 +299,66 @@ export function ProjectsSection({
                         {/* Nested workers */}
                         {hasWorkers && (
                           <div className="border-border/30 ml-3 space-y-px border-l pl-1.5">
-                            {workers.map((worker) => (
-                              <SessionCard
-                                key={worker.id}
-                                session={worker}
-                                isActive={worker.id === activeSessionId}
-                                tmuxStatus={
-                                  sessionStatuses?.[worker.id]?.status
-                                }
-                                lastLine={
-                                  sessionStatuses?.[worker.id]?.lastLine
-                                }
-                                groups={groups}
-                                projects={projects}
-                                isSelected={selectedIds.has(worker.id)}
-                                isInSelectMode={isInSelectMode}
-                                onToggleSelect={handleToggleSelect}
-                                onSelect={onSelectSession}
-                                onOpenInTab={onOpenSessionInTab}
-                                onDelete={onDeleteSession}
-                                onRename={onRenameSession}
-                              />
-                            ))}
+                            {workers.map((worker) => {
+                              const canPeek =
+                                backend === "pty" && !!worker.tmux_name;
+                              const expanded = expandedWorkers.has(worker.id);
+                              return (
+                                <div key={worker.id}>
+                                  <div className="flex items-stretch gap-1">
+                                    {canPeek && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          toggleWorkerTerminal(worker.id)
+                                        }
+                                        title={
+                                          expanded
+                                            ? "Hide live output"
+                                            : "Watch live output"
+                                        }
+                                        aria-label="Toggle live worker output"
+                                        aria-expanded={expanded}
+                                        className="text-muted-foreground hover:text-foreground hover:bg-muted/50 flex w-5 flex-shrink-0 items-center justify-center rounded"
+                                      >
+                                        {expanded ? (
+                                          <SquareTerminal className="h-3.5 w-3.5" />
+                                        ) : (
+                                          <ChevronRight className="h-3.5 w-3.5" />
+                                        )}
+                                      </button>
+                                    )}
+                                    <div className="min-w-0 flex-1">
+                                      <SessionCard
+                                        session={worker}
+                                        isActive={worker.id === activeSessionId}
+                                        tmuxStatus={
+                                          sessionStatuses?.[worker.id]?.status
+                                        }
+                                        lastLine={
+                                          sessionStatuses?.[worker.id]?.lastLine
+                                        }
+                                        groups={groups}
+                                        projects={projects}
+                                        isSelected={selectedIds.has(worker.id)}
+                                        isInSelectMode={isInSelectMode}
+                                        onToggleSelect={handleToggleSelect}
+                                        onSelect={onSelectSession}
+                                        onOpenInTab={onOpenSessionInTab}
+                                        onDelete={onDeleteSession}
+                                        onRename={onRenameSession}
+                                      />
+                                    </div>
+                                  </div>
+                                  {canPeek && expanded && worker.tmux_name && (
+                                    <MiniTerminal
+                                      key={worker.tmux_name}
+                                      attachKey={worker.tmux_name}
+                                    />
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
