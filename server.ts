@@ -32,6 +32,7 @@ import {
   trustTailscale,
   configuredAllowedOrigins,
   buildAuthCookie,
+  safeRedirectPath,
   decideHttpAuth,
   decideWsAuth,
 } from "./lib/auth";
@@ -94,7 +95,7 @@ app.prepare().then(() => {
           res.setHeader("Set-Cookie", buildAuthCookie(decision.token, secure));
           res.setHeader(
             "Location",
-            (parsedUrl.pathname || "/") + (qs ? `?${qs}` : "")
+            safeRedirectPath(parsedUrl.pathname) + (qs ? `?${qs}` : "")
           );
           res.end();
           return;

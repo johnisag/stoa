@@ -200,7 +200,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     // Drop the conductor marker so a future session in this same dir can't
     // inherit this (now-dead) conductor's id from a stale .stoa-conductor file.
     if (existing.working_directory) {
-      removeConductorMarker(existing.working_directory);
+      removeConductorMarker(existing.working_directory, existing.id);
     }
 
     // Release port if this session had one assigned

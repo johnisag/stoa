@@ -120,6 +120,17 @@ export function buildAuthCookie(token: string, secure: boolean): string {
 
 // ── pure helpers ──
 
+/**
+ * A safe LOCAL redirect target. `url.parse` leaves a request target like
+ * `//evil.com/x` or `/\evil.com` as the pathname, which is protocol-relative
+ * and would send the browser OFF-SITE — an open redirect. Accept only a path
+ * rooted at a single `/` (not `//` or `/\`); otherwise fall back to `/`.
+ */
+export function safeRedirectPath(pathname: string | null | undefined): string {
+  const p = pathname || "/";
+  return /^\/(?![/\\])/.test(p) ? p : "/";
+}
+
 /** Loopback address? Handles IPv4 127/8, IPv6 ::1, and IPv4-mapped forms. */
 export function isLoopbackAddress(addr: string | undefined | null): boolean {
   if (!addr) return false;

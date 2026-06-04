@@ -171,14 +171,27 @@ describe("planHermesRegistration — stale-path self-correction (F3)", () => {
   });
 });
 
-describe("removeConductorMarker (F5)", () => {
-  it("deletes the .stoa-conductor marker so a reused dir can't inherit a dead id", () => {
+describe("removeConductorMarker (F5 + ownership check)", () => {
+  it("deletes the marker when the id matches (the conductor's own delete)", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "stoa-cond-"));
     try {
       writeConductorMarker(dir, "sess-1");
       expect(existsSync(path.join(dir, CONDUCTOR_MARKER_FILE))).toBe(true);
-      removeConductorMarker(dir);
+      removeConductorMarker(dir, "sess-1");
       expect(existsSync(path.join(dir, CONDUCTOR_MARKER_FILE))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT delete a live conductor's marker when a SIBLING session is deleted", () => {
+    // Conductor (orchestration on, no worktree) wrote the marker into the shared
+    // project dir; deleting a plain sibling session in that dir must leave it.
+    const dir = mkdtempSync(path.join(tmpdir(), "stoa-cond-"));
+    try {
+      writeConductorMarker(dir, "conductor-id");
+      removeConductorMarker(dir, "some-other-sibling-id");
+      expect(existsSync(path.join(dir, CONDUCTOR_MARKER_FILE))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -187,7 +200,7 @@ describe("removeConductorMarker (F5)", () => {
   it("is a no-op (no throw) when there's no marker", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "stoa-cond-"));
     try {
-      expect(() => removeConductorMarker(dir)).not.toThrow();
+      expect(() => removeConductorMarker(dir, "x")).not.toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
