@@ -117,3 +117,21 @@ describe("PtyBackend over HostTransport (Tier 2)", () => {
   afterEach(() => _resetRegistryForTests());
   runContract(() => new PtyBackend(new HostTransport()));
 });
+
+// Lock the exact control bytes (no spawn → deterministic, cross-platform): a
+// spy transport records writes so a regression in the ESC/Enter byte is caught.
+describe("PtyBackend control bytes", () => {
+  it("sendEnter writes CR, sendEscape writes the ESC byte", async () => {
+    const writes: Array<[string, string]> = [];
+    const spy = {
+      write: (key: string, data: string) => writes.push([key, data]),
+    } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
+    const backend = new PtyBackend(spy);
+    await backend.sendEnter("s1");
+    await backend.sendEscape("s1");
+    expect(writes).toEqual([
+      ["s1", "\r"],
+      ["s1", "\x1b"],
+    ]);
+  });
+});

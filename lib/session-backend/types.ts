@@ -78,6 +78,8 @@ export interface SessionBackend {
   // ── Input ──────────────────────────────────────────────────────────────
   /** Press Enter. (tmux: send-keys Enter) */
   sendEnter(name: string): Promise<void>;
+  /** Press Escape — cancels a prompt/menu. (tmux: send-keys Escape; pty: ESC byte) */
+  sendEscape(name: string): Promise<void>;
   /** Send text verbatim, no shell/tmux interpretation. (tmux: send-keys -l) */
   sendKeysLiteral(name: string, text: string): Promise<void>;
   /** Send text with tmux key interpretation, optionally submitting. (tmux: send-keys "…" Enter) */

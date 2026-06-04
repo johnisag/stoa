@@ -98,6 +98,10 @@ export class PtyBackend implements SessionBackend {
     this.transport.write(name, "\r");
   }
 
+  async sendEscape(name: string): Promise<void> {
+    this.transport.write(name, "\x1b");
+  }
+
   async sendKeysLiteral(name: string, text: string): Promise<void> {
     this.transport.write(name, text);
   }

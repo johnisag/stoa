@@ -25,6 +25,7 @@ import {
   type PushEvent,
 } from "./lib/session-status";
 import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
+import { actionsForKind } from "./lib/notification-actions";
 import { computeSessionCosts } from "./lib/session-cost";
 import {
   getBudgetConfig,
@@ -226,6 +227,9 @@ app.prepare().then(() => {
       body: `${name} ${verb}`,
       tag: `${ev.id}-${ev.kind}`,
       url: "/",
+      // Lock-screen action buttons → /api/sessions/[id]/respond (send-keys/kill).
+      sessionId: ev.id,
+      actions: actionsForKind(ev.kind),
     });
   };
 
