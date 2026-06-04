@@ -33,6 +33,18 @@ describe("sanitizeNotificationText", () => {
     expect(sanitizeNotificationText(`${ESC}chello`)).toBe("hello");
   });
 
+  it("handles a bare ESC at end of string", () => {
+    expect(sanitizeNotificationText(`hello${ESC}`)).toBe("hello");
+  });
+
+  it("does not leak a CSI that follows a stray ESC (ESC ESC [0m)", () => {
+    expect(sanitizeNotificationText(`${ESC}${ESC}[0mhi`)).toBe("hi");
+  });
+
+  it("handles an unterminated OSC (no BEL) at end of string", () => {
+    expect(sanitizeNotificationText(`${ESC}]0;title-no-bel`)).toBe("");
+  });
+
   it("strips box-drawing borders (the reported vertical lines)", () => {
     const input = `task ${cc(0x2502)} running ${cc(0x2500)}`;
     expect(sanitizeNotificationText(input)).toBe("task running");
@@ -53,8 +65,29 @@ describe("sanitizeNotificationText", () => {
     expect(sanitizeNotificationText(input)).toBe(input);
   });
 
+  it("strips bidi overrides and line/paragraph separators", () => {
+    // U+202E (RTL override) reverses following text; U+2028 renders as a break.
+    const input = `safe${cc(0x202e)}evil${cc(0x2028)}name`;
+    expect(sanitizeNotificationText(input)).toBe("safeevil name");
+  });
+
+  it("does not tear an astral char at the maxLen boundary", () => {
+    const rocket = String.fromCodePoint(0x1f680);
+    const out = sanitizeNotificationText("x".repeat(79) + rocket, {
+      maxLen: 80,
+    });
+    expect(out).toBe("x".repeat(79) + rocket); // intact, no lone surrogate
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
   it("collapses whitespace and trims", () => {
     expect(sanitizeNotificationText("  a   b  ")).toBe("a b");
+  });
+
+  it("returns the fallback for all-whitespace input", () => {
+    expect(
+      sanitizeNotificationText(`  ${cc(0x09)} `, { fallback: "Session" })
+    ).toBe("Session");
   });
 
   it("caps length to maxLen", () => {

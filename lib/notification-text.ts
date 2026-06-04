@@ -26,8 +26,10 @@ const BEL = 0x07;
 function isRemovable(cp: number): boolean {
   return (
     cp === 0x00ad || // soft hyphen
-    (cp >= 0x200b && cp <= 0x200d) || // zero-width space / non-joiner / joiner
+    (cp >= 0x200b && cp <= 0x200f) || // zero-width space/joiners + LRM/RLM marks
+    (cp >= 0x202a && cp <= 0x202e) || // bidi embeddings/overrides (U+202E flips text)
     cp === 0x2060 || // word joiner
+    (cp >= 0x2066 && cp <= 0x2069) || // bidi isolates
     cp === 0xfeff || // BOM / zero-width no-break space
     cp === 0xfffd // Unicode replacement char (already-mojibake'd input)
   );
@@ -38,6 +40,8 @@ function isSeparator(cp: number): boolean {
   return (
     cp <= 0x1f || // C0 control chars (incl. tab/newline; ESC handled separately)
     (cp >= 0x7f && cp <= 0x9f) || // DEL + C1 control chars
+    cp === 0x2028 || // line separator (renders as a break, splits the toast)
+    cp === 0x2029 || // paragraph separator
     (cp >= 0x2500 && cp <= 0x259f) // box-drawing + block elements (the "lines")
   );
 }
@@ -78,9 +82,17 @@ export function sanitizeNotificationText(
             break;
           }
         }
-      } else {
-        i++; // lone/other escape — drop ESC + the following byte
+      } else if (
+        next !== undefined &&
+        next !== ESC &&
+        next >= 0x20 &&
+        next <= 0x7e
+      ) {
+        i++; // two-char escape (e.g. ESC c = RIS) — drop ESC + its final byte
       }
+      // else: lone ESC / ESC+ESC / ESC+control — drop only this ESC; the next
+      // iteration re-evaluates what follows (a second ESC starts a fresh seq, so
+      // "ESC ESC [0m" doesn't leak the "[0m"). ESC at end-of-string lands here too.
       out += " ";
       continue;
     }
@@ -95,5 +107,8 @@ export function sanitizeNotificationText(
 
   const cleaned = out.replace(/ +/g, " ").trim();
   if (!cleaned) return fallback;
-  return cleaned.length > maxLen ? cleaned.slice(0, maxLen).trim() : cleaned;
+  // Cap by CODE POINT, not UTF-16 unit — a plain slice could bisect a surrogate
+  // pair and leave a lone surrogate (tofu) at the boundary.
+  const cp = Array.from(cleaned);
+  return cp.length > maxLen ? cp.slice(0, maxLen).join("").trim() : cleaned;
 }
