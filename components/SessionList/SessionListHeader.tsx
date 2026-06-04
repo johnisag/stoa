@@ -14,6 +14,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { CostIndicator } from "@/components/CostIndicator";
 
 interface SessionListHeaderProps {
   onNewProject: () => void;
@@ -81,6 +82,7 @@ export function SessionListHeader({
             </TooltipContent>
           </Tooltip>
         )}
+        <CostIndicator />
       </div>
       <div className="flex gap-1">
         <ADropdownMenu

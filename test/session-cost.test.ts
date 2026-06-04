@@ -1,0 +1,48 @@
+import { describe, it, expect } from "vitest";
+import { parseClaudeUsage } from "../lib/session-cost";
+
+// A few JSONL lines like Claude Code writes: user turns (no usage) + assistant
+// turns carrying message.usage, plus a blank + a malformed line to skip.
+const JSONL = [
+  JSON.stringify({ type: "user", message: { content: "hi" } }),
+  JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [{ type: "text", text: "..." }],
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_creation_input_tokens: 10,
+        cache_read_input_tokens: 200,
+      },
+    },
+  }),
+  "",
+  "{ not valid json",
+  JSON.stringify({
+    type: "assistant",
+    message: {
+      usage: { input_tokens: 5, output_tokens: 7 }, // partial usage
+    },
+  }),
+].join("\n");
+
+describe("parseClaudeUsage", () => {
+  it("sums usage across assistant turns, ignoring user/blank/malformed lines", () => {
+    expect(parseClaudeUsage(JSONL)).toEqual({
+      input: 105, // 100 + 5
+      output: 57, // 50 + 7
+      cacheWrite: 10,
+      cacheRead: 200,
+    });
+  });
+
+  it("returns zeroed usage for empty input", () => {
+    expect(parseClaudeUsage("")).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+});
