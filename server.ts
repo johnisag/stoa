@@ -29,6 +29,7 @@ import type { SessionStatus } from "./lib/status-detector";
 import {
   getServerToken,
   trustLoopback,
+  trustTailscale,
   configuredAllowedOrigins,
   buildAuthCookie,
   decideHttpAuth,
@@ -43,6 +44,7 @@ const hostname = "0.0.0.0";
 const SERVER_TOKEN = getServerToken();
 const AUTH_ENABLED = SERVER_TOKEN !== null;
 const TRUST_LOOPBACK = trustLoopback();
+const TRUST_TAILSCALE = trustTailscale();
 const ALLOWED_ORIGINS = configuredAllowedOrigins();
 
 const AUTH_REQUIRED_HTML = `<!doctype html><meta charset="utf-8"><title>Stoa — token required</title><body style="font-family:system-ui;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#ddd;background:#111"><h1 style="font-size:1.3rem">🔒 Stoa needs a token</h1><p>This server requires an access token for non-local connections. Open the tokenized URL printed in the server console, or append <code>?token=YOUR_TOKEN</code> to the address.</p></body>`;
@@ -69,6 +71,7 @@ app.prepare().then(() => {
           serverToken: SERVER_TOKEN,
           remoteAddr: req.socket.remoteAddress,
           trustLoopback: TRUST_LOOPBACK,
+          trustTailscale: TRUST_TAILSCALE,
           authHeader: req.headers.authorization,
           cookieHeader: req.headers.cookie,
           queryToken: firstQueryValue(parsedUrl.query.token),
@@ -133,6 +136,7 @@ app.prepare().then(() => {
       allowedOrigins: ALLOWED_ORIGINS,
       remoteAddr: request.socket.remoteAddress,
       trustLoopback: TRUST_LOOPBACK,
+      trustTailscale: TRUST_TAILSCALE,
       authHeader: request.headers.authorization,
       cookieHeader: request.headers.cookie,
       queryToken: firstQueryValue(query.token),
@@ -422,6 +426,10 @@ app.prepare().then(() => {
           `> Auth on${TRUST_LOOPBACK ? " (localhost trusted)" : " (token required everywhere)"}. Remote access:`
         );
         console.log(`>   http://<this-host>:${port}/?token=${SERVER_TOKEN}`);
+        if (TRUST_TAILSCALE)
+          console.log(
+            `>   Tailscale range (100.64.0.0/10) is trusted — no token over the tailnet.`
+          );
         console.log(
           `>   STOA_AUTH=off disables it; STOA_REQUIRE_AUTH=1 requires it on localhost too.`
         );

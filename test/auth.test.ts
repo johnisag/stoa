@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   isLoopbackAddress,
+  isTailscaleAddress,
   parseCookies,
   safeEqual,
   isOriginAllowed,
@@ -25,6 +26,30 @@ describe("isLoopbackAddress", () => {
   it("rejects LAN / Tailscale / empty", () => {
     for (const a of ["192.168.1.20", "10.0.0.3", "100.64.1.2", "", undefined])
       expect(isLoopbackAddress(a)).toBe(false);
+  });
+});
+
+describe("isTailscaleAddress", () => {
+  it("recognizes the CGNAT range + IPv4-mapped + IPv6 ULA", () => {
+    for (const a of [
+      "100.64.0.1",
+      "100.100.20.30",
+      "100.127.255.255",
+      "::ffff:100.96.0.5",
+      "fd7a:115c:a1e0:ab12::1",
+    ])
+      expect(isTailscaleAddress(a)).toBe(true);
+  });
+  it("rejects loopback, LAN, and 100.x outside 64–127", () => {
+    for (const a of [
+      "127.0.0.1",
+      "192.168.1.5",
+      "10.0.0.1",
+      "100.63.0.1", // just below the range
+      "100.128.0.1", // just above
+      undefined,
+    ])
+      expect(isTailscaleAddress(a)).toBe(false);
   });
 });
 
@@ -148,6 +173,29 @@ describe("decideHttpAuth", () => {
   it("requires a token even on loopback when trustLoopback is false", () => {
     expect(
       decideHttpAuth({ ...base, trustLoopback: false, remoteAddr: "127.0.0.1" })
+    ).toEqual({ type: "deny" });
+  });
+
+  it("trusts a Tailscale address (no token) only when trustTailscale is on", () => {
+    expect(decideHttpAuth({ ...base, remoteAddr: "100.96.1.2" })).toEqual({
+      type: "deny",
+    }); // off by default
+    expect(
+      decideHttpAuth({
+        ...base,
+        trustTailscale: true,
+        remoteAddr: "100.96.1.2",
+      })
+    ).toEqual({ type: "allow" });
+  });
+
+  it("trustTailscale does NOT trust a plain-LAN address", () => {
+    expect(
+      decideHttpAuth({
+        ...base,
+        trustTailscale: true,
+        remoteAddr: "192.168.1.50",
+      })
     ).toEqual({ type: "deny" });
   });
 });

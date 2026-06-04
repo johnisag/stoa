@@ -88,6 +88,16 @@ export function trustLoopback(): boolean {
   return process.env.STOA_REQUIRE_AUTH !== "1";
 }
 
+/**
+ * Opt-in: trust the Tailscale range (no token over the tailnet) when
+ * STOA_TRUST_TAILSCALE=1. The tailnet already authenticates devices at the
+ * network layer, so this lets a private tailnet be token-free while a random
+ * LAN/Wi-Fi device (not in the range) still needs the token.
+ */
+export function trustTailscale(): boolean {
+  return process.env.STOA_TRUST_TAILSCALE === "1";
+}
+
 /** Extra allowed WS origins (reverse-proxy domains), from STOA_ALLOWED_ORIGINS. */
 export function configuredAllowedOrigins(): string[] {
   return (process.env.STOA_ALLOWED_ORIGINS || "")
@@ -122,6 +132,33 @@ export function isLoopbackAddress(addr: string | undefined | null): boolean {
     a.startsWith("127.") ||
     a.startsWith("::ffff:127.")
   );
+}
+
+/**
+ * Tailscale address? Covers the IPv4 CGNAT range (100.64.0.0/10), its
+ * IPv4-mapped IPv6 form, and the Tailscale IPv6 ULA prefix (fd7a:115c:a1e0::/48).
+ */
+export function isTailscaleAddress(addr: string | undefined | null): boolean {
+  if (!addr) return false;
+  let a = addr.trim().toLowerCase();
+  if (a.startsWith("::ffff:")) a = a.slice(7); // IPv4-mapped → bare IPv4
+  const m = /^(\d{1,3})\.(\d{1,3})\./.exec(a);
+  if (m) {
+    const o1 = Number(m[1]);
+    const o2 = Number(m[2]);
+    if (o1 === 100 && o2 >= 64 && o2 <= 127) return true; // 100.64.0.0/10
+  }
+  return a.startsWith("fd7a:115c:a1e0:");
+}
+
+/** Is this peer address trusted (so no token is needed)? */
+function isTrustedAddress(
+  addr: string | undefined | null,
+  opts: { trustLoopback: boolean; trustTailscale?: boolean }
+): boolean {
+  if (opts.trustLoopback && isLoopbackAddress(addr)) return true;
+  if (opts.trustTailscale && isTailscaleAddress(addr)) return true;
+  return false;
 }
 
 /** Parse a Cookie header into a name→value map (values URL-decoded). */
@@ -203,14 +240,14 @@ export function decideHttpAuth(opts: {
   serverToken: string | null;
   remoteAddr?: string | null;
   trustLoopback: boolean;
+  trustTailscale?: boolean;
   authHeader?: string | null;
   cookieHeader?: string | null;
   queryToken?: string | null;
 }): HttpAuthDecision {
   const { serverToken } = opts;
   if (serverToken === null) return { type: "allow" }; // auth disabled
-  if (opts.trustLoopback && isLoopbackAddress(opts.remoteAddr))
-    return { type: "allow" };
+  if (isTrustedAddress(opts.remoteAddr, opts)) return { type: "allow" };
 
   const b = bearer(opts.authHeader);
   if (b && safeEqual(b, serverToken)) return { type: "allow" };
@@ -236,6 +273,7 @@ export function decideWsAuth(opts: {
   allowedOrigins: string[];
   remoteAddr?: string | null;
   trustLoopback: boolean;
+  trustTailscale?: boolean;
   authHeader?: string | null;
   cookieHeader?: string | null;
   queryToken?: string | null;
@@ -245,8 +283,7 @@ export function decideWsAuth(opts: {
     return { type: "deny", reason: "origin" };
   }
   if (opts.serverToken === null) return { type: "allow" };
-  if (opts.trustLoopback && isLoopbackAddress(opts.remoteAddr))
-    return { type: "allow" };
+  if (isTrustedAddress(opts.remoteAddr, opts)) return { type: "allow" };
 
   const b = bearer(opts.authHeader);
   if (b && safeEqual(b, opts.serverToken)) return { type: "allow" };
