@@ -26,6 +26,7 @@ import {
 } from "./lib/session-status";
 import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
 import { actionsForKind } from "./lib/notification-actions";
+import { sanitizeNotificationText } from "./lib/notification-text";
 import { captureSnapshot } from "./lib/snapshots";
 import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
 import { computeSessionCosts } from "./lib/session-cost";
@@ -231,6 +232,10 @@ app.prepare().then(() => {
     } catch {
       // DB unavailable — use the backend key
     }
+    // The name is untrusted (user/agent-set, sometimes derived from a captured
+    // terminal line). Strip ANSI/box-drawing/control chars so the toast never
+    // renders as "strange vertical lines"; fall back to the (ASCII) session id.
+    name = sanitizeNotificationText(name, { fallback: ev.id });
     const verb =
       ev.kind === "waiting"
         ? "needs your input"
@@ -422,7 +427,9 @@ app.prepare().then(() => {
         const nextLevels = snapshotBudgetLevels(lite, budgetCfg);
 
         for (const b of notify) {
-          const name = costs[b.id]?.name ?? b.id;
+          const name = sanitizeNotificationText(costs[b.id]?.name ?? b.id, {
+            fallback: b.id,
+          });
           const body =
             b.level === "hard"
               ? `${name} hit the $${budgetCfg.hardUsd} cap - stopping it`

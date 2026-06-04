@@ -16,6 +16,7 @@ import {
   flashTabTitle,
   clearTabNotifications,
 } from "@/lib/notifications";
+import { sanitizeNotificationText } from "@/lib/notification-text";
 
 type SessionStatus = "idle" | "running" | "waiting" | "error" | "dead";
 
@@ -97,10 +98,16 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
     ) => {
       if (!settings.enabled || !settings.events[event]) return;
 
+      // Names are untrusted — strip terminal artifacts (ANSI/box-drawing/control
+      // chars) so a toast never renders as "strange vertical lines" / tofu.
+      const safeName = sanitizeNotificationText(sessionName, {
+        fallback: "Session",
+      });
+
       const titles: Record<NotificationEvent, string> = {
-        waiting: `${sessionName} needs input`,
-        error: `${sessionName} encountered an error`,
-        completed: `${sessionName} completed`,
+        waiting: `${safeName} needs input`,
+        error: `${safeName} encountered an error`,
+        completed: `${safeName} completed`,
       };
 
       const title = titles[event];
@@ -139,7 +146,7 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
 
       // Flash tab title
       if (event === "waiting") {
-        flashTabTitle(`Waiting: ${sessionName}`);
+        flashTabTitle(`Waiting: ${safeName}`);
       }
     },
     [settings, permissionGranted, onSessionClick]

@@ -86,5 +86,17 @@ export function useWebPush() {
     }
   }, []);
 
-  return { supported, subscribed, busy, subscribe, unsubscribe };
+  // Fire a diagnostic test notification to this device's subscription(s) so the
+  // user can confirm on demand exactly how a toast renders (text + buttons).
+  const sendTest = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/push/test", { method: "POST" });
+      return res.ok;
+    } catch (err) {
+      console.error("web push test failed:", err);
+      return false;
+    }
+  }, []);
+
+  return { supported, subscribed, busy, subscribe, unsubscribe, sendTest };
 }
