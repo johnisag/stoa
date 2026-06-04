@@ -5,10 +5,30 @@ import {
   parseCookies,
   safeEqual,
   isOriginAllowed,
+  safeRedirectPath,
   decideHttpAuth,
   decideWsAuth,
   COOKIE_NAME,
 } from "../lib/auth";
+
+describe("safeRedirectPath (open-redirect guard)", () => {
+  it("keeps a normal local path", () => {
+    expect(safeRedirectPath("/")).toBe("/");
+    expect(safeRedirectPath("/app/page")).toBe("/app/page");
+    expect(safeRedirectPath(undefined)).toBe("/");
+  });
+  it("rejects protocol-relative / backslash targets (would go off-site)", () => {
+    expect(safeRedirectPath("//evil.com/x")).toBe("/");
+    expect(safeRedirectPath("/\\evil.com")).toBe("/");
+    expect(safeRedirectPath("///evil.com")).toBe("/");
+  });
+  it("rejects non-/-rooted targets + null", () => {
+    expect(safeRedirectPath("https://evil.com")).toBe("/");
+    expect(safeRedirectPath("javascript:alert(1)")).toBe("/");
+    expect(safeRedirectPath("evil.com")).toBe("/");
+    expect(safeRedirectPath(null)).toBe("/");
+  });
+});
 
 const TOKEN = "s3cr3t-token";
 

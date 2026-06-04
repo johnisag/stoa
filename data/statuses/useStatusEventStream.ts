@@ -31,6 +31,7 @@ export function useStatusEventStream() {
     if (typeof window === "undefined") return;
     let ws: WebSocket | null = null;
     let reconnect: ReturnType<typeof setTimeout> | null = null;
+    let stable: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
     let attempt = 0;
 
@@ -39,7 +40,12 @@ export function useStatusEventStream() {
       ws = new WebSocket(`${proto}//${window.location.host}/ws/events`);
 
       ws.onopen = () => {
-        attempt = 0; // a successful connect resets the backoff
+        // Reset the backoff only after the socket STAYS open a few seconds — an
+        // accept-then-immediately-close loop must not reset to the floor delay
+        // each cycle (that's the reconnect storm the backoff exists to prevent).
+        stable = setTimeout(() => {
+          attempt = 0;
+        }, 5000);
       };
 
       ws.onmessage = (e) => {
@@ -64,6 +70,7 @@ export function useStatusEventStream() {
       };
 
       ws.onclose = () => {
+        if (stable) clearTimeout(stable); // didn't stay open long enough to count
         if (closed) return;
         // Exponential backoff with jitter (poll backstops the gap meanwhile), so
         // a downed server isn't hammered every 3s.
@@ -79,6 +86,7 @@ export function useStatusEventStream() {
     return () => {
       closed = true;
       if (reconnect) clearTimeout(reconnect);
+      if (stable) clearTimeout(stable);
       ws?.close();
     };
   }, [queryClient]);

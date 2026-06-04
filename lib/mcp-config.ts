@@ -179,15 +179,23 @@ export function writeConductorMarker(
 }
 
 /**
- * Remove the conductor marker on session delete. Without this the `.stoa-conductor`
- * file outlives its session, so a later plain Hermes session started in the SAME
- * directory (Hermes registers stoa globally) would inherit the dead conductor's
- * id from the stale marker and misattribute its workers. Best-effort.
+ * Remove the conductor marker on session delete — but ONLY this session's own
+ * marker. Without cleanup the `.stoa-conductor` file outlives its session, so a
+ * later plain Hermes session in the SAME dir (Hermes registers stoa globally)
+ * inherits the dead conductor's id. But a conductor with orchestration + NO
+ * worktree writes the marker into the SHARED project dir, so deleting a sibling
+ * session in that dir must NOT wipe the live conductor's marker — hence the
+ * content==sessionId ownership check. Best-effort.
  */
-export function removeConductorMarker(workingDirectory: string): void {
+export function removeConductorMarker(
+  workingDirectory: string,
+  sessionId: string
+): void {
   try {
     const markerPath = path.join(workingDirectory, CONDUCTOR_MARKER_FILE);
-    if (existsSync(markerPath)) rmSync(markerPath, { force: true });
+    if (!existsSync(markerPath)) return;
+    if (readFileSync(markerPath, "utf-8").trim() === sessionId)
+      rmSync(markerPath, { force: true });
   } catch {
     // Best-effort — a leftover marker is only consulted by Hermes conductors.
   }
