@@ -425,12 +425,12 @@ app.prepare().then(() => {
           const name = costs[b.id]?.name ?? b.id;
           const body =
             b.level === "hard"
-              ? `${name} hit the $${budgetCfg.hardUsd} cap — stopping it`
+              ? `${name} hit the $${budgetCfg.hardUsd} cap - stopping it`
               : `${name} crossed $${budgetCfg.softUsd} (now $${b.costUsd.toFixed(2)})`;
           // Fire-and-forget: never await push I/O inside the tick, or a slow/hung
           // endpoint would hold budgetTickBusy and delay the kill below.
           void sendPushToAll({
-            title: "Stoa · budget",
+            title: "Stoa budget",
             body,
             tag: `budget-${b.id}-${b.level}`,
             url: "/",
