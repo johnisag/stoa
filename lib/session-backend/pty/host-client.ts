@@ -218,7 +218,11 @@ export class HostClient {
           observer: this.observerForKey(key),
         });
         const snap = res?.snapshot;
-        if (snap) this.outputListeners.get(key)?.forEach((cb) => cb(snap));
+        // Prefix a full terminal reset (RIS) so the replayed snapshot REPLACES
+        // the client's buffer rather than layering — the daemon-socket reconnect
+        // equivalent of the WS "reset" frame (else reconnects dup the scrollback).
+        if (snap)
+          this.outputListeners.get(key)?.forEach((cb) => cb(`\x1bc${snap}`));
       } catch {
         // Session is gone on the daemon (e.g. daemon itself restarted); the
         // caller (server.ts) will respawn on the next browser attach.

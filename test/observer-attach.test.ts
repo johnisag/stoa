@@ -43,6 +43,7 @@ describe("AttachSession — observer mode is read-only", () => {
       output: () => {},
       exit: () => {},
       error: () => {},
+      reset: () => {},
     });
     return { calls, session };
   }

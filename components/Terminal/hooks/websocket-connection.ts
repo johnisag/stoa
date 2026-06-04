@@ -14,6 +14,9 @@ export interface WebSocketCallbacks {
   onOutput?: () => void;
   /** Fired when the agent process exits (server "exit" message). */
   onExit?: () => void;
+  /** Server "reset" frame — clear the screen+scrollback right before the
+   *  snapshot replay that follows (prevents duplicated scrollback on reconnect). */
+  onReset?: () => void;
 }
 
 export interface WebSocketManager {
@@ -127,7 +130,10 @@ export function createWebSocketConnection(
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
-      if (msg.type === "output") {
+      if (msg.type === "reset") {
+        // Server is about to replay the snapshot — clear first so it replaces.
+        callbacks.onReset?.();
+      } else if (msg.type === "output") {
         const buffer = term.buffer.active;
         const scrollYBefore = buffer.viewportY;
         const wasAtTop = scrollYBefore <= 0;
