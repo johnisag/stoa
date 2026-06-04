@@ -18,12 +18,16 @@ function git(
   cwd: string,
   args: string[],
   timeout: number,
-  maxBuffer?: number
+  maxBuffer?: number,
+  env?: Record<string, string>
 ): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync("git", args, {
     cwd,
     timeout,
     ...(maxBuffer != null ? { maxBuffer } : {}),
+    // Merge onto process.env so extra vars (e.g. GIT_INDEX_FILE for a throwaway
+    // index) don't drop PATH/HOME and break the git invocation.
+    ...(env ? { env: { ...process.env, ...env } } : {}),
   });
 }
 

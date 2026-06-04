@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { splitUnifiedDiff, parseDiff } from "../lib/diff-parser";
+import { splitUnifiedDiff, parseDiff, diffStats } from "../lib/diff-parser";
 
 const FILE_A = `diff --git a/src/a.ts b/src/a.ts
 index 111..222 100644
@@ -50,5 +50,19 @@ describe("splitUnifiedDiff", () => {
     expect(splitUnifiedDiff("some non-git content")).toEqual([
       "some non-git content",
     ]);
+  });
+});
+
+describe("diffStats", () => {
+  it("rolls up files and +/- across a multi-file diff", () => {
+    // FILE_A: +1 -1; FILE_B: new file +1
+    expect(diffStats(`${FILE_A}\n${FILE_B}`)).toEqual({
+      files: 2,
+      additions: 2,
+      deletions: 1,
+    });
+  });
+  it("is all-zero for an empty diff", () => {
+    expect(diffStats("")).toEqual({ files: 0, additions: 0, deletions: 0 });
   });
 });

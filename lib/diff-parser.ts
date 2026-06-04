@@ -201,6 +201,25 @@ export function splitUnifiedDiff(raw: string): string[] {
 }
 
 /**
+ * Roll up a multi-file unified diff into headline counts (files / +/-). Pure.
+ */
+export function diffStats(raw: string): {
+  files: number;
+  additions: number;
+  deletions: number;
+} {
+  const chunks = splitUnifiedDiff(raw);
+  let additions = 0;
+  let deletions = 0;
+  for (const chunk of chunks) {
+    const parsed = parseDiff(chunk);
+    additions += parsed.additions;
+    deletions += parsed.deletions;
+  }
+  return { files: chunks.length, additions, deletions };
+}
+
+/**
  * Get a summary string for a diff
  */
 export function getDiffSummary(diff: ParsedDiff): string {
