@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { SessionStatus } from "@/components/views/types";
 import { statusKeys } from "../sessions/keys";
+import { reconnectBaseDelay } from "./reconnect-delay";
 
 interface StatusResponse {
   statuses: Record<string, SessionStatus>;
@@ -31,10 +32,15 @@ export function useStatusEventStream() {
     let ws: WebSocket | null = null;
     let reconnect: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
+    let attempt = 0;
 
     const connect = () => {
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(`${proto}//${window.location.host}/ws/events`);
+
+      ws.onopen = () => {
+        attempt = 0; // a successful connect resets the backoff
+      };
 
       ws.onmessage = (e) => {
         try {
@@ -59,7 +65,11 @@ export function useStatusEventStream() {
 
       ws.onclose = () => {
         if (closed) return;
-        reconnect = setTimeout(connect, 3000); // poll backstops the gap
+        // Exponential backoff with jitter (poll backstops the gap meanwhile), so
+        // a downed server isn't hammered every 3s.
+        const base = reconnectBaseDelay(attempt++);
+        const delay = base / 2 + Math.random() * (base / 2);
+        reconnect = setTimeout(connect, delay);
       };
       ws.onerror = () => ws?.close();
     };
