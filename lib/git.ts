@@ -17,9 +17,14 @@ const execFileAsync = promisify(execFile);
 function git(
   cwd: string,
   args: string[],
-  timeout: number
+  timeout: number,
+  maxBuffer?: number
 ): Promise<{ stdout: string; stderr: string }> {
-  return execFileAsync("git", args, { cwd, timeout });
+  return execFileAsync("git", args, {
+    cwd,
+    timeout,
+    ...(maxBuffer != null ? { maxBuffer } : {}),
+  });
 }
 
 // Shared shell-free git runner for other modules (e.g. lib/worktrees.ts) so all
