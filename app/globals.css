@@ -172,14 +172,19 @@ body {
   }
 }
 
-/* Visible, themed scrollbar for the terminal viewport on desktop. macOS hides
-   overlay scrollbars by default, so force an always-present bar. Uses the
-   `.xterm .xterm-viewport` specificity (and !important) to win over xterm.css. */
+/* Visible, themed scrollbars on desktop. macOS hides its overlay scrollbars by
+   default, so without this the terminal scrollback + scrollable panels (sidebar,
+   git drawer, file lists, dialogs) show NO scroll affordance on a Mac.
+   IMPORTANT: modern Chromium (121+) ignores ::-webkit-scrollbar entirely once
+   `scrollbar-color`/`scrollbar-width` are set on the same element, falling back
+   to the STANDARD scrollbar — which on macOS still auto-hides. So Chromium +
+   Safari (webkit) get ONLY the ::-webkit-scrollbar rules below (those force an
+   always-present bar on Mac); the standard props are scoped to Firefox via the
+   @supports block (Firefox has no ::-webkit-scrollbar). */
 @media (min-width: 769px) {
   .xterm .xterm-viewport {
+    /* win over xterm.css (.xterm .xterm-viewport specificity + !important) */
     overflow-y: scroll !important;
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
   }
   .xterm .xterm-viewport::-webkit-scrollbar {
     width: 12px;
@@ -196,17 +201,8 @@ body {
   .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.7);
   }
-}
 
-/* App-wide visible scrollbars on desktop. macOS hides overlay scrollbars by
-   default, so scrollable panels (sidebar, git drawer, file lists, dialog
-   bodies) showed no scroll affordance. Thin + themed; `.scrollbar-none` opts
-   out (higher specificity) and the terminal keeps its own wider bar above. */
-@media (min-width: 769px) {
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
-  }
+  /* `.scrollbar-none` opts out; the terminal keeps its own wider bar above. */
   *::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -222,6 +218,22 @@ body {
   }
   *::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.55);
+  }
+}
+
+/* Firefox (no ::-webkit-scrollbar support): use the standard properties. Scoped
+   here so Chromium/Safari are NOT poisoned into the standard-scrollbar path that
+   auto-hides on macOS (see note above). */
+@supports not selector(::-webkit-scrollbar) {
+  @media (min-width: 769px) {
+    .xterm .xterm-viewport {
+      scrollbar-width: thin;
+      scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+    }
   }
 }
 
