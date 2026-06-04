@@ -43,6 +43,8 @@ import {
   ContextMenuTrigger,
 } from "./ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { SessionQuickActions } from "./SessionQuickActions";
+import { cardActionsForStatus } from "@/lib/notification-actions";
 import type { Session, Group } from "@/lib/db";
 import type { ProjectWithDevServers } from "@/lib/projects";
 
@@ -139,6 +141,10 @@ function SessionCardComponent({
 }: SessionCardProps) {
   const status = tmuxStatus || "dead";
   const config = statusConfig[status];
+  // Quick-action buttons take the row's right edge for actionable statuses; drop
+  // the (lower-value) timestamp then so the row doesn't crowd on a phone.
+  const hasQuickActions =
+    !isInSelectMode && cardActionsForStatus(status).length > 0;
   // Live one-line preview of what the agent is doing/saying — only while it's
   // active (running/waiting), so idle/dead cards stay a clean single line.
   const preview = lastLine?.trim();
@@ -480,10 +486,21 @@ function SessionCardComponent({
         </a>
       )}
 
-      {/* Time ago */}
-      <span className="text-muted-foreground hidden flex-shrink-0 text-[10px] group-hover:hidden sm:block">
-        <TimeAgo updatedAt={session.updated_at} />
-      </span>
+      {/* Time ago — yields the space to quick actions when they're present */}
+      {!hasQuickActions && (
+        <span className="text-muted-foreground hidden flex-shrink-0 text-[10px] group-hover:hidden sm:block">
+          <TimeAgo updatedAt={session.updated_at} />
+        </span>
+      )}
+
+      {/* Quick actions (approve/reject/stop) — contextual to the live status */}
+      {!isInSelectMode && (
+        <SessionQuickActions
+          sessionId={session.id}
+          status={status}
+          name={session.name}
+        />
+      )}
 
       {/* Actions menu (button) */}
       {

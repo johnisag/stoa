@@ -1,6 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Session, Group } from "@/lib/db";
 import type { AgentType } from "@/lib/providers";
+import {
+  respondErrorMessage,
+  type RespondAction,
+} from "@/lib/notification-actions";
 import { sessionKeys } from "./keys";
 import {
   removeSessionFromCache,
@@ -107,6 +111,40 @@ export function useForkSession() {
       });
       const data = await res.json();
       return data.session || null;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
+    },
+  });
+}
+
+/**
+ * Act on a session in-place (approve / reject / stop) via the same /respond
+ * endpoint the push-notification action buttons use. The live status stream
+ * reflects the result; we also invalidate the list as a backstop.
+ */
+export function useRespondToSession() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      sessionId,
+      action,
+    }: {
+      sessionId: string;
+      action: RespondAction;
+    }) => {
+      const res = await fetch(`/api/sessions/${sessionId}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) {
+        const msg = respondErrorMessage(res.status);
+        if (msg) throw new Error(msg);
+        return { stale: true }; // benign — session already gone / past the prompt
+      }
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
