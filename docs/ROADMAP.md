@@ -4,18 +4,29 @@ Stoa is a **mobile-first, self-hosted web UI for running AI coding agents
 (Claude Code, Codex, Hermes) in real terminals — native on Windows, macOS, and
 Linux.** The native-Windows migration, the `PtyTransport` unification, the Stoa
 rename, and the green 3-OS CI matrix are all done; **Priority A (UI/UX) +
-Priority B (Performance)** shipped; and the entire **2026-06 opportunity scan,
-the WS-events milestone, and the security trio** have now shipped (PRs #55–#86).
+Priority B (Performance)** shipped; and the **entire round-1 competitive scan —
+the WS-events milestone, the security trio, actionable push, and cost &
+governance — has now shipped (PRs #55–#91).**
 
-The forward menu is the **🔭 competitive feature scan** below — from a 5-segment
-web-research fan-out (similar products + community demand), ranked against what
-Stoa already ships. Pick deliberately. `D`=demand, `E`=effort, ⭐=differentiator
-for Stoa's angle.
+The forward menu is the **🔭 competitive feature scan (round 2)** below — a fresh
+5-segment web-research fan-out run after round-1 fully shipped, ranked against
+what Stoa already ships. Pick deliberately. `D`=demand, `E`=effort,
+⭐=differentiator for Stoa's angle.
 
 ---
 
-## ✅ Shipped since the last scan (PRs #55–#86)
+## ✅ Shipped since the last scan (PRs #55–#91)
 
+- **Actionable push — the full control loop** — approve / reject / stop an agent
+  from the **lock-screen notification** (#90, `actions[]` + `/api/sessions/[id]/respond`
+  over the send-keys/kill seam + a `sendEscape` backend method) AND **per-card
+  quick actions** on the board (#91, self-contained `SessionQuickActions`, status-
+  contextual). The round-1 "next big feature", now shipped on both surfaces.
+- **Cost & governance** — per-session + fleet **cost estimation** from transcript
+  tokens × model price (#88) and opt-in **budget caps** (#89, `STOA_BUDGET_SOFT_USD`
+  alert / `STOA_BUDGET_HARD_USD` push-then-auto-stop; pure decision logic + a 30s
+  server enforcement loop, off by default).
+- **Roadmap refreshed** (#87) from the round-1 5-agent competitor scan.
 - **Orchestration is reachable** — "Enable Orchestration" New-Session toggle wires
   the `stoa` MCP per provider: Claude (`.mcp.json` #55), Codex (`-c` flags #59),
   Hermes (global register + `.stoa-conductor` cwd marker #60). `spawn_worker`
@@ -43,77 +54,108 @@ for Stoa's angle.
 
 ---
 
-## 🔭 Next horizons — competitive feature scan (2026-06)
+## 🔭 Next horizons — competitive feature scan (2026-06, round 2)
 
-5-segment web research — agent IDEs (Cursor, Devin, OpenHands, Cline, Conductor,
-Vibe Kanban, Crystal, Sculptor, Factory, Jules…), web/remote terminals,
-mobile remote-control (Omnara, Happy, Terragon…), multi-agent orchestration,
-and community demand (HN / Reddit / GitHub issues) — synthesized against Stoa's
-shipped features. Ordered by leverage.
+Second 5-agent web-research fan-out (agent IDEs · mobile/remote control ·
+multi-agent orchestration · community demand · self-hosted/Windows/safety), run
+after the entire round-1 scan shipped. **The dominant 2026 macro-signal across
+every segment: the bottleneck moved from _writing_ code to _reviewing_ it** (AI
+output up ~60%, PR-review time up ~91%). Ordered by leverage.
 
-### ▶ NEXT BIG FEATURE — Actionable push notifications ⭐ _(D:high · E:M)_
+### ▶ NEXT BIG FEATURE — The review & rewind layer ⭐ _(D:high · E:M)_
 
-**Approve / reject / reply / kill an agent straight from the lock-screen
-notification — no app open.** The #1 ask across ALL FIVE research segments
-(Claude Code issues #25115 / #9878 / #6454 / #29928; Omnara, Happy, Agent-Approve
-are whole products built on it) — and **Stoa is one edit from owning it.** We
-already ship the hard 80%: the `/ws/events` live channel, server-authoritative
-"waiting on input" status from the rendered VT, the send-keys seam, and Web Push
-(SW + VAPID). The missing 20% is additive: add `actions[]` to the
-`showNotification` payload (`app/sw.ts` only focuses the window today) and route
-`notificationclick` actions back through the send-keys seam. Turns the passive
-"a session needs you" ping into the active loop that Omnara / Happy / Anthropic
-Remote Control gate behind native apps and $100–200/mo — delivered self-hosted,
-provider-agnostic, and **on Windows** where the official tooling doesn't run.
-_Where:_ app/sw.ts (notification actions), a small `/api/sessions/[id]/respond`
-seam over send-keys, server-side push payload. _Risk:_ additive; reuses shipped
-Web Push + status + send-keys.
+**One per-turn working-tree snapshot that powers two top-demand features at once:
+(a) mobile-first diff review — see exactly what the agent changed, approve/merge
+per-file or per-hunk from the phone — and (b) checkpoint/rewind — roll the tree
+back to any prior turn.** This is the convergence pick. _Diff review_ is the most
+cross-cited gap (4/5 segments; Conductor & Vibe Kanban win deals on it; rides the
+review-bottleneck macro-theme; Claude Code #31888 / #33932 / #44787). _Rewind_ is
+the single highest-demand community item in the whole dataset (claude-code #353 =
+178 reactions, + #6001 / #2704 / #4472; Codex #12558). They share **one
+substrate** — snapshot the worktree at each turn boundary (already observable via
+the rendered-screen status engine) — so one piece of infra ships two flagship
+features. Stoa already has worktrees + the mobile board + lock-screen
+approve/reject; a **swipe-to-approve mobile diff** is a form factor no competitor
+(all desktop/Mac-first) owns, and it stacks directly on the shipped actionable
+push. _Where:_ a per-turn snapshot store keyed off the turn boundary; a git-diff
+renderer on the board + mobile; "approve & merge worktree" / "restore to turn N"
+actions over the existing `/respond` + worktree plumbing. _Risk:_ snapshot
+storage growth (prune/cap); cross-platform git via `execFile` (no shell).
 
-### Mobile remote-control loop (the signature angle)
+### Async cockpit (lowest-effort; compounds the shipped push + mobile)
 
-- [ ] **Mobile kill switch** ⭐ _(D:high · E:S)_ — one-tap stop a drifting run from
-  the card AND the notification; reuses the #71 authoritative kill. "Stop a run
-  before it wastes more time" ranks among the highest-leverage phone workflows.
-- [ ] **Glanceable quick-action card chrome** ⭐ _(D:high · E:S)_ — per-card
-  reply/approve/kill so the board is mission-control, not just a viewer (board +
-  preview + `/ws/events` already there).
+- [ ] **Prompt queue — type the next tasks while it works** ⭐ _(D:high · E:M)_ —
+  dispatch follow-ups in order on idle, no interrupt (claude-code #50246 = 68
+  reactions, closed "not planned" upstream → wrapper-shaped). Stoa owns stdin + the
+  idle/working signal.
+- [ ] **Auto-resume after rate-limit reset** ⭐ _(D:high · E:S–M)_ — detect "usage
+  limit reached" off the rendered screen, count down, auto-continue when the window
+  resets, ping via the shipped push. 8+ duplicate issues across Claude/Codex;
+  Anthropic declined to ship → the natural wrapper home. Makes overnight/AFK runs
+  actually finish.
+- [ ] **Fire-and-forget dispatch from the phone** ⭐ _(D:high · E:S–M)_ — start a
+  brand-new task server-side from mobile (not just steer running ones); matches
+  Anthropic "Dispatch" / Codex "start something new". Stoa already spawns sessions
+  on the host — mostly a mobile New-Session entry point + an authenticated spawn.
 
-### Cost & governance (the loudest unclaimed surface)
+### Trust & safety (the self-hosted / Windows differentiator)
 
-- [ ] **Per-session token/cost tracking + a fleet total** ⭐ _(D:high · E:M)_ —
-  runaway-spend horror stories ($8k–$47k single runs); "htop for AI costs." Stoa
-  owns the pty/session layer and knows which agent ran what → attribute cost per
-  session/worker on the board (parse usage output or estimate tokens). Confirmed
-  absent today.
-- [ ] **Budget caps — soft alert / hard pause-or-kill** ⭐ _(D:high · E:M)_ — $50
-  soft / $100 hard is becoming standard practice; almost no parallel-agent tool
-  enforces pre-spend. Pairs with cost tracking + the authoritative kill.
+- [ ] **Runner-enforced permission policy — allow / ask / deny** ⭐ _(D:high · E:M)_ —
+  an argv-matched gate at the transport seam, provider-agnostic, where "ask" routes
+  through the shipped approve/reject push. In-agent probabilistic escalation is
+  bypassable by subprocesses; a hard runner gate isn't.
+- [ ] **Command audit log — "what did the agent run"** ⭐ _(D:high · E:M)_ — a
+  persisted, searchable per-session ledger of commands / writes / tool-calls + which
+  approval gate each passed. Self-hosters value audit above all; compliance now
+  requires the full execution chain.
+- [ ] **Secret-protection guardrail** ⭐ _(D:high · E:M)_ — entropy/regex scan of
+  reads / outputs / `.env` access; mask or block at the same interception seam as
+  the policy engine. Hardcoded-secret leaks up ~81% in 2025.
+- [ ] **Windows-native sandbox (SandboxedTransport)** ⭐⭐ _(D:high · E:L)_ — the
+  category claim nobody else can make: Claude Code's `/sandbox` doesn't run on
+  native Windows (#46740) and tells you to use WSL. A Job-Object/AppContainer-
+  confined pty as a _transport_ (not a new backend) would make "the only way to run
+  agents **safely** on native Windows" true. Highest differentiation, highest
+  effort + the cross-platform-risk pick → ship opt-in behind a capability probe.
 
-### Safe parallel autonomy (guardrails without approval fatigue)
+### Orchestration endgame (builds on conductor→worker)
 
-- [ ] **Granular per-tool Allow / Ask / Deny auto-approve** ⭐ _(D:high · E:M)_ —
-  today it's all-or-nothing YOLO per provider; users are "tired of Claude asking
-  for everything" (~15 prompts to start) yet wary of blanket-skip. Auto-allow
-  reads/edits, ask on bash/destructive; pairs with the notification-approve path.
-- [ ] **Destructive-action guardrails** _(D:high · E:M)_ — pattern-match `rm -rf` /
-  `drop db` / mass-delete off the rendered screen and require confirmation. Claims
-  the "don't wipe your prod DB" high ground the self-hosted posture implies.
+- [ ] **Independent reviewer-agent gate** ⭐ _(D:high · E:M)_ — a fresh critic
+  session sees only spec + diff, returns PASS / structured violations; blocks merge,
+  FAIL → actionable push. "Self-review is compromised" is consensus. Cheapest big
+  win: a reviewer is just another spawned worker role.
+- [ ] **Agent merge queue — safe landing** ⭐ _(D:high · E:L)_ — serialize each
+  worker's branch onto `main`, run the combined test suite, auto-rebase-and-retry,
+  merge only if green. The endgame for a conductor that fans out N branches (today
+  the human lands them by hand).
+- [ ] **Issue-tracker ingestion (GitHub Issues first)** ⭐ _(D:high · E:M)_ — pull a
+  ticket → spawn a worker with its context → PR/status back. The feature Emdash
+  wins deals on; cheap via `gh` (already the sanctioned CLI); "triage your backlog
+  and dispatch the fleet from your phone."
 
-### Terminal-transport robustness (perceived speed + reliability on mobile)
+### Mobile inputs
 
-- [ ] **Bulletproof reconnect UX** _(D:high · E:M)_ — heartbeat ping-pong,
-  exponential backoff, a visible "Reconnecting…" + manual retry; closes the client
-  replay loop over the already-persistent server pty (5G↔WiFi/sleep drop streams).
-- [ ] **Mosh-style predictive local echo** ⭐ _(D:high · E:L)_ — client-side
-  prediction over the existing WS; the biggest perceived-lag cure on a phone, a
-  pure-frontend win (sshx ships this; xterm.js #887 is unsolved for most).
+- [ ] **Image / screenshot input** ⭐ _(D:high · E:M)_ — attach a screenshot/photo
+  into the prompt from the phone (broken UI, stack trace, Figma). Stoa has voice-in
+  but no vision-in; fully self-hosted (the image never leaves the box). The clearest
+  "a phone can do what a terminal can't."
+- [ ] **Two-way conversational voice** ⭐ _(D:med–high · E:M)_ — TTS read-back +
+  turn-taking on top of the shipped dictation; browser `SpeechSynthesis`, no cloud
+  dependency. Matches Omnara/Happy's eyes-free commute mode.
 
-### Self-hosted collaboration
+### Also surfaced (lower priority)
 
-- [ ] **One-link shareable session (read-only or write)** ⭐ _(D:med · E:L)_ —
-  sshx-grade live-session sharing on the user's own box, no cloud account; reuses
-  the shipped token-auth + Origin allowlist, scoped to a single session. (Narrower,
-  shipped-infra version of the deferred read-only transcript share.)
+- **Best-of-N compare** _(D:med-high · E:M)_ — same task to N agents/providers →
+  side-by-side diff → merge the winner; the multi-provider twist (Claude vs Codex
+  vs Hermes) is Stoa-unique; gate behind budget caps.
+- **Multi-account switching + auto-failover** _(D:high-raw · E:S–M)_ — per-session
+  credential pick (claude-code #18435 = 593 reactions); the auto-failover-on-limit
+  variant pairs with auto-resume.
+- **Optional codebase indexing via MCP** _(D:med-high · E:L)_ — self-hosted
+  embeddings/symbol index to cut token-burning grep sweeps (#4556 = 63 reactions);
+  ship as an optional MCP server, not a default.
+- **OpenTelemetry export** _(D:med · E:M)_ — emit session / cost / audit as OTel
+  spans to the self-hoster's Grafana/Langfuse; reuses the audit event stream.
 
 ---
 
