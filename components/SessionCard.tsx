@@ -21,6 +21,7 @@ import {
   ExternalLink,
   Download,
   GitCompare,
+  History,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -46,6 +47,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SessionQuickActions } from "./SessionQuickActions";
 import { SessionDiffModal } from "./SessionDiffModal";
+import { SnapshotTimeline } from "./SnapshotTimeline";
 import { cardActionsForStatus } from "@/lib/notification-actions";
 import type { Session, Group } from "@/lib/db";
 import type { ProjectWithDevServers } from "@/lib/projects";
@@ -158,6 +160,7 @@ function SessionCardComponent({
   const [editName, setEditName] = useState(session.name);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const justStartedEditingRef = useRef(false);
 
@@ -294,6 +297,10 @@ function SessionCardComponent({
         <MenuItem onClick={() => setShowDiff(true)}>
           <GitCompare className="mr-2 h-3 w-3" />
           Review changes
+        </MenuItem>
+        <MenuItem onClick={() => setShowHistory(true)}>
+          <History className="mr-2 h-3 w-3" />
+          Turn history
         </MenuItem>
         <MenuSub>
           <MenuSubTrigger>
@@ -543,6 +550,13 @@ function SessionCardComponent({
           sessionId={session.id}
           name={session.name}
           onClose={() => setShowDiff(false)}
+        />
+      )}
+      {showHistory && (
+        <SnapshotTimeline
+          sessionId={session.id}
+          name={session.name}
+          onClose={() => setShowHistory(false)}
         />
       )}
     </>

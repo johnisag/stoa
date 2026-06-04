@@ -3,18 +3,13 @@
 import { useMemo } from "react";
 import { X, Loader2, GitCompare } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { UnifiedDiff } from "@/components/DiffViewer/UnifiedDiff";
-import {
-  parseDiff,
-  getDiffFileName,
-  splitUnifiedDiff,
-} from "@/lib/diff-parser";
+import { DiffFileList } from "@/components/DiffViewer/DiffFileList";
+import { diffStats } from "@/lib/diff-parser";
 import { useSessionDiff } from "@/hooks/useSessionDiff";
 
 /**
- * Full-screen "what the agent changed" review for one session: fetches the
- * cumulative diff and renders one collapsible UnifiedDiff per file (the parser
- * is single-file, so we split first). Read-only — Stage 1 of review & rewind.
+ * Full-screen "what the agent changed" review for one session. Read-only —
+ * Stage 1 of review & rewind.
  */
 export function SessionDiffModal({
   sessionId,
@@ -26,35 +21,14 @@ export function SessionDiffModal({
   onClose: () => void;
 }) {
   const { data, isLoading, isError } = useSessionDiff(sessionId, true);
-
-  const files = useMemo(() => {
-    if (!data?.diff) return [];
-    return splitUnifiedDiff(data.diff).map((chunk) => {
-      const parsed = parseDiff(chunk);
-      return { parsed, fileName: getDiffFileName(parsed) };
-    });
-  }, [data?.diff]);
-
-  const totals = useMemo(
-    () =>
-      files.reduce(
-        (acc, f) => ({
-          add: acc.add + f.parsed.additions,
-          del: acc.del + f.parsed.deletions,
-        }),
-        { add: 0, del: 0 }
-      ),
-    [files]
-  );
-  // Collapse by default once there are many files (keeps the DOM + mobile sane).
-  const expandedByDefault = files.length <= 5;
+  const stats = useMemo(() => diffStats(data?.diff ?? ""), [data?.diff]);
 
   const subtitle =
     data?.supported === false
       ? "Not a git repository"
-      : files.length === 0
+      : stats.files === 0
         ? "No changes"
-        : `${files.length} file${files.length === 1 ? "" : "s"} · +${totals.add} −${totals.del}${
+        : `${stats.files} file${stats.files === 1 ? "" : "s"} · +${stats.additions} −${stats.deletions}${
             data?.baseRef ? ` vs ${data.baseRef}` : ""
           }`;
 
@@ -89,23 +63,15 @@ export function SessionDiffModal({
           <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
             Couldn&apos;t load the diff.
           </div>
-        ) : files.length === 0 ? (
-          <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
-            {data?.supported === false
-              ? "This session isn't in a git repository."
-              : "No changes yet."}
-          </div>
         ) : (
-          <div className="space-y-2">
-            {files.map((f, i) => (
-              <UnifiedDiff
-                key={`${f.fileName}-${i}`}
-                diff={f.parsed}
-                fileName={f.fileName}
-                expanded={expandedByDefault}
-              />
-            ))}
-          </div>
+          <DiffFileList
+            diff={data?.diff ?? ""}
+            emptyLabel={
+              data?.supported === false
+                ? "This session isn't in a git repository."
+                : "No changes yet."
+            }
+          />
         )}
       </div>
     </div>

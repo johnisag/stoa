@@ -26,6 +26,7 @@ import {
 } from "./lib/session-status";
 import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
 import { actionsForKind } from "./lib/notification-actions";
+import { captureSnapshot } from "./lib/snapshots";
 import { computeSessionCosts } from "./lib/session-cost";
 import {
   getBudgetConfig,
@@ -198,6 +199,16 @@ app.prepare().then(() => {
   // (mirrors the in-app checkStateChanges cooldown).
   const lastPushAt = new Map<string, number>();
   const PUSH_COOLDOWN_MS = 15000;
+  // Opt-in per-turn working-tree snapshots (refs/stoa/snap/*). Off by default —
+  // it writes shadow commits to the session's repo. Tracks prev status so we
+  // snapshot only on a running→settled turn boundary.
+  const SNAPSHOTS_ENABLED = process.env.STOA_SNAPSHOTS === "1";
+  let lastSnapStatusById = new Map<string, SessionStatus>();
+  if (SNAPSHOTS_ENABLED) {
+    console.log(
+      "> Per-turn snapshots on (STOA_SNAPSHOTS=1): the status ticker runs continuously and writes refs/stoa/snap/* at each turn boundary."
+    );
+  }
   const shouldPush = (ev: PushEvent): boolean => {
     const key = `${ev.id}-${ev.kind}`;
     const now = Date.now();
@@ -255,9 +266,10 @@ app.prepare().then(() => {
     // Web Push must fire with no tab open, so the ticker also runs whenever a
     // push subscription exists (computeManagedStatuses is cheap when idle).
     const pushEnabled = hasPushSubscriptions();
-    if (!wsListening && !pushEnabled) {
+    if (!wsListening && !pushEnabled && !SNAPSHOTS_ENABLED) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
       if (lastPushStatusById.size) lastPushStatusById = new Map();
+      if (lastSnapStatusById.size) lastSnapStatusById = new Map();
       return;
     }
     if (statusTickBusy) return; // don't stack ticks if a capture runs slow
@@ -292,6 +304,31 @@ app.prepare().then(() => {
               console.error("web push failed:", err)
             );
         }
+      }
+      if (SNAPSHOTS_ENABLED) {
+        // Snapshot on a turn boundary: the agent went from working to settled.
+        // Fire-and-forget — captureSnapshot runs several git calls; never block
+        // the tick on it (mirrors the push fan-out above).
+        for (const s of curr) {
+          const prev = lastSnapStatusById.get(s.id);
+          if (
+            prev === "running" &&
+            (s.status === "waiting" ||
+              s.status === "idle" ||
+              s.status === "error")
+          ) {
+            const row = queries.getSession(getDb()).get(s.id) as
+              | Session
+              | undefined;
+            if (row?.working_directory)
+              void captureSnapshot(
+                row.working_directory,
+                s.id,
+                s.lastLine
+              ).catch((err) => console.error("snapshot capture failed:", err));
+          }
+        }
+        lastSnapStatusById = statusById(curr);
       }
     } catch (err) {
       console.error("status events tick failed:", err);
