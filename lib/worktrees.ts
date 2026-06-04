@@ -178,13 +178,11 @@ export async function deleteWorktree(
     }
   }
 
-  // Optionally delete the branch
-  if (
-    deleteBranch &&
-    branchName &&
-    branchName !== "main" &&
-    branchName !== "master"
-  ) {
+  // Optionally delete the branch — but ONLY a branch Stoa created. `branch -D`
+  // force-deletes (discards unmerged commits), so restrict it to the
+  // `feature/` prefix from generateBranchName(). A worktree manually repointed
+  // to a real branch (develop / trunk / a non-`main` default) is left alone.
+  if (deleteBranch && branchName && branchName.startsWith("feature/")) {
     try {
       await runGit(resolvedProjectPath, ["branch", "-D", branchName], 10000);
     } catch {
@@ -276,7 +274,12 @@ export async function listWorktrees(projectPath: string): Promise<
  */
 export function isStoaWorktree(worktreePath: string): boolean {
   const base = normalizeWorktreePath(WORKTREES_DIR);
-  return normalizeWorktreePath(worktreePath).startsWith(base);
+  const p = normalizeWorktreePath(worktreePath);
+  // Require a SEPARATOR boundary, not a bare prefix: a plain startsWith(base)
+  // would let a same-named sibling (…/worktrees-evil) pass and reach the
+  // destructive delete path. Must be strictly inside the dir (and not the dir
+  // itself, which is never a worktree).
+  return p !== base && p.startsWith(base + path.sep);
 }
 
 export interface AnnotatedWorktree {

@@ -5,7 +5,7 @@ import { getDb, queries, type Session, type Group } from "@/lib/db";
 import { isValidAgentType, type AgentType } from "@/lib/providers";
 import { sessionKey, getProviderDefinition } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
-import { createWorktree } from "@/lib/worktrees";
+import { createWorktree, isStoaWorktree } from "@/lib/worktrees";
 import { setupWorktree, type SetupResult } from "@/lib/env-setup";
 import { findAvailablePort } from "@/lib/ports";
 import { runInBackground } from "@/lib/async-operations";
@@ -120,6 +120,15 @@ export async function POST(request: NextRequest) {
       // branch + installed deps), so skip createWorktree and setupWorktree —
       // just point the session at it and allocate a dev-server port.
       const attachPath = expandHome(existingWorktreePath);
+      // Only attach to an actual Stoa worktree (the picker only ever offers
+      // these). Enforce it here too so a crafted request can't point a session
+      // at an arbitrary directory under the worktree contract.
+      if (!isStoaWorktree(attachPath)) {
+        return NextResponse.json(
+          { error: "Not a Stoa worktree" },
+          { status: 400 }
+        );
+      }
       if (!existsSync(attachPath)) {
         return NextResponse.json(
           { error: `Worktree no longer exists: ${existingWorktreePath}` },
