@@ -28,7 +28,10 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { resolveConductorSessionId } from "../lib/conductor-marker";
+import {
+  resolveConductorSessionId,
+  pickConductorId,
+} from "../lib/conductor-marker";
 
 const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
 
@@ -216,11 +219,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-// Helper to get conductor ID from args or env
+// Resolve the conductor ID for a tool call. The Stoa-baked id is authoritative;
+// an agent-supplied `conductorId` is only used when there's no baked id (some
+// agents pass their own provider session id, which would break the worker FK).
 function getConductorId(
   args: Record<string, unknown> | undefined
 ): string | null {
-  return (args?.conductorId as string) || DEFAULT_CONDUCTOR_ID || null;
+  return pickConductorId(
+    args?.conductorId as string | undefined,
+    DEFAULT_CONDUCTOR_ID
+  );
 }
 
 // Handle tool calls

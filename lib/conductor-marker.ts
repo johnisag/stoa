@@ -38,3 +38,18 @@ export function resolveConductorSessionId(
   }
   return "";
 }
+
+/**
+ * Choose the conductor id for a spawn_worker-style call. The Stoa-baked id (from
+ * env/marker via resolveConductorSessionId) is AUTHORITATIVE — newer agents
+ * (e.g. Claude Code) sometimes pass their OWN provider session id as
+ * `conductorId`, which isn't a Stoa session and trips the worker's FOREIGN KEY.
+ * So a baked id always wins; the agent-supplied arg is only a fallback for
+ * manual/edge setups with no baked id. Returns null when neither is present.
+ */
+export function pickConductorId(
+  argId: string | null | undefined,
+  bakedId: string | null | undefined
+): string | null {
+  return (bakedId || "").trim() || (argId || "").trim() || null;
+}

@@ -136,6 +136,18 @@ export async function spawnWorker(
     }
   }
 
+  // Guard the conductor_session_id FK: a conductor id that isn't a real Stoa
+  // session (e.g. an agent passing its own provider session id) would otherwise
+  // surface as a raw "SqliteError: FOREIGN KEY constraint failed".
+  const conductor = queries.getSession(db).get(conductorSessionId) as
+    | Session
+    | undefined;
+  if (!conductor) {
+    throw new Error(
+      `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing Stoa session.`
+    );
+  }
+
   // Create session in database
   const tmuxName = sessionKey({
     kind: "agent",
