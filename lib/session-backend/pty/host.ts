@@ -35,7 +35,7 @@ interface Conn {
   /** Keys this connection is attached to: output/exit unsubscribers + sizing-client id. */
   attached: Map<
     string,
-    { offOutput: () => void; offExit: () => void; clientId: number }
+    { offOutput: () => void; offExit: () => void; clientId: number | null }
   >;
 }
 
@@ -102,8 +102,11 @@ function handleMessage(conn: Conn, msg: ClientMessage) {
       const offExit = session.onExit(({ exitCode }) =>
         send(conn, { t: "exit", key: msg.key, code: exitCode })
       );
-      // Register this connection as a sizing client (pty -> smallest viewer).
-      const clientId = session.addClient(session.cols, session.rows);
+      // Register as a sizing client (pty -> smallest viewer) — UNLESS this is an
+      // observer (read-only mini-terminal), which must not shrink the pty.
+      const clientId = msg.observer
+        ? null
+        : session.addClient(session.cols, session.rows);
       conn.attached.set(msg.key, { offOutput, offExit, clientId });
       // The snapshot is the response value; the client repaints it first.
       send(conn, { t: "res", id: msg.id, ok: true, value: { snapshot } });
@@ -121,9 +124,10 @@ function handleMessage(conn: Conn, msg: ClientMessage) {
     case "resize": {
       const sub = conn.attached.get(msg.key);
       const session = getSession(msg.key);
-      if (sub && session)
+      // Observers (clientId === null) own no sizing slot — ignore their resizes.
+      if (sub && sub.clientId !== null && session)
         session.resizeClient(sub.clientId, msg.cols, msg.rows);
-      else session?.resize(msg.cols, msg.rows);
+      else if (!sub) session?.resize(msg.cols, msg.rows);
       break;
     }
 
@@ -210,7 +214,7 @@ function detachKey(conn: Conn, key: string) {
   if (sub) {
     sub.offOutput();
     sub.offExit();
-    getSession(key)?.removeClient(sub.clientId);
+    if (sub.clientId !== null) getSession(key)?.removeClient(sub.clientId);
     conn.attached.delete(key);
   }
 }

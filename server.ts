@@ -372,7 +372,7 @@ app.prepare().then(() => {
         const msg = JSON.parse(message.toString());
         switch (msg.type) {
           case "attach":
-            void session.attach(msg.key, msg.spawn);
+            void session.attach(msg.key, msg.spawn, msg.observer);
             break;
           case "input":
             session.write(msg.data);
