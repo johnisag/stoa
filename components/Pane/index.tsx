@@ -439,6 +439,13 @@ export const Pane = memo(function Pane({
           onSplitVertical={() => splitVertical(paneId)}
           onClose={() => close(paneId)}
           onDetach={handleDetach}
+          showTerminalActions={viewMode === "terminal" && !!activeTab}
+          showTerminalAttach={
+            !!(activeTab?.sessionId || activeTab?.attachedTmux)
+          }
+          onTerminalCopy={() => terminalRef?.enterSelectMode()}
+          onTerminalPaste={() => terminalRef?.pasteFromClipboard()}
+          onTerminalAttach={() => terminalRef?.openFilePicker()}
         />
       )}
 
@@ -486,6 +493,9 @@ export const Pane = memo(function Pane({
                   // 📎 inserts a file path into the agent's prompt — only useful
                   // when the tab is attached to a session (a scratch shell isn't).
                   showImageButton={!!(tab.sessionId || tab.attachedTmux)}
+                  // Desktop pane surfaces copy/paste/attach in the tab bar, not
+                  // floating over the terminal.
+                  floatingActions={false}
                 />
               </div>
             );
@@ -577,6 +587,8 @@ export const Pane = memo(function Pane({
                           showImageButton={
                             !!(tab.sessionId || tab.attachedTmux)
                           }
+                          // Desktop surfaces copy/paste/attach in the tab bar.
+                          floatingActions={false}
                         />
                       </div>
                     );

@@ -11,6 +11,9 @@ import {
   GitBranch,
   Users,
   Home,
+  Copy,
+  ClipboardPaste,
+  Paperclip,
 } from "lucide-react";
 import {
   Tooltip,
@@ -54,6 +57,14 @@ interface DesktopTabBarProps {
   onSplitVertical: () => void;
   onClose: () => void;
   onDetach: () => void;
+  // Terminal actions (copy/paste/attach) — only meaningful in terminal view;
+  // they drive the active tab's terminal via its imperative handle. Attach is
+  // gated separately (a scratch shell has no agent prompt to insert a path into).
+  showTerminalActions: boolean;
+  showTerminalAttach: boolean;
+  onTerminalCopy: () => void;
+  onTerminalPaste: () => void;
+  onTerminalAttach: () => void;
 }
 
 // A view-toggle icon button: labelled + focus-ringed in one place so every
@@ -123,6 +134,11 @@ export function DesktopTabBar({
   onSplitVertical,
   onClose,
   onDetach,
+  showTerminalActions,
+  showTerminalAttach,
+  onTerminalCopy,
+  onTerminalPaste,
+  onTerminalAttach,
 }: DesktopTabBarProps) {
   const getTabName = (tab: Tab) => {
     if (tab.sessionId) {
@@ -240,6 +256,66 @@ export function DesktopTabBar({
 
       {/* Pane Controls */}
       <div className="ml-auto flex items-center gap-0.5 px-2">
+        {/* Terminal actions (copy / paste / attach), separated from the pane
+            controls. Only in terminal view — they act on the active terminal. */}
+        {showTerminalActions && (
+          <>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onTerminalCopy();
+                  }}
+                  aria-label="Select text to copy"
+                  className="h-6 w-6"
+                >
+                  <Copy className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Select text to copy</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onTerminalPaste();
+                  }}
+                  aria-label="Paste from clipboard"
+                  className="h-6 w-6"
+                >
+                  <ClipboardPaste className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Paste from clipboard</TooltipContent>
+            </Tooltip>
+            {showTerminalAttach && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTerminalAttach();
+                    }}
+                    aria-label="Attach file"
+                    className="h-6 w-6"
+                  >
+                    <Paperclip className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Attach file</TooltipContent>
+              </Tooltip>
+            )}
+            <div className="bg-border mx-1 h-4 w-px" aria-hidden />
+          </>
+        )}
         {hasAttachedTmux && (
           <Tooltip>
             <TooltipTrigger asChild>
