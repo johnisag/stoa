@@ -556,6 +556,7 @@ function SessionCardComponent({
         <SnapshotTimeline
           sessionId={session.id}
           name={session.name}
+          status={status}
           onClose={() => setShowHistory(false)}
         />
       )}

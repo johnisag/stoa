@@ -13,6 +13,7 @@ import {
   captureSnapshot,
   listSnapshots,
   getSnapshotDiff,
+  restoreSnapshot,
 } from "../lib/snapshots";
 
 const argStr = (args: string[]) => args.join(" ");
@@ -157,5 +158,72 @@ describe("getSnapshotDiff", () => {
       return { stdout: "", stderr: "" };
     });
     expect(await getSnapshotDiff("/repo", "sess", 1)).toContain("+root");
+  });
+});
+
+describe("restoreSnapshot", () => {
+  it("safety-snapshots, then resets the worktree to the target tree (HEAD untouched)", async () => {
+    isGitRepo.mockResolvedValue(true);
+    runGit.mockImplementation(async (_cwd: string, args: string[]) => {
+      const a = argStr(args);
+      if (a.startsWith("for-each-ref"))
+        return {
+          stdout: "000001\tsha1\td\tone\n000002\tsha2\td\ttwo\n",
+          stderr: "",
+        };
+      if (a === "write-tree") return { stdout: "cur-tree\n", stderr: "" }; // safety
+      if (a === "rev-parse sha2^{tree}")
+        return { stdout: "old-tree\n", stderr: "" };
+      if (a === "rev-parse HEAD") return { stdout: "head-sha\n", stderr: "" };
+      if (a.startsWith("commit-tree"))
+        return { stdout: "safety-sha\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+
+    const res = await restoreSnapshot("/repo", "sess", 2);
+    expect(res.restored).toBe(true);
+    expect(res.safetySeq).toBe(3); // captured the pre-rewind state as #3
+
+    // The rewind reset index+worktree to the target snapshot's tree.
+    expect(
+      runGit.mock.calls.some(
+        (c) => (c[1] as string[]).join(" ") === "read-tree -u --reset old-tree"
+      )
+    ).toBe(true);
+    // A safety commit was written before the reset.
+    expect(
+      runGit.mock.calls.some((c) => (c[1] as string[])[0] === "commit-tree")
+    ).toBe(true);
+    // HEAD is never moved (no reset --hard / checkout of a branch).
+    expect(
+      runGit.mock.calls.some((c) => {
+        const a = (c[1] as string[]).join(" ");
+        return a.startsWith("reset --hard") || a.startsWith("checkout ");
+      })
+    ).toBe(false);
+  });
+
+  it("returns restored:false for an unknown seq (no worktree reset)", async () => {
+    isGitRepo.mockResolvedValue(true);
+    runGit.mockImplementation(async (_cwd: string, args: string[]) => {
+      if (argStr(args).startsWith("for-each-ref"))
+        return { stdout: "000001\tsha1\td\tone\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+    const res = await restoreSnapshot("/repo", "sess", 99);
+    expect(res).toEqual({ restored: false, safetySeq: null });
+    expect(
+      runGit.mock.calls.some((c) =>
+        (c[1] as string[]).join(" ").startsWith("read-tree -u --reset")
+      )
+    ).toBe(false);
+  });
+
+  it("returns restored:false when the cwd isn't a repo", async () => {
+    isGitRepo.mockResolvedValue(false);
+    expect(await restoreSnapshot("/x", "sess", 1)).toEqual({
+      restored: false,
+      safetySeq: null,
+    });
   });
 });

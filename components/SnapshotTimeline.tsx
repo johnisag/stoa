@@ -1,13 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { X, ChevronLeft, History, Camera, Loader2 } from "lucide-react";
+import {
+  X,
+  ChevronLeft,
+  History,
+  Camera,
+  Loader2,
+  RotateCcw,
+} from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DiffFileList } from "@/components/DiffViewer/DiffFileList";
 import {
   useSessionSnapshots,
   useCreateCheckpoint,
   useSnapshotDiff,
+  useRestoreSnapshot,
 } from "@/hooks/useSessionSnapshots";
 
 function ago(iso: string): string {
@@ -32,15 +41,22 @@ function ago(iso: string): string {
 export function SnapshotTimeline({
   sessionId,
   name,
+  status,
   onClose,
 }: {
   sessionId: string;
   name: string;
+  status?: string;
   onClose: () => void;
 }) {
+  // Rewinding the working tree under a live agent would clobber its in-flight
+  // work — block it (the route enforces this too).
+  const isRunning = status === "running";
   const { data: snapshots, isLoading } = useSessionSnapshots(sessionId, true);
   const checkpoint = useCreateCheckpoint(sessionId);
+  const restore = useRestoreSnapshot(sessionId);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const { data: diff, isLoading: diffLoading } = useSnapshotDiff(
     sessionId,
     selectedSeq
@@ -49,6 +65,25 @@ export function SnapshotTimeline({
   // Newest first for display.
   const rows = (snapshots ?? []).slice().reverse();
   const selected = rows.find((s) => s.seq === selectedSeq) ?? null;
+
+  const openTimeline = () => {
+    setSelectedSeq(null);
+    setConfirming(false);
+  };
+
+  const doRestore = (seq: number) => {
+    restore.mutate(seq, {
+      onSuccess: (r) => {
+        setConfirming(false);
+        openTimeline();
+        toast.success(
+          `Rewound to turn #${seq}` +
+            (r.safetySeq ? ` · saved current as #${r.safetySeq}` : "")
+        );
+      },
+      onError: (err) => toast.error(`Rewind failed: ${err.message}`),
+    });
+  };
 
   return (
     <div
@@ -60,7 +95,7 @@ export function SnapshotTimeline({
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setSelectedSeq(null)}
+            onClick={openTimeline}
             className="h-9 w-9"
             aria-label="Back to timeline"
           >
@@ -95,6 +130,23 @@ export function SnapshotTimeline({
             Checkpoint
           </Button>
         )}
+        {selected && !confirming && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirming(true)}
+            disabled={restore.isPending || isRunning}
+            title={isRunning ? "Stop the agent to rewind" : undefined}
+            className="h-9"
+          >
+            {restore.isPending ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <RotateCcw className="mr-1 h-4 w-4" />
+            )}
+            {isRunning ? "Running…" : "Restore"}
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon-sm"
@@ -105,6 +157,39 @@ export function SnapshotTimeline({
           <X className="h-5 w-5" />
         </Button>
       </div>
+
+      {selected && confirming && (
+        <div className="border-border flex flex-wrap items-center gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs">
+          <span className="text-foreground flex-1">
+            Rewind the working tree to turn #{selected.seq}? The current state
+            is snapshotted first, so you can undo. New untracked files
+            aren&apos;t removed.
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8"
+            onClick={() => setConfirming(false)}
+            disabled={restore.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="h-8"
+            onClick={() => doRestore(selected.seq)}
+            disabled={restore.isPending}
+          >
+            {restore.isPending ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <RotateCcw className="mr-1 h-4 w-4" />
+            )}
+            Rewind
+          </Button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto p-3">
         {selected ? (

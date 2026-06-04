@@ -43,6 +43,25 @@ export function useCreateCheckpoint(sessionId: string) {
   });
 }
 
+/** Rewind the working tree to a snapshot; refreshes the list (safety snapshot). */
+export function useRestoreSnapshot(sessionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      seq: number
+    ): Promise<{ restored: boolean; safetySeq: number | null }> => {
+      const res = await fetch(
+        `/api/sessions/${sessionId}/snapshots/${seq}/restore`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(`restore ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: key(sessionId) }),
+  });
+}
+
 /** The diff a snapshot introduced (immutable past turn → cached long). */
 export function useSnapshotDiff(sessionId: string, seq: number | null) {
   return useQuery({

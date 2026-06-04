@@ -98,84 +98,92 @@ export async function captureSnapshot(
   inFlight.add(sessionId);
   try {
     if (!(await isGitRepo(dir))) return null;
-
-    const indexFile = join(
-      tmpDir(),
-      `stoa-snap-${process.pid}-${++indexCounter}.idx`
-    );
-    const indexEnv = { GIT_INDEX_FILE: indexFile };
-    try {
-      // Initialize the throwaway index first — `git add -A` against a
-      // non-existent GIT_INDEX_FILE can no-op on some git builds (Windows),
-      // silently snapshotting nothing. read-tree --empty guarantees it exists.
-      await runGit(dir, ["read-tree", "--empty"], T, BIG, indexEnv);
-      // Stage the whole worktree into the throwaway index, then snapshot its tree.
-      await runGit(dir, ["add", "-A"], T, BIG, indexEnv);
-      const tree = (
-        await runGit(dir, ["write-tree"], T, BIG, indexEnv)
-      ).stdout.trim();
-      if (!tree) return null;
-
-      const existing = await listSnapshots(dir, sessionId);
-      // Skip a no-op turn: identical tree to the most recent snapshot.
-      const last = existing[existing.length - 1];
-      if (last) {
-        try {
-          const lastTree = (
-            await runGit(dir, ["rev-parse", `${last.sha}^{tree}`], T)
-          ).stdout.trim();
-          if (lastTree === tree) return null;
-        } catch {
-          // Can't resolve the last tree — fall through and snapshot anyway.
-        }
-      }
-
-      // Parent on HEAD when it exists (unborn repos have none).
-      let parentArgs: string[] = [];
-      try {
-        const head = (
-          await runGit(dir, ["rev-parse", "HEAD"], T)
-        ).stdout.trim();
-        if (head) parentArgs = ["-p", head];
-      } catch {
-        // Unborn HEAD — no parent.
-      }
-
-      const subject = (summary || "checkpoint")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 200);
-      const sha = (
-        await runGit(
-          dir,
-          ["commit-tree", tree, ...parentArgs, "-m", subject || "checkpoint"],
-          T,
-          BIG,
-          IDENTITY
-        )
-      ).stdout.trim();
-      if (!sha) return null;
-
-      const seq = (last?.seq ?? 0) + 1;
-      await runGit(dir, ["update-ref", refFor(sessionId, seq), sha], T);
-
-      // Prune oldest beyond the cap.
-      const all = [...existing, { seq, sha, date: "", summary: subject }];
-      const overflow = all.length - MAX_SNAPSHOTS;
-      for (let i = 0; i < overflow; i++) {
-        await runGit(
-          dir,
-          ["update-ref", "-d", refFor(sessionId, all[i].seq)],
-          T
-        ).catch(() => {});
-      }
-
-      return { seq, sha, date: new Date().toISOString(), summary: subject };
-    } finally {
-      await fs.unlink(indexFile).catch(() => {});
-    }
+    return await captureCore(dir, sessionId, summary);
   } finally {
     inFlight.delete(sessionId);
+  }
+}
+
+// The capture body, lock-free: callers must already hold the per-session lock
+// (and have verified it's a git repo) so restoreSnapshot can capture a safety
+// snapshot WITHOUT releasing the lock between it and the destructive reset.
+async function captureCore(
+  dir: string,
+  sessionId: string,
+  summary: string
+): Promise<Snapshot | null> {
+  const indexFile = join(
+    tmpDir(),
+    `stoa-snap-${process.pid}-${++indexCounter}.idx`
+  );
+  const indexEnv = { GIT_INDEX_FILE: indexFile };
+  try {
+    // Initialize the throwaway index first — `git add -A` against a
+    // non-existent GIT_INDEX_FILE can no-op on some git builds (Windows),
+    // silently snapshotting nothing. read-tree --empty guarantees it exists.
+    await runGit(dir, ["read-tree", "--empty"], T, BIG, indexEnv);
+    // Stage the whole worktree into the throwaway index, then snapshot its tree.
+    await runGit(dir, ["add", "-A"], T, BIG, indexEnv);
+    const tree = (
+      await runGit(dir, ["write-tree"], T, BIG, indexEnv)
+    ).stdout.trim();
+    if (!tree) return null;
+
+    const existing = await listSnapshots(dir, sessionId);
+    // Skip a no-op turn: identical tree to the most recent snapshot.
+    const last = existing[existing.length - 1];
+    if (last) {
+      try {
+        const lastTree = (
+          await runGit(dir, ["rev-parse", `${last.sha}^{tree}`], T)
+        ).stdout.trim();
+        if (lastTree === tree) return null;
+      } catch {
+        // Can't resolve the last tree — fall through and snapshot anyway.
+      }
+    }
+
+    // Parent on HEAD when it exists (unborn repos have none).
+    let parentArgs: string[] = [];
+    try {
+      const head = (await runGit(dir, ["rev-parse", "HEAD"], T)).stdout.trim();
+      if (head) parentArgs = ["-p", head];
+    } catch {
+      // Unborn HEAD — no parent.
+    }
+
+    const subject = (summary || "checkpoint")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200);
+    const sha = (
+      await runGit(
+        dir,
+        ["commit-tree", tree, ...parentArgs, "-m", subject || "checkpoint"],
+        T,
+        BIG,
+        IDENTITY
+      )
+    ).stdout.trim();
+    if (!sha) return null;
+
+    const seq = (last?.seq ?? 0) + 1;
+    await runGit(dir, ["update-ref", refFor(sessionId, seq), sha], T);
+
+    // Prune oldest beyond the cap.
+    const all = [...existing, { seq, sha, date: "", summary: subject }];
+    const overflow = all.length - MAX_SNAPSHOTS;
+    for (let i = 0; i < overflow; i++) {
+      await runGit(
+        dir,
+        ["update-ref", "-d", refFor(sessionId, all[i].seq)],
+        T
+      ).catch(() => {});
+    }
+
+    return { seq, sha, date: new Date().toISOString(), summary: subject };
+  } finally {
+    await fs.unlink(indexFile).catch(() => {});
   }
 }
 
@@ -215,5 +223,59 @@ export async function getSnapshotDiff(
       .stdout;
   } catch {
     return "";
+  }
+}
+
+export interface RestoreResult {
+  restored: boolean;
+  /** Seq of the safety snapshot taken of the pre-rewind state, if any. */
+  safetySeq: number | null;
+}
+
+/**
+ * Rewind the working tree to a snapshot: reset the index + working tree to that
+ * turn's tree WITHOUT moving HEAD (git read-tree -u --reset). A safety snapshot
+ * of the current state is captured first, so the rewind is itself undoable.
+ * Untracked files created after the snapshot are left in place. Returns
+ * {restored:false} if the repo or snapshot can't be resolved.
+ */
+export async function restoreSnapshot(
+  cwd: string,
+  sessionId: string,
+  seq: number
+): Promise<RestoreResult> {
+  const dir = expandHome(cwd);
+  // Hold the per-session lock across the WHOLE restore so an auto-capture can't
+  // snapshot a half-reset worktree, and two restores can't race each other.
+  if (inFlight.has(sessionId)) return { restored: false, safetySeq: null };
+  inFlight.add(sessionId);
+  try {
+    if (!(await isGitRepo(dir))) return { restored: false, safetySeq: null };
+
+    const snaps = await listSnapshots(dir, sessionId);
+    const target = snaps.find((s) => s.seq === seq);
+    if (!target) return { restored: false, safetySeq: null };
+
+    // Safety snapshot of the current state FIRST so the rewind is recoverable.
+    // A THROW aborts the rewind — never destroy the worktree without a recovery
+    // point. null is acceptable: it means the current tree already equals the
+    // latest snapshot, so that snapshot IS the recovery point.
+    let safety: Snapshot | null;
+    try {
+      safety = await captureCore(dir, sessionId, `before rewind to #${seq}`);
+    } catch {
+      return { restored: false, safetySeq: null };
+    }
+
+    // Reset the index + working tree to the snapshot's tree, HEAD untouched.
+    // (Untracked files created after the snapshot are left in place.)
+    const tree = (
+      await runGit(dir, ["rev-parse", `${target.sha}^{tree}`], T)
+    ).stdout.trim();
+    await runGit(dir, ["read-tree", "-u", "--reset", tree], T, BIG);
+
+    return { restored: true, safetySeq: safety?.seq ?? null };
+  } finally {
+    inFlight.delete(sessionId);
   }
 }
