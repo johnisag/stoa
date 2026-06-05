@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Plus, Trash2, ExternalLink, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -21,10 +21,12 @@ import {
   useCreateRepo,
   useDeleteRepo,
   useDispatchReposQuery,
+  useResolveSource,
   useUpdateRepo,
   type CreateRepoInput,
   type UpdateRepoPatch,
 } from "@/data/dispatch/queries";
+import { useProjectsQuery } from "@/data/projects";
 import { AGENT_BADGE, repoUrl } from "./shared";
 
 const EMPTY: CreateRepoInput = {
@@ -39,6 +41,50 @@ const EMPTY: CreateRepoInput = {
   enabled: false,
 };
 
+/** A small single-select segmented control (radiogroup). Shared by the mode
+ * toggle and the add-repo source picker so they stay visually + a11y identical. */
+function SegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+  disabled,
+}: {
+  options: readonly T[];
+  value: T;
+  onChange: (v: T) => void;
+  ariaLabel: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className="bg-muted inline-flex rounded-md p-0.5 text-xs"
+    >
+      {options.map((o) => (
+        <button
+          key={o}
+          type="button"
+          role="radio"
+          aria-checked={value === o}
+          disabled={disabled}
+          onClick={() => value !== o && onChange(o)}
+          className={cn(
+            "rounded px-2.5 py-0.5 capitalize transition-colors",
+            value === o
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+            disabled && "cursor-not-allowed opacity-50"
+          )}
+        >
+          {o}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ModeToggle({
   value,
   onChange,
@@ -49,25 +95,13 @@ function ModeToggle({
   disabled?: boolean;
 }) {
   return (
-    <div className="bg-muted inline-flex rounded-md p-0.5 text-xs">
-      {(["review", "auto"] as const).map((m) => (
-        <button
-          key={m}
-          type="button"
-          disabled={disabled}
-          aria-pressed={value === m}
-          onClick={() => value !== m && onChange(m)}
-          className={cn(
-            "rounded px-2 py-0.5 capitalize transition-colors",
-            value === m
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-        >
-          {m}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      options={["review", "auto"] as const}
+      value={value}
+      onChange={onChange}
+      ariaLabel="Dispatch mode"
+      disabled={disabled}
+    />
   );
 }
 
@@ -211,6 +245,46 @@ function AddRepoForm() {
   const set = <K extends keyof CreateRepoInput>(k: K, v: CreateRepoInput[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
+  // ── source picker ── (auto-fill path/slug/branch instead of typing them)
+  const projectsQ = useProjectsQuery();
+  const resolve = useResolveSource();
+  const projects = (projectsQ.data ?? []).filter((p) => !p.is_uncategorized);
+  const [source, setSource] = useState<"manual" | "project">("manual");
+
+  // Track the latest pick so a slow earlier resolve can't clobber a newer one.
+  const lastPickedRef = useRef<string | null>(null);
+
+  // Pick a Stoa project → prefill the path immediately, then resolve its GitHub
+  // owner/name + default branch in the background and fill those too.
+  const pickProject = (projectId: string) => {
+    const p = projects.find((x) => x.id === projectId);
+    if (!p) return;
+    const dir = p.working_directory?.trim();
+    if (!dir || dir === "~") {
+      toast.error(`${p.name} has no checkout path — enter it manually`);
+      return;
+    }
+    lastPickedRef.current = projectId;
+    set("repoPath", dir);
+    resolve.mutate(dir, {
+      onSuccess: (r) => {
+        if (lastPickedRef.current !== projectId) return; // superseded
+        if (!r.isGitRepo) {
+          toast.error(`${p.name} isn't a git repo — enter owner/name manually`);
+          return;
+        }
+        if (r.slug) set("repoSlug", r.slug);
+        if (r.defaultBranch) set("baseBranch", r.defaultBranch);
+        if (!r.slug)
+          toast.message("Couldn't detect owner/name — add it manually");
+      },
+      onError: (e) => {
+        if (lastPickedRef.current !== projectId) return;
+        toast.error((e as Error).message);
+      },
+    });
+  };
+
   const submit = () => {
     if (!form.repoPath.trim() || !form.repoSlug.trim()) {
       toast.error("Repo path and owner/name are required");
@@ -230,6 +304,47 @@ function AddRepoForm() {
 
   return (
     <div className="bg-muted/30 space-y-3 rounded-md border border-dashed p-3">
+      {/* Source picker — auto-fill from a Stoa project instead of typing the
+          path + owner/name. (Scan / GitHub sources land in later layers.) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <SegmentedControl
+          options={["manual", "project"] as const}
+          value={source}
+          ariaLabel="Repo source"
+          onChange={(s) => {
+            setSource(s);
+            if (s === "manual") resolve.reset();
+          }}
+        />
+        {source === "project" && (
+          <Select onValueChange={pickProject} disabled={projectsQ.isLoading}>
+            <SelectTrigger
+              className="h-8 w-[220px]"
+              aria-label="Source project"
+            >
+              <SelectValue
+                placeholder={
+                  projectsQ.isLoading
+                    ? "Loading projects…"
+                    : projects.length
+                      ? "Pick a project to auto-fill"
+                      : "No projects yet"
+                }
+              />
+            </SelectTrigger>
+            <SelectContent>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {source === "project" && resolve.isPending && (
+          <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" />
+        )}
+      </div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <Input
           placeholder="Local checkout path (e.g. C:\\repos\\app)"
