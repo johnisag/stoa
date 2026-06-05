@@ -14,7 +14,7 @@
 
 import { randomUUID } from "crypto";
 import { getDb, queries } from "../db";
-import { createWorktree } from "../worktrees";
+import { createWorktree, deleteWorktree } from "../worktrees";
 import { setupWorktree } from "../env-setup";
 import { resolveModelForAgent } from "../model-catalog";
 import { getProvider, buildAgentArgs, shellQuoteArg } from "../providers";
@@ -66,6 +66,9 @@ export async function dispatchOne(
   const db = getDb();
   const issueNumber = candidate.issue_number;
   const issueTitle = candidate.issue_title ?? `issue-${issueNumber}`;
+  // Tracked so the catch can clean up a half-built dispatch — otherwise a failure
+  // after createWorktree leaks the worktree+branch and the next attempt collides.
+  let createdWorktree: string | null = null;
 
   try {
     const provider = getProvider(repo.agent_type);
@@ -77,6 +80,7 @@ export async function dispatchOne(
       featureName: `issue-${issueNumber}`,
       baseBranch: repo.base_branch,
     });
+    createdWorktree = worktreePath;
 
     // 2. Env setup (copy .env, install deps) in the background — never block.
     const sourcePath = expandHome(repo.repo_path);
@@ -141,6 +145,15 @@ export async function dispatchOne(
       .run(sessionId, branchName, worktreePath, candidate.id);
   } catch (err) {
     console.error(`dispatch failed for ${repo.repo_slug}#${issueNumber}:`, err);
+    // Clean up the worktree+branch so the disk doesn't leak and a future attempt
+    // for this issue doesn't collide on the branch name.
+    if (createdWorktree) {
+      try {
+        await deleteWorktree(createdWorktree, expandHome(repo.repo_path), true);
+      } catch (cleanupErr) {
+        console.error("dispatch worktree cleanup failed:", cleanupErr);
+      }
+    }
     queries.updateDispatchStatus(db).run("failed", candidate.id);
   }
 }

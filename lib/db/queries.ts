@@ -396,12 +396,14 @@ export const queries = {
        WHERE repo_id = ? AND dispatched_at IS NOT NULL AND date(dispatched_at) = date('now')`
     ),
 
-  // Concurrency cap: live in-flight workers for a repo.
+  // Concurrency cap: workers still actively coding (status 'dispatched'). Once a
+  // worker opens its PR (→ 'pr_open') or finishes/dies, its slot frees — so a
+  // completed-but-unmerged PR never pins the cap forever.
   countLiveInFlight: (db: Database.Database) =>
     getStmt(
       db,
       `SELECT COUNT(*) AS n FROM issue_dispatches
-       WHERE repo_id = ? AND status IN ('dispatched', 'pr_open')`
+       WHERE repo_id = ? AND status = 'dispatched'`
     ),
 
   listPendingForRepo: (db: Database.Database) =>
@@ -431,20 +433,10 @@ export const queries = {
        ORDER BY dispatched_at DESC`
     ),
 
-  // In-flight workers whose PR hasn't been linked yet (status-ticker poll target).
-  listInFlightMissingPR: (db: Database.Database) =>
-    getStmt(
-      db,
-      `SELECT * FROM issue_dispatches
-       WHERE status = 'dispatched' AND pr_url IS NULL AND session_id IS NOT NULL`
-    ),
-
-  // Active rows (dispatched/pr_open) — startup orphan reconcile checks these.
-  listActiveDispatches: (db: Database.Database) =>
-    getStmt(
-      db,
-      `SELECT * FROM issue_dispatches WHERE status IN ('dispatched', 'pr_open')`
-    ),
+  // Workers still 'dispatched' (actively coding) — the sweep re-checks each:
+  // PR opened → pr_open; session gone without a PR → failed.
+  listDispatched: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM issue_dispatches WHERE status = 'dispatched'`),
 
   markDispatched: (db: Database.Database) =>
     getStmt(

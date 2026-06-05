@@ -93,18 +93,10 @@ export async function reconcileTick(): Promise<void> {
       }
     }
 
-    // 4. Link PRs: detect a worker's PR by its branch and store it. Kept here
-    // (the slow 60s tick) rather than the 2.5s status ticker so the blocking gh
-    // call never stalls the live status broadcast.
-    for (const d of queries
-      .listInFlightMissingPR(db)
-      .all() as IssueDispatch[]) {
-      if (!d.worktree_path || !d.branch_name) continue;
-      const pr = getPRForBranch(d.worktree_path, d.branch_name);
-      if (pr) {
-        queries.updateDispatchPR(db).run(pr.url, pr.number, pr.state, d.id);
-      }
-    }
+    // 4. Sweep active workers: link opened PRs and free slots held by workers
+    // that finished/died. Kept here (the slow 60s tick), not the 2.5s status
+    // ticker, so the blocking gh call never stalls the live status broadcast.
+    await sweepActiveWorkers();
   } catch (err) {
     console.error("dispatch reconcile tick failed:", err);
   } finally {
@@ -113,15 +105,18 @@ export async function reconcileTick(): Promise<void> {
 }
 
 /**
- * Startup orphan reconcile: a Tier-1 (in-process) restart kills running agents
- * but leaves their `dispatched` rows, which would wrongly hold concurrency
- * slots. Mark any active dispatch whose session is no longer live as `failed`.
- * (Tier-2 sessions survive a restart, so they stay live and are untouched.)
+ * Re-check every still-'dispatched' worker and free its concurrency slot when it
+ * is no longer actively coding:
+ *   - PR opened (branch has a PR) → 'pr_open' (work delivered),
+ *   - session no longer live (finished or a Tier-1-restart orphan) and no PR
+ *     → 'failed'.
+ * This is what keeps the concurrency cap honest over time — without it a worker
+ * that opened a PR or exited would pin its slot forever.
  */
-export async function reconcileOrphans(): Promise<void> {
+export async function sweepActiveWorkers(): Promise<void> {
   const db = getDb();
-  const active = queries.listActiveDispatches(db).all() as IssueDispatch[];
-  if (active.length === 0) return;
+  const rows = queries.listDispatched(db).all() as IssueDispatch[];
+  if (rows.length === 0) return;
 
   let liveNames: Set<string>;
   try {
@@ -129,16 +124,38 @@ export async function reconcileOrphans(): Promise<void> {
   } catch {
     return; // can't enumerate sessions → don't risk false "failed" marks
   }
+  // An empty list is ambiguous: a just-restarted Tier-2 daemon may not have
+  // rehydrated its registry yet vs there being genuinely no live sessions. PR
+  // detection is always safe, but skip the dead→failed marking in that case to
+  // avoid mass false failures right after a restart — a truly dead worker is
+  // swept on a later tick once any session is live.
+  const skipDeadMark = liveNames.size === 0;
 
-  for (const d of active) {
-    if (!d.session_id) continue;
-    const sess = queries.getSession(db).get(d.session_id) as
-      | Session
-      | undefined;
+  for (const d of rows) {
+    if (d.worktree_path && d.branch_name) {
+      const pr = getPRForBranch(d.worktree_path, d.branch_name);
+      if (pr) {
+        queries.updateDispatchPR(db).run(pr.url, pr.number, pr.state, d.id);
+        continue;
+      }
+    }
+    if (skipDeadMark) continue;
+    const sess = d.session_id
+      ? (queries.getSession(db).get(d.session_id) as Session | undefined)
+      : undefined;
     const live = sess && liveNames.has(sess.tmux_name);
     if (!live) {
       queries.updateDispatchStatus(db).run("failed", d.id);
-      console.log(`dispatch: orphan reconciled → failed (${d.id})`);
+      console.log(`dispatch: worker swept → failed (${d.id})`);
     }
   }
+}
+
+/**
+ * Startup reconcile: free slots held by workers that didn't survive a Tier-1
+ * restart (and link any PRs opened just before). Delegates to the same sweep the
+ * 60s tick uses. (Tier-2 sessions survive a restart, so they stay live.)
+ */
+export async function reconcileOrphans(): Promise<void> {
+  await sweepActiveWorkers();
 }

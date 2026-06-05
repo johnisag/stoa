@@ -13,6 +13,8 @@ import type { EligibleIssue } from "@/lib/dispatch/types";
 
 // Mutable holder so the db mock can return the in-memory db created in beforeAll.
 const state = vi.hoisted(() => ({ db: null as unknown }));
+// Reconfigurable backend.list() — drives the dead-worker sweep.
+const backendList = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
 
 vi.mock("@/lib/dispatch/dispatcher", () => ({ dispatchOne: vi.fn() }));
 vi.mock("@/lib/dispatch/issues", () => ({
@@ -20,17 +22,20 @@ vi.mock("@/lib/dispatch/issues", () => ({
 }));
 vi.mock("@/lib/pr", () => ({ getPRForBranch: vi.fn(() => null) }));
 vi.mock("@/lib/session-backend", () => ({
-  getSessionBackend: () => ({ list: async () => [] }),
+  getSessionBackend: () => ({ list: backendList }),
 }));
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
   return { ...actual, getDb: () => state.db };
 });
 
-import { reconcileTick } from "@/lib/dispatch/reconciler";
+import { randomUUID } from "crypto";
+import { reconcileTick, sweepActiveWorkers } from "@/lib/dispatch/reconciler";
 import { queries } from "@/lib/db";
 import { dispatchOne } from "@/lib/dispatch/dispatcher";
 import { listEligibleIssues } from "@/lib/dispatch/issues";
+import { getPRForBranch } from "@/lib/pr";
+import type { IssueDispatch } from "@/lib/dispatch/types";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
@@ -92,7 +97,52 @@ beforeEach(() => {
   );
   vi.clearAllMocks();
   vi.mocked(listEligibleIssues).mockReturnValue([]);
+  vi.mocked(getPRForBranch).mockReturnValue(null);
+  backendList.mockResolvedValue([]);
 });
+
+// Insert a live-worker dispatch: a session row (so getSession resolves) + a
+// 'dispatched' issue row pointing at it, dispatched_at=now (counts toward today).
+function addDispatchedWithSession(
+  repoId: string,
+  issueNumber: number,
+  opts: { tmuxName: string; worktree?: string; branch?: string }
+): string {
+  const sessionId = randomUUID();
+  queries
+    .createSession(db())
+    .run(
+      sessionId,
+      `#${issueNumber}`,
+      opts.tmuxName,
+      opts.worktree ?? "/tmp/wt",
+      null,
+      "sonnet",
+      null,
+      "sessions",
+      "claude",
+      1,
+      "uncategorized"
+    );
+  const dispatchId = `disp-${candSeq++}`;
+  db()
+    .prepare(
+      `INSERT INTO issue_dispatches (id, repo_id, issue_number, status, session_id, worktree_path, branch_name, dispatched_at)
+       VALUES (?, ?, ?, 'dispatched', ?, ?, ?, datetime('now'))`
+    )
+    .run(
+      dispatchId,
+      repoId,
+      issueNumber,
+      sessionId,
+      opts.worktree ?? "/tmp/wt",
+      opts.branch ?? "feature/x"
+    );
+  return dispatchId;
+}
+
+const getStatus = (id: string) =>
+  (queries.getDispatch(db()).get(id) as IssueDispatch).status;
 
 describe("reconcileTick", () => {
   it("auto mode dispatches up to the slot count (concurrency-bound)", async () => {
@@ -144,5 +194,77 @@ describe("reconcileTick", () => {
     expect(vi.mocked(listEligibleIssues)).not.toHaveBeenCalled();
     expect(vi.mocked(dispatchOne)).not.toHaveBeenCalled();
     expect(queries.listPendingForRepo(db()).all(repo)).toHaveLength(0);
+  });
+
+  it("honors the daily cap read from the DB (already-dispatched today)", async () => {
+    const repo = addRepo({ mode: "auto", daily_quota: 2, max_concurrency: 5 });
+    // Two workers already dispatched today → quota exhausted.
+    addDispatchedWithSession(repo, 1, { tmuxName: "claude-a" });
+    addDispatchedWithSession(repo, 2, { tmuxName: "claude-b" });
+    addPending(repo, 3);
+    backendList.mockResolvedValue(["claude-a", "claude-b"]); // both still live
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).not.toHaveBeenCalled(); // 2/2 used today
+  });
+});
+
+describe("sweepActiveWorkers", () => {
+  it("links a PR and frees the slot (dispatched → pr_open)", async () => {
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, {
+      tmuxName: "claude-x",
+      branch: "feature/x",
+      worktree: "/tmp/wt",
+    });
+    backendList.mockResolvedValue(["claude-x"]);
+    vi.mocked(getPRForBranch).mockReturnValue({
+      number: 7,
+      url: "https://pr/7",
+      state: "OPEN",
+      title: "fix",
+    });
+
+    await sweepActiveWorkers();
+
+    const row = queries.getDispatch(db()).get(d) as IssueDispatch;
+    expect(row.status).toBe("pr_open");
+    expect(row.pr_number).toBe(7);
+    expect(row.pr_url).toBe("https://pr/7");
+    // pr_open no longer counts against the concurrency cap.
+    expect((queries.countLiveInFlight(db()).get(repo) as { n: number }).n).toBe(
+      0
+    );
+  });
+
+  it("marks a dead worker (no PR, session gone) failed", async () => {
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-gone" });
+    backendList.mockResolvedValue(["claude-other"]); // session not live
+
+    await sweepActiveWorkers();
+
+    expect(getStatus(d)).toBe("failed");
+  });
+
+  it("leaves a live worker dispatched", async () => {
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-live" });
+    backendList.mockResolvedValue(["claude-live"]);
+
+    await sweepActiveWorkers();
+
+    expect(getStatus(d)).toBe("dispatched");
+  });
+
+  it("does NOT mass-fail when the backend list is empty (restart race guard)", async () => {
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-x" });
+    backendList.mockResolvedValue([]); // ambiguous: daemon may be mid-hydration
+
+    await sweepActiveWorkers();
+
+    expect(getStatus(d)).toBe("dispatched"); // not failed
   });
 });

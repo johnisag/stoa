@@ -470,9 +470,11 @@ app.prepare().then(() => {
   // does real work for ENABLED repos (auto-dispatch) or in-flight rows (PR
   // polling). reconcileTick has its own busy guard. 60s cadence tolerates the
   // blocking gh calls (issue list + pr list) it makes.
-  setInterval(() => {
+  const dispatchTimer = setInterval(() => {
     void reconcileTick();
   }, 60000);
+  // Don't let the reconciler timer keep the process alive on its own.
+  dispatchTimer.unref?.();
 
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
   function handleTmuxConnection(ws: WebSocket) {
