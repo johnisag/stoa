@@ -15,6 +15,7 @@ import {
   Copy,
   Check,
   Command,
+  Rocket,
 } from "lucide-react";
 import { PaneLayout } from "@/components/PaneLayout";
 import {
@@ -43,6 +44,7 @@ export function DesktopView({
   setShowNotificationSettings,
   showQuickSwitcher,
   setShowQuickSwitcher,
+  setShowDispatch,
   onShowShortcuts,
   notificationSettings,
   permissionGranted,
@@ -205,6 +207,21 @@ export function DesktopView({
           </div>
 
           <div className="flex items-center gap-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Dispatch (GitHub issues to agents)"
+                  onClick={() => setShowDispatch(true)}
+                >
+                  <Rocket className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Dispatch</p>
+              </TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

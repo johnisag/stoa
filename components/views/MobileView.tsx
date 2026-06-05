@@ -24,6 +24,7 @@ export function MobileView({
   newSessionProjectId,
   showQuickSwitcher,
   setShowQuickSwitcher,
+  setShowDispatch,
   onShowShortcuts,
   attachToSession,
   openSessionInNewTab,
@@ -82,7 +83,13 @@ export function MobileView({
             />
           </div>
 
-          <SidebarFooter onShowShortcuts={onShowShortcuts} />
+          <SidebarFooter
+            onShowShortcuts={onShowShortcuts}
+            onShowDispatch={() => {
+              setShowDispatch(true);
+              setSidebarOpen(false);
+            }}
+          />
         </div>
       </SwipeSidebar>
 
