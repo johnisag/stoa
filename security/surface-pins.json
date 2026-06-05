@@ -1,5 +1,5 @@
 {
-  "_comment": "Pinned auto-execution surfaces. Regenerate with: node scripts/guard-surfaces.mjs --update (a code-owned change — see .github/CODEOWNERS).",
+  "_comment": "Pinned auto-execution surfaces. Regenerate with: node scripts/guard-surfaces.mjs --update (a code-owned change - see .github/CODEOWNERS).",
   "packageScripts": {
     "dev": "tsx server.ts",
     "build": "next build",
@@ -24,7 +24,7 @@
     ".github/workflows-disabled/claude.yml": "2d89f2c5d04afa2cb64888b1155f5e71a23122319e7d2c8fac4e10b8bf27acb0",
     ".github/workflows/test.yml": "29982cc39802717cefd6f5bf17acb4a58ce9ed6d6b7c7d2a411ebad26275bdff",
     ".husky/pre-commit": "042eaf5386ffbfccd14639db8112e12d297a7d4d2caf25c36a4b10edcb822fc2",
-    "scripts/guard-surfaces.mjs": "8737902e9745ee9b456af8436833a1238c80e14d96a98324c02ae04fa6c1ee12",
+    "scripts/guard-surfaces.mjs": "c0df0792d415c96570b204b69cd49ea9be606a157e2c0683d78c03b07530afd1",
     "scripts/install.ps1": "5e86f980272fe6f6ec7f911b61bd880c7da71a355e67f4960bbc76372cfd9b9f",
     "scripts/install.sh": "6b673db658df993ace3291280996f8fca499e4bbabca441c87fd95113ba95149",
     "scripts/lib/ai-clis.sh": "0019827ec924018f9fb91a26cf64cc020ddf097aca7d36dc58feedae2cc048fb",

