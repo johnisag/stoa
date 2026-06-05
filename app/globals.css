@@ -162,39 +162,25 @@ body {
   display: none;
 }
 
-/* Thin scrollbar for xterm on mobile */
-@media (max-width: 768px) {
-  .xterm-viewport {
-    scrollbar-width: thin;
-  }
-  .xterm-viewport::-webkit-scrollbar {
-    width: 4px;
-  }
-  .xterm-viewport::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .xterm-viewport::-webkit-scrollbar-thumb {
-    background: hsl(var(--muted-foreground) / 0.3);
-    border-radius: 2px;
-  }
-}
-
-/* Visible, themed scrollbars on desktop. macOS hides its overlay scrollbars by
-   default, so without this the terminal scrollback + scrollable panels (sidebar,
-   git drawer, file lists, dialogs) show NO scroll affordance on a Mac.
+/* TERMINAL scrollbar — gated on POINTER TYPE, not viewport width. A pointer
+   device (desktop/laptop trackpad or mouse, incl. macOS at ANY zoom or in a
+   narrow/split pane) FORCES an always-present bar; touch devices are excluded so
+   they keep touch-scroll.ts's setup (it sets the viewport overflow:hidden and
+   drives a synthetic-wheel path — fighting that with `overflow-y:scroll` caused
+   double-scroll). Width-gating (min-width:769px) silently dropped the bar on a
+   zoomed-in or narrow Mac window, which is the "no scrollbar at all" report.
    IMPORTANT: modern Chromium (121+) ignores ::-webkit-scrollbar entirely once
    `scrollbar-color`/`scrollbar-width` are set on the same element, falling back
    to the STANDARD scrollbar — which on macOS still auto-hides. So Chromium +
-   Safari (webkit) get ONLY the ::-webkit-scrollbar rules below (those force an
-   always-present bar on Mac); the standard props are scoped to Firefox via the
-   @supports block (Firefox has no ::-webkit-scrollbar). */
-@media (min-width: 769px) {
+   Safari (webkit) get ONLY the ::-webkit-scrollbar rules; the standard props are
+   scoped to Firefox via the @supports block (Firefox has no ::-webkit-scrollbar). */
+@media (pointer: fine) {
   .xterm .xterm-viewport {
-    /* win over xterm.css (.xterm .xterm-viewport specificity + !important) */
+    /* win over xterm.css (.xterm .xterm-viewport specificity) + any auto-hide */
     overflow-y: scroll !important;
   }
   .xterm .xterm-viewport::-webkit-scrollbar {
-    width: 12px;
+    width: 12px !important;
   }
   .xterm .xterm-viewport::-webkit-scrollbar-track {
     background: transparent;
@@ -208,8 +194,24 @@ body {
   .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.7);
   }
+}
 
-  /* `.scrollbar-none` opts out; the terminal keeps its own wider bar above. */
+/* Touch devices (phones/tablets): a slim bar, and NEVER force overflow — leave
+   the viewport's overflow to touch-scroll.ts so native + synthetic scroll don't
+   both fire. */
+@media (pointer: coarse) {
+  .xterm .xterm-viewport::-webkit-scrollbar {
+    width: 5px;
+  }
+  .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 3px;
+  }
+}
+
+/* Other scrollable panels (sidebar, git drawer, file lists, dialogs) — desktop
+   only; `.scrollbar-none` opts out. The terminal keeps its own bar above. */
+@media (min-width: 769px) {
   *::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -230,13 +232,16 @@ body {
 
 /* Firefox (no ::-webkit-scrollbar support): use the standard properties. Scoped
    here so Chromium/Safari are NOT poisoned into the standard-scrollbar path that
-   auto-hides on macOS (see note above). */
+   auto-hides on macOS (see note above). The terminal bar is ungated; the global
+   one stays desktop-only. */
 @supports not selector(::-webkit-scrollbar) {
-  @media (min-width: 769px) {
+  @media (pointer: fine) {
     .xterm .xterm-viewport {
       scrollbar-width: thin;
       scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
     }
+  }
+  @media (min-width: 769px) {
     * {
       scrollbar-width: thin;
       scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
