@@ -9,24 +9,26 @@ the WS-events milestone, the security trio, actionable push, and cost &
 governance — has now shipped (PRs #55–#91).**
 
 The forward menu is the **🔭 competitive feature scan (round 2)** below — a fresh
-5-segment web-research fan-out run after round-1 fully shipped, ranked against
-what Stoa already ships. Pick deliberately. `D`=demand, `E`=effort,
-⭐=differentiator for Stoa's angle.
+5-segment web-research fan-out run against what Stoa already ships. Pick
+deliberately. `D`=demand, `E`=effort, ⭐=differentiator for Stoa's angle.
+
+**Round-2 update (2026-06-05):** the round-2 _flagship_ — the **review & rewind
+layer** — has now **fully shipped** (Stages 1–3, PRs #93–#95), along with the
+**prompt queue** (#96), **Dispatch / GitHub-issue ingestion** (#104 engine + #108
+control-plane UI), and the **CRITICAL macOS scrollbar bug** (#98 + #106). See
+"✅ Shipped since round 2" below; the remaining unbuilt horizons are re-ranked
+under "🔭 Next horizons."
 
 ---
 
 ## 🚨 CRITICAL — open bugs (fix first)
 
-- **macOS · Hermes: terminal scrollbar non-functional + the blue "jump to
-  bottom" button is invisible.** On macOS, you can't scroll the terminal in a
-  **Hermes** session (the scrollbar doesn't work), and the **blue scroll-to-
-  bottom button** that should jump you to the latest output **isn't visible** —
-  so there's no way to reach the bottom of the buffer. Repro: macOS, Hermes
-  session, scrolled up in a long buffer. (A macOS scrollbar fix shipped in #85
-  for the Chrome-121 `::-webkit-scrollbar` regression; this is a
-  remaining/again-broken case specific to Hermes + the `ScrollToBottomButton`.)
-  Likely suspects: `ScrollToBottomButton` visibility/`z-index` on macOS WebKit,
-  and the xterm viewport scrollbar styling in Hermes panes.
+_None open._ The macOS · Hermes scrollbar + invisible jump-to-bottom bug is
+**fixed**: #98 made the scroll-to-bottom button clickable/visible (hand cursor,
+labeled), and #106 fixed the invisible scrollbar by gating the forced bar on
+pointer type. ⚠️ Still wants a real-macOS-with-Hermes confirmation under the
+human-in-the-loop verification gate (see 📌 Open notes) before we call it closed
+for good.
 
 ---
 
@@ -69,6 +71,32 @@ what Stoa already ships. Pick deliberately. `D`=demand, `E`=effort,
 
 ---
 
+## ✅ Shipped since round 2 (PRs #93–#108)
+
+- **The review & rewind layer — COMPLETE (the round-2 flagship)** — **Stage 1**
+  session diff review, see exactly what the agent changed (#93); **Stage 2**
+  per-turn snapshots + turn-history timeline, captured at each turn boundary as
+  object-deduped shadow commits under `refs/stoa/snap/<sessionId>/<seq>` (#94);
+  **Stage 3** rewind — restore the working tree to any snapshot, itself undoable
+  via a safety snapshot (#95). One substrate, both flagship features.
+- **Prompt queue** (#96) — line up the next tasks while an agent works; dispatch
+  follow-ups in order on idle, no interrupt. The top "async cockpit" item.
+- **Dispatch — GitHub issue → agent fleet** — the **engine** (#104, issue→fleet
+  reconciler) + the **control-plane UI** (#108, allocation console + backlog +
+  in-flight board). Covers "issue-tracker ingestion" and the server-side
+  fire-and-forget dispatch path.
+- **Orchestration polish** — agent type shown on worker cards + sidebar rows
+  (#99); conductor id is the baked id, authoritative over the agent's guess (#97).
+- **Terminal / UI fixes** — bulletproof reconnect with no duplicated scrollback
+  (#100); clickable/labeled scroll-to-bottom + quick-action labels (#98);
+  optimistic quick-action dismiss (#101).
+- **Push hardening** — sanitize untrusted text in notifications + on-demand test
+  push (#103); plain-ASCII text so Windows doesn't render emoji as boxes (#102).
+- **Security** — supply-chain surface guard, content-pinned + provider-agnostic
+  (#107).
+
+---
+
 ## 🔭 Next horizons — competitive feature scan (2026-06, round 2)
 
 Second 5-agent web-research fan-out (agent IDEs · mobile/remote control ·
@@ -77,25 +105,32 @@ after the entire round-1 scan shipped. **The dominant 2026 macro-signal across
 every segment: the bottleneck moved from _writing_ code to _reviewing_ it** (AI
 output up ~60%, PR-review time up ~91%). Ordered by leverage.
 
-### ▶ NEXT BIG FEATURE — The review & rewind layer ⭐ _(D:high · E:M)_
+### ✅ SHIPPED — The review & rewind layer ⭐ _(was NEXT BIG FEATURE)_
 
-**One per-turn working-tree snapshot that powers two top-demand features at once:
-(a) mobile-first diff review — see exactly what the agent changed, approve/merge
-per-file or per-hunk from the phone — and (b) checkpoint/rewind — roll the tree
-back to any prior turn.** This is the convergence pick. _Diff review_ is the most
-cross-cited gap (4/5 segments; Conductor & Vibe Kanban win deals on it; rides the
-review-bottleneck macro-theme; Claude Code #31888 / #33932 / #44787). _Rewind_ is
-the single highest-demand community item in the whole dataset (claude-code #353 =
-178 reactions, + #6001 / #2704 / #4472; Codex #12558). They share **one
-substrate** — snapshot the worktree at each turn boundary (already observable via
-the rendered-screen status engine) — so one piece of infra ships two flagship
-features. Stoa already has worktrees + the mobile board + lock-screen
-approve/reject; a **swipe-to-approve mobile diff** is a form factor no competitor
-(all desktop/Mac-first) owns, and it stacks directly on the shipped actionable
-push. _Where:_ a per-turn snapshot store keyed off the turn boundary; a git-diff
-renderer on the board + mobile; "approve & merge worktree" / "restore to turn N"
-actions over the existing `/respond` + worktree plumbing. _Risk:_ snapshot
-storage growth (prune/cap); cross-platform git via `execFile` (no shell).
+Done in three stages (#93 diff review · #94 per-turn snapshots + timeline · #95
+rewind/restore). One substrate — per-turn shadow-commit snapshots at the turn
+boundary — powering both human diff review and checkpoint/rewind. _Follow-ups
+still open:_ a **swipe-to-approve / per-hunk mobile diff** form factor (the
+no-competitor-owns-it angle) and an **"approve & merge worktree"** action are not
+yet built on top of the shipped diff + snapshot plumbing — candidates for a
+fast-follow once the next flagship lands.
+
+### ▶ NEXT BIG FEATURE — Independent reviewer-agent gate ⭐ _(D:high · E:M)_
+
+**A fresh critic session that sees only the spec + the diff and returns
+PASS / structured violations — blocking merge, with FAIL routed to an actionable
+push.** This is the machine half of the review-bottleneck thesis: human review
+just shipped (#93–95), so the next leverage is automating the first pass.
+"Self-review is compromised" is cross-segment consensus. It's the **cheapest big
+orchestration win** because a reviewer is just another spawned worker role — it
+stacks directly on what already ships: the session diff (#93), the
+conductor→worker spawn seam, and actionable approve/reject push (#90/#91).
+_Where:_ spawn a reviewer worker with a locked prompt (spec + `getSessionDiff`
+output, no repo write); parse its PASS/violations into a structured verdict;
+gate the existing "approve & merge" path on it; FAIL → push with the violations.
+_Risk:_ keep the critic read-only (no tools that mutate the tree); cross-platform
+git via `execFile` (no shell); don't let a flaky critic hard-block — make the
+gate advisory-with-override first, enforcing later.
 
 ### Async cockpit (lowest-effort; compounds the shipped push + mobile)
 

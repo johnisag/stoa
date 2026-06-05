@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Menu,
+  Rocket,
   ChevronLeft,
   ChevronRight,
   Terminal as TerminalIcon,
@@ -70,6 +71,8 @@ interface MobileTabBarProps {
   isConductor: boolean;
   workerCount: number;
   onMenuClick?: () => void;
+  /** Opens the Dispatch control plane (GitHub issues → agent fleet). */
+  onDispatchClick?: () => void;
   onViewModeChange: (mode: ViewMode) => void;
   onSelectSession?: (sessionId: string) => void;
 }
@@ -82,6 +85,7 @@ export function MobileTabBar({
   isConductor,
   workerCount,
   onMenuClick,
+  onDispatchClick,
   onViewModeChange,
   onSelectSession,
 }: MobileTabBarProps) {
@@ -157,6 +161,23 @@ export function MobileTabBar({
           className="h-8 w-8 shrink-0"
         >
           <Menu className="h-4 w-4" />
+        </Button>
+      )}
+
+      {/* Dispatch (GitHub issues → agent fleet) — mobile's one-tap entry, since
+          the only other path is the rocket buried in the swipe-drawer footer. */}
+      {onDispatchClick && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Dispatch"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDispatchClick();
+          }}
+          className="h-8 w-8 shrink-0"
+        >
+          <Rocket className="h-4 w-4" />
         </Button>
       )}
 

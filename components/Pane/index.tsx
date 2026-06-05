@@ -69,6 +69,7 @@ interface PaneProps {
     ref: TerminalHandle | null
   ) => void;
   onMenuClick?: () => void;
+  onDispatchClick?: () => void;
   onSelectSession?: (sessionId: string) => void;
 }
 
@@ -80,6 +81,7 @@ export const Pane = memo(function Pane({
   projects,
   onRegisterTerminal,
   onMenuClick,
+  onDispatchClick,
   onSelectSession,
 }: PaneProps) {
   const { isMobile } = useViewport();
@@ -406,6 +408,7 @@ export const Pane = memo(function Pane({
           isConductor={isConductor}
           workerCount={workerCount}
           onMenuClick={onMenuClick}
+          onDispatchClick={onDispatchClick}
           onViewModeChange={setViewMode}
           onSelectSession={onSelectSession}
         />

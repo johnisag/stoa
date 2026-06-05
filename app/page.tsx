@@ -591,6 +591,7 @@ function HomeContent() {
         projects={projects}
         onRegisterTerminal={registerTerminalRef}
         onMenuClick={isMobile ? () => setSidebarOpen(true) : undefined}
+        onDispatchClick={isMobile ? () => setShowDispatch(true) : undefined}
         onSelectSession={handleSelectSession}
       />
     ),
