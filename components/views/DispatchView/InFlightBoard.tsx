@@ -56,7 +56,7 @@ function Card({
         className="line-clamp-2 font-medium hover:underline"
         title={d.issue_title ?? undefined}
       >
-        #{d.issue_number} {d.issue_title}
+        #{d.issue_number} {d.issue_title ?? "(untitled issue)"}
       </a>
 
       <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -93,7 +93,7 @@ function Card({
           className="text-foreground inline-flex w-fit items-center gap-1.5 rounded bg-emerald-500/10 px-2 py-1 text-xs font-medium hover:bg-emerald-500/20"
         >
           <GitPullRequest className="h-3.5 w-3.5" />
-          PR #{d.pr_number}
+          PR{d.pr_number != null ? ` #${d.pr_number}` : ""}
           {d.pr_status && (
             <span className="text-muted-foreground">
               ({d.pr_status.toLowerCase()})
@@ -120,7 +120,7 @@ const GROUPS: {
 ];
 
 export function InFlightBoard({ open }: { open: boolean }) {
-  const { data: board = [], isLoading } = useBoardQuery(open);
+  const { data: board = [], isLoading, isError } = useBoardQuery(open);
   const { data: repos = [] } = useDispatchReposQuery(open);
   const repoById = new Map<string, DispatchRepo>(repos.map((r) => [r.id, r]));
 
@@ -129,6 +129,13 @@ export function InFlightBoard({ open }: { open: boolean }) {
       <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
         <Loader2 className="h-4 w-4 animate-spin" /> Loading board...
       </div>
+    );
+
+  if (isError)
+    return (
+      <p className="py-10 text-center text-sm text-red-500">
+        Failed to load the board. Retrying...
+      </p>
     );
 
   if (board.length === 0)

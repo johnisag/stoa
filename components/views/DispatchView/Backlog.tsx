@@ -13,7 +13,7 @@ import {
 import { AGENT_BADGE, repoUrl, timeAgo } from "./shared";
 
 export function Backlog({ open }: { open: boolean }) {
-  const { data: pending = [], isLoading } = usePendingQuery(open);
+  const { data: pending = [], isLoading, isError } = usePendingQuery(open);
   const { data: repos = [] } = useDispatchReposQuery(open);
   const action = useDispatchAction();
   const repoById = new Map<string, DispatchRepo>(repos.map((r) => [r.id, r]));
@@ -33,6 +33,13 @@ export function Backlog({ open }: { open: boolean }) {
       <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
         <Loader2 className="h-4 w-4 animate-spin" /> Loading backlog...
       </div>
+    );
+
+  if (isError)
+    return (
+      <p className="py-10 text-center text-sm text-red-500">
+        Failed to load the backlog. Retrying...
+      </p>
     );
 
   if (pending.length === 0)
@@ -78,7 +85,7 @@ export function Backlog({ open }: { open: boolean }) {
                   className="truncate text-sm font-medium hover:underline"
                   title={d.issue_title ?? undefined}
                 >
-                  #{d.issue_number} {d.issue_title}
+                  #{d.issue_number} {d.issue_title ?? "(untitled issue)"}
                 </a>
                 <ExternalLink className="text-muted-foreground h-3 w-3 shrink-0" />
               </div>

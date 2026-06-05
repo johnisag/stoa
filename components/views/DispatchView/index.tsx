@@ -59,6 +59,7 @@ export function DispatchView({
               <button
                 key={t.key}
                 type="button"
+                aria-pressed={tab === t.key}
                 onClick={() => setTab(t.key)}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded px-3 py-1 transition-colors",

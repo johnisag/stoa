@@ -55,6 +55,7 @@ function ModeToggle({
           key={m}
           type="button"
           disabled={disabled}
+          aria-pressed={value === m}
           onClick={() => value !== m && onChange(m)}
           className={cn(
             "rounded px-2 py-0.5 capitalize transition-colors",
@@ -263,7 +264,10 @@ function AddRepoForm() {
             min={0}
             value={form.dailyQuota}
             onChange={(e) =>
-              set("dailyQuota", Math.max(0, Number(e.target.value)))
+              set(
+                "dailyQuota",
+                Math.max(0, Math.floor(Number(e.target.value)) || 0)
+              )
             }
             className="h-8 w-16"
           />
@@ -275,7 +279,10 @@ function AddRepoForm() {
             min={1}
             value={form.maxConcurrency}
             onChange={(e) =>
-              set("maxConcurrency", Math.max(1, Number(e.target.value)))
+              set(
+                "maxConcurrency",
+                Math.max(1, Math.floor(Number(e.target.value)) || 1)
+              )
             }
             className="h-8 w-16"
           />
@@ -298,6 +305,7 @@ function AddRepoForm() {
           <Switch
             checked={form.enabled}
             onCheckedChange={(v) => set("enabled", v)}
+            aria-label="Enable on create"
           />
           enabled
         </label>
@@ -320,7 +328,7 @@ function AddRepoForm() {
 }
 
 export function AllocationConsole({ open }: { open: boolean }) {
-  const { data: repos = [], isLoading } = useDispatchReposQuery(open);
+  const { data: repos = [], isLoading, isError } = useDispatchReposQuery(open);
 
   return (
     <div className="space-y-3">
@@ -337,6 +345,10 @@ export function AllocationConsole({ open }: { open: boolean }) {
         <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading repos...
         </div>
+      ) : isError ? (
+        <p className="py-6 text-center text-sm text-red-500">
+          Failed to load repos. Retrying...
+        </p>
       ) : repos.length === 0 ? (
         <p className="text-muted-foreground py-6 text-center text-sm">
           No repos tracked yet. Add one above to start dispatching.
@@ -344,7 +356,13 @@ export function AllocationConsole({ open }: { open: boolean }) {
       ) : (
         <div className="space-y-2">
           {repos.map((r) => (
-            <RepoRow key={r.id} repo={r} />
+            // composite key: remount the row (re-seeding its local input state)
+            // when the server values change out from under it (another tab, the
+            // reconciler), so the quota/concurrency/label fields don't go stale.
+            <RepoRow
+              key={`${r.id}:${r.daily_quota}:${r.max_concurrency}:${r.label_filter ?? ""}`}
+              repo={r}
+            />
           ))}
         </div>
       )}
