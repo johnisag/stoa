@@ -9,9 +9,10 @@ import type {
 } from "@/lib/dispatch/types";
 import type { AgentType } from "@/lib/providers";
 import type { DiscoveredRepo } from "@/lib/dispatch/discover";
+import type { GitHubRepo, PreparedRepo } from "@/lib/dispatch/github";
 import { dispatchKeys } from "./keys";
 
-export type { DiscoveredRepo };
+export type { DiscoveredRepo, GitHubRepo, PreparedRepo };
 
 // ── reads ──
 
@@ -106,6 +107,46 @@ export function useDiscoverQuery(enabled = true) {
     enabled,
     staleTime: 60000,
   });
+}
+
+export interface GitHubRepoList {
+  repos: GitHubRepo[];
+  cloneRoot: string | null;
+}
+
+async function fetchGitHubRepos(): Promise<GitHubRepoList> {
+  const res = await fetch("/api/dispatch/github-repos");
+  if (!res.ok) throw new Error("Failed to list GitHub repos");
+  const data = await res.json();
+  return { repos: data.repos ?? [], cloneRoot: data.cloneRoot ?? null };
+}
+
+/** The authenticated user's GitHub repos (via gh) + where a clone would land.
+ * Lazy: only runs while the "github" source is selected. */
+export function useGitHubReposQuery(enabled = true) {
+  return useQuery({
+    queryKey: dispatchKeys.github(),
+    queryFn: fetchGitHubRepos,
+    enabled,
+    staleTime: 60000,
+  });
+}
+
+async function prepareRepo(slug: string): Promise<PreparedRepo> {
+  const res = await fetch("/api/dispatch/github-clone", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Failed to prepare repo");
+  return data as PreparedRepo;
+}
+
+/** Ensure a picked GitHub repo exists locally (clone-if-needed) → returns its
+ * local path + default branch so the form can fill in. */
+export function usePrepareRepo() {
+  return useMutation({ mutationFn: prepareRepo });
 }
 
 // ── writes ── (the route parses camelCase keys; see app/api/dispatch/repos)

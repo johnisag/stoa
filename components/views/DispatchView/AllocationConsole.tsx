@@ -22,6 +22,8 @@ import {
   useDeleteRepo,
   useDiscoverQuery,
   useDispatchReposQuery,
+  useGitHubReposQuery,
+  usePrepareRepo,
   useResolveSource,
   useUpdateRepo,
   type CreateRepoInput,
@@ -250,10 +252,16 @@ function AddRepoForm() {
   const projectsQ = useProjectsQuery();
   const resolve = useResolveSource();
   const projects = (projectsQ.data ?? []).filter((p) => !p.is_uncategorized);
-  const [source, setSource] = useState<"manual" | "project" | "scan">("manual");
-  // Scan is lazy: only hits the filesystem while the "scan" source is selected.
+  const [source, setSource] = useState<
+    "manual" | "project" | "scan" | "github"
+  >("manual");
+  // Scan + github are lazy: they only run while their source is selected.
   const discoverQ = useDiscoverQuery(source === "scan");
   const discovered = discoverQ.data ?? [];
+  const githubQ = useGitHubReposQuery(source === "github");
+  const githubRepos = githubQ.data?.repos ?? [];
+  const cloneRoot = githubQ.data?.cloneRoot ?? null;
+  const prepare = usePrepareRepo();
 
   // Track the latest pick so a slow earlier resolve can't clobber a newer one.
   const lastPickedRef = useRef<string | null>(null);
@@ -294,6 +302,27 @@ function AddRepoForm() {
     fillFromPath(dir, p.name);
   };
 
+  // Pick a GitHub repo → fill slug + branch from the listing immediately, then
+  // ensure it's cloned locally (clone-if-needed) and fill the resulting path.
+  const pickGitHub = (slug: string) => {
+    const repo = githubRepos.find((r) => r.slug === slug);
+    lastPickedRef.current = slug;
+    set("repoSlug", slug);
+    if (repo?.defaultBranch) set("baseBranch", repo.defaultBranch);
+    prepare.mutate(slug, {
+      onSuccess: (p) => {
+        if (lastPickedRef.current !== slug) return; // superseded by a newer pick
+        set("repoPath", p.path);
+        if (p.defaultBranch) set("baseBranch", p.defaultBranch);
+        toast.success(p.cloned ? `Cloned ${slug}` : `Found ${slug} locally`);
+      },
+      onError: (e) => {
+        if (lastPickedRef.current !== slug) return;
+        toast.error((e as Error).message);
+      },
+    });
+  };
+
   const submit = () => {
     if (!form.repoPath.trim() || !form.repoSlug.trim()) {
       toast.error("Repo path and owner/name are required");
@@ -313,16 +342,20 @@ function AddRepoForm() {
 
   return (
     <div className="bg-muted/30 space-y-3 rounded-md border border-dashed p-3">
-      {/* Source picker — auto-fill from a Stoa project or a scanned local repo
-          instead of typing the path + owner/name. (GitHub source lands next.) */}
+      {/* Source picker — auto-fill from a Stoa project, a scanned local repo, or
+          a GitHub repo (cloned locally on demand) instead of typing the path. */}
       <div className="flex flex-wrap items-center gap-2">
         <SegmentedControl
-          options={["manual", "project", "scan"] as const}
+          options={["manual", "project", "scan", "github"] as const}
           value={source}
           ariaLabel="Repo source"
           onChange={(s) => {
             setSource(s);
-            if (s === "manual") resolve.reset();
+            // Drop any in-flight pick from the previous source so its late
+            // resolve/clone can't write into the form or keep the spinner up.
+            lastPickedRef.current = null;
+            resolve.reset();
+            prepare.reset();
           }}
         />
         {source === "project" && (
@@ -389,7 +422,49 @@ function AddRepoForm() {
               </SelectContent>
             </Select>
           ))}
-        {source !== "manual" && resolve.isPending && (
+        {source === "github" &&
+          (githubQ.isError ? (
+            <span className="text-destructive text-xs">
+              gh failed — is the GitHub CLI installed &amp; authenticated?
+            </span>
+          ) : (
+            <Select
+              onValueChange={pickGitHub}
+              disabled={githubQ.isLoading || githubRepos.length === 0}
+            >
+              <SelectTrigger className="h-8 w-[260px]" aria-label="GitHub repo">
+                <SelectValue
+                  placeholder={
+                    githubQ.isLoading
+                      ? "Loading repos…"
+                      : githubRepos.length
+                        ? "Pick a GitHub repo"
+                        : "No repos found"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {githubRepos.map((r) => (
+                  <SelectItem key={r.slug} value={r.slug}>
+                    {r.slug}
+                    {r.isPrivate && (
+                      <span className="text-muted-foreground ml-2 text-xs">
+                        private
+                      </span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ))}
+        {source === "github" && !githubQ.isError && githubRepos.length > 0 && (
+          <span className="text-muted-foreground text-xs">
+            {cloneRoot
+              ? `clones to ${cloneRoot}`
+              : "set STOA_CLONE_ROOT to clone"}
+          </span>
+        )}
+        {source !== "manual" && (resolve.isPending || prepare.isPending) && (
           <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" />
         )}
       </div>
@@ -475,7 +550,7 @@ function AddRepoForm() {
         <Button
           size="sm"
           onClick={submit}
-          disabled={create.isPending}
+          disabled={create.isPending || resolve.isPending || prepare.isPending}
           className="ml-auto"
         >
           {create.isPending ? (
