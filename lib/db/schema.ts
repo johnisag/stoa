@@ -112,7 +112,50 @@ export function createSchema(db: Database.Database): void {
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
+    -- Dispatch: tracked repos for GitHub-issue → agent-fleet ingestion
+    CREATE TABLE IF NOT EXISTS dispatch_repos (
+      id TEXT PRIMARY KEY,
+      repo_path TEXT NOT NULL,
+      repo_slug TEXT NOT NULL,
+      agent_type TEXT NOT NULL DEFAULT 'claude',
+      daily_quota INTEGER NOT NULL DEFAULT 0,
+      max_concurrency INTEGER NOT NULL DEFAULT 1,
+      label_filter TEXT,
+      base_branch TEXT NOT NULL DEFAULT 'main',
+      mode TEXT NOT NULL DEFAULT 'review',
+      enabled INTEGER NOT NULL DEFAULT 0,
+      project_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+    );
+
+    -- Dispatch: one row per ingested issue (a pending candidate or a live worker)
+    CREATE TABLE IF NOT EXISTS issue_dispatches (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL,
+      issue_number INTEGER NOT NULL,
+      issue_title TEXT,
+      issue_url TEXT,
+      issue_created_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      session_id TEXT,
+      branch_name TEXT,
+      worktree_path TEXT,
+      pr_url TEXT,
+      pr_number INTEGER,
+      pr_status TEXT,
+      dispatched_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+    );
+
     -- Indexes for common queries
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_repo_issue ON issue_dispatches(repo_id, issue_number);
+    CREATE INDEX IF NOT EXISTS idx_dispatch_status ON issue_dispatches(status);
+    CREATE INDEX IF NOT EXISTS idx_dispatch_repo ON issue_dispatches(repo_id);
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
     CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id);
     CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id);

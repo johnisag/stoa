@@ -30,6 +30,7 @@ import { sanitizeNotificationText } from "./lib/notification-text";
 import { captureSnapshot } from "./lib/snapshots";
 import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
 import { computeSessionCosts } from "./lib/session-cost";
+import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import {
   getBudgetConfig,
   budgetEnabled,
@@ -464,6 +465,17 @@ app.prepare().then(() => {
     }, 30000);
   }
 
+  // ── dispatch reconciler (GitHub issue → agent fleet) ──
+  // Always armed but cheap when idle: the tick early-returns per repo and only
+  // does real work for ENABLED repos (auto-dispatch) or in-flight rows (PR
+  // polling). reconcileTick has its own busy guard. 60s cadence tolerates the
+  // blocking gh calls (issue list + pr list) it makes.
+  const dispatchTimer = setInterval(() => {
+    void reconcileTick();
+  }, 60000);
+  // Don't let the reconciler timer keep the process alive on its own.
+  dispatchTimer.unref?.();
+
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
   function handleTmuxConnection(ws: WebSocket) {
     let ptyProcess: pty.IPty;
@@ -611,6 +623,12 @@ app.prepare().then(() => {
         );
       }
     }
+    // Dispatch startup catch-up: free slots held by workers that didn't survive
+    // a Tier-1 restart, then run one reconcile pass immediately so a day missed
+    // while Stoa was down is topped up now (not only on the next 60s tick).
+    void reconcileOrphans()
+      .then(() => reconcileTick())
+      .catch((err) => console.error("dispatch startup reconcile failed:", err));
     server.listen(port, () => {
       console.log(`> Stoa ready on http://${hostname}:${port}`);
       if (AUTH_ENABLED) {

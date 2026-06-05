@@ -341,4 +341,133 @@ export const queries = {
 
   countPushSubscriptions: (db: Database.Database) =>
     getStmt(db, `SELECT COUNT(*) AS n FROM push_subscriptions`),
+
+  // Dispatch — tracked repos (the allocation console rows)
+  createDispatchRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+
+  getDispatchRepo: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM dispatch_repos WHERE id = ?`),
+
+  getAllDispatchRepos: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM dispatch_repos ORDER BY created_at ASC`),
+
+  getEnabledDispatchRepos: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM dispatch_repos WHERE enabled = 1 ORDER BY created_at ASC`
+    ),
+
+  updateDispatchRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  deleteDispatchRepo: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM dispatch_repos WHERE id = ?`),
+
+  // Dispatch — issue pipeline rows
+  getDispatchByRepoIssue: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE repo_id = ? AND issue_number = ?`
+    ),
+
+  upsertDispatchCandidate: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT OR IGNORE INTO issue_dispatches (id, repo_id, issue_number, issue_title, issue_url, issue_created_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending')`
+    ),
+
+  getDispatch: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM issue_dispatches WHERE id = ?`),
+
+  // Daily cap: rows DISPATCHED today (calendar day, UTC) for a repo.
+  countDispatchesToday: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n FROM issue_dispatches
+       WHERE repo_id = ? AND dispatched_at IS NOT NULL AND date(dispatched_at) = date('now')`
+    ),
+
+  // Concurrency cap: workers still actively coding (status 'dispatched'). Once a
+  // worker opens its PR (→ 'pr_open') or finishes/dies, its slot frees — so a
+  // completed-but-unmerged PR never pins the cap forever.
+  countLiveInFlight: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n FROM issue_dispatches
+       WHERE repo_id = ? AND status = 'dispatched'`
+    ),
+
+  listPendingForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE repo_id = ? AND status = 'pending'
+       ORDER BY issue_created_at ASC`
+    ),
+
+  listDispatchesForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE repo_id = ? ORDER BY created_at DESC`
+    ),
+
+  listAllPending: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE status = 'pending' ORDER BY issue_created_at ASC`
+    ),
+
+  listDispatchesForBoard: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches
+       WHERE status IN ('dispatched', 'pr_open', 'merged', 'failed')
+       ORDER BY dispatched_at DESC`
+    ),
+
+  // Workers still 'dispatched' (actively coding) — the sweep re-checks each:
+  // PR opened → pr_open; session gone without a PR → failed.
+  listDispatched: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM issue_dispatches WHERE status = 'dispatched'`),
+
+  // Atomically claim a pending candidate → dispatched. The WHERE status='pending'
+  // makes concurrent dispatchers safe (a reconcile tick racing a manual approve,
+  // or two rapid approves): exactly one .run() reports changes===1, the rest get 0
+  // and bail — an issue is never double-spawned. dispatched_at counts it toward the
+  // daily cap immediately (a failed attempt still consumes its slot — no retry storm).
+  claimDispatch: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET status = 'dispatched', dispatched_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND status = 'pending'`
+    ),
+
+  // Fill in the worker's session/branch/worktree after the claim+spawn (status is
+  // already 'dispatched' from the claim).
+  setDispatchSession: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET session_id = ?, branch_name = ?, worktree_path = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Record the worker's PR + set the terminal status (caller passes 'pr_open' or
+  // 'merged' so a merged PR isn't mislabeled).
+  updateDispatchPR: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET pr_url = ?, pr_number = ?, pr_status = ?, status = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  updateDispatchStatus: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET status = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
 };
