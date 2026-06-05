@@ -6,4 +6,5 @@ export const dispatchKeys = {
   pending: () => [...dispatchKeys.all, "pending"] as const, // review queue (backlog)
   board: () => [...dispatchKeys.all, "board"] as const, // in-flight + finished
   discover: () => [...dispatchKeys.all, "discover"] as const, // scanned local repos
+  github: () => [...dispatchKeys.all, "github"] as const, // gh repo list
 };
