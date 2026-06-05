@@ -227,7 +227,8 @@ const migrations: Migration[] = [
           enabled INTEGER NOT NULL DEFAULT 0,
           project_id TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
         )
       `);
       db.exec(`
@@ -247,7 +248,9 @@ const migrations: Migration[] = [
           pr_status TEXT,
           dispatched_at TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE,
+          FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
         )
       `);
       db.exec(

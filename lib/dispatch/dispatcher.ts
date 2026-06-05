@@ -54,10 +54,11 @@ function issueToSessionName(issueNumber: number, issueTitle: string): string {
 }
 
 /**
- * Dispatch one pending candidate: create a worktree, insert a (conductor-free)
- * session row, spawn the agent with the issue as its initial prompt, and flip
- * the dispatch row to `dispatched`. On any failure the row is marked `failed` so
- * it neither retries forever nor holds a concurrency slot.
+ * Dispatch one pending candidate: atomically CLAIM it (so a concurrent
+ * tick/approve can't double-spawn the same issue), then create a worktree,
+ * insert a (conductor-free) session row, and spawn the agent with the issue as
+ * its initial prompt. On any failure the row is marked `failed` (worktree cleaned
+ * up) so it neither retries forever nor holds a concurrency slot.
  */
 export async function dispatchOne(
   repo: DispatchRepo,
@@ -66,6 +67,15 @@ export async function dispatchOne(
   const db = getDb();
   const issueNumber = candidate.issue_number;
   const issueTitle = candidate.issue_title ?? `issue-${issueNumber}`;
+
+  // 0. Atomic claim: pending → dispatched. If another caller already claimed it
+  // (changes===0) we must NOT spawn — bail before doing any work. This closes the
+  // double-spawn race (reconcile tick vs manual approve, or two rapid approves)
+  // and the crash window: the row is 'dispatched' (swept, never re-dispatched)
+  // rather than lingering 'pending' (which a later tick would re-spawn).
+  const claim = queries.claimDispatch(db).run(candidate.id);
+  if (claim.changes === 0) return;
+
   // Tracked so the catch can clean up a half-built dispatch — otherwise a failure
   // after createWorktree leaks the worktree+branch and the next attempt collides.
   let createdWorktree: string | null = null;
@@ -88,7 +98,8 @@ export async function dispatchOne(
       await setupWorktree({ worktreePath, sourcePath });
     }, `dispatch-setup-${candidate.id}`);
 
-    // 3. Conductor-free session row.
+    // 3. Conductor-free session row + link it onto the (already-claimed) dispatch
+    // row BEFORE spawning, so the sweep can judge liveness even if spawn crashes.
     const sessionId = randomUUID();
     const tmuxName = sessionKey({
       kind: "agent",
@@ -113,6 +124,9 @@ export async function dispatchOne(
     queries
       .updateSessionWorktree(db)
       .run(worktreePath, branchName, repo.base_branch, null, sessionId);
+    queries
+      .setDispatchSession(db)
+      .run(sessionId, branchName, worktreePath, candidate.id);
 
     // 4. Spawn the agent with the issue as its initial prompt.
     const prompt = buildIssuePrompt(
@@ -138,11 +152,6 @@ export async function dispatchOne(
       binary,
       args,
     });
-
-    // 5. Flip the pipeline row to dispatched (counts against the daily cap).
-    queries
-      .markDispatched(db)
-      .run(sessionId, branchName, worktreePath, candidate.id);
   } catch (err) {
     console.error(`dispatch failed for ${repo.repo_slug}#${issueNumber}:`, err);
     // Clean up the worktree+branch so the disk doesn't leak and a future attempt

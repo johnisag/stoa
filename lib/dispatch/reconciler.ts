@@ -14,8 +14,7 @@
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session } from "../db";
 import { getSessionBackend } from "../session-backend";
-import { getPRForBranch } from "../pr";
-import { listEligibleIssues } from "./issues";
+import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
 import type { DispatchRepo, IssueDispatch, SlotInputs } from "./types";
 
@@ -52,7 +51,7 @@ export async function reconcileTick(): Promise<void> {
     const repos = queries.getEnabledDispatchRepos(db).all() as DispatchRepo[];
     for (const repo of repos) {
       // 1. Ingest eligible open issues as `pending` candidates (idempotent).
-      for (const issue of listEligibleIssues(repo)) {
+      for (const issue of await listEligibleIssues(repo)) {
         if (queries.getDispatchByRepoIssue(db).get(repo.id, issue.number)) {
           continue; // already a candidate / dispatched / done — never re-add
         }
@@ -93,10 +92,12 @@ export async function reconcileTick(): Promise<void> {
       }
     }
 
-    // 4. Sweep active workers: link opened PRs and free slots held by workers
-    // that finished/died. Kept here (the slow 60s tick), not the 2.5s status
-    // ticker, so the blocking gh call never stalls the live status broadcast.
-    await sweepActiveWorkers();
+    // 4. Sweep active workers: link opened/merged PRs and free slots held by
+    // workers that finished/died. Kept here (the slow 60s tick), not the 2.5s
+    // status ticker, so the blocking gh call never stalls the live status
+    // broadcast. guardEmptyList=false: 60s in, the backend is ready, so an empty
+    // list genuinely means "no live sessions" and dead workers should be swept.
+    await sweepActiveWorkers({ guardEmptyList: false });
   } catch (err) {
     console.error("dispatch reconcile tick failed:", err);
   } finally {
@@ -107,13 +108,22 @@ export async function reconcileTick(): Promise<void> {
 /**
  * Re-check every still-'dispatched' worker and free its concurrency slot when it
  * is no longer actively coding:
- *   - PR opened (branch has a PR) → 'pr_open' (work delivered),
+ *   - PR exists for the branch → 'merged' (PR merged) or 'pr_open' (work delivered),
  *   - session no longer live (finished or a Tier-1-restart orphan) and no PR
  *     → 'failed'.
- * This is what keeps the concurrency cap honest over time — without it a worker
- * that opened a PR or exited would pin its slot forever.
+ * This keeps the concurrency cap honest — without it a worker that opened a PR,
+ * merged it, or exited would pin its slot forever.
+ *
+ * `guardEmptyList`: when the backend returns ZERO live sessions, the dead→failed
+ * sweep is ambiguous (a just-restarted Tier-2 daemon may not have rehydrated yet).
+ * Pass `true` ONLY at startup to skip the dead-mark and avoid mass false failures.
+ * Steady-state ticks pass `false` — otherwise, once all workers finish and no
+ * other session exists, the empty list would skip the sweep forever and pin every
+ * slot (a deadlock).
  */
-export async function sweepActiveWorkers(): Promise<void> {
+export async function sweepActiveWorkers(opts: {
+  guardEmptyList: boolean;
+}): Promise<void> {
   const db = getDb();
   const rows = queries.listDispatched(db).all() as IssueDispatch[];
   if (rows.length === 0) return;
@@ -124,18 +134,18 @@ export async function sweepActiveWorkers(): Promise<void> {
   } catch {
     return; // can't enumerate sessions → don't risk false "failed" marks
   }
-  // An empty list is ambiguous: a just-restarted Tier-2 daemon may not have
-  // rehydrated its registry yet vs there being genuinely no live sessions. PR
-  // detection is always safe, but skip the dead→failed marking in that case to
-  // avoid mass false failures right after a restart — a truly dead worker is
-  // swept on a later tick once any session is live.
-  const skipDeadMark = liveNames.size === 0;
+  const skipDeadMark = opts.guardEmptyList && liveNames.size === 0;
 
   for (const d of rows) {
     if (d.worktree_path && d.branch_name) {
-      const pr = getPRForBranch(d.worktree_path, d.branch_name);
-      if (pr) {
-        queries.updateDispatchPR(db).run(pr.url, pr.number, pr.state, d.id);
+      const pr = await getPRForBranchAnyState(d.worktree_path, d.branch_name);
+      // OPEN/MERGED → terminal-ish, frees the slot. A CLOSED (abandoned) PR falls
+      // through to the dead-session check.
+      if (pr && (pr.state === "OPEN" || pr.state === "MERGED")) {
+        const status = pr.state === "MERGED" ? "merged" : "pr_open";
+        queries
+          .updateDispatchPR(db)
+          .run(pr.url, pr.number, pr.state, status, d.id);
         continue;
       }
     }
@@ -152,10 +162,11 @@ export async function sweepActiveWorkers(): Promise<void> {
 }
 
 /**
- * Startup reconcile: free slots held by workers that didn't survive a Tier-1
- * restart (and link any PRs opened just before). Delegates to the same sweep the
- * 60s tick uses. (Tier-2 sessions survive a restart, so they stay live.)
+ * Startup reconcile: link any PRs opened just before a restart and free slots
+ * held by workers that didn't survive a Tier-1 restart. Uses the empty-list guard
+ * so a Tier-2 daemon mid-rehydration doesn't get its live workers mass-failed;
+ * any genuinely-dead worker it skips is swept by the first 60s tick.
  */
 export async function reconcileOrphans(): Promise<void> {
-  await sweepActiveWorkers();
+  await sweepActiveWorkers({ guardEmptyList: true });
 }

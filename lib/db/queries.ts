@@ -438,16 +438,31 @@ export const queries = {
   listDispatched: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM issue_dispatches WHERE status = 'dispatched'`),
 
-  markDispatched: (db: Database.Database) =>
+  // Atomically claim a pending candidate → dispatched. The WHERE status='pending'
+  // makes concurrent dispatchers safe (a reconcile tick racing a manual approve,
+  // or two rapid approves): exactly one .run() reports changes===1, the rest get 0
+  // and bail — an issue is never double-spawned. dispatched_at counts it toward the
+  // daily cap immediately (a failed attempt still consumes its slot — no retry storm).
+  claimDispatch: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE issue_dispatches SET status = 'dispatched', session_id = ?, branch_name = ?, worktree_path = ?, dispatched_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+      `UPDATE issue_dispatches SET status = 'dispatched', dispatched_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND status = 'pending'`
     ),
 
+  // Fill in the worker's session/branch/worktree after the claim+spawn (status is
+  // already 'dispatched' from the claim).
+  setDispatchSession: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET session_id = ?, branch_name = ?, worktree_path = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Record the worker's PR + set the terminal status (caller passes 'pr_open' or
+  // 'merged' so a merged PR isn't mislabeled).
   updateDispatchPR: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE issue_dispatches SET pr_url = ?, pr_number = ?, pr_status = ?, status = 'pr_open', updated_at = datetime('now') WHERE id = ?`
+      `UPDATE issue_dispatches SET pr_url = ?, pr_number = ?, pr_status = ?, status = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
   updateDispatchStatus: (db: Database.Database) =>

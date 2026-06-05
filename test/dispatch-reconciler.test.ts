@@ -18,9 +18,9 @@ const backendList = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
 
 vi.mock("@/lib/dispatch/dispatcher", () => ({ dispatchOne: vi.fn() }));
 vi.mock("@/lib/dispatch/issues", () => ({
-  listEligibleIssues: vi.fn(() => []),
+  listEligibleIssues: vi.fn(async () => []),
+  getPRForBranchAnyState: vi.fn(async () => null),
 }));
-vi.mock("@/lib/pr", () => ({ getPRForBranch: vi.fn(() => null) }));
 vi.mock("@/lib/session-backend", () => ({
   getSessionBackend: () => ({ list: backendList }),
 }));
@@ -33,8 +33,10 @@ import { randomUUID } from "crypto";
 import { reconcileTick, sweepActiveWorkers } from "@/lib/dispatch/reconciler";
 import { queries } from "@/lib/db";
 import { dispatchOne } from "@/lib/dispatch/dispatcher";
-import { listEligibleIssues } from "@/lib/dispatch/issues";
-import { getPRForBranch } from "@/lib/pr";
+import {
+  listEligibleIssues,
+  getPRForBranchAnyState,
+} from "@/lib/dispatch/issues";
 import type { IssueDispatch } from "@/lib/dispatch/types";
 
 function db() {
@@ -96,8 +98,8 @@ beforeEach(() => {
     "DELETE FROM issue_dispatches; DELETE FROM dispatch_repos; DELETE FROM sessions;"
   );
   vi.clearAllMocks();
-  vi.mocked(listEligibleIssues).mockReturnValue([]);
-  vi.mocked(getPRForBranch).mockReturnValue(null);
+  vi.mocked(listEligibleIssues).mockResolvedValue([]);
+  vi.mocked(getPRForBranchAnyState).mockResolvedValue(null);
   backendList.mockResolvedValue([]);
 });
 
@@ -176,7 +178,7 @@ describe("reconcileTick", () => {
 
   it("ingests eligible issues as pending candidates, idempotently", async () => {
     const repo = addRepo({ mode: "review" });
-    vi.mocked(listEligibleIssues).mockReturnValue([issue(1), issue(2)]);
+    vi.mocked(listEligibleIssues).mockResolvedValue([issue(1), issue(2)]);
 
     await reconcileTick();
     expect(queries.listPendingForRepo(db()).all(repo)).toHaveLength(2);
@@ -187,7 +189,7 @@ describe("reconcileTick", () => {
 
   it("skips disabled repos entirely (no ingest, no dispatch)", async () => {
     const repo = addRepo({ enabled: 0, mode: "auto" });
-    vi.mocked(listEligibleIssues).mockReturnValue([issue(1)]);
+    vi.mocked(listEligibleIssues).mockResolvedValue([issue(1)]);
 
     await reconcileTick();
 
@@ -219,14 +221,13 @@ describe("sweepActiveWorkers", () => {
       worktree: "/tmp/wt",
     });
     backendList.mockResolvedValue(["claude-x"]);
-    vi.mocked(getPRForBranch).mockReturnValue({
+    vi.mocked(getPRForBranchAnyState).mockResolvedValue({
       number: 7,
       url: "https://pr/7",
       state: "OPEN",
-      title: "fix",
     });
 
-    await sweepActiveWorkers();
+    await sweepActiveWorkers({ guardEmptyList: false });
 
     const row = queries.getDispatch(db()).get(d) as IssueDispatch;
     expect(row.status).toBe("pr_open");
@@ -238,12 +239,30 @@ describe("sweepActiveWorkers", () => {
     );
   });
 
+  it("records a merged PR as 'merged' (not mislabeled failed)", async () => {
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, {
+      tmuxName: "claude-gone",
+      branch: "feature/x",
+    });
+    backendList.mockResolvedValue([]); // agent exited after the merge
+    vi.mocked(getPRForBranchAnyState).mockResolvedValue({
+      number: 9,
+      url: "https://pr/9",
+      state: "MERGED",
+    });
+
+    await sweepActiveWorkers({ guardEmptyList: false });
+
+    expect(getStatus(d)).toBe("merged");
+  });
+
   it("marks a dead worker (no PR, session gone) failed", async () => {
     const repo = addRepo();
     const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-gone" });
     backendList.mockResolvedValue(["claude-other"]); // session not live
 
-    await sweepActiveWorkers();
+    await sweepActiveWorkers({ guardEmptyList: false });
 
     expect(getStatus(d)).toBe("failed");
   });
@@ -253,18 +272,28 @@ describe("sweepActiveWorkers", () => {
     const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-live" });
     backendList.mockResolvedValue(["claude-live"]);
 
-    await sweepActiveWorkers();
+    await sweepActiveWorkers({ guardEmptyList: false });
 
     expect(getStatus(d)).toBe("dispatched");
   });
 
-  it("does NOT mass-fail when the backend list is empty (restart race guard)", async () => {
+  it("startup guard does NOT mass-fail on an empty list (Tier-2 rehydration race)", async () => {
     const repo = addRepo();
     const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-x" });
     backendList.mockResolvedValue([]); // ambiguous: daemon may be mid-hydration
 
-    await sweepActiveWorkers();
+    await sweepActiveWorkers({ guardEmptyList: true });
 
-    expect(getStatus(d)).toBe("dispatched"); // not failed
+    expect(getStatus(d)).toBe("dispatched"); // not failed at startup
+  });
+
+  it("steady-state sweep DOES fail a dead worker on an empty list (no deadlock)", async () => {
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-x" });
+    backendList.mockResolvedValue([]); // genuinely no live sessions, 60s in
+
+    await sweepActiveWorkers({ guardEmptyList: false });
+
+    expect(getStatus(d)).toBe("failed"); // slot freed — won't pin forever
   });
 });
