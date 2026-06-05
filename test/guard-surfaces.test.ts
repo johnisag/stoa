@@ -25,7 +25,15 @@ import {
   runInit,
 } from "../scripts/guard-surfaces.mjs";
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, unlinkSync } from "fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  unlinkSync,
+  symlinkSync,
+  lstatSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { execFileSync } from "child_process";
@@ -711,6 +719,145 @@ describe("adversarial-review fixes (case-blind extensions + inline TOML)", () =>
       'mcp_servers.evil = { command = "sh" }\n'
     );
     expect(s.mcpServers).toContain("evil");
+  });
+});
+
+describe("adversarial-review fixes round 2 (NEW-1..8)", () => {
+  const allow = ["orchestration-server"];
+
+  it("NEW-1: bare allowlisted COMMAND allowed; bare-arg package/module name is NOT", () => {
+    expect(
+      isAllowedMcpServer({ command: "orchestration-server", args: "" }, allow)
+    ).toBe(true); // the tool itself
+    expect(
+      isAllowedMcpServer(
+        { command: "npx", args: "tsx /x/orchestration-server.ts" },
+        allow
+      )
+    ).toBe(true); // legit script path
+    expect(
+      isAllowedMcpServer(
+        { command: "npx", args: "orchestration-server" },
+        allow
+      )
+    ).toBe(false); // registry name-confusion
+    expect(
+      isAllowedMcpServer(
+        { command: "python", args: "-m orchestration-server" },
+        allow
+      )
+    ).toBe(false); // module exec
+    expect(
+      isAllowedMcpServer(
+        { command: "node", args: "/tmp/orchestration-server/evil.js" },
+        allow
+      )
+    ).toBe(false); // dir spoof
+  });
+
+  it("NEW-1: a committed .mcp.json is byte-pinned (a forged server can't land without a code-owned re-pin)", () => {
+    const dir = gitFixture();
+    writeFileSync(
+      join(dir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: { x: { command: "npx", args: ["orchestration-server"] } },
+      })
+    );
+    git(dir, "add", ".mcp.json");
+    expect(runGuard(dir).violations.join()).toMatch(
+      /\.mcp\.json: new unpinned/
+    );
+  });
+
+  it("NEW-3: scriptFileTargets catches an extensionless interpreter operand", () => {
+    expect(scriptFileTargets("node ./bin/setup")).toContain("bin/setup");
+    expect(scriptFileTargets("bash scripts/x.sh")).toContain("scripts/x.sh");
+    expect(scriptFileTargets("node --version")).not.toContain("--version");
+  });
+
+  it("NEW-3: a lifecycle script running an extensionless unpinned file is flagged (RCE on npm install)", () => {
+    const dir = fixture();
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        scripts: {
+          test: "vitest run",
+          build: "next build",
+          postinstall: "node ./bin/setup",
+        },
+      })
+    );
+    mkdirSync(join(dir, "bin"));
+    writeFileSync(
+      join(dir, "bin", "setup"),
+      "#!/usr/bin/env node\nconsole.log(1)\n"
+    );
+    updatePins(dir);
+    expect(guard(dir).join()).toMatch(
+      /lifecycle script "postinstall" runs UNPINNED file "bin\/setup"/
+    );
+  });
+
+  it("NEW-4: a tracked config cannot widen skipDirs to exempt the payload sweep", () => {
+    const dir = gitFixture();
+    writeFileSync(
+      join(dir, "security", "guard.config.json"),
+      JSON.stringify({ skipDirs: ["vendor"] })
+    );
+    git(dir, "add", "security/guard.config.json");
+    updatePins(dir);
+    git(dir, "add", "security");
+    mkdirSync(join(dir, "app", "vendor"), { recursive: true });
+    writeFileSync(join(dir, "app", "vendor", "big.bin"), "A".repeat(1_200_000));
+    git(dir, "add", "app/vendor/big.bin");
+    expect(runGuard(dir).violations.join()).toMatch(
+      /app\/vendor\/big\.bin: 1\.2 MB — oversized/
+    );
+  });
+
+  it("NEW-2: a git submodule mounted at a surface dir is a violation", () => {
+    const dir = gitFixture();
+    writeFileSync(
+      join(dir, ".gitmodules"),
+      '[submodule "x"]\n\tpath = .claude/sub\n\turl = ../x\n'
+    );
+    git(dir, "add", ".gitmodules");
+    expect(runGuard(dir).violations.join()).toMatch(
+      /\.claude\/sub: git submodule at a surface path/
+    );
+  });
+
+  it("NEW-2/NEW-6: a surface file under a submodule routes as a VIOLATION and is hook-scanned", () => {
+    const dir = gitFixture();
+    writeFileSync(
+      join(dir, ".gitmodules"),
+      '[submodule "x"]\n\tpath = .claude/sub\n\turl = ../x\n'
+    );
+    git(dir, "add", ".gitmodules");
+    mkdirSync(join(dir, ".claude", "sub"), { recursive: true });
+    writeFileSync(
+      join(dir, ".claude", "sub", "settings.json"),
+      JSON.stringify({ hooks: { PreToolUse: [] } })
+    );
+    const out = runGuard(dir).violations.join();
+    expect(out).toMatch(/\.claude\/sub\/settings\.json: new unpinned/); // committed-via-submodule → violation, not advisory
+    expect(out).toMatch(
+      /\.claude\/sub\/settings\.json: contains hook definition/
+    ); // step-3 now scans the walk set
+  });
+
+  it("NEW-8: a symlinked surface dir is flagged (where the OS permits symlinks)", () => {
+    const dir = gitFixture();
+    mkdirSync(join(dir, "payload-dir"));
+    try {
+      symlinkSync(join(dir, "payload-dir"), join(dir, ".agents"), "junction");
+    } catch {
+      return; // OS won't permit a link here — logic is exercised on POSIX CI
+    }
+    if (!lstatSync(join(dir, ".agents")).isSymbolicLink()) return; // not reported as a link on this OS
+    expect(runGuard(dir).violations.join()).toMatch(
+      /\.agents: surface dir is a symlink/
+    );
   });
 });
 

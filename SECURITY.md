@@ -30,9 +30,39 @@ while leaving its `package.json` command string intact, or editing `.husky/pre-c
 | committed credentials                                                                                                                                                               | exfiltration                                                                                                                                                                                       | `gitleaks` in CI; `.env*` gitignored (`.env.example` kept); enable GitHub push protection                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 The guard runs in **both** the husky pre-commit hook and a CI job. It hard-fails on
-**tracked** surfaces; an _untracked, local_ artifact (your own `.vscode/tasks.json`,
-a local `.claude/settings.local.json` hook) is an **advisory warning** only, so it
-never blocks unrelated commits.
+**committed** surfaces (in the git index, or inside a committed submodule); an
+_untracked, local_ artifact (your own `.vscode/tasks.json`, a local
+`.claude/settings.local.json` hook) is an **advisory warning** only, so it never
+blocks unrelated commits.
+
+### Hardening details & known limits
+
+Two adversarial reviews drove these (each is regression-tested):
+
+- **MCP/hook configs that aren't under a surface dir** (`.mcp.json`, `.claude.json`)
+  are byte-pinned as **root surface files**, so the structured allow-check is
+  defense-in-depth, not the sole gate — a committed config can't add a server
+  without a code-owned re-pin. The allow-check matches the command basename or a
+  **file-like** arg only, so `npx <pkg>` (registry confusion), `python -m <mod>`,
+  `node -r/--require/--import` preloads, dir-name spoofs, and code-injecting `env`
+  (`NODE_OPTIONS`/`LD_PRELOAD`/`NODE_PATH`/…) are all rejected.
+- **Git submodules** can't be byte-pinned (their contents live in another repo) and
+  auto-load on `clone --recurse-submodules`, so a submodule mounted at/under a
+  surface path is a hard violation, and a surface file _inside_ a submodule routes
+  as committed → violation (not advisory). **Symlinked** surface dirs are rejected
+  for the same reason (the link target isn't scanned).
+- **Lifecycle script targets** are pinned even when **extensionless** (`postinstall:
+"node ./bin/setup"`), and the gitignored-drop walk covers files `git ls-files`
+  omits. `skipDirs` and `oversizeAllowlist` are **not** user-widenable (widening
+  either would disarm the payload sweep).
+- **Known limits (documented, low residual):** the structured TOML drift parser
+  (`--global`) degrades to a whole-file hash alert on exotic inline tables (still
+  not silent); Windows trailing-dot/space path folds are blocked by git's
+  `core.protectNTFS` for committed paths rather than by the guard itself; and a
+  **non-git** invocation (no CI/hook context) trusts a local `guard.config.json` —
+  but `skipDirs`/`oversizeAllowlist` are non-widenable regardless, so it can't
+  disarm the payload sweep. The real enforcement contexts (CI, pre-commit) are
+  always git.
 
 **When you legitimately change a surface**, re-pin in the SAME PR:
 
