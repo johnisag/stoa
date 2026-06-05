@@ -341,4 +341,126 @@ export const queries = {
 
   countPushSubscriptions: (db: Database.Database) =>
     getStmt(db, `SELECT COUNT(*) AS n FROM push_subscriptions`),
+
+  // Dispatch — tracked repos (the allocation console rows)
+  createDispatchRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+
+  getDispatchRepo: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM dispatch_repos WHERE id = ?`),
+
+  getAllDispatchRepos: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM dispatch_repos ORDER BY created_at ASC`),
+
+  getEnabledDispatchRepos: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM dispatch_repos WHERE enabled = 1 ORDER BY created_at ASC`
+    ),
+
+  updateDispatchRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  deleteDispatchRepo: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM dispatch_repos WHERE id = ?`),
+
+  // Dispatch — issue pipeline rows
+  getDispatchByRepoIssue: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE repo_id = ? AND issue_number = ?`
+    ),
+
+  upsertDispatchCandidate: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT OR IGNORE INTO issue_dispatches (id, repo_id, issue_number, issue_title, issue_url, issue_created_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending')`
+    ),
+
+  getDispatch: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM issue_dispatches WHERE id = ?`),
+
+  // Daily cap: rows DISPATCHED today (calendar day, UTC) for a repo.
+  countDispatchesToday: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n FROM issue_dispatches
+       WHERE repo_id = ? AND dispatched_at IS NOT NULL AND date(dispatched_at) = date('now')`
+    ),
+
+  // Concurrency cap: live in-flight workers for a repo.
+  countLiveInFlight: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n FROM issue_dispatches
+       WHERE repo_id = ? AND status IN ('dispatched', 'pr_open')`
+    ),
+
+  listPendingForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE repo_id = ? AND status = 'pending'
+       ORDER BY issue_created_at ASC`
+    ),
+
+  listDispatchesForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE repo_id = ? ORDER BY created_at DESC`
+    ),
+
+  listAllPending: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE status = 'pending' ORDER BY issue_created_at ASC`
+    ),
+
+  listDispatchesForBoard: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches
+       WHERE status IN ('dispatched', 'pr_open', 'merged', 'failed')
+       ORDER BY dispatched_at DESC`
+    ),
+
+  // In-flight workers whose PR hasn't been linked yet (status-ticker poll target).
+  listInFlightMissingPR: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches
+       WHERE status = 'dispatched' AND pr_url IS NULL AND session_id IS NOT NULL`
+    ),
+
+  // Active rows (dispatched/pr_open) — startup orphan reconcile checks these.
+  listActiveDispatches: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE status IN ('dispatched', 'pr_open')`
+    ),
+
+  markDispatched: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET status = 'dispatched', session_id = ?, branch_name = ?, worktree_path = ?, dispatched_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  updateDispatchPR: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET pr_url = ?, pr_number = ?, pr_status = ?, status = 'pr_open', updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  updateDispatchStatus: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET status = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
 };

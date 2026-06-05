@@ -209,6 +209,58 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: 16,
+    name: "add_dispatch_tables",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS dispatch_repos (
+          id TEXT PRIMARY KEY,
+          repo_path TEXT NOT NULL,
+          repo_slug TEXT NOT NULL,
+          agent_type TEXT NOT NULL DEFAULT 'claude',
+          daily_quota INTEGER NOT NULL DEFAULT 0,
+          max_concurrency INTEGER NOT NULL DEFAULT 1,
+          label_filter TEXT,
+          base_branch TEXT NOT NULL DEFAULT 'main',
+          mode TEXT NOT NULL DEFAULT 'review',
+          enabled INTEGER NOT NULL DEFAULT 0,
+          project_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS issue_dispatches (
+          id TEXT PRIMARY KEY,
+          repo_id TEXT NOT NULL,
+          issue_number INTEGER NOT NULL,
+          issue_title TEXT,
+          issue_url TEXT,
+          issue_created_at TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          session_id TEXT,
+          branch_name TEXT,
+          worktree_path TEXT,
+          pr_url TEXT,
+          pr_number INTEGER,
+          pr_status TEXT,
+          dispatched_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_repo_issue ON issue_dispatches(repo_id, issue_number)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_dispatch_status ON issue_dispatches(status)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_dispatch_repo ON issue_dispatches(repo_id)`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
