@@ -6,10 +6,12 @@ dist/
 .next/
 out/
 
-# Environment
+# Environment — ignore ALL .env variants (.env.production, .env.development, .envrc, …)
 .env
-.env.local
-.env*.local
+.env*
+.envrc
+# …but keep the public, secret-free onboarding template trackable.
+!.env.example
 
 # Python
 __pycache__/

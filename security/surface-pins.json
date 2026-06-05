@@ -1,0 +1,41 @@
+{
+  "_comment": "Pinned auto-execution surfaces. Regenerate with: node scripts/guard-surfaces.mjs --update (a code-owned change — see .github/CODEOWNERS).",
+  "packageScripts": {
+    "dev": "tsx server.ts",
+    "build": "next build",
+    "start": "cross-env NODE_ENV=production tsx server.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "setup": "bash scripts/setup.sh",
+    "postinstall": "node scripts/postinstall.js",
+    "prepare": "husky"
+  },
+  "files": {
+    ".claude/agents/code-reviewer/AGENT.md": "32cca417efa272c84b6bab7048d8443721a5e792a47779b4c4cb87bc28863ef1",
+    ".claude/commands/commit.md": "ecde998fbd4c5366078dd3b04942ae562cdf502b5421801b7f8833ca58dc3310",
+    ".claude/commands/setup.md": "273d61ee4491504145353da5f8d737217d383fc5ab59eaf167bf65c0ec3aeb29",
+    ".claude/skills/debugging/SKILL.md": "9c2e530580db8d42dc06b8aba3f47a86f5038a7c3f7a96d2c86add718469ea0e",
+    ".github/CODEOWNERS": "8ae1c3443d6e1c8a336b67b6a87f34fb789a6448fd89e887e097e9208eb0ddd8",
+    ".github/workflows-disabled/README.md": "821fe69b3f74d1b61d069513efcd196af6e0b0afb6e1238b70491df85d9a282c",
+    ".github/workflows-disabled/claude-code-review.yml": "e203499ee6261f22d7ec8523021b15414e5b51d2e07834622866728bcbcfdf67",
+    ".github/workflows-disabled/claude.yml": "2d89f2c5d04afa2cb64888b1155f5e71a23122319e7d2c8fac4e10b8bf27acb0",
+    ".github/workflows/test.yml": "f55cf192f6ea347e7b7f4ba25120cced8c7ece311301e6711b8c501693ffda84",
+    ".husky/pre-commit": "042eaf5386ffbfccd14639db8112e12d297a7d4d2caf25c36a4b10edcb822fc2",
+    "scripts/guard-surfaces.mjs": "0b7789e01642b1f3697ffea7025a4d36aa6024caa677ab9be262b0a4fdfe6e76",
+    "scripts/install.ps1": "5e86f980272fe6f6ec7f911b61bd880c7da71a355e67f4960bbc76372cfd9b9f",
+    "scripts/install.sh": "6b673db658df993ace3291280996f8fca499e4bbabca441c87fd95113ba95149",
+    "scripts/lib/ai-clis.sh": "0019827ec924018f9fb91a26cf64cc020ddf097aca7d36dc58feedae2cc048fb",
+    "scripts/lib/commands.sh": "fda45d3a4c46b6679339c8e26c1730ff8f2673209a8cdc515f719d32edab8d73",
+    "scripts/lib/common.sh": "e6ab975d4bde0ae409664e3f553ab125febbe139313314e4df2de9207762397f",
+    "scripts/lib/prerequisites.sh": "a4e99781938cfc2add823e82abd365da33c627296ed019f1379072a4e6b76a9f",
+    "scripts/postinstall.js": "53bb659676007f2c842b753f25436c33471e52581e279057d499b9165cfb8764",
+    "scripts/precommit.js": "cd5b697d4d96842b998c975bf955617f18566605779b1d2578f1381c0f4065d7",
+    "scripts/pty-host.ts": "490174e586be52ae510ed339d67b1852f0a541c1de5fcde622205ee31a82c19a",
+    "scripts/setup.sh": "cfdeb6f0ad53698ab160a5c218b9a1cf20fa38333913371f4279d4a56e71be7a",
+    "scripts/stoa": "025d1b56b00f67008a074bb712f326bfd03d7bef358d5bb2c75b1eeb49910165",
+    "scripts/stoa.js": "18ebd7fadfcfca9b8d6a9d0b14591328c782225d4979b839213e011e69f2c946"
+  }
+}
