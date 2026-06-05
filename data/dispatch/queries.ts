@@ -64,6 +64,29 @@ export function useBoardQuery(enabled = true) {
   });
 }
 
+// ── sources ── (auto-fill the add-repo form from a local path)
+
+export interface ResolvedSource {
+  isGitRepo: boolean;
+  slug: string | null;
+  defaultBranch: string | null;
+}
+
+async function resolveSource(path: string): Promise<ResolvedSource> {
+  const res = await fetch(
+    `/api/dispatch/resolve?path=${encodeURIComponent(path)}`
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Failed to resolve repo");
+  return data as ResolvedSource;
+}
+
+/** Resolve a local checkout path → { isGitRepo, slug, defaultBranch } so the
+ * add-repo form can auto-fill owner/name + base branch when a source is picked. */
+export function useResolveSource() {
+  return useMutation({ mutationFn: resolveSource });
+}
+
 // ── writes ── (the route parses camelCase keys; see app/api/dispatch/repos)
 
 export interface CreateRepoInput {

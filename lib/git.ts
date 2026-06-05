@@ -97,6 +97,45 @@ export async function getDefaultBranch(dirPath: string): Promise<string> {
 }
 
 /**
+ * Parse an owner/name slug from a GitHub remote URL. Pure (testable without git).
+ * Handles https (`https://github.com/owner/name(.git)`) and ssh
+ * (`git@github.com:owner/name(.git)`, `ssh://git@github.com/owner/name`) forms;
+ * returns null for non-GitHub or unparseable remotes so callers fall back to
+ * manual entry.
+ */
+export function parseGitHubSlug(remoteUrl: string): string | null {
+  const stripped = remoteUrl
+    .trim()
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "");
+  if (!stripped) return null;
+  // host can be reached as github.com/owner/name (https/ssh-url) or
+  // github.com:owner/name (scp-like ssh). Anchor the host on a `//`, `@`, or
+  // string-start boundary so look-alikes (e.g. evil-github.com) don't match.
+  const m = stripped.match(/(?:^|\/\/|@)github\.com[/:]([^/]+)\/([^/]+)$/i);
+  if (!m || !m[1] || !m[2]) return null;
+  return `${m[1]}/${m[2]}`;
+}
+
+/**
+ * Derive the GitHub owner/name slug for a local checkout from its origin remote.
+ * Returns null when there's no origin or it isn't a GitHub remote (manual entry).
+ */
+export async function getRepoSlug(dirPath: string): Promise<string | null> {
+  const resolvedPath = expandHome(dirPath);
+  try {
+    const { stdout } = await git(
+      resolvedPath,
+      ["remote", "get-url", "origin"],
+      5000
+    );
+    return parseGitHubSlug(stdout);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Get list of local branches
  */
 export async function getBranches(dirPath: string): Promise<string[]> {
