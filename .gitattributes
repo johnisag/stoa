@@ -1,0 +1,27 @@
+# Normalize line endings to LF on checkout, on every OS.
+#
+# Why: this is a cross-platform Node/TS repo. With Git's `core.autocrlf=true`
+# (the default on the GitHub windows-latest runner and many Windows dev boxes),
+# LF blobs are checked out as CRLF — and CRLF tripped Node/vitest parsing of a
+# source file on Windows CI ("SyntaxError: Invalid or unexpected token", the file
+# failing to collect) while passing on macOS/Linux and on LF working trees. Shell
+# scripts (.husky hooks, *.sh) also require LF. All blobs are already LF in the
+# index, so this only enforces checkout EOL — it does not rewrite history.
+* text=auto eol=lf
+
+# Windows PowerShell installer is the one file we keep CRLF.
+*.ps1 text eol=crlf
+
+# Binary assets — never touch their bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.db binary
+*.wasm binary

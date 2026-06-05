@@ -1,0 +1,29 @@
+# Code owners for the sensitive / auto-execution surfaces. A change to any of
+# these requires @johnisag's review.
+#
+# NOTE: this only ENFORCES if branch protection has "Require review from Code
+# Owners" enabled (Settings → Branches → main). Turn that on to make it binding.
+
+# CI / GitHub Actions (runs in the cloud with the repo token)
+/.github/                    @johnisag
+
+# Claude / agent config + MCP (auto-executes on this machine)
+/.claude/                    @johnisag
+/.mcp.json                   @johnisag
+/CLAUDE.md                   @johnisag
+/AGENTS.md                   @johnisag
+
+# Build / install / git-hook execution surfaces
+/package.json                @johnisag
+/package-lock.json           @johnisag
+/.husky/                     @johnisag
+/scripts/                    @johnisag
+/.vscode/                    @johnisag
+
+# Security tooling itself — the guard's TRUST ROOT. These MUST be owned: the pin
+# baseline + config decide what the guard trusts/checks, so a re-pin or a config
+# change has to go through code-owner review (else the guard can be silently
+# re-baselined onto a trojan or disarmed by an unowned config).
+/SECURITY.md                 @johnisag
+/security/                   @johnisag
+/scripts/guard-surfaces.mjs  @johnisag
