@@ -29,11 +29,15 @@ while leaving its `package.json` command string intact, or editing `.husky/pre-c
 | oversized / obfuscated blob anywhere (incl. `lib/`, `app/`)                                                                                                                         | bundled/run by CI                                                                                                                                                                                  | repo-wide sweep: fails on >1 MB or minified/obfuscated source                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | committed credentials                                                                                                                                                               | exfiltration                                                                                                                                                                                       | `gitleaks` in CI; `.env*` gitignored (`.env.example` kept); enable GitHub push protection                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
-The guard runs in **both** the husky pre-commit hook and a CI job. It hard-fails on
-**committed** surfaces (in the git index, or inside a committed submodule); an
-_untracked, local_ artifact (your own `.vscode/tasks.json`, a local
-`.claude/settings.local.json` hook) is an **advisory warning** only, so it never
-blocks unrelated commits.
+The guard runs in **both** the husky pre-commit hook and a CI job. A **hook** or a
+**non-allowlisted MCP server** in any agent config hard-fails **even when the config
+is untracked/gitignored** (`claude.local.json`, `.claude/settings.local.json`, a
+local `.mcp.json`) — that gitignored-and-invisible-to-review file is the exact
+persistence vector an attacker picks, so advisory-only would let it slide. A merely
+_unpinned_ benign local file (an `.md` note, your own `.vscode/tasks.json`) is an
+**advisory warning** only, so it never blocks unrelated commits. (CI only sees
+committed files — a gitignored config is caught by the local **pre-commit** run, not
+by CI; keep the hook installed.)
 
 ### Hardening details & known limits
 

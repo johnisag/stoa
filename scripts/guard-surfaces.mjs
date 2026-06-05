@@ -565,9 +565,10 @@ export function runGuard(root) {
       violations.push(`${rel}: pinned surface file is gone (moved/deleted?)`);
 
   // 3. Agent configs — hooks + MCP servers (Claude/Cursor/Gemini JSON; Codex/Hermes
-  //    TOML is byte-pinned only, see SECURITY.md). Parse failure is itself a
-  //    violation. Matching is case-INSENSITIVE (a tracked `.Cursor/mcp.json` loads
-  //    identically on macOS/Windows). Tracked → violation; untracked local → advisory.
+  //    TOML is byte-pinned only, see SECURITY.md). Matching is case-INSENSITIVE (a
+  //    tracked `.Cursor/mcp.json` loads identically on macOS/Windows). A hook or a
+  //    non-allowlisted MCP server is a hard VIOLATION even when UNTRACKED/local — it
+  //    auto-executes on agent start (the gitignored claude.local.json vector).
   const cfgFilesLc = new Set(cfg.agentConfigFiles.map((f) => f.toLowerCase()));
   const cfgDirsLc = cfg.agentConfigDirs.map((d) => d.toLowerCase());
   const configRels = new Set(cfg.agentConfigFiles);
@@ -583,24 +584,30 @@ export function runGuard(root) {
     if (!tracked.has(localCfg) && existsSync(join(root, localCfg))) configRels.add(localCfg);
   for (const rel of configRels) {
     if (!existsSync(join(root, rel))) continue;
-    const sink = committed(rel) ? violations : warnings;
     const text = readText(root, rel);
     if (text == null) continue;
     const parsed = readJson(text);
     if (!parsed.ok) {
-      sink.push(
-        /"hooks"/.test(text)
-          ? `${rel}: unparseable config that mentions "hooks" — possible obfuscated hook injection`
-          : `${rel}: unparseable JSON config (could hide an injected hook from the scanner)`
-      );
+      // A config that mentions "hooks" but won't parse is suspicious regardless of
+      // tracking (it could hide a hook from the scanner) → always a violation. A
+      // plainly-malformed config with no hook smell is routed (untracked → advisory).
+      if (/"hooks"/.test(text))
+        violations.push(`${rel}: unparseable config that mentions "hooks" — possible obfuscated hook injection`);
+      else
+        (committed(rel) ? violations : warnings).push(`${rel}: unparseable JSON config (could hide an injected hook from the scanner)`);
       continue;
     }
+    // A hook or a non-allowlisted MCP server AUTO-EXECUTES the moment an agent
+    // starts — so it is a hard VIOLATION even in an UNTRACKED / gitignored local
+    // config (`claude.local.json`, `.claude/settings.local.json`, a local `.mcp.json`).
+    // That is the exact persistence vector an attacker picks BECAUSE it's
+    // gitignored and invisible to review; advisory-only would let it slide.
     const hooks = findHooksKeys(parsed.value);
     if (hooks.length)
-      sink.push(`${rel}: contains hook definition(s) [${hooks.join(", ")}] — auto-executes on agent events`);
+      violations.push(`${rel}: contains hook definition(s) [${hooks.join(", ")}] — auto-executes on agent events`);
     for (const s of findMcpServers(parsed.value))
       if (!isAllowedMcpServer(s, cfg.mcpAllowlist))
-        sink.push(
+        violations.push(
           `${rel}: defines MCP server "${s.name}" (command: ${`${s.command} ${s.args}`.trim()}) — auto-launches when a Claude/Cursor/Gemini/Codex/Hermes agent starts`
         );
   }

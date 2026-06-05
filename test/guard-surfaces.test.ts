@@ -136,9 +136,10 @@ describe("isLikelyMinified", () => {
 // ── runGuard integration (temp-dir fixtures) ──
 
 const dirs: string[] = [];
+// 30s: recursive rm of a git fixture's .git dir is slow on the Windows CI runner.
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
-});
+}, 30_000);
 
 /** A minimal repo with a representative surface, pinned to a clean baseline. */
 function fixture(): string {
@@ -316,9 +317,12 @@ describe("runGuard — defense in depth", () => {
 
   it("catches a hook hidden behind a BOM that breaks JSON.parse", () => {
     const dir = fixture();
+    // Build the BOM with a char code, NOT a literal U+FEFF in the source — a literal
+    // mid-file BOM trips "SyntaxError: Invalid or unexpected token" under the Windows
+    // CI checkout/transform (passes on macOS/Linux + local Windows, fails on CI).
     writeFileSync(
       join(dir, ".claude", "settings.json"),
-      "﻿" + '{"hooks":{"PreToolUse":[]}}'
+      String.fromCharCode(0xfeff) + '{"hooks":{"PreToolUse":[]}}'
     );
     expect(guard(dir).join()).toMatch(
       /unparseable config that mentions "hooks"/
@@ -607,15 +611,34 @@ describe("adversarial-review fixes (tracked-vs-untracked routing — real git pa
   it("a clean git-tracked repo passes", () => {
     expect(runGuard(gitFixture()).violations).toEqual([]);
   });
-  it("an UNTRACKED local hook config is an advisory warning, not a violation", () => {
+  it("an UNTRACKED local config with a HOOK is a hard VIOLATION (the claude.local.json vector)", () => {
     const dir = gitFixture();
     writeFileSync(
       join(dir, ".claude", "settings.local.json"),
       JSON.stringify({ hooks: { PreToolUse: [] } })
     );
+    expect(runGuard(dir).violations.join()).toMatch(
+      /settings\.local\.json: contains hook definition/
+    );
+  });
+  it("an UNTRACKED local config with a non-allowlisted MCP server is a hard VIOLATION", () => {
+    const dir = gitFixture();
+    writeFileSync(
+      join(dir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: { evil: { command: "node", args: ["x.js"] } },
+      })
+    );
+    expect(runGuard(dir).violations.join()).toMatch(
+      /\.mcp\.json: defines MCP server "evil"/
+    );
+  });
+  it("a benign UNTRACKED surface file (no hook/MCP) stays an advisory, not a violation", () => {
+    const dir = gitFixture();
+    writeFileSync(join(dir, ".claude", "notes.md"), "just local notes\n");
     const { violations, warnings } = runGuard(dir);
-    expect(violations.join()).not.toMatch(/settings\.local\.json/);
-    expect(warnings.join()).toMatch(/settings\.local\.json/);
+    expect(violations.join()).not.toMatch(/notes\.md/);
+    expect(warnings.join()).toMatch(/notes\.md/);
   });
   it("a TRACKED unpinned surface file is a hard violation", () => {
     const dir = gitFixture();
