@@ -20,6 +20,7 @@ import type { DispatchRepo } from "@/lib/dispatch/types";
 import {
   useCreateRepo,
   useDeleteRepo,
+  useDiscoverQuery,
   useDispatchReposQuery,
   useResolveSource,
   useUpdateRepo,
@@ -249,28 +250,25 @@ function AddRepoForm() {
   const projectsQ = useProjectsQuery();
   const resolve = useResolveSource();
   const projects = (projectsQ.data ?? []).filter((p) => !p.is_uncategorized);
-  const [source, setSource] = useState<"manual" | "project">("manual");
+  const [source, setSource] = useState<"manual" | "project" | "scan">("manual");
+  // Scan is lazy: only hits the filesystem while the "scan" source is selected.
+  const discoverQ = useDiscoverQuery(source === "scan");
+  const discovered = discoverQ.data ?? [];
 
   // Track the latest pick so a slow earlier resolve can't clobber a newer one.
   const lastPickedRef = useRef<string | null>(null);
 
-  // Pick a Stoa project → prefill the path immediately, then resolve its GitHub
-  // owner/name + default branch in the background and fill those too.
-  const pickProject = (projectId: string) => {
-    const p = projects.find((x) => x.id === projectId);
-    if (!p) return;
-    const dir = p.working_directory?.trim();
-    if (!dir || dir === "~") {
-      toast.error(`${p.name} has no checkout path — enter it manually`);
-      return;
-    }
-    lastPickedRef.current = projectId;
+  // Prefill the path immediately, then resolve owner/name + default branch and
+  // fill those too. Shared by the project + scan sources (keyed on the path so a
+  // slow earlier resolve can't overwrite a newer pick).
+  const fillFromPath = (dir: string, label: string) => {
+    lastPickedRef.current = dir;
     set("repoPath", dir);
     resolve.mutate(dir, {
       onSuccess: (r) => {
-        if (lastPickedRef.current !== projectId) return; // superseded
+        if (lastPickedRef.current !== dir) return; // superseded by a newer pick
         if (!r.isGitRepo) {
-          toast.error(`${p.name} isn't a git repo — enter owner/name manually`);
+          toast.error(`${label} isn't a git repo — enter owner/name manually`);
           return;
         }
         if (r.slug) set("repoSlug", r.slug);
@@ -279,10 +277,21 @@ function AddRepoForm() {
           toast.message("Couldn't detect owner/name — add it manually");
       },
       onError: (e) => {
-        if (lastPickedRef.current !== projectId) return;
+        if (lastPickedRef.current !== dir) return;
         toast.error((e as Error).message);
       },
     });
+  };
+
+  const pickProject = (projectId: string) => {
+    const p = projects.find((x) => x.id === projectId);
+    if (!p) return;
+    const dir = p.working_directory?.trim();
+    if (!dir || dir === "~") {
+      toast.error(`${p.name} has no checkout path — enter it manually`);
+      return;
+    }
+    fillFromPath(dir, p.name);
   };
 
   const submit = () => {
@@ -304,11 +313,11 @@ function AddRepoForm() {
 
   return (
     <div className="bg-muted/30 space-y-3 rounded-md border border-dashed p-3">
-      {/* Source picker — auto-fill from a Stoa project instead of typing the
-          path + owner/name. (Scan / GitHub sources land in later layers.) */}
+      {/* Source picker — auto-fill from a Stoa project or a scanned local repo
+          instead of typing the path + owner/name. (GitHub source lands next.) */}
       <div className="flex flex-wrap items-center gap-2">
         <SegmentedControl
-          options={["manual", "project"] as const}
+          options={["manual", "project", "scan"] as const}
           value={source}
           ariaLabel="Repo source"
           onChange={(s) => {
@@ -341,7 +350,46 @@ function AddRepoForm() {
             </SelectContent>
           </Select>
         )}
-        {source === "project" && resolve.isPending && (
+        {source === "scan" &&
+          (discoverQ.isError ? (
+            <span className="text-destructive text-xs">
+              Scan failed — enter the path manually
+            </span>
+          ) : (
+            <Select
+              onValueChange={(dir) => {
+                const hit = discovered.find((x) => x.path === dir);
+                fillFromPath(dir, hit?.name ?? dir);
+              }}
+              disabled={discoverQ.isLoading || discovered.length === 0}
+            >
+              <SelectTrigger
+                className="h-8 w-[260px]"
+                aria-label="Scanned repo"
+              >
+                <SelectValue
+                  placeholder={
+                    discoverQ.isLoading
+                      ? "Scanning…"
+                      : discovered.length
+                        ? "Pick a discovered repo"
+                        : "No local repos found"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {discovered.map((r) => (
+                  <SelectItem key={r.path} value={r.path}>
+                    {r.name}
+                    <span className="text-muted-foreground ml-2 text-xs">
+                      {r.path}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ))}
+        {source !== "manual" && resolve.isPending && (
           <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" />
         )}
       </div>

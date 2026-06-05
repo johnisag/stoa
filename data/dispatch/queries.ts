@@ -8,7 +8,10 @@ import type {
   IssueDispatch,
 } from "@/lib/dispatch/types";
 import type { AgentType } from "@/lib/providers";
+import type { DiscoveredRepo } from "@/lib/dispatch/discover";
 import { dispatchKeys } from "./keys";
+
+export type { DiscoveredRepo };
 
 // ── reads ──
 
@@ -85,6 +88,24 @@ async function resolveSource(path: string): Promise<ResolvedSource> {
  * add-repo form can auto-fill owner/name + base branch when a source is picked. */
 export function useResolveSource() {
   return useMutation({ mutationFn: resolveSource });
+}
+
+async function fetchDiscovered(): Promise<DiscoveredRepo[]> {
+  const res = await fetch("/api/dispatch/discover");
+  if (!res.ok) throw new Error("Failed to scan for local repos");
+  const data = await res.json();
+  return data.repos ?? [];
+}
+
+/** Local git checkouts found by scanning the projects' parent folders (+
+ * STOA_SCAN_ROOTS). Lazy: only runs while the "scan" source is selected. */
+export function useDiscoverQuery(enabled = true) {
+  return useQuery({
+    queryKey: dispatchKeys.discover(),
+    queryFn: fetchDiscovered,
+    enabled,
+    staleTime: 60000,
+  });
 }
 
 // ── writes ── (the route parses camelCase keys; see app/api/dispatch/repos)
