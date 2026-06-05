@@ -44,6 +44,7 @@ import {
 import { sessionKey } from "@/lib/providers/registry";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
+import { DispatchView } from "@/components/views/DispatchView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
@@ -133,6 +134,7 @@ function HomeContent() {
   const [showNotificationSettings, setShowNotificationSettings] =
     useState(false);
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
+  const [showDispatch, setShowDispatch] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [copiedSessionId, setCopiedSessionId] = useState(false);
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
@@ -696,6 +698,8 @@ function HomeContent() {
     setShowNotificationSettings,
     showQuickSwitcher,
     setShowQuickSwitcher,
+    showDispatch,
+    setShowDispatch,
     onShowShortcuts: () => setShowHelp(true),
     notificationSettings,
     permissionGranted,
@@ -735,6 +739,9 @@ function HomeContent() {
         open={showHelp}
         onOpenChange={setShowHelp}
       />
+      {/* Dispatch control plane (GitHub-issue -> agent fleet). Self-contained
+          dialog; the nav buttons in Desktop/MobileView open it via setShowDispatch. */}
+      <DispatchView open={showDispatch} onOpenChange={setShowDispatch} />
     </>
   );
 }

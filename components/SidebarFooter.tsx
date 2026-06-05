@@ -1,5 +1,5 @@
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Keyboard } from "lucide-react";
+import { Keyboard, Rocket } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -10,14 +10,36 @@ import { WorktreesButton } from "@/components/Worktrees/WorktreesButton";
 interface SidebarFooterProps {
   /** Opens the keyboard-shortcut cheatsheet (also bound to `?`). */
   onShowShortcuts?: () => void;
+  /** Opens the Dispatch control plane (GitHub issues -> agent fleet). */
+  onShowDispatch?: () => void;
 }
 
-export function SidebarFooter({ onShowShortcuts }: SidebarFooterProps = {}) {
+export function SidebarFooter({
+  onShowShortcuts,
+  onShowDispatch,
+}: SidebarFooterProps = {}) {
   return (
     <div className="mt-auto px-3 pt-2 pb-3">
       <div className="flex items-center justify-between">
         <span className="text-muted-foreground text-xs">Theme</span>
         <div className="flex items-center gap-1">
+          {onShowDispatch && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={onShowDispatch}
+                  aria-label="Dispatch"
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
+                >
+                  <Rocket className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Dispatch</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
           {onShowShortcuts && (
             <Tooltip>
               <TooltipTrigger asChild>
