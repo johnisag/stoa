@@ -272,7 +272,11 @@ export function useTerminalConnection({
       searchAddonRef.current = searchAddon;
       cleanupTerminal = cleanup;
 
-      // Scroll tracking
+      // Scroll tracking — drive the jump-to-bottom button. xterm's buffer math is
+      // synchronous + accurate at callback time and matches mobile's touch-scroll
+      // (which sets the viewport overflow:hidden, so a DOM scrollHeight read is
+      // unreliable there). The button only failed on macOS because scrolling
+      // itself was dead (the scrollbar CSS); fixing that restores this path.
       term.onScroll(() => {
         const buffer = term.buffer.active;
         setIsAtBottom(buffer.viewportY >= buffer.baseY);
