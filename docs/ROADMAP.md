@@ -15,6 +15,21 @@ what Stoa already ships. Pick deliberately. `D`=demand, `E`=effort,
 
 ---
 
+## 🚨 CRITICAL — open bugs (fix first)
+
+- **macOS · Hermes: terminal scrollbar non-functional + the blue "jump to
+  bottom" button is invisible.** On macOS, you can't scroll the terminal in a
+  **Hermes** session (the scrollbar doesn't work), and the **blue scroll-to-
+  bottom button** that should jump you to the latest output **isn't visible** —
+  so there's no way to reach the bottom of the buffer. Repro: macOS, Hermes
+  session, scrolled up in a long buffer. (A macOS scrollbar fix shipped in #85
+  for the Chrome-121 `::-webkit-scrollbar` regression; this is a
+  remaining/again-broken case specific to Hermes + the `ScrollToBottomButton`.)
+  Likely suspects: `ScrollToBottomButton` visibility/`z-index` on macOS WebKit,
+  and the xterm viewport scrollbar styling in Hermes panes.
+
+---
+
 ## ✅ Shipped since the last scan (PRs #55–#91)
 
 - **Actionable push — the full control loop** — approve / reject / stop an agent
