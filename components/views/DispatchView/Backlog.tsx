@@ -1,16 +1,158 @@
 "use client";
 
-import { Check, X, Loader2, ExternalLink } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, X, Loader2, ExternalLink, Rocket } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { DispatchRepo, IssueDispatch } from "@/lib/dispatch/types";
 import {
+  useCreateIssue,
   useDispatchAction,
   useDispatchReposQuery,
   usePendingQuery,
 } from "@/data/dispatch/queries";
 import { AGENT_BADGE, repoUrl, timeAgo } from "./shared";
+
+/** Create a real GitHub issue and either queue it to the backlog or dispatch a
+ * worker for it immediately. */
+function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
+  const create = useCreateIssue();
+  const [repoId, setRepoId] = useState("");
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [labels, setLabels] = useState("");
+  const [pending, setPending] = useState<null | "backlog" | "now">(null);
+
+  // Keep repoId valid: default to the first repo and re-sync if the list changes
+  // (avoids the controlled-Select desync where state and the shown value drift).
+  useEffect(() => {
+    if (repos.length && !repos.some((r) => r.id === repoId)) {
+      setRepoId(repos[0].id);
+    }
+  }, [repos, repoId]);
+
+  if (repos.length === 0)
+    return (
+      <p className="text-muted-foreground rounded-md border border-dashed px-3 py-3 text-xs">
+        Add a repo in the Allocation tab to create and dispatch issues.
+      </p>
+    );
+
+  const submit = (disposition: "backlog" | "now") => {
+    if (!repoId) return;
+    if (!title.trim()) {
+      toast.error("An issue title is required");
+      return;
+    }
+    setPending(disposition);
+    create.mutate(
+      {
+        repoId,
+        title: title.trim(),
+        body,
+        labels: labels
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+        disposition,
+      },
+      {
+        onSuccess: (d) => {
+          toast.success(
+            `Created #${d.issue.number} — ${
+              disposition === "now"
+                ? "dispatching a worker"
+                : "added to backlog"
+            }`
+          );
+          setTitle("");
+          setBody("");
+          setLabels("");
+        },
+        onError: (e) => toast.error((e as Error).message),
+        onSettled: () => setPending(null),
+      }
+    );
+  };
+
+  return (
+    <div className="bg-muted/30 space-y-2 rounded-md border border-dashed p-3">
+      <p className="text-muted-foreground text-xs">
+        Creates a real GitHub issue on the selected repo, then queues it or
+        dispatches a worker immediately.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Select value={repoId} onValueChange={setRepoId}>
+          <SelectTrigger className="h-8 w-[200px]" aria-label="Issue repo">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {repos.map((r) => (
+              <SelectItem key={r.id} value={r.id}>
+                {r.repo_slug}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          placeholder="Issue title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="h-8 min-w-[200px] flex-1"
+        />
+      </div>
+      <Textarea
+        placeholder="Description (optional)"
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        className="min-h-[56px] text-sm"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          placeholder="Labels (comma-separated)"
+          value={labels}
+          onChange={(e) => setLabels(e.target.value)}
+          className="h-8 w-48"
+        />
+        <div className="ml-auto flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={create.isPending}
+            onClick={() => submit("backlog")}
+          >
+            {pending === "backlog" && (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            )}
+            Add to backlog
+          </Button>
+          <Button
+            size="sm"
+            disabled={create.isPending}
+            onClick={() => submit("now")}
+          >
+            {pending === "now" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Rocket className="h-4 w-4" />
+            )}
+            Dispatch now
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function Backlog({ open }: { open: boolean }) {
   const { data: pending = [], isLoading, isError } = usePendingQuery(open);
@@ -28,99 +170,98 @@ export function Backlog({ open }: { open: boolean }) {
       }
     );
 
-  if (isLoading)
-    return (
-      <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading backlog...
-      </div>
-    );
-
-  if (isError)
-    return (
-      <p className="py-10 text-center text-sm text-red-500">
-        Failed to load the backlog. Retrying...
-      </p>
-    );
-
-  if (pending.length === 0)
-    return (
-      <p className="text-muted-foreground py-10 text-center text-sm">
-        No candidates waiting. Review-mode repos surface eligible issues here
-        for one-tap approval; auto-mode repos dispatch them straight to the
-        board.
-      </p>
-    );
-
   return (
-    <div className="space-y-2">
-      <p className="text-muted-foreground text-xs">
-        {pending.length} candidate{pending.length === 1 ? "" : "s"} awaiting
-        approval. Approving spawns a worker immediately (it bypasses the daily
-        cap); cancelling drops the candidate.
-      </p>
-      {pending.map((d: IssueDispatch) => {
-        const repo = repoById.get(d.repo_id);
-        const busy = action.isPending && action.variables?.id === d.id;
-        return (
-          <div
-            key={d.id}
-            className="hover:bg-muted/40 flex items-center gap-3 rounded-md border px-3 py-2"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                {repo && (
-                  <span
-                    className={cn(
-                      "rounded px-1.5 py-0.5 text-[11px] font-medium",
-                      AGENT_BADGE[repo.agent_type]
+    <div className="space-y-3">
+      <NewIssueForm repos={repos} />
+
+      {isLoading ? (
+        <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading backlog...
+        </div>
+      ) : isError ? (
+        <p className="py-10 text-center text-sm text-red-500">
+          Failed to load the backlog. Retrying...
+        </p>
+      ) : pending.length === 0 ? (
+        <p className="text-muted-foreground py-10 text-center text-sm">
+          No candidates waiting. Review-mode repos surface eligible issues here
+          for one-tap approval; auto-mode repos dispatch them straight to the
+          board.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-muted-foreground text-xs">
+            {pending.length} candidate{pending.length === 1 ? "" : "s"} awaiting
+            approval. Approving spawns a worker immediately (it bypasses the
+            daily cap); cancelling drops the candidate.
+          </p>
+          {pending.map((d: IssueDispatch) => {
+            const repo = repoById.get(d.repo_id);
+            const busy = action.isPending && action.variables?.id === d.id;
+            return (
+              <div
+                key={d.id}
+                className="hover:bg-muted/40 flex items-center gap-3 rounded-md border px-3 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    {repo && (
+                      <span
+                        className={cn(
+                          "rounded px-1.5 py-0.5 text-[11px] font-medium",
+                          AGENT_BADGE[repo.agent_type]
+                        )}
+                      >
+                        {repo.agent_type}
+                      </span>
                     )}
-                  >
-                    {repo.agent_type}
-                  </span>
-                )}
-                <a
-                  href={d.issue_url ?? (repo ? repoUrl(repo.repo_slug) : "#")}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="truncate text-sm font-medium hover:underline"
-                  title={d.issue_title ?? undefined}
+                    <a
+                      href={
+                        d.issue_url ?? (repo ? repoUrl(repo.repo_slug) : "#")
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="truncate text-sm font-medium hover:underline"
+                      title={d.issue_title ?? undefined}
+                    >
+                      #{d.issue_number} {d.issue_title ?? "(untitled issue)"}
+                    </a>
+                    <ExternalLink className="text-muted-foreground h-3 w-3 shrink-0" />
+                  </div>
+                  <div className="text-muted-foreground mt-0.5 text-xs">
+                    {repo?.repo_slug ?? "unknown repo"}
+                    {d.issue_created_at && (
+                      <> &middot; raised {timeAgo(d.issue_created_at)}</>
+                    )}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => dispatchAction(d.id, "approve")}
                 >
-                  #{d.issue_number} {d.issue_title ?? "(untitled issue)"}
-                </a>
-                <ExternalLink className="text-muted-foreground h-3 w-3 shrink-0" />
+                  {busy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Check className="h-4 w-4" />
+                  )}
+                  Approve
+                </Button>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Cancel candidate"
+                  disabled={busy}
+                  onClick={() => dispatchAction(d.id, "cancel")}
+                >
+                  <X className="text-muted-foreground hover:text-destructive h-4 w-4" />
+                </Button>
               </div>
-              <div className="text-muted-foreground mt-0.5 text-xs">
-                {repo?.repo_slug ?? "unknown repo"}
-                {d.issue_created_at && (
-                  <> &middot; raised {timeAgo(d.issue_created_at)}</>
-                )}
-              </div>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => dispatchAction(d.id, "approve")}
-            >
-              {busy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Check className="h-4 w-4" />
-              )}
-              Approve
-            </Button>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Cancel candidate"
-              disabled={busy}
-              onClick={() => dispatchAction(d.id, "cancel")}
-            >
-              <X className="text-muted-foreground hover:text-destructive h-4 w-4" />
-            </Button>
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -180,6 +180,39 @@ export function useCreateRepo() {
   });
 }
 
+export interface CreateIssueInput {
+  repoId: string;
+  title: string;
+  body: string;
+  labels: string[];
+  disposition: "now" | "backlog";
+}
+
+/** Create a real GitHub issue on a tracked repo and either dispatch it now or
+ * leave it in the backlog. Refreshes the backlog + board. */
+export function useCreateIssue() {
+  const qc = useQueryClient();
+  return useMutation({
+    // Issue creation is non-idempotent (each POST opens a new GitHub issue) — do
+    // NOT auto-retry, or a flaky network would create duplicates.
+    retry: 0,
+    mutationFn: async (input: CreateIssueInput) => {
+      const res = await fetch("/api/dispatch/issues/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to create issue");
+      return data as { issue: { number: number; url: string } };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: dispatchKeys.pending() });
+      qc.invalidateQueries({ queryKey: dispatchKeys.board() });
+    },
+  });
+}
+
 /** Partial config patch (quota, concurrency, mode, enabled, agent, label, base). */
 export type UpdateRepoPatch = Partial<{
   agentType: AgentType;
