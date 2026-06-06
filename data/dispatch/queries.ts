@@ -68,6 +68,25 @@ export function useBoardQuery(enabled = true) {
   });
 }
 
+async function fetchScheduled(): Promise<IssueDispatch[]> {
+  const res = await fetch("/api/dispatch/scheduled");
+  if (!res.ok) throw new Error("Failed to load scheduled");
+  const data = await res.json();
+  return data.scheduled ?? [];
+}
+
+/** Future-dated rows ('scheduled'). Polls so a row disappears from the list as
+ * it comes due and the reconciler promotes it. */
+export function useScheduledQuery(enabled = true) {
+  return useQuery({
+    queryKey: dispatchKeys.scheduled(),
+    queryFn: fetchScheduled,
+    enabled,
+    staleTime: 5000,
+    refetchInterval: enabled ? 15000 : false,
+  });
+}
+
 // ── sources ── (auto-fill the add-repo form from a local path)
 
 export interface ResolvedSource {
@@ -185,7 +204,9 @@ export interface CreateIssueInput {
   title: string;
   body: string;
   labels: string[];
-  disposition: "now" | "backlog";
+  disposition: "now" | "backlog" | "scheduled";
+  /** ISO time — required when disposition === "scheduled". */
+  scheduledAt?: string;
 }
 
 /** Create a real GitHub issue on a tracked repo and either dispatch it now or
@@ -209,6 +230,7 @@ export function useCreateIssue() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: dispatchKeys.pending() });
       qc.invalidateQueries({ queryKey: dispatchKeys.board() });
+      qc.invalidateQueries({ queryKey: dispatchKeys.scheduled() });
     },
   });
 }
@@ -321,6 +343,7 @@ export function useDispatchAction() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: dispatchKeys.pending() });
       qc.invalidateQueries({ queryKey: dispatchKeys.board() });
+      qc.invalidateQueries({ queryKey: dispatchKeys.scheduled() });
     },
   });
 }

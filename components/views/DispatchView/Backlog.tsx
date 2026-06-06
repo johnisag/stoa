@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, X, Loader2, ExternalLink, Rocket } from "lucide-react";
+import { Check, X, Loader2, ExternalLink, Rocket, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
   useDispatchAction,
   useDispatchReposQuery,
   usePendingQuery,
+  useScheduledQuery,
 } from "@/data/dispatch/queries";
 import { AGENT_BADGE, repoUrl, timeAgo } from "./shared";
 
@@ -31,7 +32,10 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [labels, setLabels] = useState("");
-  const [pending, setPending] = useState<null | "backlog" | "now">(null);
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [pending, setPending] = useState<
+    null | "backlog" | "now" | "scheduled"
+  >(null);
 
   // Keep repoId valid: default to the first repo and re-sync if the list changes
   // (avoids the controlled-Select desync where state and the shown value drift).
@@ -48,11 +52,20 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
       </p>
     );
 
-  const submit = (disposition: "backlog" | "now") => {
+  const submit = (disposition: "backlog" | "now" | "scheduled") => {
     if (!repoId) return;
     if (!title.trim()) {
       toast.error("An issue title is required");
       return;
+    }
+    if (disposition === "scheduled" && Number.isNaN(Date.parse(scheduledAt))) {
+      toast.error("Pick a date & time to schedule");
+      return;
+    }
+    if (disposition === "scheduled" && Date.parse(scheduledAt) <= Date.now()) {
+      toast.message(
+        "That time is in the past — it'll dispatch on the next tick"
+      );
     }
     setPending(disposition);
     create.mutate(
@@ -65,6 +78,9 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
           .map((s) => s.trim())
           .filter(Boolean),
         disposition,
+        ...(disposition === "scheduled"
+          ? { scheduledAt: new Date(scheduledAt).toISOString() }
+          : {}),
       },
       {
         onSuccess: (d) => {
@@ -72,12 +88,15 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
             `Created #${d.issue.number} — ${
               disposition === "now"
                 ? "dispatching a worker"
-                : "added to backlog"
+                : disposition === "scheduled"
+                  ? "scheduled"
+                  : "added to backlog"
             }`
           );
           setTitle("");
           setBody("");
           setLabels("");
+          if (disposition === "scheduled") setScheduledAt("");
         },
         onError: (e) => toast.error((e as Error).message),
         onSettled: () => setPending(null),
@@ -124,7 +143,29 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
           onChange={(e) => setLabels(e.target.value)}
           className="h-8 w-48"
         />
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1">
+            <Input
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              aria-label="Schedule time"
+              className="h-8 w-[190px]"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={create.isPending}
+              onClick={() => submit("scheduled")}
+            >
+              {pending === "scheduled" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Clock className="h-4 w-4" />
+              )}
+              Schedule
+            </Button>
+          </div>
           <Button
             size="sm"
             variant="outline"
@@ -157,6 +198,7 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
 export function Backlog({ open }: { open: boolean }) {
   const { data: pending = [], isLoading, isError } = usePendingQuery(open);
   const { data: repos = [] } = useDispatchReposQuery(open);
+  const { data: scheduled = [] } = useScheduledQuery(open);
   const action = useDispatchAction();
   const repoById = new Map<string, DispatchRepo>(repos.map((r) => [r.id, r]));
 
@@ -173,6 +215,56 @@ export function Backlog({ open }: { open: boolean }) {
   return (
     <div className="space-y-3">
       <NewIssueForm repos={repos} />
+
+      {scheduled.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-muted-foreground text-xs">
+            {scheduled.length} scheduled — each dispatches automatically within
+            ~1 min of its time.
+          </p>
+          {scheduled.map((d: IssueDispatch) => {
+            const repo = repoById.get(d.repo_id);
+            const busy = action.isPending && action.variables?.id === d.id;
+            return (
+              <div
+                key={d.id}
+                className="hover:bg-muted/40 flex items-center gap-3 rounded-md border border-dashed px-3 py-2"
+              >
+                <Clock className="text-muted-foreground h-4 w-4 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div
+                    className="truncate text-sm font-medium"
+                    title={d.issue_title ?? undefined}
+                  >
+                    #{d.issue_number} {d.issue_title ?? "(untitled issue)"}
+                  </div>
+                  <div className="text-muted-foreground mt-0.5 text-xs">
+                    {repo?.repo_slug ?? "unknown repo"}
+                    {d.scheduled_at && (
+                      <>
+                        {" "}
+                        &middot;{" "}
+                        {new Date(d.scheduled_at).toLocaleString(undefined, {
+                          timeZoneName: "short",
+                        })}
+                      </>
+                    )}
+                  </div>
+                </div>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Cancel scheduled"
+                  disabled={busy}
+                  onClick={() => dispatchAction(d.id, "cancel")}
+                >
+                  <X className="text-muted-foreground hover:text-destructive h-4 w-4" />
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {isLoading ? (
         <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
