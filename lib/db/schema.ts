@@ -146,6 +146,7 @@ export function createSchema(db: Database.Database): void {
       pr_number INTEGER,
       pr_status TEXT,
       dispatched_at TEXT,
+      scheduled_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE,

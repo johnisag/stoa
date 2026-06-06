@@ -24,9 +24,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const action = body?.action;
 
     if (action === "cancel") {
-      if (dispatch.status !== "pending") {
+      if (dispatch.status !== "pending" && dispatch.status !== "scheduled") {
         return NextResponse.json(
-          { error: "Only pending candidates can be cancelled" },
+          { error: "Only pending or scheduled candidates can be cancelled" },
           { status: 409 }
         );
       }
