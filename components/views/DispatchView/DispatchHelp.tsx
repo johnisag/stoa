@@ -32,7 +32,12 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           <li>
             <span className="text-foreground font-medium">Allocation</span> —
             set up which repositories to watch, which agent, how many issues per
-            day, and whether work runs on its own or waits for you.
+            day, and whether work runs on its own or waits for you. Tap a
+            repo&apos;s{" "}
+            <span className="text-foreground font-medium">inbox</span> icon to
+            browse all its open GitHub issues (even ones outside your label
+            filter) and dispatch any of them with one tap; issues already being
+            worked show their status instead.
           </li>
           <li>
             <span className="text-foreground font-medium">Backlog</span> —
