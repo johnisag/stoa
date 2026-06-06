@@ -1,6 +1,6 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createRequire } from "module";
-import { mkdtempSync, mkdirSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -10,8 +10,10 @@ import { join } from "path";
 const require = createRequire(import.meta.url);
 const CLI_PATH = "../scripts/stoa.js";
 
-const { isGitInstall } = require(CLI_PATH) as {
+const { isGitInstall, parseEnvFile, loadEnvFile } = require(CLI_PATH) as {
   isGitInstall: (dir?: string) => boolean;
+  parseEnvFile: (content: string) => Record<string, string>;
+  loadEnvFile: (dir: string) => Record<string, string>;
 };
 
 /**
@@ -21,10 +23,18 @@ const { isGitInstall } = require(CLI_PATH) as {
  */
 function loadCliWith(env: Record<string, string | undefined>) {
   const saved: Record<string, string | undefined> = {};
-  for (const k of ["STOA_PORT", "PORT"]) {
+  // STOA_SKIP_ENV_FILE disables the CLI's repo-root .env load at module load,
+  // so a developer's local .env (e.g. STOA_PORT=3022 for dogfooding) can't make
+  // these port-resolution assertions non-deterministic. No filesystem mutation.
+  const keys = ["STOA_PORT", "PORT", "STOA_SKIP_ENV_FILE"];
+  const overrides: Record<string, string | undefined> = {
+    ...env,
+    STOA_SKIP_ENV_FILE: "1",
+  };
+  for (const k of keys) {
     saved[k] = process.env[k];
-    if (env[k] === undefined) delete process.env[k];
-    else process.env[k] = env[k];
+    if (overrides[k] === undefined) delete process.env[k];
+    else process.env[k] = overrides[k];
   }
   delete require.cache[require.resolve(CLI_PATH)];
   try {
@@ -34,7 +44,7 @@ function loadCliWith(env: Record<string, string | undefined>) {
     };
   } finally {
     // Restore env so cases don't leak into each other.
-    for (const k of ["STOA_PORT", "PORT"]) {
+    for (const k of keys) {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
     }
@@ -122,5 +132,88 @@ describe("stoa CLI: port resolution (STOA_PORT must reach the server)", () => {
         if (!(k in saved)) delete (process.env as Record<string, string>)[k];
       Object.assign(process.env, saved);
     }
+  });
+});
+
+describe("stoa CLI: parseEnvFile (dependency-free .env parsing)", () => {
+  it("parses plain KEY=VALUE pairs", () => {
+    expect(parseEnvFile("STOA_PORT=3022\nFOO=bar")).toEqual({
+      STOA_PORT: "3022",
+      FOO: "bar",
+    });
+  });
+
+  it("ignores blank lines and # comments", () => {
+    const parsed = parseEnvFile(
+      "# a comment\n\nSTOA_PORT=3022\n   # indented\n"
+    );
+    expect(parsed).toEqual({ STOA_PORT: "3022" });
+  });
+
+  it("strips a leading `export ` and surrounding quotes", () => {
+    expect(parseEnvFile('export STOA_PORT="3022"')).toEqual({
+      STOA_PORT: "3022",
+    });
+    expect(parseEnvFile("TOKEN='ab c'")).toEqual({ TOKEN: "ab c" });
+  });
+
+  it("tolerates spaces around the = and keeps inner = signs", () => {
+    expect(parseEnvFile("STOA_PORT = 3022\nURL=http://x/?a=b")).toEqual({
+      STOA_PORT: "3022",
+      URL: "http://x/?a=b",
+    });
+  });
+
+  it("skips malformed keys and lines without =", () => {
+    expect(parseEnvFile("123BAD=x\nnoequals\nOK=1")).toEqual({ OK: "1" });
+  });
+
+  it("strips a leading UTF-8 BOM (Windows editors write .env BOM-first)", () => {
+    expect(parseEnvFile("\uFEFFSTOA_PORT=3022\nFOO=bar")).toEqual({
+      STOA_PORT: "3022",
+      FOO: "bar",
+    });
+  });
+});
+
+describe("stoa CLI: loadEnvFile (hydrate process.env without clobbering)", () => {
+  let dir: string;
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    dir = freshDir();
+    saved = {
+      STOA_PORT: process.env.STOA_PORT,
+      PORT: process.env.PORT,
+      FROM_FILE: process.env.FROM_FILE,
+    };
+    delete process.env.STOA_PORT;
+    delete process.env.PORT;
+    delete process.env.FROM_FILE;
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it("is a silent no-op when no .env exists", () => {
+    expect(loadEnvFile(dir)).toEqual({});
+    expect(process.env.STOA_PORT).toBeUndefined();
+  });
+
+  it("sets keys from .env when they are unset in the environment", () => {
+    writeFileSync(join(dir, ".env"), "STOA_PORT=3022\nFROM_FILE=yes\n");
+    loadEnvFile(dir);
+    expect(process.env.STOA_PORT).toBe("3022");
+    expect(process.env.FROM_FILE).toBe("yes");
+  });
+
+  it("does NOT clobber a value already in the real environment", () => {
+    process.env.STOA_PORT = "9999"; // real env wins
+    writeFileSync(join(dir, ".env"), "STOA_PORT=3022\nFROM_FILE=yes\n");
+    loadEnvFile(dir);
+    expect(process.env.STOA_PORT).toBe("9999");
+    expect(process.env.FROM_FILE).toBe("yes"); // unset key still filled
   });
 });

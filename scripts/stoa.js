@@ -23,6 +23,76 @@ const path = require("path");
 
 const IS_WINDOWS = process.platform === "win32";
 
+// ---------------------------------------------------------------------------
+// .env loader (dependency-free)
+//
+// Stoa ships no dotenv dependency and the server reads process.env at module
+// load, so a bare `.env` in the repo root would otherwise be ignored. The CLI
+// hydrates process.env from `.env` BEFORE resolving PORT (below) so that
+// `STOA_PORT=3022` in `.env` actually reaches the spawned server. Precedence
+// follows dotenv convention: a value already in the real environment WINS — the
+// file only fills in unset keys, so `STOA_PORT=... stoa start` still overrides.
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the text of a .env file into a plain key→value object. Pure (no I/O).
+ * Supports `KEY=VALUE`, `export KEY=VALUE`, surrounding single/double quotes,
+ * spaces around `=`, blank lines and `#` comments. No variable expansion and
+ * no inline-comment stripping (kept predictable). Invalid keys are skipped.
+ */
+function parseEnvFile(content) {
+  const out = {};
+  // Strip a leading UTF-8 BOM: Windows editors (Notepad, some PowerShell
+  // redirects) write .env files BOM-first, which would otherwise corrupt the
+  // first key (e.g. "\uFEFFSTOA_PORT") and silently drop it.
+  const text = String(content).replace(/^\uFEFF/, "");
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const body = line.startsWith("export ") ? line.slice(7).trim() : line;
+    const eq = body.indexOf("=");
+    if (eq === -1) continue;
+    const key = body.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let value = body.slice(eq + 1).trim();
+    // Strip one layer of matching surrounding quotes.
+    if (
+      value.length >= 2 &&
+      ((value[0] === '"' && value[value.length - 1] === '"') ||
+        (value[0] === "'" && value[value.length - 1] === "'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Read `<dir>/.env` (if present) and set any keys NOT already in process.env.
+ * Missing file is a silent no-op. Returns the parsed object (for tests).
+ * Set STOA_SKIP_ENV_FILE=1 to disable entirely (used by tests so a developer's
+ * local repo-root .env can't make env-dependent assertions non-deterministic).
+ */
+function loadEnvFile(dir) {
+  if (process.env.STOA_SKIP_ENV_FILE === "1") return {};
+  const envPath = path.join(dir, ".env");
+  if (!fs.existsSync(envPath)) return {};
+  let parsed = {};
+  try {
+    parsed = parseEnvFile(fs.readFileSync(envPath, "utf8"));
+  } catch {
+    return {};
+  }
+  for (const [k, v] of Object.entries(parsed)) {
+    if (process.env[k] === undefined) process.env[k] = v;
+  }
+  return parsed;
+}
+
+// Hydrate from the repo-root .env before any env-derived constant is resolved.
+loadEnvFile(path.resolve(__dirname, ".."));
+
 // Port the server listens on. STOA_PORT is the documented knob; a raw PORT is
 // also honored. This single resolved value is used for BOTH the displayed URL
 // and the spawned server's env, so the two can never diverge.
@@ -504,4 +574,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { isGitInstall, serverEnv, PORT };
+module.exports = { isGitInstall, serverEnv, PORT, parseEnvFile, loadEnvFile };
