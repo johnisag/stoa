@@ -8,9 +8,10 @@ Priority B (Performance)** shipped; and the **entire round-1 competitive scan �
 the WS-events milestone, the security trio, actionable push, and cost &
 governance — has now shipped (PRs #55–#91).**
 
-The forward menu is the **🔭 competitive feature scan (round 2)** below — a fresh
-5-segment web-research fan-out run against what Stoa already ships. Pick
-deliberately. `D`=demand, `E`=effort, ⭐=differentiator for Stoa's angle.
+The 🔭 **Next horizons** scan (round 2) below is the _backlog menu_ of unbuilt
+work, demand/effort-ranked (`D`=demand, `E`=effort, ⭐=differentiator for Stoa's
+angle). The **committed near-term sequence** drawn from it is the **▶ ACTIVE
+PLAN** section below — that is the single source of "what's next."
 
 **Round-2 update (2026-06-05):** the round-2 _flagship_ — the **review & rewind
 layer** — has now **fully shipped** (Stages 1–3, PRs #93–#95), along with the
@@ -18,6 +19,53 @@ layer** — has now **fully shipped** (Stages 1–3, PRs #93–#95), along with 
 control-plane UI), and the **CRITICAL macOS scrollbar bug** (#98 + #106). See
 "✅ Shipped since round 2" below; the remaining unbuilt horizons are re-ranked
 under "🔭 Next horizons."
+
+**Reality-sync (2026-06-06):** this roadmap had drifted behind `main`. Two
+corrections: (1) the **independent reviewer-agent gate** — listed below as the
+"▶ NEXT BIG FEATURE" — **already shipped** (#118, `lib/dispatch/reviewer.ts`),
+together with the full **Dispatch fleet** maturation (#109–#124: merge cockpit,
+fix loop, schedule, source pickers, on-demand triage). (2) The **always-on
+service / autostart** feature (#123) was **reverted by choice** (#125) —
+autostart is the operator's decision, not Stoa's. The forward plan is now the
+**▶ ACTIVE PLAN** section directly below.
+
+---
+
+## ▶ ACTIVE PLAN (2026-06-06) — agreed execution order
+
+The current committed sequence. Each item ships as its own PR through the
+3-OS CI matrix + 3-agent review gate; tick the box here as it lands.
+
+1. [ ] **Port-config bug fix** _(E:S)_ — the CLI (`scripts/stoa.js`) reads
+   `STOA_PORT` for display/status, but the server (`server.ts`) reads `PORT`,
+   and `cmdStart`/`cmdUpdate` spawn `npm start` **without passing the port
+   through** — so the displayed port and the listening port silently diverge,
+   and `STOA_PORT` doesn't actually move the server. Fix: pass
+   `env: { ...process.env, PORT }` into the spawned server so `STOA_PORT` is
+   authoritative end-to-end. Regression test in `test/stoa-cli.test.ts`.
+   _(Fix the repo bug — not a per-machine `stoa.cmd` wrapper.)_
+2. [ ] **Tier-2 daemon `uncaughtException` guard + lifecycle tests** _(E:S)_ —
+   the pty-host daemon has no top-level exception guard, so one unhandled throw
+   kills **every** live session at once (the largest stability blast-radius in
+   the tree). Add a per-connection keep-alive guard + lock the three untested
+   Tier-2 lifecycle contracts (exit-over-IPC, exit-after-reconnect,
+   Tier-2→Tier-1 fallback). Don't build new Windows features on a daemon one
+   bad frame can take down.
+3. [ ] **Audit / event ledger** ⭐ _(E:M)_ — an append-only per-session ledger
+   of commands / writes / tool-calls / tokens / cost / durations / approval
+   outcomes, written at the existing pty `onData` + `session.write` seams into
+   the existing `better-sqlite3` store. This is the **Windows-safety moat**
+   ("what did the agent run") **and** the raw substrate for analytics (item 4) —
+   one ledger, viewed twice. First brick of the unshipped Trust & Safety
+   cluster; the permission policy later hooks the same seam and routes "ask"
+   through the shipped approve/reject push.
+4. [ ] **Analytics view on the ledger** _(E:M)_ — insights dashboard over the
+   item-3 ledger (cost per merged PR, reviewer-gate pass rate, where sessions
+   stall, cost per repo), all on-box. **Keep `better-sqlite3` as the source of
+   truth — do NOT swap it for DuckDB** (SQLite is right for the OLTP workload;
+   a DuckDB native addon adds 3-OS install pain). Only if SQLite's own
+   aggregates prove insufficient, add DuckDB **read-side** pointed at the
+   existing sqlite file via `sqlite_scanner` (zero ETL, zero migration).
 
 ---
 
@@ -71,7 +119,7 @@ for good.
 
 ---
 
-## ✅ Shipped since round 2 (PRs #93–#108)
+## ✅ Shipped since round 2 (PRs #93–#124)
 
 - **The review & rewind layer — COMPLETE (the round-2 flagship)** — **Stage 1**
   session diff review, see exactly what the agent changed (#93); **Stage 2**
@@ -81,10 +129,21 @@ for good.
   via a safety snapshot (#95). One substrate, both flagship features.
 - **Prompt queue** (#96) — line up the next tasks while an agent works; dispatch
   follow-ups in order on idle, no interrupt. The top "async cockpit" item.
-- **Dispatch — GitHub issue → agent fleet** — the **engine** (#104, issue→fleet
-  reconciler) + the **control-plane UI** (#108, allocation console + backlog +
-  in-flight board). Covers "issue-tracker ingestion" and the server-side
-  fire-and-forget dispatch path.
+- **Dispatch — GitHub issue → agent fleet (matured #104–#124)** — the **engine**
+  (#104, issue→fleet reconciler) + the **control-plane UI** (#108, allocation
+  console + backlog + in-flight board), then the full fleet build-out: source
+  pickers (#110–#112 Stoa-project / disk-scan / GitHub-repo, clone-if-needed),
+  create-an-issue from Stoa (#113), schedule-for-later (#115), **merge cockpit**
+  (#117 review the diff + merge a worker's PR), **independent reviewer gate**
+  (#118 auto-critic each PR, verdict in the cockpit — opt-in), **fix loop**
+  (#119 re-task on changes-requested, then re-review), dismiss + retry for
+  failed cards (#120), in-app "How it works" guide (#121), and on-demand issue
+  triage (#124, browse a repo's open backlog from the cockpit). _Note:_ the
+  reviewer gate is currently **advisory** (the verdict is surfaced; merge stays
+  the user's tap) and the critic is read-only by prompt — making it
+  merge-blocking + tool-enforced read-only is a tracked follow-up.
+- **Reverted by choice** — always-on service / autostart parity (#123) was
+  undone (#125); running Stoa as a supervised service is left to the operator.
 - **Orchestration polish** — agent type shown on worker cards + sidebar rows
   (#99); conductor id is the baked id, authoritative over the agent's guess (#97).
 - **Terminal / UI fixes** — bulletproof reconnect with no duplicated scrollback
@@ -115,28 +174,23 @@ no-competitor-owns-it angle) and an **"approve & merge worktree"** action are no
 yet built on top of the shipped diff + snapshot plumbing — candidates for a
 fast-follow once the next flagship lands.
 
-### ▶ NEXT BIG FEATURE — Independent reviewer-agent gate ⭐ _(D:high · E:M)_
+### ✅ SHIPPED — Independent reviewer-agent gate ⭐ _(was NEXT BIG FEATURE)_
 
-**A fresh critic session that sees only the spec + the diff and returns
-PASS / structured violations — blocking merge, with FAIL routed to an actionable
-push.** This is the machine half of the review-bottleneck thesis: human review
-just shipped (#93–95), so the next leverage is automating the first pass.
-"Self-review is compromised" is cross-segment consensus. It's the **cheapest big
-orchestration win** because a reviewer is just another spawned worker role — it
-stacks directly on what already ships: the session diff (#93), the
-conductor→worker spawn seam, and actionable approve/reject push (#90/#91).
-_Where:_ spawn a reviewer worker with a locked prompt (spec + `getSessionDiff`
-output, no repo write); parse its PASS/violations into a structured verdict;
-gate the existing "approve & merge" path on it; FAIL → push with the violations.
-_Risk:_ keep the critic read-only (no tools that mutate the tree); cross-platform
-git via `execFile` (no shell); don't let a flaky critic hard-block — make the
-gate advisory-with-override first, enforcing later.
+**Shipped in #118** (`lib/dispatch/reviewer.ts`): a fresh critic session reviews
+each worker PR and returns a PASS / request-changes verdict surfaced in the
+merge cockpit, with the **fix loop** (#119) re-tasking the worker on
+changes-requested and then re-reviewing (bounded by `MAX_FIX_ROUNDS`). This was
+the machine half of the review-bottleneck thesis. _Follow-ups still open (tracked
+as "Reviewer gate — enforcing mode" under Orchestration endgame):_ the gate is
+**advisory** today — the verdict is shown but merge isn't blocked on it — and the
+critic is kept read-only by **prompt wording only** (it's spawned with
+auto-approve). Making it (a) merge-blocking with override and (b) tool-enforced
+read-only is the remaining hardening.
 
 ### Async cockpit (lowest-effort; compounds the shipped push + mobile)
 
-- [ ] **Prompt queue — type the next tasks while it works** ⭐ _(D:high · E:M)_ —
-  dispatch follow-ups in order on idle, no interrupt (claude-code #50246 = 68
-  reactions, closed "not planned" upstream → wrapper-shaped). Stoa owns stdin + the
+- [x] **Prompt queue — type the next tasks while it works** ⭐ ✅ **SHIPPED (#96)** —
+  dispatch follow-ups in order on idle, no interrupt. Stoa owns stdin + the
   idle/working signal.
 - [ ] **Auto-resume after rate-limit reset** ⭐ _(D:high · E:S–M)_ — detect "usage
   limit reached" off the rendered screen, count down, auto-continue when the window
@@ -154,7 +208,7 @@ gate advisory-with-override first, enforcing later.
   an argv-matched gate at the transport seam, provider-agnostic, where "ask" routes
   through the shipped approve/reject push. In-agent probabilistic escalation is
   bypassable by subprocesses; a hard runner gate isn't.
-- [ ] **Command audit log — "what did the agent run"** ⭐ _(D:high · E:M)_ — a
+- [ ] **Command audit log — "what did the agent run"** ⭐ _(D:high · E:M)_ **→ promoted to ▶ ACTIVE PLAN item 3 (audit/event ledger)** — a
   persisted, searchable per-session ledger of commands / writes / tool-calls + which
   approval gate each passed. Self-hosters value audit above all; compliance now
   requires the full execution chain.
@@ -170,18 +224,17 @@ gate advisory-with-override first, enforcing later.
 
 ### Orchestration endgame (builds on conductor→worker)
 
-- [ ] **Independent reviewer-agent gate** ⭐ _(D:high · E:M)_ — a fresh critic
-  session sees only spec + diff, returns PASS / structured violations; blocks merge,
-  FAIL → actionable push. "Self-review is compromised" is consensus. Cheapest big
-  win: a reviewer is just another spawned worker role.
+- [ ] **Reviewer gate — enforcing mode** ⭐ _(D:high · E:M)_ — the reviewer-agent
+  gate shipped advisory (#118); harden it to (a) block the merge path on a
+  request-changes verdict (with explicit human override) and (b) enforce the
+  critic's read-only contract at the runner/tool seam, not just in the prompt.
 - [ ] **Agent merge queue — safe landing** ⭐ _(D:high · E:L)_ — serialize each
   worker's branch onto `main`, run the combined test suite, auto-rebase-and-retry,
   merge only if green. The endgame for a conductor that fans out N branches (today
   the human lands them by hand).
-- [ ] **Issue-tracker ingestion (GitHub Issues first)** ⭐ _(D:high · E:M)_ — pull a
-  ticket → spawn a worker with its context → PR/status back. The feature Emdash
-  wins deals on; cheap via `gh` (already the sanctioned CLI); "triage your backlog
-  and dispatch the fleet from your phone."
+- [x] **Issue-tracker ingestion (GitHub Issues first)** ⭐ ✅ **SHIPPED (#104–#124)** —
+  pull a ticket → spawn a worker with its context → PR/status back, now the full
+  Dispatch fleet. The feature Emdash wins deals on; built on `gh`.
 
 ### Mobile inputs
 
@@ -240,9 +293,9 @@ Lower-profile than the feature horizons but real.
   ref-counted detach in #84). Proper fix: `Map<key, Set<sub>>` + a sub-id in the
   detach protocol.
 - [ ] **Daemon `uncaughtException` guard + scoped retry on the flaky Windows pty test**
-  _(P:med · E:S)_ — one unhandled throw in the Tier-2 daemon kills every live
+  _(P:med · E:S)_ **→ promoted to ▶ ACTIVE PLAN item 2** — one unhandled throw in the Tier-2 daemon kills every live
   session; add per-connection keep-alive + `it.retry` on the node-pty spawn specs.
-- [ ] **Lock the untested Tier-2 lifecycle contracts** _(P:med · E:M)_ — exit-over-IPC,
+- [ ] **Lock the untested Tier-2 lifecycle contracts** _(P:med · E:M)_ **→ folded into ▶ ACTIVE PLAN item 2** — exit-over-IPC,
   exit-after-reconnect (a short agent exiting during a socket drop repaints as
   alive), Tier-2→Tier-1 fallback.
 
