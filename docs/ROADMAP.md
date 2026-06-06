@@ -36,14 +36,16 @@ autostart is the operator's decision, not Stoa's. The forward plan is now the
 The current committed sequence. Each item ships as its own PR through the
 3-OS CI matrix + 3-agent review gate; tick the box here as it lands.
 
-1. [ ] **Port-config bug fix** _(E:S)_ — the CLI (`scripts/stoa.js`) reads
+1. [x] **Port-config bug fix** ✅ **DONE** — the CLI (`scripts/stoa.js`) read
    `STOA_PORT` for display/status, but the server (`server.ts`) reads `PORT`,
-   and `cmdStart`/`cmdUpdate` spawn `npm start` **without passing the port
-   through** — so the displayed port and the listening port silently diverge,
-   and `STOA_PORT` doesn't actually move the server. Fix: pass
-   `env: { ...process.env, PORT }` into the spawned server so `STOA_PORT` is
-   authoritative end-to-end. Regression test in `test/stoa-cli.test.ts`.
-   _(Fix the repo bug — not a per-machine `stoa.cmd` wrapper.)_
+   and `cmdStart`/`cmdRun` spawned `npm start` **without passing the port
+   through** — so the displayed port and the listening port silently diverged,
+   and `STOA_PORT` didn't actually move the server. Fixed: a single resolved
+   `PORT` (`STOA_PORT || PORT || 3011`) now drives both the displayed URL and a
+   `serverEnv()` passed to every server spawn (case-collision-safe on Windows);
+   `.env.example` documents `STOA_PORT`. Regression tests in
+   `test/stoa-cli.test.ts`. _(Fixed the repo bug — not a per-machine
+   `stoa.cmd` wrapper.)_
 2. [ ] **Tier-2 daemon `uncaughtException` guard + lifecycle tests** _(E:S)_ —
    the pty-host daemon has no top-level exception guard, so one unhandled throw
    kills **every** live session at once (the largest stability blast-radius in
