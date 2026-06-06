@@ -68,6 +68,10 @@ export interface IssueDispatch {
   reviewer_session_id: string | null;
   /** Cached GitHub reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED). */
   review_decision: string | null;
+  /** How many fix rounds the worker has done in response to review feedback. */
+  fix_rounds: number;
+  /** Session id of the in-flight fixer worker (null when none running). */
+  fixer_session_id: string | null;
   created_at: string;
   updated_at: string;
 }

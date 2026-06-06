@@ -387,6 +387,21 @@ export const queries = {
       `UPDATE issue_dispatches SET review_decision = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // Fix loop: start a fix round (record the fixer session, bump the counter).
+  startFixRound: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET fixer_session_id = ?, fix_rounds = fix_rounds + 1, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Fix loop: a fixer finished — clear reviewer + decision + fixer so the next
+  // tick spawns a fresh critic against the updated PR (re-review).
+  resetForReReview: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET reviewer_session_id = NULL, review_decision = NULL, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
+    ),
+
   // Dispatch — issue pipeline rows
   getDispatchByRepoIssue: (db: Database.Database) =>
     getStmt(
