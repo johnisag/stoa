@@ -102,6 +102,35 @@ describe("pty registry / PtySession", () => {
     killSession("test-fallback");
   });
 
+  it("dedupes a no-op resize so it never SIGWINCHes the pty (Android typing-lag guard)", () => {
+    // Each pty.resize() raises SIGWINCH, making a TUI repaint its whole screen.
+    // Android's soft keyboard fires visualViewport `resize` repeatedly while
+    // typing, re-sending an identical size every time; without this guard each
+    // one floods the terminal with redraw and buries the keystroke ("typing lag").
+    const session = spawnSession("test-resize", {
+      binary: "node",
+      args: ["-e", "setTimeout(() => {}, 10000)"],
+      cwd: process.cwd(),
+    });
+    // Reach into the live pty to count the resizes that actually reach the OS.
+    const pty = (
+      session as unknown as { pty: { resize: (c: number, r: number) => void } }
+    ).pty;
+    const spy = vi.spyOn(pty, "resize");
+
+    session.resize(123, 45); // real change — goes through
+    session.resize(123, 45); // identical — must be swallowed (no SIGWINCH storm)
+    session.resize(123, 45);
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    session.resize(124, 46); // genuine new size — passes through again
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenLastCalledWith(124, 46);
+
+    spy.mockRestore();
+    killSession("test-resize");
+  });
+
   it("reaps a session from the registry when its process exits", async () => {
     spawnSession("test-reap", {
       binary: "node",
