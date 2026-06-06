@@ -93,16 +93,91 @@ export function buildReviewPrompt(
   );
 }
 
+/** Max worker fix rounds before a PR is left for a human (env-overridable;
+ * `STOA_MAX_FIX_ROUNDS=0` validly disables the fixer, leaving critic-only). */
+export const MAX_FIX_ROUNDS = (() => {
+  const raw = process.env.STOA_MAX_FIX_ROUNDS;
+  if (raw == null) return 2;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 2;
+})();
+
+export type ReviewAction =
+  | "spawn_critic"
+  | "spawn_fixer"
+  | "rereview"
+  | "wait"
+  | "approved"
+  | "stuck"
+  | "idle";
+
 /**
- * Spawn a critic agent in the worker's existing worktree to review its PR.
- * Returns the new reviewer session id (the caller records it), or null on
- * failure. Reuses the worker spawn recipe minus worktree creation.
+ * Pure state machine for the review/fix loop on one open PR. Unit-tested.
+ *   no critic yet            → spawn_critic
+ *   critic: APPROVED         → approved (ready to merge)
+ *   critic: CHANGES_REQUESTED → spawn_fixer (under cap) else stuck (needs human)
+ *   fixer running            → wait
+ *   fixer finished           → rereview (clear + re-spawn a fresh critic)
  */
-export async function spawnReviewer(
+export function nextReviewAction(input: {
+  reviewGate: boolean;
+  status: string;
+  prNumber: number | null;
+  reviewerSessionId: string | null;
+  reviewDecision: string | null;
+  fixerSessionId: string | null;
+  fixerAlive: boolean;
+  fixRounds: number;
+  maxFixRounds: number;
+}): ReviewAction {
+  if (
+    !input.reviewGate ||
+    input.status !== "pr_open" ||
+    input.prNumber == null
+  ) {
+    return "idle";
+  }
+  if (input.fixerSessionId && input.fixerAlive) return "wait";
+  if (input.fixerSessionId && !input.fixerAlive) return "rereview";
+  if (!input.reviewerSessionId) return "spawn_critic";
+  if (input.reviewDecision === "APPROVED") return "approved";
+  if (input.reviewDecision === "CHANGES_REQUESTED") {
+    return input.fixRounds < input.maxFixRounds ? "spawn_fixer" : "stuck";
+  }
+  return "idle"; // pending / unknown — keep polling the decision
+}
+
+/** The fixer's brief: address the review feedback and push to the SAME branch
+ * (updates the existing PR — no new PR). Pure (unit-tested). */
+export function buildFixPrompt(repo: DispatchRepo, d: IssueDispatch): string {
+  return (
+    `[Stoa] A reviewer requested changes on pull request #${d.pr_number} in ` +
+    `${repo.repo_slug} (issue #${d.issue_number}: "${d.issue_title ?? ""}").\n\n` +
+    `You are in the PR's worktree.\n\n` +
+    `1. Read the feedback and the diff:\n` +
+    `   gh pr view ${d.pr_number} --comments\n` +
+    `   gh pr diff ${d.pr_number}\n` +
+    `2. Implement the requested changes, commit them, and PUSH to the SAME ` +
+    `branch (git push). Do NOT open a new PR — pushing updates PR #${d.pr_number}.\n` +
+    `3. Keep the changes scoped to the feedback.`
+  );
+}
+
+/**
+ * Spawn an agent in the worker's existing worktree (no new worktree). Records
+ * the session id on the dispatch row via `onSpawn` BEFORE the backend create, so
+ * the spawn-once guard holds even if create throws. Returns the session id or
+ * null on failure. autoApprove so the agent runs gh/git unattended (prompt-
+ * bounded; the inherent opt-in risk).
+ */
+async function spawnInWorktree(
   repo: DispatchRepo,
-  d: IssueDispatch
+  d: IssueDispatch,
+  sessionName: string,
+  prompt: string,
+  onSpawn: (sessionId: string) => void
 ): Promise<string | null> {
-  if (!d.worktree_path || d.pr_number == null) return null;
+  if (!d.worktree_path) return null;
   try {
     const db = getDb();
     const provider = getProvider(repo.agent_type);
@@ -118,7 +193,7 @@ export async function spawnReviewer(
       .createSession(db)
       .run(
         sessionId,
-        `review #${d.pr_number}`,
+        sessionName,
         tmuxName,
         cwd,
         null,
@@ -129,13 +204,12 @@ export async function spawnReviewer(
         1,
         repo.project_id ?? "uncategorized"
       );
-    // Record the reviewer id BEFORE spawning so the spawn-once guard fires even
-    // if the backend create throws — never spawn two critics on one PR.
-    queries.setDispatchReviewer(db).run(sessionId, d.id);
-    const prompt = buildReviewPrompt(repo, d);
-    // autoApprove so the critic can run `gh pr diff/review` unattended. The prompt
-    // bounds it to read-only + one review; tool access isn't hard-enforced, which
-    // is the inherent (opt-in, default-off) risk of an unattended review agent.
+    // Persist worktree/branch on the session row (consistency with dispatcher)
+    // so reviewer/fixer sessions are complete for diff/branch lookups.
+    queries
+      .updateSessionWorktree(db)
+      .run(cwd, d.branch_name, repo.base_branch, null, sessionId);
+    onSpawn(sessionId); // record id BEFORE create (spawn-once)
     const { binary, args } = buildAgentArgs(repo.agent_type, {
       model,
       autoApprove: true,
@@ -154,9 +228,39 @@ export async function spawnReviewer(
     return sessionId;
   } catch (err) {
     console.error(
-      `reviewer spawn failed for ${repo.repo_slug}#${d.issue_number}:`,
+      `spawn (${sessionName}) failed for ${repo.repo_slug}#${d.issue_number}:`,
       err
     );
     return null;
   }
+}
+
+/** Spawn the critic that reviews the PR (records reviewer_session_id). */
+export async function spawnReviewer(
+  repo: DispatchRepo,
+  d: IssueDispatch
+): Promise<string | null> {
+  if (d.pr_number == null) return null;
+  return spawnInWorktree(
+    repo,
+    d,
+    `review #${d.pr_number}`,
+    buildReviewPrompt(repo, d),
+    (sid) => queries.setDispatchReviewer(getDb()).run(sid, d.id)
+  );
+}
+
+/** Spawn a fixer that addresses review feedback (records fixer + bumps round). */
+export async function spawnFixer(
+  repo: DispatchRepo,
+  d: IssueDispatch
+): Promise<string | null> {
+  if (d.pr_number == null) return null;
+  return spawnInWorktree(
+    repo,
+    d,
+    `fix #${d.pr_number}`,
+    buildFixPrompt(repo, d),
+    (sid) => queries.startFixRound(getDb()).run(sid, d.id)
+  );
 }

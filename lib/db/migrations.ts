@@ -290,6 +290,18 @@ const migrations: Migration[] = [
       db.exec(`ALTER TABLE issue_dispatches ADD COLUMN review_decision TEXT`);
     },
   },
+  {
+    id: 19,
+    name: "add_fix_loop_columns",
+    up: (db) => {
+      // Fix loop: on CHANGES_REQUESTED a fixer worker addresses the feedback
+      // (capped by fix_rounds); fixer_session_id tracks the in-flight fixer.
+      db.exec(
+        `ALTER TABLE issue_dispatches ADD COLUMN fix_rounds INTEGER NOT NULL DEFAULT 0`
+      );
+      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN fixer_session_id TEXT`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

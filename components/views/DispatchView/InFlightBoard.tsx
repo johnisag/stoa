@@ -139,11 +139,14 @@ function Card({
           )}
         >
           review:{" "}
-          {d.review_decision === "CHANGES_REQUESTED"
-            ? "changes requested"
-            : d.review_decision
-              ? d.review_decision.toLowerCase().replace(/_/g, " ")
-              : "pending"}
+          {d.fixer_session_id
+            ? "fixing…"
+            : d.review_decision === "CHANGES_REQUESTED"
+              ? "changes requested"
+              : d.review_decision
+                ? d.review_decision.toLowerCase().replace(/_/g, " ")
+                : "pending"}
+          {d.fix_rounds > 0 && ` (round ${d.fix_rounds})`}
         </span>
       )}
 

@@ -18,9 +18,11 @@ import { expandHome } from "../platform";
 import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
 import {
-  shouldSpawnReviewer,
+  nextReviewAction,
   spawnReviewer,
+  spawnFixer,
   getReviewDecision,
+  MAX_FIX_ROUNDS,
 } from "./reviewer";
 import type { DispatchRepo, IssueDispatch, SlotInputs } from "./types";
 
@@ -212,26 +214,63 @@ export async function sweepActiveWorkers(opts: {
 export async function reviewGatePass(): Promise<void> {
   const db = getDb();
   const prOpen = queries.listPrOpen(db).all() as IssueDispatch[];
+  if (prOpen.length === 0) return;
+
+  // One backend list for the whole pass — used to tell if a fixer is still live.
+  let liveNames: Set<string>;
+  try {
+    liveNames = new Set(await getSessionBackend().list());
+  } catch {
+    liveNames = new Set();
+  }
+  const isAlive = (sessionId: string | null): boolean => {
+    if (!sessionId) return false;
+    const s = queries.getSession(db).get(sessionId) as Session | undefined;
+    return !!s && liveNames.has(s.tmux_name);
+  };
+
   for (const d of prOpen) {
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
       | DispatchRepo
       | undefined;
     if (!repo || repo.review_gate !== 1) continue;
-    if (shouldSpawnReviewer(repo, d)) {
-      // spawnReviewer records reviewer_session_id itself (spawn-once). The
-      // critic hasn't posted yet, so skip the decision poll until a later tick.
-      await spawnReviewer(repo, d);
-      continue;
-    }
-    if (d.worktree_path && d.pr_number != null) {
-      const decision = await getReviewDecision(
+
+    const fixerAlive = isAlive(d.fixer_session_id);
+
+    // Keep the cached decision fresh once a critic has run and no fixer is active.
+    let decision = d.review_decision;
+    if (
+      d.reviewer_session_id &&
+      !fixerAlive &&
+      d.worktree_path &&
+      d.pr_number != null
+    ) {
+      const fresh = await getReviewDecision(
         expandHome(d.worktree_path),
         d.pr_number
       );
-      if (decision && decision !== d.review_decision) {
-        queries.setDispatchReviewDecision(db).run(decision, d.id);
+      if (fresh && fresh !== decision) {
+        queries.setDispatchReviewDecision(db).run(fresh, d.id);
+        decision = fresh;
       }
     }
+
+    const action = nextReviewAction({
+      reviewGate: true,
+      status: d.status,
+      prNumber: d.pr_number,
+      reviewerSessionId: d.reviewer_session_id,
+      reviewDecision: decision,
+      fixerSessionId: d.fixer_session_id,
+      fixerAlive,
+      fixRounds: d.fix_rounds,
+      maxFixRounds: MAX_FIX_ROUNDS,
+    });
+
+    if (action === "spawn_critic") await spawnReviewer(repo, d);
+    else if (action === "spawn_fixer") await spawnFixer(repo, d);
+    else if (action === "rereview") queries.resetForReReview(db).run(d.id);
+    // wait / approved / stuck / idle → nothing to do this tick
   }
 }
 

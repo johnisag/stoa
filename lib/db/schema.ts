@@ -150,6 +150,8 @@ export function createSchema(db: Database.Database): void {
       scheduled_at TEXT,
       reviewer_session_id TEXT,
       review_decision TEXT,
+      fix_rounds INTEGER NOT NULL DEFAULT 0,
+      fixer_session_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE,
