@@ -14,7 +14,9 @@
     "prepare": "husky"
   },
   "files": {
-    ".claude/agents/code-reviewer/AGENT.md": "32cca417efa272c84b6bab7048d8443721a5e792a47779b4c4cb87bc28863ef1",
+    ".claude/agents/code-reviewer-conventions/AGENT.md": "daa83fca674af98c5f0650f23118bdb4f9236c3f32d196e12bfe1d4139f3b6a2",
+    ".claude/agents/code-reviewer-correctness/AGENT.md": "33c92e0ba2475fbcb9acf5def9ec45d6647fb572cbab12e2425bf11424ceabe8",
+    ".claude/agents/code-reviewer-simplicity/AGENT.md": "19aa3d05f2add9a20e4b9225260aaff63fbd7d6baad3f755b13a86f904dbc754",
     ".claude/commands/commit.md": "ecde998fbd4c5366078dd3b04942ae562cdf502b5421801b7f8833ca58dc3310",
     ".claude/commands/setup.md": "273d61ee4491504145353da5f8d737217d383fc5ab59eaf167bf65c0ec3aeb29",
     ".claude/skills/debugging/SKILL.md": "9c2e530580db8d42dc06b8aba3f47a86f5038a7c3f7a96d2c86add718469ea0e",
@@ -25,17 +27,19 @@
     ".github/workflows/test.yml": "29982cc39802717cefd6f5bf17acb4a58ce9ed6d6b7c7d2a411ebad26275bdff",
     ".husky/pre-commit": "042eaf5386ffbfccd14639db8112e12d297a7d4d2caf25c36a4b10edcb822fc2",
     "scripts/guard-surfaces.mjs": "c0df0792d415c96570b204b69cd49ea9be606a157e2c0683d78c03b07530afd1",
+    "scripts/install-service.ps1": "47281d72a40d5a72b8eff78ec1e127a6d61bdd78f688e2ebf8adfac28ac91e47",
     "scripts/install.ps1": "5e86f980272fe6f6ec7f911b61bd880c7da71a355e67f4960bbc76372cfd9b9f",
     "scripts/install.sh": "6b673db658df993ace3291280996f8fca499e4bbabca441c87fd95113ba95149",
     "scripts/lib/ai-clis.sh": "0019827ec924018f9fb91a26cf64cc020ddf097aca7d36dc58feedae2cc048fb",
-    "scripts/lib/commands.sh": "fda45d3a4c46b6679339c8e26c1730ff8f2673209a8cdc515f719d32edab8d73",
-    "scripts/lib/common.sh": "e6ab975d4bde0ae409664e3f553ab125febbe139313314e4df2de9207762397f",
+    "scripts/lib/commands.sh": "2949d346448430cd6f9c23331c877b5e2201628aa4834418d5925c6c25cc89b2",
+    "scripts/lib/common.sh": "612b51d93f2dde7f1e25792fecc1aacdb1288330ac3b51024c00edbf380d170d",
     "scripts/lib/prerequisites.sh": "a4e99781938cfc2add823e82abd365da33c627296ed019f1379072a4e6b76a9f",
     "scripts/postinstall.js": "53bb659676007f2c842b753f25436c33471e52581e279057d499b9165cfb8764",
     "scripts/precommit.js": "cd5b697d4d96842b998c975bf955617f18566605779b1d2578f1381c0f4065d7",
     "scripts/pty-host.ts": "490174e586be52ae510ed339d67b1852f0a541c1de5fcde622205ee31a82c19a",
     "scripts/setup.sh": "cfdeb6f0ad53698ab160a5c218b9a1cf20fa38333913371f4279d4a56e71be7a",
     "scripts/stoa": "025d1b56b00f67008a074bb712f326bfd03d7bef358d5bb2c75b1eeb49910165",
-    "scripts/stoa.js": "18ebd7fadfcfca9b8d6a9d0b14591328c782225d4979b839213e011e69f2c946"
+    "scripts/stoa.js": "18ebd7fadfcfca9b8d6a9d0b14591328c782225d4979b839213e011e69f2c946",
+    "scripts/update-service.ps1": "c78dc596530e3e661a6ac3b3db4d785e34a213bc748858be56fe4dce448f9764"
   }
 }
