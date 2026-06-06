@@ -346,8 +346,8 @@ export const queries = {
   createDispatchRepo: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, project_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, review_gate, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
 
   getDispatchRepo: (db: Database.Database) =>
@@ -365,11 +365,27 @@ export const queries = {
   updateDispatchRepo: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, review_gate = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
   deleteDispatchRepo: (db: Database.Database) =>
     getStmt(db, `DELETE FROM dispatch_repos WHERE id = ?`),
+
+  // Dispatch — reviewer gate
+  listPrOpen: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM issue_dispatches WHERE status = 'pr_open'`),
+
+  setDispatchReviewer: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET reviewer_session_id = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  setDispatchReviewDecision: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET review_decision = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
 
   // Dispatch — issue pipeline rows
   getDispatchByRepoIssue: (db: Database.Database) =>

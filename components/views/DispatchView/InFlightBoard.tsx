@@ -125,6 +125,28 @@ function Card({
         </a>
       )}
 
+      {/* Reviewer-gate verdict (advisory) — the critic's GitHub review decision.
+          Shows "pending" while a gated repo's critic hasn't posted yet. */}
+      {(d.review_decision || (repo?.review_gate === 1 && isPrOpen)) && (
+        <span
+          className={cn(
+            "inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[11px] font-medium",
+            d.review_decision === "APPROVED"
+              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+              : d.review_decision === "CHANGES_REQUESTED"
+                ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                : "bg-muted text-muted-foreground"
+          )}
+        >
+          review:{" "}
+          {d.review_decision === "CHANGES_REQUESTED"
+            ? "changes requested"
+            : d.review_decision
+              ? d.review_decision.toLowerCase().replace(/_/g, " ")
+              : "pending"}
+        </span>
+      )}
+
       {/* Review the diff + merge the PR, right from Stoa (merge is your tap;
           Stoa never auto-merges). Only while the PR is open. */}
       {isPrOpen && (

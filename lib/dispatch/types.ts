@@ -29,6 +29,8 @@ export interface DispatchRepo {
   mode: DispatchMode;
   /** 0/1 — paused vs active. */
   enabled: number;
+  /** 0/1 — opt-in reviewer gate: spawn a critic agent on each worker's PR. */
+  review_gate: number;
   project_id: string | null;
   created_at: string;
   updated_at: string;
@@ -62,6 +64,10 @@ export interface IssueDispatch {
   dispatched_at: string | null;
   /** ISO time a 'scheduled' row becomes eligible (promoted to 'pending'). */
   scheduled_at: string | null;
+  /** Session id of the spawned critic agent (spawn-once guard). */
+  reviewer_session_id: string | null;
+  /** Cached GitHub reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED). */
+  review_decision: string | null;
   created_at: string;
   updated_at: string;
 }
