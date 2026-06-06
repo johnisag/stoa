@@ -264,6 +264,52 @@ read-only is the remaining hardening.
 
 ---
 
+## 🧭 Strategic horizons (2026-06-06) — two pillars
+
+Captured from a working session. Both are defensible *specifically* because Stoa
+is self-hosted and multi-provider (Claude + Codex + Hermes under one roof) —
+angles no single-vendor tool can own. Each lands through the standard PR + 3-OS
+CI + 3-agent gate when picked up.
+
+### Pillar 1 — Insight: the analytics layer (3 stages on one ledger)
+
+Built on ACTIVE PLAN item 3's append-only audit/event ledger — three lenses on
+one substrate, not three separate builds. Sequenced easiest→hardest:
+
+- [ ] **Performance analytics** _(D:high · E:M)_ — tokens, cost, session
+  duration, time-to-first-output, time-to-PR, reviewer-gate pass rate. Mostly
+  data already computed (`lib/session-cost.ts`, `pricing.ts`); this is ACTIVE
+  PLAN item 4. Ship first.
+- [ ] **Behavioural analytics** _(D:high · E:M–L)_ — "what each agent actually
+  does": command frequency, file-touch patterns, retry/loop rates, where
+  sessions stall. The audit-log payoff; needs the ledger's command/tool stream.
+- [ ] **Intelligence analytics** ⭐ _(D:high · E:L)_ — per-provider effectiveness
+  (Claude vs Codex vs Hermes) correlated with outcome signals (PR merged? tests
+  passed? reviewer verdict? human approve/reject?). Genuinely differentiating
+  (only multi-provider self-hosted cockpit) but measurement-design-heavy —
+  resist a vanity "score" until behavioural + outcome inputs are trustworthy.
+  Stage last.
+
+### Pillar 2 — Orchestration: declarative multi-provider workflows ⭐⭐
+
+- [ ] **Agent pipelines** _(D:high · E:L)_ — a declarative workflow spec
+  (YAML/JSON): steps, dependencies (sequential vs parallel), and which provider
+  runs each, driven by an executor over the EXISTING seams (`spawn_worker` MCP
+  orchestration, the prompt queue's idle dispatch, Dispatch fan-out). E.g.
+  "Claude drafts → Hermes reviews → Codex + Claude implement in parallel →
+  reviewer-gate merges." A multi-provider DAG no single-vendor tool can tell —
+  this generalizes the roadmap's "best-of-N compare" into full pipelines. A
+  category-definer alongside the Windows sandbox. _Risk:_ L-effort; needs
+  careful failure/partial-completion handling + rewind/snapshot integration.
+- [ ] **Unified triggers (cron + issue + manual)** _(D:med–high · E:M)_ — rather
+  than a standalone cron, make scheduling a TRIGGER TYPE that feeds the same
+  workflow executor: manual, cron ("every morning at 9, run this workflow on
+  this repo"), or GitHub-issue (the existing Dispatch path, #115 reconciler
+  already proves fire-on-schedule plumbing). One executor, three front doors —
+  avoids three half-built schedulers.
+
+---
+
 ## 🔧 Carried-over engineering backlog
 
 Still-valid items from the prior codebase scan + the ultra-review follow-ups.
