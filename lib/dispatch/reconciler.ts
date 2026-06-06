@@ -14,8 +14,14 @@
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session } from "../db";
 import { getSessionBackend } from "../session-backend";
+import { expandHome } from "../platform";
 import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
+import {
+  shouldSpawnReviewer,
+  spawnReviewer,
+  getReviewDecision,
+} from "./reviewer";
 import type { DispatchRepo, IssueDispatch, SlotInputs } from "./types";
 
 /**
@@ -124,6 +130,11 @@ export async function reconcileTick(): Promise<void> {
     // broadcast. guardEmptyList=false: 60s in, the backend is ready, so an empty
     // list genuinely means "no live sessions" and dead workers should be swept.
     await sweepActiveWorkers({ guardEmptyList: false });
+
+    // 5. Reviewer gate (opt-in per repo): spawn a critic on each new PR and
+    // refresh the cached GitHub review decision for the cockpit. Non-gated repos
+    // are skipped, so this is a no-op unless a repo armed `review_gate`.
+    await reviewGatePass();
   } catch (err) {
     console.error("dispatch reconcile tick failed:", err);
   } finally {
@@ -193,6 +204,37 @@ export async function sweepActiveWorkers(opts: {
  * so a Tier-2 daemon mid-rehydration doesn't get its live workers mass-failed;
  * any genuinely-dead worker it skips is swept by the first 60s tick.
  */
+/**
+ * Reviewer-gate pass: for every open PR whose repo armed `review_gate`, spawn a
+ * critic once and keep its GitHub review decision cached on the row. A no-op for
+ * non-gated repos (the common case).
+ */
+export async function reviewGatePass(): Promise<void> {
+  const db = getDb();
+  const prOpen = queries.listPrOpen(db).all() as IssueDispatch[];
+  for (const d of prOpen) {
+    const repo = queries.getDispatchRepo(db).get(d.repo_id) as
+      | DispatchRepo
+      | undefined;
+    if (!repo || repo.review_gate !== 1) continue;
+    if (shouldSpawnReviewer(repo, d)) {
+      // spawnReviewer records reviewer_session_id itself (spawn-once). The
+      // critic hasn't posted yet, so skip the decision poll until a later tick.
+      await spawnReviewer(repo, d);
+      continue;
+    }
+    if (d.worktree_path && d.pr_number != null) {
+      const decision = await getReviewDecision(
+        expandHome(d.worktree_path),
+        d.pr_number
+      );
+      if (decision && decision !== d.review_decision) {
+        queries.setDispatchReviewDecision(db).run(decision, d.id);
+      }
+    }
+  }
+}
+
 export async function reconcileOrphans(): Promise<void> {
   await sweepActiveWorkers({ guardEmptyList: true });
 }

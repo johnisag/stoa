@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
           : "main",
         mode,
         body?.enabled ? 1 : 0,
+        body?.reviewGate ? 1 : 0,
         typeof body?.projectId === "string" ? body.projectId : null
       );
     const repo = queries.getDispatchRepo(getDb()).get(id) as DispatchRepo;
