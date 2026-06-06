@@ -59,6 +59,7 @@ function addRepo(over: Partial<Record<string, unknown>> = {}): string {
       (over.base_branch as string) ?? "main",
       (over.mode as string) ?? "auto",
       (over.enabled as number) ?? 1,
+      (over.review_gate as number) ?? 0,
       null
     );
   return id;

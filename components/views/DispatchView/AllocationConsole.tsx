@@ -42,6 +42,7 @@ const EMPTY: CreateRepoInput = {
   baseBranch: "main",
   mode: "review",
   enabled: false,
+  reviewGate: false,
 };
 
 /** A small single-select segmented control (radiogroup). Shared by the mode
@@ -219,6 +220,23 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
 
       {/* mode */}
       <ModeToggle value={repo.mode} onChange={(m) => patch({ mode: m })} />
+
+      {/* reviewer gate (opt-in): spawn a critic agent on each worker's PR */}
+      <label
+        className="text-muted-foreground flex items-center gap-1 text-xs"
+        title="Spawn an independent critic agent to review each worker's PR"
+      >
+        <Switch
+          checked={repo.review_gate === 1}
+          onCheckedChange={(v) => patch({ reviewGate: v })}
+          aria-label={
+            repo.review_gate === 1
+              ? "Disable reviewer gate"
+              : "Enable reviewer gate"
+          }
+        />
+        critic
+      </label>
 
       {/* delete */}
       <Button

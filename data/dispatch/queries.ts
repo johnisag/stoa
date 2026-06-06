@@ -180,6 +180,7 @@ export interface CreateRepoInput {
   baseBranch: string;
   mode: DispatchMode;
   enabled: boolean;
+  reviewGate: boolean;
 }
 
 export function useCreateRepo() {
@@ -244,6 +245,7 @@ export type UpdateRepoPatch = Partial<{
   baseBranch: string;
   mode: DispatchMode;
   enabled: boolean;
+  reviewGate: boolean;
 }>;
 
 export function useUpdateRepo() {
@@ -292,6 +294,9 @@ export function useUpdateRepo() {
                 ...(patch.mode !== undefined ? { mode: patch.mode } : {}),
                 ...(patch.enabled !== undefined
                   ? { enabled: patch.enabled ? 1 : 0 }
+                  : {}),
+                ...(patch.reviewGate !== undefined
+                  ? { review_gate: patch.reviewGate ? 1 : 0 }
                   : {}),
               }
             : r
