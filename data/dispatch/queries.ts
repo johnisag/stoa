@@ -347,3 +347,27 @@ export function useDispatchAction() {
     },
   });
 }
+
+/** Merge a worker's PR (squash) — a deliberate user action from the cockpit. */
+export function useMergeDispatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0, // merge is non-idempotent — never auto-retry
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/dispatch/dispatches/${id}/merge`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Merge failed");
+      return data;
+    },
+    onSuccess: (_data, id) => {
+      // Flip the row to 'merged' immediately so the Merge button doesn't
+      // re-enable in the window before the board refetch lands.
+      qc.setQueryData<IssueDispatch[]>(dispatchKeys.board(), (old) =>
+        (old ?? []).map((r) => (r.id === id ? { ...r, status: "merged" } : r))
+      );
+      qc.invalidateQueries({ queryKey: dispatchKeys.board() });
+    },
+  });
+}
