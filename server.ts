@@ -143,6 +143,14 @@ app.prepare().then(() => {
     // Let HMR and other WebSocket connections pass through to Next.js.
     if (!wss) return;
 
+    // Disable Nagle's algorithm on the terminal/events socket. Keystrokes are
+    // tiny (one WS frame per character); with Nagle on, TCP holds each small
+    // packet waiting for the previous ACK (~40ms, up to 200ms with delayed
+    // ACKs), so every character's echo round-trips late — a constant, "always
+    // there" typing lag, worst over WiFi to a phone. SSH and terminals disable
+    // Nagle for exactly this reason; do the same so keystrokes flush instantly.
+    request.socket.setNoDelay(true);
+
     // Origin allowlist (always — CSWSH defense) + token gate. The browser sends
     // the auth cookie on a same-origin upgrade, so no client wiring is needed.
     const decision = decideWsAuth({
@@ -479,6 +487,14 @@ app.prepare().then(() => {
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
   function handleTmuxConnection(ws: WebSocket) {
     let ptyProcess: pty.IPty;
+    // Last size pushed to the shell pty (spawned at 80×24 below). A resize to the
+    // SAME dimensions still raises SIGWINCH, which makes tmux + the agent TUI
+    // repaint — flooding output and burying fresh keystrokes. Android's soft
+    // keyboard fires visualViewport `resize` repeatedly while typing (re-sending an
+    // identical size each time), so dedupe here too — the PtySession path has the
+    // same guard. Keeps the POSIX tmux experience snappy under mobile typing (#116).
+    let ptyCols = 80;
+    let ptyRows = 24;
     try {
       const shell = process.env.SHELL || "/bin/zsh";
       // Use minimal env - only essentials for shell to work
@@ -530,7 +546,13 @@ app.prepare().then(() => {
             ptyProcess.write(msg.data);
             break;
           case "resize":
-            ptyProcess.resize(msg.cols, msg.rows);
+            // Skip a no-op resize (see ptyCols/ptyRows) — it would re-SIGWINCH the
+            // shell and stall typing for no layout change.
+            if (msg.cols !== ptyCols || msg.rows !== ptyRows) {
+              ptyProcess.resize(msg.cols, msg.rows);
+              ptyCols = msg.cols;
+              ptyRows = msg.rows;
+            }
             break;
           case "command":
             ptyProcess.write(msg.data + "\r");

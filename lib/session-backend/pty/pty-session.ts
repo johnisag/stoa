@@ -68,6 +68,13 @@ export class PtySession {
   private _alive = true;
   private _lastActivity: number;
   private _exitCode: number | null = null;
+  // Last size actually pushed to the pty. A pty.resize() raises SIGWINCH, which
+  // makes a TUI (Claude Code, …) repaint its whole screen — so a resize to the
+  // SAME dimensions is pure churn that floods output and buries fresh keystrokes.
+  // Android's soft keyboard fires visualViewport `resize` repeatedly while typing
+  // (suggestion strip / layout height flutter), each re-sending an identical
+  // size; deduping here kills that redraw storm (the "typing lag" on mobile).
+  private _size: { cols: number; rows: number };
   meta: Record<string, string>;
 
   constructor(init: PtySessionInit) {
@@ -76,6 +83,7 @@ export class PtySession {
     this.pty = init.pty;
     this.meta = init.meta ?? {};
     this._lastActivity = Date.now();
+    this._size = { cols: init.cols, rows: init.rows };
     this.term = new Terminal({
       cols: init.cols,
       rows: init.rows,
@@ -163,9 +171,14 @@ export class PtySession {
   /** Resize the pty (and the headless emulator). */
   resize(cols: number, rows: number): void {
     if (cols <= 0 || rows <= 0) return;
+    // Skip a no-op resize: re-applying the same size still raises SIGWINCH and
+    // triggers a full TUI repaint (see _size). This is the guard that stops the
+    // Android typing-lag redraw storm.
+    if (cols === this._size.cols && rows === this._size.rows) return;
     try {
       this.term.resize(cols, rows);
       if (this._alive) this.pty.resize(cols, rows);
+      this._size = { cols, rows };
     } catch {
       // resize can race with exit; ignore
     }
