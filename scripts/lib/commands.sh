@@ -252,27 +252,6 @@ cmd_logs() {
     tail -f "$LOG_FILE"
 }
 
-# Stop Stoa for an update: through the service manager when auto-start is enabled
-# (so the supervisor doesn't relaunch it mid-build), otherwise the plain stop.
-stop_for_update() {
-    if service_enabled; then
-        stop_service
-    else
-        cmd_stop
-    fi
-}
-
-# Resume Stoa after an update: through the service manager when enabled (which
-# re-reads the unit, so the new build goes live and stays supervised), otherwise
-# a plain background start.
-resume_after_update() {
-    if service_enabled; then
-        start_service
-    else
-        cmd_start
-    fi
-}
-
 cmd_update() {
     if [[ ! -d "$REPO_DIR" ]]; then
         log_error "Stoa is not installed. Run 'stoa install' first."
@@ -307,7 +286,7 @@ cmd_update() {
     local was_running=false
     if is_running; then
         was_running=true
-        stop_for_update
+        cmd_stop
     fi
 
     log_info "Updating from $(git remote get-url origin 2>/dev/null || echo origin)"
@@ -325,7 +304,7 @@ cmd_update() {
         log_error "Update failed (git pull — local main may have diverged)."
         if [[ "$was_running" == true ]]; then
             log_warn "Restarting the server with the existing version..."
-            resume_after_update
+            cmd_start
         fi
         exit 1
     fi
@@ -343,7 +322,7 @@ cmd_update() {
             log_error "Update failed (dependency install/build)."
             if [[ "$was_running" == true ]]; then
                 log_warn "Restarting the server with the existing version..."
-                resume_after_update
+                cmd_start
             fi
             exit 1
         fi
@@ -351,20 +330,7 @@ cmd_update() {
     fi
 
     if [[ "$was_running" == true ]]; then
-        resume_after_update
-        # The supervisor (launchd/systemd) relaunches asynchronously, so confirm
-        # the server actually came back — otherwise a failed restart (e.g. a
-        # launchctl/systemctl hiccup) would be silently reported as success.
-        local waited=0
-        while ! is_running && [[ $waited -lt 10 ]]; do
-            sleep 1
-            waited=$((waited + 1))
-        done
-        if ! is_running; then
-            log_error "Update applied, but the server did not come back up."
-            echo "  Check 'stoa status' and 'stoa logs'."
-            exit 1
-        fi
+        cmd_start
     fi
 }
 
@@ -390,12 +356,12 @@ cmd_enable() {
     <key>ProgramArguments</key>
     <array>
         <string>$script_path</string>
-        <string>start-foreground</string>
+        <string>start</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <false/>
     <key>StandardOutPath</key>
     <string>$LOG_FILE</string>
     <key>StandardErrorPath</key>
@@ -427,7 +393,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=$script_path start-foreground
-Restart=always
+Restart=on-failure
 RestartSec=10
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
@@ -437,10 +403,6 @@ EOF
 
         systemctl --user daemon-reload
         systemctl --user enable stoa
-        # Linger lets the user service start at boot before an interactive login,
-        # matching the always-on guarantee (best-effort; needs admin on some distros).
-        loginctl enable-linger "$(id -un)" 2>/dev/null ||
-            log_warn "Could not enable linger; service will start after first login."
         log_success "Auto-start enabled (systemd)"
         echo "  Service: $service_path"
 

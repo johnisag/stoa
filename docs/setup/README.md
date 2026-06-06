@@ -53,9 +53,6 @@ After installation, use the `stoa` command to manage the server:
 | `stoa disable`   | Disable auto-start              |
 | `stoa uninstall` | Remove Stoa completely          |
 
-> On **Windows**, `enable` / `disable` / `uninstall` aren't part of the CLI — use
-> the service scripts instead (see [Auto-Start on Boot](#auto-start-on-boot)).
-
 ## Prerequisites
 
 The installer can automatically install these on macOS and Linux:
@@ -126,30 +123,6 @@ To disable:
 stoa disable
 ```
 
-### Windows (NSSM service)
-
-Windows doesn't use `stoa enable`. Instead, register Stoa as a Windows **service**
-with [NSSM](https://nssm.cc/) via the bundled script. It starts on boot/logon and
-auto-restarts within seconds if the process ever stops or crashes.
-
-```powershell
-# Requires Chocolatey (the script installs NSSM through it if missing).
-# Self-elevates with a UAC prompt.
-powershell -ExecutionPolicy Bypass -File scripts\install-service.ps1
-
-# Options:
-#   -Port 3022   custom port (use one if you also run `npm run dev` on 3011)
-#   -NoAuth      disable the access token (only behind a VPN — see below)
-powershell -ExecutionPolicy Bypass -File scripts\install-service.ps1 -Port 3022 -NoAuth
-```
-
-Manage it with `nssm restart Stoa` / `nssm stop Stoa`, or via `services.msc`.
-Logs go to `~/.stoa\service.out.log` and `service.err.log`.
-
-> **`-NoAuth`** turns off the app-level token, so **anyone who can reach the port
-> has full access**. Only use it when the port is reachable solely over a private
-> network such as Tailscale.
-
 ## Mobile Access with Tailscale
 
 Stoa is designed for mobile access. The easiest way to access it from your phone is with [Tailscale](https://tailscale.com):
@@ -192,11 +165,10 @@ The `stoa status` command will show your Tailscale URL if Tailscale is installed
 
 ```
 ~/.stoa/
-├── repo/                # Cloned Stoa repository
-├── stoa.pid             # PID file when running (CLI-managed)
-├── logs/stoa.log        # Server logs (stoa start / stoa run)
-├── service.out.log      # NSSM service stdout (Windows service only)
-└── service.err.log      # NSSM service stderr (Windows service only)
+├── repo/              # Cloned Stoa repository
+├── stoa.pid       # PID file when running
+├── stoa.log       # Server logs
+└── stoa.log.old   # Rotated logs (if > 10MB)
 ```
 
 ## Updating
@@ -212,20 +184,6 @@ This will:
 3. Install any new dependencies
 4. Rebuild for production
 5. Restart the server if it was running
-
-On **Windows with the NSSM service**, use the paired script instead — `stoa update`
-alone won't restart the service (it isn't tracked by Stoa's pid file), and rebuilding
-while the service holds files open can fail with lock errors:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\update-service.ps1
-```
-
-It stops the service, runs the update + rebuild, then restarts it.
-
-On **macOS/Linux** this is automatic: if you ran `stoa enable`, `stoa update` is
-service-aware and restarts the launchd/systemd service through its manager (no
-separate script needed).
 
 ## Troubleshooting
 
