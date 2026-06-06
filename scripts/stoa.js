@@ -23,9 +23,29 @@ const path = require("path");
 
 const IS_WINDOWS = process.platform === "win32";
 
-// Port the server listens on (matches server.ts default and the bash CLI).
-const PORT = process.env.STOA_PORT || "3011";
+// Port the server listens on. STOA_PORT is the documented knob; a raw PORT is
+// also honored. This single resolved value is used for BOTH the displayed URL
+// and the spawned server's env, so the two can never diverge.
+const PORT = process.env.STOA_PORT || process.env.PORT || "3011";
 const URL = `http://localhost:${PORT}`;
+
+// Environment for the spawned server. The CLI may have STOA_PORT set without
+// PORT (the var server.ts actually reads), so map the resolved PORT through
+// explicitly — otherwise the server would silently fall back to its 3011
+// default while the CLI reports the configured port.
+//
+// On Windows env vars are case-insensitive, but a spread of process.env yields
+// a plain, case-SENSITIVE object: a pre-existing differently-cased key (e.g.
+// "Port") would survive alongside our "PORT", leaving the child's lookup
+// ambiguous. Strip any case-variant of PORT first, then set the canonical one.
+function serverEnv() {
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.toUpperCase() !== "PORT") env[k] = v;
+  }
+  env.PORT = PORT;
+  return env;
+}
 
 // ~/.stoa is the Stoa home; everything (pid, logs) lives under it.
 const STOA_HOME = process.env.STOA_HOME || path.join(os.homedir(), ".stoa");
@@ -106,11 +126,12 @@ function clearPidFile() {
  * Run a command synchronously in the repo root with inherited stdio.
  * Returns the exit code; exits the CLI on failure unless allowFail is set.
  */
-function runSync(cmd, args, { cwd = REPO_DIR, allowFail = false } = {}) {
+function runSync(cmd, args, { cwd = REPO_DIR, allowFail = false, env } = {}) {
   const result = spawnSync(cmd, args, {
     cwd,
     stdio: "inherit",
     shell: SPAWN_SHELL,
+    ...(env ? { env } : {}),
   });
   if (result.error) {
     error(`Failed to run "${cmd}": ${result.error.message}`);
@@ -165,7 +186,7 @@ function cmdStart() {
     detached: true,
     stdio: ["ignore", out, err],
     shell: SPAWN_SHELL,
-    env: process.env,
+    env: serverEnv(),
   });
 
   if (typeof child.pid !== "number") {
@@ -280,7 +301,7 @@ function cmdRun() {
   setTimeout(() => openBrowser(URL), 1500);
 
   // Run in the foreground with inherited stdio (Ctrl+C stops it).
-  runSync("npm", ["start"]);
+  runSync("npm", ["start"], { env: serverEnv() });
 }
 
 /** logs: tail the log file if present. */
@@ -483,4 +504,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { isGitInstall };
+module.exports = { isGitInstall, serverEnv, PORT };
