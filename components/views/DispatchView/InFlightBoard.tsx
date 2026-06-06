@@ -1,13 +1,28 @@
 "use client";
 
-import { Loader2, GitPullRequest, ExternalLink, GitBranch } from "lucide-react";
+import { useState } from "react";
+import {
+  Loader2,
+  GitPullRequest,
+  ExternalLink,
+  GitBranch,
+  GitMerge,
+  GitCompare,
+} from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { SessionDiffModal } from "@/components/SessionDiffModal";
 import type {
   DispatchRepo,
   DispatchStatus,
   IssueDispatch,
 } from "@/lib/dispatch/types";
-import { useBoardQuery, useDispatchReposQuery } from "@/data/dispatch/queries";
+import {
+  useBoardQuery,
+  useDispatchReposQuery,
+  useMergeDispatch,
+} from "@/data/dispatch/queries";
 import { AGENT_BADGE, STATUS_META, repoUrl, timeAgo } from "./shared";
 
 function Card({
@@ -18,6 +33,14 @@ function Card({
   repo: DispatchRepo | undefined;
 }) {
   const meta = STATUS_META[d.status];
+  const [showDiff, setShowDiff] = useState(false);
+  const merge = useMergeDispatch();
+  const isPrOpen = d.status === "pr_open";
+  const doMerge = () =>
+    merge.mutate(d.id, {
+      onSuccess: () => toast.success(`Merged PR #${d.pr_number}`),
+      onError: (e) => toast.error((e as Error).message),
+    });
   return (
     <div className="bg-card flex flex-col gap-1.5 rounded-md border p-3 text-sm">
       <div className="flex items-center gap-2">
@@ -100,6 +123,45 @@ function Card({
             </span>
           )}
         </a>
+      )}
+
+      {/* Review the diff + merge the PR, right from Stoa (merge is your tap;
+          Stoa never auto-merges). Only while the PR is open. */}
+      {isPrOpen && (
+        <div className="mt-1 flex items-center gap-2">
+          {d.session_id && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowDiff(true)}
+            >
+              <GitCompare className="h-3.5 w-3.5" /> Review
+            </Button>
+          )}
+          {d.pr_number != null && (
+            <Button
+              size="sm"
+              onClick={doMerge}
+              disabled={merge.isPending}
+              className="ml-auto"
+            >
+              {merge.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <GitMerge className="h-3.5 w-3.5" />
+              )}
+              Merge
+            </Button>
+          )}
+        </div>
+      )}
+
+      {showDiff && d.session_id && (
+        <SessionDiffModal
+          sessionId={d.session_id}
+          name={`#${d.issue_number} ${d.issue_title ?? ""}`.trim()}
+          onClose={() => setShowDiff(false)}
+        />
       )}
     </div>
   );
