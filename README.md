@@ -59,9 +59,6 @@ irm https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.ps1 | i
 
 On Windows the native pty backend is selected automatically (no tmux/WSL needed). Set `STOA_BACKEND=tmux|pty` to override the choice on any platform.
 
-**Always-on:** to keep Stoa running across reboots and logins, register it as a
-Windows service — see [Auto-start on boot](#auto-start-on-boot) below.
-
 > **Session persistence:** Sessions survive browser disconnects everywhere. They
 > also survive a Stoa server restart — via tmux on macOS/Linux, and via the
 > Tier-2 pty-host daemon (default-on) on Windows. If the daemon is unavailable,
@@ -105,29 +102,10 @@ permissions". Hermes resume is planned — see [docs/ROADMAP.md](docs/ROADMAP.md
 stoa run       # Start and open browser
 stoa start     # Start in background
 stoa stop      # Stop server
-stoa restart   # Restart server
 stoa status    # Show URLs
 stoa logs      # Tail logs
 stoa update    # Update to latest
-stoa enable    # Auto-start on boot (macOS/Linux)
-stoa disable   # Disable auto-start (macOS/Linux)
-stoa uninstall # Remove Stoa (macOS/Linux)
 ```
-
-On **Windows**, auto-start uses a service instead of `stoa enable` — see below.
-
-## Auto-start on boot
-
-Keep Stoa running across reboots and logins:
-
-- **macOS / Linux** — `stoa enable` (creates a launchd agent / systemd user
-  service); `stoa disable` to undo.
-- **Windows** — register a service with `scripts\install-service.ps1` (uses NSSM,
-  self-elevates); `scripts\update-service.ps1` updates it in place. `stoa enable`
-  is macOS/Linux only.
-
-See [docs/setup](docs/setup/README.md#auto-start-on-boot) for ports, auth, and
-details.
 
 ## Updating
 
@@ -138,14 +116,6 @@ stoa update
 Stops the server (if running), pulls the latest `main`, reinstalls dependencies,
 rebuilds, and restarts. It pins to `main`, and if anything fails it restarts the
 existing version — so a bad update never leaves the server down.
-
-On **macOS/Linux** with `stoa enable` active, `stoa update` is service-aware: it
-stops, rebuilds, and restarts through launchd/systemd for you — no extra step.
-
-**Windows always-on service:** if you registered Stoa as a service (above), run
-`scripts\update-service.ps1` instead — `stoa update` alone won't restart the
-service, and rebuilding while it holds files open can fail with lock errors. The
-wrapper stops the service, runs the update, and restarts it.
 
 ## Mobile Access
 
