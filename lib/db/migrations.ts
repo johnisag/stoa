@@ -264,6 +264,15 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 17,
+    name: "add_scheduled_at_to_issue_dispatches",
+    up: (db) => {
+      // One-shot scheduling: a 'scheduled' row waits until scheduled_at, then the
+      // reconciler promotes it to 'pending' (normal headroom/mode rules apply).
+      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN scheduled_at TEXT`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

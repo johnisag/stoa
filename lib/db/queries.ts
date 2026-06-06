@@ -385,6 +385,30 @@ export const queries = {
        VALUES (?, ?, ?, ?, ?, ?, 'pending')`
     ),
 
+  // Schedule a candidate for a future time: 'scheduled' until the reconciler
+  // promotes it to 'pending' at/after scheduled_at.
+  insertScheduledCandidate: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT OR IGNORE INTO issue_dispatches (id, repo_id, issue_number, issue_title, issue_url, issue_created_at, scheduled_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled')`
+    ),
+
+  // All rows with status='scheduled' (the reconciler filters due ones in JS) —
+  // used by the reconciler promotion + the UI list.
+  listScheduled: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches WHERE status = 'scheduled' ORDER BY scheduled_at ASC`
+    ),
+
+  // Promote a due scheduled row → pending (then normal headroom/mode applies).
+  promoteScheduledToPending: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET status = 'pending', updated_at = datetime('now') WHERE id = ? AND status = 'scheduled'`
+    ),
+
   getDispatch: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM issue_dispatches WHERE id = ?`),
 

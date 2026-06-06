@@ -25,11 +25,24 @@ export async function POST(request: NextRequest) {
           (l): l is string => typeof l === "string"
         )
       : [];
-    const disposition = body?.disposition === "now" ? "now" : "backlog";
+    const disposition =
+      body?.disposition === "now"
+        ? "now"
+        : body?.disposition === "scheduled"
+          ? "scheduled"
+          : "backlog";
+    const scheduledAt =
+      typeof body?.scheduledAt === "string" ? body.scheduledAt.trim() : "";
 
     if (!repoId || !title) {
       return NextResponse.json(
         { error: "repoId and a non-empty title are required" },
+        { status: 400 }
+      );
+    }
+    if (disposition === "scheduled" && Number.isNaN(Date.parse(scheduledAt))) {
+      return NextResponse.json(
+        { error: "a valid scheduledAt time is required" },
         { status: 400 }
       );
     }
@@ -51,19 +64,28 @@ export async function POST(request: NextRequest) {
       labels,
     });
 
-    // 2. Record it as a candidate (pending). datetime('now') for issue_created_at
-    // so the backlog shows "raised just now".
+    // 2. Record it as a candidate. issue_created_at = now so the backlog shows
+    // "raised just now". A "scheduled" disposition parks it as 'scheduled' until
+    // its time; everything else lands as 'pending'.
     const id = randomUUID();
-    queries
-      .upsertDispatchCandidate(db)
-      .run(
-        id,
-        repo.id,
-        created.number,
-        title,
-        created.url,
-        new Date().toISOString()
-      );
+    const nowIso = new Date().toISOString();
+    if (disposition === "scheduled") {
+      queries
+        .insertScheduledCandidate(db)
+        .run(
+          id,
+          repo.id,
+          created.number,
+          title,
+          created.url,
+          nowIso,
+          new Date(scheduledAt).toISOString()
+        );
+    } else {
+      queries
+        .upsertDispatchCandidate(db)
+        .run(id, repo.id, created.number, title, created.url, nowIso);
+    }
     const row = queries.getDispatch(db).get(id) as IssueDispatch | undefined;
     if (!row) {
       // Can't happen for a fresh issue number (no INSERT OR IGNORE conflict), but

@@ -35,6 +35,7 @@ export interface DispatchRepo {
 }
 
 export type DispatchStatus =
+  | "scheduled"
   | "pending"
   | "dispatched"
   | "pr_open"
@@ -59,6 +60,8 @@ export interface IssueDispatch {
   pr_status: string | null;
   /** When Stoa spawned the worker (counts against the daily cap). */
   dispatched_at: string | null;
+  /** ISO time a 'scheduled' row becomes eligible (promoted to 'pending'). */
+  scheduled_at: string | null;
   created_at: string;
   updated_at: string;
 }

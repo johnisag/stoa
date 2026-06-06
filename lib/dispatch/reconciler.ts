@@ -36,6 +36,24 @@ export function pickCandidates(
   return slots <= 0 ? [] : pending.slice(0, slots);
 }
 
+/**
+ * IDs of scheduled rows that are due (`scheduled_at <= now`). Pure + unit-tested.
+ * A missing/unparseable `scheduled_at` is treated as due (fail-open, so a bad
+ * timestamp can never strand an issue in 'scheduled' forever).
+ */
+export function dueDispatchIds(
+  rows: { id: string; scheduled_at: string | null }[],
+  nowMs: number
+): string[] {
+  return rows
+    .filter((r) => {
+      if (!r.scheduled_at) return true;
+      const t = Date.parse(r.scheduled_at);
+      return Number.isNaN(t) || t <= nowMs;
+    })
+    .map((r) => r.id);
+}
+
 let tickBusy = false;
 
 /**
@@ -48,6 +66,14 @@ export async function reconcileTick(): Promise<void> {
   tickBusy = true;
   try {
     const db = getDb();
+    // 0. Promote any scheduled rows that have come due → pending, so the normal
+    // headroom/mode logic below dispatches or surfaces them this tick.
+    const dueIds = dueDispatchIds(
+      queries.listScheduled(db).all() as IssueDispatch[],
+      Date.now()
+    );
+    for (const id of dueIds) queries.promoteScheduledToPending(db).run(id);
+
     const repos = queries.getEnabledDispatchRepos(db).all() as DispatchRepo[];
     for (const repo of repos) {
       // 1. Ingest eligible open issues as `pending` candidates (idempotent).
