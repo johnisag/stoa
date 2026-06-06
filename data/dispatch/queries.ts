@@ -10,9 +10,10 @@ import type {
 import type { AgentType } from "@/lib/providers";
 import type { DiscoveredRepo } from "@/lib/dispatch/discover";
 import type { GitHubRepo, PreparedRepo } from "@/lib/dispatch/github";
+import type { TriageIssue } from "@/lib/dispatch/triage";
 import { dispatchKeys } from "./keys";
 
-export type { DiscoveredRepo, GitHubRepo, PreparedRepo };
+export type { DiscoveredRepo, GitHubRepo, PreparedRepo, TriageIssue };
 
 // ── reads ──
 
@@ -349,6 +350,67 @@ export function useDispatchAction() {
       qc.invalidateQueries({ queryKey: dispatchKeys.pending() });
       qc.invalidateQueries({ queryKey: dispatchKeys.board() });
       qc.invalidateQueries({ queryKey: dispatchKeys.scheduled() });
+    },
+  });
+}
+
+// ── on-demand triage ── (browse a repo's open issues, dispatch a chosen one)
+
+async function fetchOpenIssues(
+  repoId: string,
+  search: string
+): Promise<TriageIssue[]> {
+  const qs = search.trim()
+    ? `?search=${encodeURIComponent(search.trim())}`
+    : "";
+  const res = await fetch(`/api/dispatch/repos/${repoId}/open-issues${qs}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Failed to browse issues");
+  return data.issues ?? [];
+}
+
+/** Browse a tracked repo's OPEN GitHub issues on demand for triage. Enabled only
+ * while the panel is open — it shells out to gh, so never poll in the bg. */
+export function useOpenIssuesQuery(
+  repoId: string | null,
+  search: string,
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: [...dispatchKeys.openIssues(repoId ?? ""), search],
+    queryFn: () => fetchOpenIssues(repoId as string, search),
+    enabled: enabled && !!repoId,
+    staleTime: 10000,
+  });
+}
+
+export interface TriageDispatchInput {
+  repoId: string;
+  number: number;
+  title?: string;
+  url?: string | null;
+  createdAt?: string;
+}
+
+/** Dispatch an EXISTING open issue picked during triage (spawns a worker now). */
+export function useTriageDispatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0, // spawning a worker is non-idempotent — never auto-retry
+    mutationFn: async ({ repoId, ...rest }: TriageDispatchInput) => {
+      const res = await fetch(`/api/dispatch/repos/${repoId}/open-issues`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rest),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to dispatch issue");
+      return data as { dispatch: IssueDispatch };
+    },
+    onSuccess: (_data, v) => {
+      qc.invalidateQueries({ queryKey: dispatchKeys.openIssues(v.repoId) });
+      qc.invalidateQueries({ queryKey: dispatchKeys.pending() });
+      qc.invalidateQueries({ queryKey: dispatchKeys.board() });
     },
   });
 }
