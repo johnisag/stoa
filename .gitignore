@@ -32,6 +32,9 @@ npm-debug.log*
 *.swp
 *.swo
 
+# Claude Code personal overrides (e.g. bypass-permissions "yolo" mode) — never committed
+.claude/settings.local.json
+
 # Testing
 coverage/
 .cache/

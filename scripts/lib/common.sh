@@ -81,6 +81,58 @@ is_running() {
     get_pid &>/dev/null
 }
 
+# ---- Service-manager helpers (launchd on macOS, systemd --user on Linux) ----
+# These let `stoa update` (and friends) drive the SAME supervisor that `stoa
+# enable` set up, instead of spawning an un-managed background copy.
+
+# Path to the auto-start unit for the current platform.
+service_unit_path() {
+    if [[ "$OS" == "macos" ]]; then
+        echo "$HOME/Library/LaunchAgents/com.stoa.plist"
+    else
+        echo "$HOME/.config/systemd/user/stoa.service"
+    fi
+}
+
+# True if auto-start (launchd/systemd) is configured.
+service_enabled() {
+    [[ -f "$(service_unit_path)" ]]
+}
+
+# Stop Stoa through its service manager so it isn't auto-relaunched mid-update.
+stop_service() {
+    log_info "Stopping the Stoa service..."
+    if [[ "$OS" == "macos" ]]; then
+        launchctl unload "$(service_unit_path)" 2>/dev/null || true
+    else
+        systemctl --user stop stoa 2>/dev/null || true
+    fi
+    # Belt-and-suspenders: a manually `stoa start`ed instance isn't owned by the
+    # service manager, so make sure nothing is left holding the port. Re-validate
+    # liveness right before SIGKILL (like cmd_stop) so a reaped/recycled pid from
+    # the supervisor teardown above can't be hit.
+    if is_running; then
+        local pid
+        pid=$(get_pid)
+        kill "$pid" 2>/dev/null || true
+        sleep 1
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$PID_FILE"
+}
+
+# Start Stoa through its service manager (re-reads the unit, so new code is live).
+start_service() {
+    log_info "Starting the Stoa service..."
+    if [[ "$OS" == "macos" ]]; then
+        launchctl load "$(service_unit_path)" 2>/dev/null || true
+    else
+        systemctl --user start stoa 2>/dev/null || true
+    fi
+}
+
 # Get Tailscale IP if available
 get_tailscale_ip() {
     if command -v tailscale &> /dev/null; then
