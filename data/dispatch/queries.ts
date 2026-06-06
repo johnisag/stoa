@@ -334,7 +334,7 @@ export function useDispatchAction() {
       action,
     }: {
       id: string;
-      action: "approve" | "cancel";
+      action: "approve" | "cancel" | "dismiss" | "retry";
     }) => {
       const res = await fetch(`/api/dispatch/dispatches/${id}`, {
         method: "POST",

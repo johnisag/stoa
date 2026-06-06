@@ -402,6 +402,16 @@ export const queries = {
       `UPDATE issue_dispatches SET reviewer_session_id = NULL, review_decision = NULL, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // Retry a failed dispatch: wipe all worker/PR/review state back to a clean
+  // 'pending' so dispatchOne can claim + spawn it fresh (new worktree/branch).
+  resetDispatchForRetry: (db: Database.Database) =>
+    getStmt(
+      db,
+      // WHERE status='failed' so a double-tap retry only resets once (the second
+      // is a no-op; dispatchOne's claimDispatch is still the spawn-once gate).
+      `UPDATE issue_dispatches SET status = 'pending', session_id = NULL, branch_name = NULL, worktree_path = NULL, pr_url = NULL, pr_number = NULL, pr_status = NULL, dispatched_at = NULL, reviewer_session_id = NULL, review_decision = NULL, fix_rounds = 0, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'failed'`
+    ),
+
   // Dispatch — issue pipeline rows
   getDispatchByRepoIssue: (db: Database.Database) =>
     getStmt(
