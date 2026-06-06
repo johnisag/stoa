@@ -8,6 +8,8 @@ import {
   GitBranch,
   GitMerge,
   GitCompare,
+  RotateCcw,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -20,6 +22,7 @@ import type {
 } from "@/lib/dispatch/types";
 import {
   useBoardQuery,
+  useDispatchAction,
   useDispatchReposQuery,
   useMergeDispatch,
 } from "@/data/dispatch/queries";
@@ -35,12 +38,23 @@ function Card({
   const meta = STATUS_META[d.status];
   const [showDiff, setShowDiff] = useState(false);
   const merge = useMergeDispatch();
+  const action = useDispatchAction();
   const isPrOpen = d.status === "pr_open";
+  const isFailed = d.status === "failed";
   const doMerge = () =>
     merge.mutate(d.id, {
       onSuccess: () => toast.success(`Merged PR #${d.pr_number}`),
       onError: (e) => toast.error((e as Error).message),
     });
+  const doFailedAction = (act: "retry" | "dismiss") =>
+    action.mutate(
+      { id: d.id, action: act },
+      {
+        onSuccess: () =>
+          toast.success(act === "retry" ? "Re-dispatched" : "Dismissed"),
+        onError: (e) => toast.error((e as Error).message),
+      }
+    );
   return (
     <div className="bg-card flex flex-col gap-1.5 rounded-md border p-3 text-sm">
       <div className="flex items-center gap-2">
@@ -178,6 +192,35 @@ function Card({
               Merge
             </Button>
           )}
+        </div>
+      )}
+
+      {/* Failed rows: retry (re-dispatch fresh) or dismiss (hide; stays parked). */}
+      {isFailed && (
+        <div className="mt-1 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={action.isPending}
+            onClick={() => doFailedAction("retry")}
+          >
+            {action.isPending && action.variables?.action === "retry" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            Retry
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Dismiss failed dispatch"
+            disabled={action.isPending}
+            className="ml-auto"
+            onClick={() => doFailedAction("dismiss")}
+          >
+            <X className="text-muted-foreground hover:text-destructive h-4 w-4" />
+          </Button>
         </div>
       )}
 
