@@ -1,0 +1,126 @@
+"use client";
+
+import { Rocket, Clock, CheckCircle, Bot, AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+
+/**
+ * Plain-language "How Dispatch works" guide for non-technical users. Shown in the
+ * Dispatch dialog's content area (toggled by the header "?"), reachable from
+ * every tab. Kept jargon-light on purpose.
+ */
+export function DispatchHelp({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      role="region"
+      aria-label="How Dispatch works"
+      className="mx-auto max-w-2xl space-y-5 text-sm"
+    >
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <Rocket className="h-4 w-4" aria-hidden="true" /> What is Dispatch?
+        </h3>
+        <p className="text-muted-foreground">
+          Dispatch turns GitHub issues into finished work. You point it at a
+          repository, and an AI agent works on each issue and proposes the
+          changes for you to review and accept.
+        </p>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="text-base font-semibold">The three tabs</h3>
+        <ul className="text-muted-foreground space-y-1">
+          <li>
+            <span className="text-foreground font-medium">Allocation</span> —
+            set up which repositories to watch, which agent, how many issues per
+            day, and whether work runs on its own or waits for you.
+          </li>
+          <li>
+            <span className="text-foreground font-medium">Backlog</span> —
+            create new issues, and approve ones waiting for an agent.
+          </li>
+          <li>
+            <span className="text-foreground font-medium">In flight</span> —
+            watch agents work, review the changes, and accept them.
+          </li>
+        </ul>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="text-base font-semibold">Two ways a repo runs</h3>
+        <ul className="text-muted-foreground space-y-1">
+          <li>
+            <span className="text-foreground font-medium">Auto</span> — agents
+            start on their own, up to your daily limit.
+          </li>
+          <li>
+            <span className="text-foreground font-medium">Review</span> — new
+            issues wait in the Backlog for you to approve first.
+          </li>
+        </ul>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="text-base font-semibold">When you create an issue</h3>
+        <ul className="text-muted-foreground space-y-1">
+          <li>
+            <span className="text-foreground font-medium">Dispatch now</span> —
+            creates the issue <em>and</em> starts an agent on it right away.
+          </li>
+          <li>
+            <span className="text-foreground font-medium">Add to backlog</span>{" "}
+            — creates it and queues it: if the repo is set to auto, an agent
+            starts within about a minute; if review, it waits for your approval.
+          </li>
+          <li>
+            <span className="text-foreground inline-flex items-center gap-1 font-medium">
+              <Clock className="h-3.5 w-3.5" aria-hidden="true" /> Schedule
+            </span>{" "}
+            — creates it and starts it at a time you choose.
+          </li>
+        </ul>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <Bot className="h-4 w-4" aria-hidden="true" /> Critic (optional)
+        </h3>
+        <p className="text-muted-foreground">
+          Turn on <span className="text-foreground font-medium">critic</span>{" "}
+          for a repo and a second agent checks each agent&apos;s work. If it
+          asks for changes, a fixer makes them (up to a couple of rounds); if it
+          still can&apos;t, the work surfaces for you to decide.
+        </p>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <CheckCircle className="h-4 w-4" aria-hidden="true" /> Accepting the
+          work
+        </h3>
+        <p className="text-muted-foreground">
+          Always your tap, from the In-flight card. Stoa never accepts changes
+          without you.
+        </p>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <AlertCircle className="h-4 w-4" aria-hidden="true" /> If something
+          goes wrong
+        </h3>
+        <p className="text-muted-foreground">
+          A stuck agent&apos;s card turns red. Use{" "}
+          <span className="text-foreground font-medium">Retry</span> to run it
+          again, or <span className="text-foreground font-medium">Dismiss</span>{" "}
+          to clear it.
+        </p>
+      </section>
+
+      <div className="pt-1">
+        <Button size="sm" onClick={onClose}>
+          Got it
+        </Button>
+      </div>
+    </div>
+  );
+}
