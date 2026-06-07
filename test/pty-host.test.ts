@@ -1,6 +1,12 @@
 // Isolated daemon socket so this file's daemon doesn't collide with other
 // daemon-using test files running in parallel workers (global pipe/socket).
 process.env.STOA_PTY_HOST_NAME = "stoa-pty-host-test-host";
+// Force the pty backend so the Tier-2→Tier-1 fallback contract below resolves a
+// pty backend on the POSIX CI runners too (default is tmux on macOS/Linux).
+process.env.STOA_BACKEND = "pty";
+// Disable the audit decorator so getSessionBackend() returns the raw backend
+// (the fallback test asserts the transport type directly, not through a wrapper).
+process.env.STOA_AUDIT = "0";
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { startHost, stopHost } from "@/lib/session-backend/pty/host";

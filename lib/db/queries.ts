@@ -535,4 +535,30 @@ export const queries = {
       db,
       `UPDATE issue_dispatches SET status = ?, updated_at = datetime('now') WHERE id = ?`
     ),
+
+  // Audit / event ledger (append-only)
+  appendSessionEvent: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO session_events (session_key, event_type, payload, created_at)
+       VALUES (?, ?, ?, ?)`
+    ),
+
+  getSessionEvents: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM session_events WHERE session_key = ? ORDER BY id ASC`
+    ),
+
+  getSessionEventsByType: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM session_events WHERE session_key = ? AND event_type = ? ORDER BY id ASC`
+    ),
+
+  countSessionEvents: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n FROM session_events WHERE session_key = ?`
+    ),
 };
