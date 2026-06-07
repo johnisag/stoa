@@ -23,9 +23,17 @@ const MODEL_OPTIONS_BY_AGENT: Partial<Record<AgentType, ModelOption[]>> = {
   codex: CODEX_MODEL_OPTIONS,
 };
 
+// Hermes is free-text (no dropdown), but Stoa gives it an explicit default so a
+// fresh session launches `hermes -m <model>` rather than relying on whatever
+// Hermes happens to be configured for. Must be a FULL provider model name — the
+// shorthand "opus" 404s (`hermes -m opus` → anthropic model: opus). Verified
+// against the live backend: `hermes model` reports "claude-opus-4-8" (dash).
+export const HERMES_DEFAULT_MODEL = "claude-opus-4-8";
+
 const DEFAULT_MODEL_BY_AGENT: Partial<Record<AgentType, string>> = {
   claude: "sonnet",
   codex: "gpt-5.4",
+  hermes: HERMES_DEFAULT_MODEL,
 };
 
 // Agents whose models are dynamic/provider-specific (no fixed catalog). For
@@ -38,6 +46,21 @@ export function isFreeTextModelAgent(agentType: AgentType): boolean {
   return FREE_TEXT_MODEL_AGENTS.has(agentType);
 }
 
+/**
+ * True if `model` is a static catalog value belonging to a DIFFERENT (static)
+ * agent — e.g. "opus"/"sonnet" (Claude) or "gpt-5.4" (Codex). Used to stop a
+ * project's Claude/Codex `default_model` (the column defaults to "sonnet") from
+ * leaking into a free-text agent like Hermes, which would then forward the bogus
+ * name to its backend (`hermes -m opus` → Anthropic 404 model: opus).
+ */
+function isForeignStaticModel(agentType: AgentType, model: string): boolean {
+  return Object.entries(MODEL_OPTIONS_BY_AGENT).some(
+    ([id, options]) =>
+      id !== agentType &&
+      (options ?? []).some((option) => option.value === model)
+  );
+}
+
 export function getModelOptions(agentType: AgentType): ModelOption[] {
   // Free-text agents have no fixed list (empty array signals a text input).
   if (isFreeTextModelAgent(agentType)) return [];
@@ -45,13 +68,11 @@ export function getModelOptions(agentType: AgentType): ModelOption[] {
 }
 
 export function getDefaultModelForAgent(agentType: AgentType): string {
-  // Free-text agents default to empty → the agent picks its own default.
+  const configured = DEFAULT_MODEL_BY_AGENT[agentType];
+  if (configured) return configured;
+  // A free-text agent with no configured default → empty (agent picks its own).
   if (isFreeTextModelAgent(agentType)) return "";
-  return (
-    DEFAULT_MODEL_BY_AGENT[agentType] ??
-    getModelOptions(agentType)[0]?.value ??
-    "sonnet"
-  );
+  return getModelOptions(agentType)[0]?.value ?? "sonnet";
 }
 
 export function isSupportedModelForAgent(
@@ -75,9 +96,17 @@ export function resolveModelForAgent(
   const normalizedModel =
     typeof model === "string" && model.trim() ? model.trim() : null;
 
-  // Free-text agents: pass the typed value through as-is (empty → agent default).
+  // Free-text agents: pass a genuine typed model through as-is. But fall back to
+  // the agent's configured default for (a) empty input and (b) a static model
+  // that belongs to ANOTHER agent's catalog (e.g. a project's "opus"/"sonnet"
+  // default_model) — forwarding that would 404 (`hermes -m opus`). A genuine
+  // free-text model (provider-qualified, e.g. "anthropic/claude-opus-4.8")
+  // matches no static catalog and passes through.
   if (isFreeTextModelAgent(agentType)) {
-    return normalizedModel ?? "";
+    if (normalizedModel && !isForeignStaticModel(agentType, normalizedModel)) {
+      return normalizedModel;
+    }
+    return getDefaultModelForAgent(agentType);
   }
 
   if (normalizedModel && isSupportedModelForAgent(agentType, normalizedModel)) {
