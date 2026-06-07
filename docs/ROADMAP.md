@@ -341,21 +341,56 @@ one substrate, not three separate builds. Sequenced easiest→hardest:
 
 ### Pillar 2 — Orchestration: declarative multi-provider workflows ⭐⭐
 
-- [ ] **Agent pipelines** _(D:high · E:L)_ — a declarative workflow spec
-  (YAML/JSON): steps, dependencies (sequential vs parallel), and which provider
-  runs each, driven by an executor over the EXISTING seams (`spawn_worker` MCP
-  orchestration, the prompt queue's idle dispatch, Dispatch fan-out). E.g.
-  "Claude drafts → Hermes reviews → Codex + Claude implement in parallel →
-  reviewer-gate merges." A multi-provider DAG no single-vendor tool can tell —
-  this generalizes the roadmap's "best-of-N compare" into full pipelines. A
-  category-definer alongside the Windows sandbox. _Risk:_ L-effort; needs
-  careful failure/partial-completion handling + rewind/snapshot integration.
+- [x] **Agent pipelines — engine + executor (Stage 1)** _(D:high · E:L)_ ✅ **DONE** —
+  a declarative workflow spec (`lib/pipeline/types.ts`): steps, `dependsOn`
+  edges, per-step provider/model, driven by a **PURE engine**
+  (`lib/pipeline/engine.ts` — DAG validation incl. cycle detection, the
+  ready/started/outcome reducer, failure cascade-skip, run-status derivation;
+  exhaustively unit-tested over injected state) + a **thin executor**
+  (`lib/pipeline/executor.ts` — injectable side-effects, parallel launch of
+  ready steps, poll→outcome loop) wired to the existing `spawnWorker` seam via
+  `lib/pipeline/default-deps.ts`. Reachable through `POST/GET /api/pipelines`
+  (+ in-memory run registry) and the conductor MCP (`run_pipeline` /
+  `get_pipeline`). E.g. "Claude drafts → Hermes reviews → Codex + Claude
+  implement in parallel → merge." Also shipped the **first regression tests for
+  `lib/orchestration.ts`** (was untested). Hardened through a 2× 3-agent
+  supremacy review: spec validation rejects shell-metachar injection in
+  `model`/`workingDirectory`; the executor caps real fan-out
+  (`maxParallelism`, default 4), is crash-safe (an unexpected throw drives the
+  run terminal, never a zombie snapshot), and the run registry has a
+  hard-ceiling eviction so it can't grow unbounded. _Follow-ups (Stage 2):_ a
+  pipeline **UI** (author/visualize the DAG), **run persistence** across
+  restarts (the registry is in-memory today), richer **PR-grounded step
+  outcomes** (see the merge-signal note below), and **rewind/snapshot
+  integration**.
 - [ ] **Unified triggers (cron + issue + manual)** _(D:med–high · E:M)_ — rather
   than a standalone cron, make scheduling a TRIGGER TYPE that feeds the same
   workflow executor: manual, cron ("every morning at 9, run this workflow on
   this repo"), or GitHub-issue (the existing Dispatch path, #115 reconciler
   already proves fire-on-schedule plumbing). One executor, three front doors —
   avoids three half-built schedulers.
+
+#### ⚠️ Insight merge-signal blind spot (found 2026-06-07) — folds into Orchestration
+
+The Intelligence lens reports **0 merges** because a session's merge is only
+recorded from two paths: the **Dispatch** outcome (`issue_dispatches.status`)
+or the **in-app PR panel** (`GET /api/sessions/[id]/pr`, pull-on-demand). Every
+real PR in this repo (#1–#135) was created + squash-merged via `gh`/`git` in the
+**terminal** during the ceremony — so none of it ever reached Stoa's DB. The
+engine math is correct; the **signal coverage** is the gap.
+
+**Decision (durable fix, Stage-2 of pipelines):** add **branch-based PR-status
+reconciliation** for ALL sessions with a `branch_name` (interactive + Dispatch +
+orchestration workers) via `gh pr view <branch>` / git "did this branch land on
+main", following the `lib/dispatch/github.ts` convention (`resolveBinary("gh")`,
+`execFile` argv, a pure parse fn split out for tests). **Segment merges by
+origin** (autonomous worker vs human-steered interactive) so an autonomous
+merge and a human-rescued one never blend into one effectiveness score — keep
+the existing Laplace-smoothed, sample-gated guard. Until then the lens should
+not headline a "0% / 100% merge rate" off a near-empty tracked-merge
+denominator (extend the existing minimum-sample floor to the merge metric).
+
+
 
 ---
 

@@ -32,6 +32,15 @@ import {
   resolveConductorSessionId,
   pickConductorId,
 } from "../lib/conductor-marker";
+import { PROVIDER_IDS } from "../lib/providers/registry";
+
+// Agents that can run a worker/step — the single source of truth shared with
+// the server-side validateSpec (PROVIDER_IDS minus the non-spawnable "shell").
+// Deriving the MCP schema enum here keeps the advertised set from drifting when
+// a provider is added/removed.
+const SPAWNABLE_AGENTS = PROVIDER_IDS.filter(
+  (id) => id !== "shell"
+) as string[];
 
 const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
 
@@ -199,6 +208,62 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["workerId"],
+        },
+      },
+      {
+        name: "run_pipeline",
+        description:
+          "Run a declarative multi-step agent pipeline (a DAG). Each step runs a task on a chosen agent and may depend on other steps; independent steps run in parallel (bounded), a failed step skips its dependents. NOTE: dependsOn controls ORDERING only — it does NOT pass a prior step's output into a dependent step, so encode any needed context in each step's task text. Returns a runId to poll with get_pipeline.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            conductorId: {
+              type: "string",
+              description:
+                "Your session ID (the conductor). Required unless CONDUCTOR_SESSION_ID env var is set.",
+            },
+            spec: {
+              type: "object",
+              description:
+                "The pipeline spec: { name, workingDirectory, steps: [{ id, agent, task, dependsOn?, model?, workingDirectory? }] }. dependsOn is a list of step ids that must succeed first (omit/empty = a root step that runs immediately).",
+              properties: {
+                name: { type: "string" },
+                workingDirectory: {
+                  type: "string",
+                  description: "Default git repo path for steps.",
+                },
+                steps: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      agent: { type: "string", enum: SPAWNABLE_AGENTS },
+                      task: { type: "string" },
+                      dependsOn: { type: "array", items: { type: "string" } },
+                      model: { type: "string" },
+                      workingDirectory: { type: "string" },
+                    },
+                    required: ["id", "agent", "task"],
+                  },
+                },
+              },
+              required: ["name", "workingDirectory", "steps"],
+            },
+          },
+          required: ["spec"],
+        },
+      },
+      {
+        name: "get_pipeline",
+        description:
+          "Poll a pipeline run's live state (per-step status + overall status) by its runId.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            runId: { type: "string", description: "The pipeline run ID." },
+          },
+          required: ["runId"],
         },
       },
       {
@@ -394,6 +459,86 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: result.error
                 ? `Error: ${result.error}`
                 : "Worker killed successfully.",
+            },
+          ],
+        };
+      }
+
+      case "run_pipeline": {
+        const conductorId = getConductorId(args);
+        if (!conductorId) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: conductorId is required. Pass it as a parameter or set CONDUCTOR_SESSION_ID env var.",
+              },
+            ],
+          };
+        }
+        const result = await apiCall("/api/pipelines", {
+          method: "POST",
+          body: JSON.stringify({
+            conductorSessionId: conductorId,
+            spec: args?.spec,
+          }),
+        });
+        if (result.error) {
+          return {
+            content: [
+              { type: "text" as const, text: `Error: ${result.error}` },
+            ],
+          };
+        }
+        const run = result.run;
+        const stepList = Object.values(
+          run.steps as Record<string, { id: string; status: string }>
+        )
+          .map((st) => `- ${st.id}: ${st.status}`)
+          .join("\n");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Pipeline started!\nRun ID: ${run.id}\nStatus: ${run.status}\nSteps:\n${stepList}\n\nPoll with get_pipeline(runId: "${run.id}").`,
+            },
+          ],
+        };
+      }
+
+      case "get_pipeline": {
+        const result = await apiCall(
+          `/api/pipelines/${encodeURIComponent(String(args?.runId))}`
+        );
+        if (result.error) {
+          return {
+            content: [
+              { type: "text" as const, text: `Error: ${result.error}` },
+            ],
+          };
+        }
+        const run = result.run;
+        const stepList = Object.values(
+          run.steps as Record<
+            string,
+            {
+              id: string;
+              status: string;
+              detail: string | null;
+              sessionId: string | null;
+            }
+          >
+        )
+          .map(
+            (st) =>
+              `- ${st.id}: ${st.status}${st.sessionId ? ` [session ${st.sessionId.slice(0, 8)}]` : ""}${st.detail ? ` (${st.detail})` : ""}`
+          )
+          .join("\n");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Pipeline ${run.id}\nStatus: ${run.status}\nSteps:\n${stepList}`,
             },
           ],
         };
