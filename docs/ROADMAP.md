@@ -77,13 +77,42 @@ The current committed sequence. Each item ships as its own PR through the
    events key on the mutable backend key (a rename splits the trail, with a
    `{from}` breadcrumb) — a stable correlation id is an analytics-model decision;
    raw pty output is not recorded (the rendered-screen capture serves that).
-4. [ ] **Analytics view on the ledger** _(E:M)_ — insights dashboard over the
-   item-3 ledger (cost per merged PR, reviewer-gate pass rate, where sessions
-   stall, cost per repo), all on-box. **Keep `better-sqlite3` as the source of
-   truth — do NOT swap it for DuckDB** (SQLite is right for the OLTP workload;
-   a DuckDB native addon adds 3-OS install pain). Only if SQLite's own
-   aggregates prove insufficient, add DuckDB **read-side** pointed at the
-   existing sqlite file via `sqlite_scanner` (zero ETL, zero migration).
+4. [x] **Analytics view on the ledger** ⭐ ✅ **DONE** — the **Insight layer**:
+   a full on-box analytics cockpit over the item-3 ledger + session outcomes,
+   spanning all three lenses of the Insight pillar in one strike. **Performance**
+   (cost, tokens, median session duration, time-to-first-input, cost per merged
+   PR, reviewer-gate pass rate), **Behavioural** (event-type mix, inputs/session,
+   input cadence, paste ratio, abandoned sessions), **Intelligence** (per-provider
+   merge rate + reviewer pass rate + a Laplace-smoothed, volume-weighted,
+   sample-gated effectiveness score — no tiny-n vanity), **Trends** (dense daily
+   time-series + least-squares slope), and **Issue detection** (cost spikes,
+   stalls, runaway loops, failure clusters, low reviewer pass rate, abandonment).
+   Architecture: a PURE engine (`lib/analytics/engine.ts`, exhaustively unit-
+   tested over an injected snapshot) + a thin DB gather (`lib/analytics/queries.ts`,
+   one indexed window query + bounded-concurrency cost reads) + a thin API
+   (`/api/analytics`) + a dependency-free Dialog UI (`components/views/AnalyticsView`,
+   inline SVG charts, mobile-first, a11y-labelled). **`better-sqlite3` stays the
+   source of truth** (no DuckDB — see below). Shipped through 2× 3-agent review.
+   This completes Insight-pillar **Stage 1 (Performance)** and lands much of
+   **Stage 2 (Behavioural)** + **Stage 3 (Intelligence)** on the same substrate.
+
+---
+
+## ▶ ACTIVE PLAN — ✅ COMPLETE (2026-06-07)
+
+All four committed items shipped (port fix #127/#128 · Tier-2 crash guard #132 ·
+audit ledger #133 · Insight analytics layer). Next sequence to be drawn from the
+🔭 Next horizons + 🧭 Strategic pillars below — candidate leads: the **Insight
+pillar's** remaining depth (behavioural file-touch patterns, per-provider
+intelligence correlated with richer outcome signals) once the ledger emits
+cost/token/duration events, or the **Orchestration pillar** (declarative
+multi-provider agent pipelines + unified cron/issue/manual triggers).
+
+_Reference — the original DuckDB guidance for item 4:_ **Keep `better-sqlite3`
+as the source of truth** (SQLite is right for the OLTP workload; a DuckDB native
+addon adds 3-OS install pain). Only if SQLite's own aggregates prove
+insufficient, add DuckDB **read-side** pointed at the existing sqlite file via
+`sqlite_scanner` (zero ETL, zero migration).
 
 ---
 
@@ -292,19 +321,23 @@ CI + 3-agent gate when picked up.
 Built on ACTIVE PLAN item 3's append-only audit/event ledger — three lenses on
 one substrate, not three separate builds. Sequenced easiest→hardest:
 
-- [ ] **Performance analytics** _(D:high · E:M)_ — tokens, cost, session
-  duration, time-to-first-output, time-to-PR, reviewer-gate pass rate. Mostly
-  data already computed (`lib/session-cost.ts`, `pricing.ts`); this is ACTIVE
-  PLAN item 4. Ship first.
-- [ ] **Behavioural analytics** _(D:high · E:M–L)_ — "what each agent actually
-  does": command frequency, file-touch patterns, retry/loop rates, where
-  sessions stall. The audit-log payoff; needs the ledger's command/tool stream.
-- [ ] **Intelligence analytics** ⭐ _(D:high · E:L)_ — per-provider effectiveness
-  (Claude vs Codex vs Hermes) correlated with outcome signals (PR merged? tests
-  passed? reviewer verdict? human approve/reject?). Genuinely differentiating
-  (only multi-provider self-hosted cockpit) but measurement-design-heavy —
-  resist a vanity "score" until behavioural + outcome inputs are trustworthy.
-  Stage last.
+- [x] **Performance analytics** ✅ **DONE** — tokens, cost, median session
+  duration, time-to-first-input, cost per merged PR, reviewer-gate pass rate.
+  Shipped as the Insight layer (ACTIVE PLAN item 4) over the audit ledger +
+  `lib/session-cost.ts`/`pricing.ts`.
+- [x] **Behavioural analytics** ✅ **MOSTLY DONE** — "what each agent actually
+  does": event-type mix, inputs/session, input cadence, paste ratio, where
+  sessions stall + abandonment. Shipped in the Insight layer's Behaviour lens.
+  _Remaining depth (needs richer ledger events):_ command frequency + file-touch
+  patterns require the ledger to record tool/command detail (today it records
+  lifecycle + input at the SessionBackend seam, not per-command/tool streams).
+- [x] **Intelligence analytics** ⭐ ✅ **DONE (v1)** — per-provider effectiveness
+  (Claude vs Codex vs Hermes) correlated with outcome signals (PR merged?
+  reviewer verdict?). Shipped as the Insight layer's Intelligence lens with a
+  **Laplace-smoothed, volume-weighted, sample-gated** effectiveness score that
+  honours the "resist a vanity score" guidance (withheld below a session floor;
+  raw rates always shown with their denominators). _Deepens further_ as more
+  outcome signals (tests passed, human approve/reject) flow into the ledger.
 
 ### Pillar 2 — Orchestration: declarative multi-provider workflows ⭐⭐
 
