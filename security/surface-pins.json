@@ -33,7 +33,7 @@
     "scripts/lib/prerequisites.sh": "a4e99781938cfc2add823e82abd365da33c627296ed019f1379072a4e6b76a9f",
     "scripts/postinstall.js": "53bb659676007f2c842b753f25436c33471e52581e279057d499b9165cfb8764",
     "scripts/precommit.js": "cd5b697d4d96842b998c975bf955617f18566605779b1d2578f1381c0f4065d7",
-    "scripts/pty-host.ts": "490174e586be52ae510ed339d67b1852f0a541c1de5fcde622205ee31a82c19a",
+    "scripts/pty-host.ts": "01e3c3cd655d9b7732f325c9f31e7c8f6ac3bc07fbecc3bc636c9ceadb8d25c9",
     "scripts/setup.sh": "cfdeb6f0ad53698ab160a5c218b9a1cf20fa38333913371f4279d4a56e71be7a",
     "scripts/stoa": "025d1b56b00f67008a074bb712f326bfd03d7bef358d5bb2c75b1eeb49910165",
     "scripts/stoa.js": "8d0363eec86be13727e4133063bcb82517f65d1e5de3f87e9d5e5741dbcf345a"

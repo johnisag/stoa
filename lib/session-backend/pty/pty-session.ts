@@ -112,14 +112,35 @@ export class PtySession {
         if (c >= 0xdc00 && c <= 0xdfff)
           this.rawBuffer = this.rawBuffer.slice(1);
       }
-      for (const listener of this.outputListeners) listener(data);
+      PtySession.fanOut(this.outputListeners, data);
     });
 
     this.pty.onExit(({ exitCode }) => {
       this._alive = false;
       this._exitCode = exitCode;
-      for (const listener of this.exitListeners) listener({ exitCode });
+      PtySession.fanOut(this.exitListeners, { exitCode });
     });
+  }
+
+  /**
+   * Fan a value out to a set of subscribers, isolating each call.
+   *
+   * A throwing subscriber must NOT abort the fan-out to the others, and —
+   * critically — must NOT escape the node-pty onData/onExit callback it runs
+   * inside. That callback is an async context the Tier-2 pty-host daemon does
+   * NOT wrap (only the IPC frame decoder has a try/catch), so an exception
+   * thrown here would surface as an uncaughtException and crash the daemon —
+   * killing EVERY live agent session at once. Swallow + log per listener so one
+   * bad subscriber can't take down the process or starve the other viewers.
+   */
+  private static fanOut<T>(listeners: Set<(value: T) => void>, value: T): void {
+    for (const listener of listeners) {
+      try {
+        listener(value);
+      } catch (err) {
+        console.error("[pty-session] output/exit listener threw:", err);
+      }
+    }
   }
 
   get alive(): boolean {

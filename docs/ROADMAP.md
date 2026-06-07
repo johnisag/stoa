@@ -46,13 +46,21 @@ The current committed sequence. Each item ships as its own PR through the
    `.env.example` documents `STOA_PORT`. Regression tests in
    `test/stoa-cli.test.ts`. _(Fixed the repo bug — not a per-machine
    `stoa.cmd` wrapper.)_
-2. [ ] **Tier-2 daemon `uncaughtException` guard + lifecycle tests** _(E:S)_ —
-   the pty-host daemon has no top-level exception guard, so one unhandled throw
-   kills **every** live session at once (the largest stability blast-radius in
-   the tree). Add a per-connection keep-alive guard + lock the three untested
-   Tier-2 lifecycle contracts (exit-over-IPC, exit-after-reconnect,
-   Tier-2→Tier-1 fallback). Don't build new Windows features on a daemon one
-   bad frame can take down.
+2. [x] **Tier-2 daemon `uncaughtException` guard + lifecycle tests** ✅ **DONE** —
+   the pty-host daemon had no top-level exception guard, so one unhandled throw
+   would kill **every** live session at once (the largest stability blast-radius
+   in the tree). Fixed in three layers: (1) `PtySession.fanOut` isolates each
+   output/exit subscriber in a try/catch, so a throwing listener can't abort the
+   fan-out **or** escape node-pty's `onData`/`onExit` callback (the async seam
+   the IPC decoder's try/catch doesn't cover); (2) the daemon's `send()` drops
+   just the failing connection on a write/encode error (it reconnects + repaints
+   from a fresh snapshot); (3) `installProcessGuards()` adds last-resort
+   `uncaughtException`/`unhandledRejection` handlers that log-and-stay-alive,
+   installed **only** in the standalone daemon entry (`scripts/pty-host.ts`),
+   never in-process where they'd mask real crashes. Locked the three untested
+   Tier-2 lifecycle contracts (exit-over-IPC, exit-during-socket-drop reported
+   as gone, Tier-2→Tier-1 fallback re-resolution) plus the fan-out isolation and
+   guard install/semantics — all in `test/pty-host.test.ts` + `pty-session.test.ts`.
 3. [ ] **Audit / event ledger** ⭐ _(E:M)_ — an append-only per-session ledger
    of commands / writes / tool-calls / tokens / cost / durations / approval
    outcomes, written at the existing pty `onData` + `session.write` seams into
