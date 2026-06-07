@@ -61,14 +61,22 @@ The current committed sequence. Each item ships as its own PR through the
    Tier-2 lifecycle contracts (exit-over-IPC, exit-during-socket-drop reported
    as gone, Tier-2→Tier-1 fallback re-resolution) plus the fan-out isolation and
    guard install/semantics — all in `test/pty-host.test.ts` + `pty-session.test.ts`.
-3. [ ] **Audit / event ledger** ⭐ _(E:M)_ — an append-only per-session ledger
-   of commands / writes / tool-calls / tokens / cost / durations / approval
-   outcomes, written at the existing pty `onData` + `session.write` seams into
-   the existing `better-sqlite3` store. This is the **Windows-safety moat**
-   ("what did the agent run") **and** the raw substrate for analytics (item 4) —
-   one ledger, viewed twice. First brick of the unshipped Trust & Safety
-   cluster; the permission policy later hooks the same seam and routes "ask"
-   through the shipped approve/reject push.
+3. [x] **Audit / event ledger** ⭐ ✅ **DONE** — an append-only per-session
+   ledger (`session_events`: id, session_key, event_type, payload JSON,
+   created_at epoch-millis) written at the **`getSessionBackend()` seam** via a
+   `RecordingBackend` decorator (`lib/audit/ledger.ts`) — recording lifecycle
+   (create / kill / rename) + input (text / paste / enter / escape) across tmux
+   AND both pty tiers from one place. Recorded in the **web-server process**
+   (where `better-sqlite3` lives — the Tier-2 daemon has no DB handle), best-effort
+   (a failed audit write never breaks a terminal; failure logging is throttled).
+   No FK to `sessions` ON PURPOSE so the trail outlives a deleted session — the
+   **Windows-safety moat** ("what did the agent run") **and** the raw substrate
+   for analytics (item 4). Input text is length-only by default (secrets aren't
+   copied verbatim); `STOA_AUDIT_INPUT_TEXT=1` opts into capped full text.
+   Default on; opt out with `STOA_AUDIT=0`. _Known limits (item-4 follow-ups):_
+   events key on the mutable backend key (a rename splits the trail, with a
+   `{from}` breadcrumb) — a stable correlation id is an analytics-model decision;
+   raw pty output is not recorded (the rendered-screen capture serves that).
 4. [ ] **Analytics view on the ledger** _(E:M)_ — insights dashboard over the
    item-3 ledger (cost per merged PR, reviewer-gate pass rate, where sessions
    stall, cost per repo), all on-box. **Keep `better-sqlite3` as the source of
