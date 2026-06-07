@@ -235,7 +235,9 @@ function Overview({ report }: { report: AnalyticsReport }) {
           hint={
             p.costPerMergedPr != null
               ? `$${p.costPerMergedPr.toFixed(2)}/PR amortized`
-              : undefined
+              : p.mergedPrCount === 0
+                ? "counts in-app/Dispatch merges only"
+                : undefined
           }
         />
         <StatCard
