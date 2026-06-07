@@ -98,15 +98,38 @@ The current committed sequence. Each item ships as its own PR through the
 
 ---
 
+## ▶ ACTIVE PLAN (2026-06-07) — next committed sequence
+
+Top of the list, in order. Each ships as its own PR through the 3-OS CI matrix +
+3-agent review gate; tick the box here as it lands.
+
+1. [ ] **Merge-signal reconciliation — close the Insight blind spot** ⭐ — the
+   Intelligence lens reports 0 merges because a session's merge is only recorded
+   from the Dispatch outcome or the in-app PR panel; every real PR here is merged
+   via terminal `gh`/`git`, so it never reaches the DB. Add **branch-based
+   PR-status reconciliation** for ALL sessions with a `branch_name` (interactive +
+   Dispatch + orchestration workers) via `gh pr view <branch>` / git "did this
+   branch land on main", following the `lib/dispatch/github.ts` convention
+   (`resolveBinary("gh")`, `execFile` argv, a pure parse fn split out for tests).
+   **Segment merges by origin** (autonomous worker vs human-steered interactive)
+   so the two never blend into one effectiveness score; keep the existing
+   Laplace-smoothed, sample-gated guard. (Full analysis under Pillar 2 below.)
+2. [ ] **`stoa update` reliability — investigate + fix the failed auto-update** —
+   the self-update didn't work from the agent side (had to update + restart Stoa
+   manually). Root-cause why (dirty-tree guard tripping on an untracked/ignored
+   file? restart not surviving? port not re-applied?), fix the repo bug (not a
+   per-machine workaround), and add a regression test. See the `stoa update`
+   dirty-tree note in the ceremony skill as a starting hypothesis.
+
+---
+
 ## ▶ ACTIVE PLAN — ✅ COMPLETE (2026-06-07)
 
 All four committed items shipped (port fix #127/#128 · Tier-2 crash guard #132 ·
-audit ledger #133 · Insight analytics layer). Next sequence to be drawn from the
-🔭 Next horizons + 🧭 Strategic pillars below — candidate leads: the **Insight
-pillar's** remaining depth (behavioural file-touch patterns, per-provider
-intelligence correlated with richer outcome signals) once the ledger emits
-cost/token/duration events, or the **Orchestration pillar** (declarative
-multi-provider agent pipelines + unified cron/issue/manual triggers).
+audit ledger #133 · Insight analytics layer #134). The **Orchestration pillar's**
+Stage 1 (declarative agent-pipeline DAG engine + executor) then shipped in #136,
+and the duplicate sidebar-collapse toggle was fixed in #135. The next committed
+sequence is the **▶ ACTIVE PLAN** section directly above.
 
 _Reference — the original DuckDB guidance for item 4:_ **Keep `better-sqlite3`
 as the source of truth** (SQLite is right for the OLTP workload; a DuckDB native
