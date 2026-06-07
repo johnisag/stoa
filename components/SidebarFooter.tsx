@@ -1,5 +1,5 @@
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Keyboard, Rocket } from "lucide-react";
+import { Keyboard, Rocket, BarChart3 } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -12,17 +12,37 @@ interface SidebarFooterProps {
   onShowShortcuts?: () => void;
   /** Opens the Dispatch control plane (GitHub issues -> agent fleet). */
   onShowDispatch?: () => void;
+  /** Opens the Insight / analytics view over the audit ledger. */
+  onShowAnalytics?: () => void;
 }
 
 export function SidebarFooter({
   onShowShortcuts,
   onShowDispatch,
+  onShowAnalytics,
 }: SidebarFooterProps = {}) {
   return (
     <div className="mt-auto px-3 pt-2 pb-3">
       <div className="flex items-center justify-between">
         <span className="text-muted-foreground text-xs">Theme</span>
         <div className="flex items-center gap-1">
+          {onShowAnalytics && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={onShowAnalytics}
+                  aria-label="Insight"
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
+                >
+                  <BarChart3 className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Insight</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
           {onShowDispatch && (
             <Tooltip>
               <TooltipTrigger asChild>
