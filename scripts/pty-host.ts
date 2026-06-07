@@ -2,9 +2,18 @@
 //   node node_modules/tsx/dist/cli.mjs scripts/pty-host.ts
 // Auto-spawned (detached) by the host client when STOA_PTY_HOST=1 and no
 // daemon is running yet. Keeps agent sessions alive across web-server restarts.
-import { startHost } from "../lib/session-backend/pty/host";
+import {
+  startHost,
+  installProcessGuards,
+} from "../lib/session-backend/pty/host";
 
 import { hostAddress } from "../lib/session-backend/pty/protocol";
+
+// This process owns EVERY live agent session, so a single unhandled throw must
+// not crash it and take them all down. Install the keep-alive guards before we
+// start serving. (Guards live only here, not when the host runs in-process
+// under the web server / test runner, where they'd mask real crashes.)
+installProcessGuards();
 
 startHost()
   .then((started) => {

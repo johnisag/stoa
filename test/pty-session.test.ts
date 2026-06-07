@@ -180,4 +180,34 @@ describe("pty registry / PtySession", () => {
     killSession("test-kill");
     expect(hasSession("test-kill")).toBe(false);
   });
+
+  it("isolates a throwing output subscriber: others still receive + the pty callback never throws (Tier-2 keep-alive)", async () => {
+    // The Tier-2 pty-host daemon runs the output fan-out inside node-pty's
+    // onData callback, which is OUTSIDE the IPC decoder's try/catch. If one
+    // subscriber threw and that escaped, it would crash the daemon and kill
+    // EVERY live session. Lock that a throwing listener can't abort the fan-out
+    // to the others (and, by construction, can't escape the pty callback).
+    const marker = "FANOUT_ISOLATE_88";
+    const session = spawnSession("test-fanout", {
+      binary: "node",
+      args: [
+        "-e",
+        `setInterval(()=>process.stdout.write('${marker}\\r\\n'),20)`,
+      ],
+      cwd: process.cwd(),
+    });
+
+    let good = "";
+    session.onOutput(() => {
+      throw new Error("subscriber boom"); // hostile/buggy subscriber, first in set
+    });
+    session.onOutput((d) => {
+      good += d; // must still receive despite the thrower above
+    });
+
+    const got = await waitFor(() => good.includes(marker));
+    expect(got).toBe(true);
+    expect(good).toContain(marker);
+    killSession("test-fanout");
+  });
 });
