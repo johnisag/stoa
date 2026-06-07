@@ -172,4 +172,22 @@ describe("killWorker", () => {
   it("is a no-op for an unknown worker id", async () => {
     await expect(killWorker("nope", false)).resolves.toBeUndefined();
   });
+
+  it("records the given final status (completed) instead of always failed", async () => {
+    const conductor = addSession();
+    const worker = await spawnWorker({
+      conductorSessionId: conductor,
+      task: "successful task",
+      workingDirectory: "/repo",
+      useWorktree: false,
+    });
+    // The pipeline reaper kills a SUCCEEDED step's worker — its row must read
+    // "completed", not the default "failed" (else success is mislabeled).
+    await killWorker(worker.id, false, "completed");
+    expect(backendKill).toHaveBeenCalled();
+    const row = db()
+      .prepare("SELECT worker_status FROM sessions WHERE id = ?")
+      .get(worker.id) as { worker_status: string };
+    expect(row.worker_status).toBe("completed");
+  });
 });

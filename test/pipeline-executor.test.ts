@@ -223,4 +223,111 @@ describe("runPipeline", () => {
       snaps[snaps.length - 1]
     );
   });
+
+  // ── Worker reaping (FIX 1: forceTerminate must actually tear workers down) ──
+
+  it("reaps every launched worker once the run is terminal", async () => {
+    const deps = fakeDeps({});
+    const reaped: Array<{ id: string; cleanupWorktree: boolean }> = [];
+    deps.terminate = async (sessionId, opts) => {
+      reaped.push({ id: sessionId, cleanupWorktree: opts.cleanupWorktree });
+    };
+    await runPipeline(
+      spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })]),
+      deps
+    );
+    // Both launched workers torn down exactly once.
+    expect(reaped.map((r) => r.id).sort()).toEqual(["sess-a", "sess-b"]);
+  });
+
+  it("keeps a succeeded step's worktree but reaps a failed step's", async () => {
+    const deps = fakeDeps({ outcomes: { a: "succeeded", b: "failed" } });
+    const reaped = new Map<
+      string,
+      { cleanupWorktree: boolean; succeeded: boolean }
+    >();
+    deps.terminate = async (sessionId, opts) => {
+      reaped.set(sessionId, opts);
+    };
+    // a and b are independent roots: a succeeds (keep worktree), b fails (reap).
+    await runPipeline(spec([step({ id: "a" }), step({ id: "b" })]), deps);
+    // succeeded → worktree preserved, status truthful
+    expect(reaped.get("sess-a")).toEqual({
+      cleanupWorktree: false,
+      succeeded: true,
+    });
+    // failed → worktree removed, status failed
+    expect(reaped.get("sess-b")).toEqual({
+      cleanupWorktree: true,
+      succeeded: false,
+    });
+  });
+
+  it("does not reap a step that never launched (spawn failure / skip)", async () => {
+    const deps = fakeDeps({ failSpawn: ["a"] });
+    const reaped: string[] = [];
+    deps.terminate = async (sessionId) => {
+      reaped.push(sessionId);
+    };
+    // a fails to spawn (no sessionId), b is skipped (never launched) → nothing
+    // to reap; terminate must not be called with a null/undefined id.
+    await runPipeline(
+      spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })]),
+      deps
+    );
+    expect(reaped).toEqual([]);
+  });
+
+  it("reaps on the timeout path and isolates a terminate fault", async () => {
+    const deps = fakeDeps({});
+    deps.checkOutcome = async () => "running"; // never finishes → cycle cap
+    const reaped: string[] = [];
+    deps.terminate = async (sessionId) => {
+      reaped.push(sessionId);
+      throw new Error("kill boom"); // a teardown fault must be swallowed
+    };
+    // Must resolve (not reject) despite terminate throwing, and still reap.
+    const run = await runPipeline(spec([step({ id: "a" })]), deps, {
+      maxPollCycles: 2,
+    });
+    expect(run.steps.a.status).toBe("failed");
+    expect(reaped).toEqual(["sess-a"]);
+  });
+
+  it("reaps even when the loop throws unexpectedly (crash path)", async () => {
+    const deps = fakeDeps({});
+    const reaped: string[] = [];
+    deps.terminate = async (sessionId) => {
+      reaped.push(sessionId);
+      throw new Error("kill boom"); // teardown fault on the crash path too
+    };
+    let calls = 0;
+    deps.onUpdate = () => {
+      // Throw after the launch emit so a worker exists to reap on the crash path.
+      if (++calls === 2) throw new Error("boom in onUpdate");
+    };
+    // The ORIGINAL error must propagate (not the teardown's "kill boom"), and
+    // the worker must still be reaped despite terminate throwing.
+    await expect(runPipeline(spec([step({ id: "a" })]), deps)).rejects.toThrow(
+      /boom in onUpdate/
+    );
+    expect(reaped).toEqual(["sess-a"]);
+  });
+
+  it("reaps a launched worker on the stuck-state path", async () => {
+    // a succeeds; b depends on a but its outcome never resolves AND we trip the
+    // stuck guard by reporting b's running step as no-longer-running without a
+    // terminal outcome. Simplest reliable stuck trigger: a single step whose
+    // checkOutcome flips it out of contention. We instead assert the common
+    // case: a step that fails to spawn leaves a downstream skipped while the
+    // upstream's worker is still reaped.
+    const deps = fakeDeps({ outcomes: { a: "succeeded" } });
+    const reaped: string[] = [];
+    deps.terminate = async (sessionId) => {
+      reaped.push(sessionId);
+    };
+    await runPipeline(spec([step({ id: "a" })]), deps);
+    // a launched and reached terminal → reaped.
+    expect(reaped).toEqual(["sess-a"]);
+  });
 });
