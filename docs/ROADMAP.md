@@ -386,6 +386,23 @@ one substrate, not three separate builds. Sequenced easiest→hardest:
   restarts (the registry is in-memory today), richer **PR-grounded step
   outcomes** (see the merge-signal note below), and **rewind/snapshot
   integration**.
+- [ ] **Agent pipelines — Stage-1 hardening** _(D:high · E:M)_ ⭐ — a 2× 3-agent
+  ultra review of #136 found the pure engine solid but the executor's lifecycle
+  shell unsafe to actually run. Full findings + the ordered fix sequence:
+  `docs/issues/pipeline-stage1-ultra-review.md`. Committed order, each its own PR:
+  1. **CRITICAL** — `forceTerminate` kills nothing: terminated/finished runs never
+     call `killWorker`, so every pty + worktree + agent process leaks (even on
+     success). Add a `terminate` seam + reaper.
+  2. **HIGH** — `succeeded` is unverified ("terminal went quiet" ≠ "task done"):
+     a refusal/no-op/scrolled-off-error all green-light. Require a truth signal.
+  3. **HIGH** — no idempotency: a retried `run_pipeline` double-launches the DAG.
+  4. **HIGH** — registry evicts LIVE runs (resurrection thrash + 404s).
+  5. **HIGH** — no persisted run↔session linkage: restart orphans are
+     unrecoverable in principle (folds into "run persistence" above).
+  6. **HIGH** — `spawn_worker` MCP enum hardcoded vs `run_pipeline`'s derived one.
+  7. **MED cluster** — validateSpec type guards (400 not 500), real timeout
+     deadline + per-step timeout, `terminationReason`, no raw `error.message`,
+     a `toRunDTO` + machine-readable status marker, route/MCP tests.
 - [ ] **Unified triggers (cron + issue + manual)** _(D:med–high · E:M)_ — rather
   than a standalone cron, make scheduling a TRIGGER TYPE that feeds the same
   workflow executor: manual, cron ("every morning at 9, run this workflow on
