@@ -55,7 +55,18 @@ function send(conn: Conn, msg: HostMessage) {
     conn.socket.destroy();
     return;
   }
-  conn.socket.write(encode(msg));
+  try {
+    conn.socket.write(encode(msg));
+  } catch (err) {
+    // Drop just this connection on a write/encode failure so it reconnects and
+    // repaints from a fresh snapshot, rather than limping along half-broken.
+    // (Crash-safety on the output path is already handled at the source:
+    // PtySession.fanOut isolates each subscriber and the IPC decoder swallows
+    // malformed frames, so a throw here can't escape to crash the daemon — this
+    // catch is about connection hygiene, not keeping the process alive.)
+    console.error("[pty-host] send failed; dropping connection:", err);
+    conn.socket.destroy();
+  }
 }
 
 async function handleMessage(conn: Conn, msg: ClientMessage) {
@@ -339,4 +350,41 @@ export function stopHost(): Promise<void> {
     connections.clear();
     srv.close(() => resolve());
   });
+}
+
+/**
+ * Last-resort keep-alive for the Tier-2 daemon.
+ *
+ * The daemon owns EVERY live agent session in one process, so a single
+ * unhandled throw / rejected promise would otherwise crash it and kill them all
+ * at once — the largest stability blast-radius in the tree. The hot paths are
+ * already guarded at the source (the IPC frame decoder swallows malformed
+ * frames, PtySession.fanOut isolates each subscriber, and send() drops a single
+ * failing connection), but an exception from some unforeseen async seam must
+ * NOT take the process down. Log it and keep serving the surviving sessions.
+ *
+ * Installed ONLY in the standalone daemon entry point (scripts/pty-host.ts) —
+ * never when the host runs in-process under the web server or the test runner,
+ * where a process-wide handler would mask real crashes elsewhere.
+ */
+let guardsInstalled = false;
+function onUncaughtException(err: unknown, origin?: string): void {
+  console.error(`[pty-host] uncaughtException (kept alive, ${origin}):`, err);
+}
+function onUnhandledRejection(reason: unknown): void {
+  console.error("[pty-host] unhandledRejection (kept alive):", reason);
+}
+
+export function installProcessGuards(): void {
+  if (guardsInstalled) return;
+  guardsInstalled = true;
+  process.on("uncaughtException", onUncaughtException);
+  process.on("unhandledRejection", onUnhandledRejection);
+}
+
+export function uninstallProcessGuards(): void {
+  if (!guardsInstalled) return;
+  guardsInstalled = false;
+  process.removeListener("uncaughtException", onUncaughtException);
+  process.removeListener("unhandledRejection", onUnhandledRejection);
 }
