@@ -43,7 +43,6 @@ export function SessionList({
   onOpenTerminal,
   onStartDevServer,
   onCreateDevServer,
-  onCollapse,
 }: SessionListProps) {
   // Fetch data directly with loading states
   const {
@@ -140,7 +139,6 @@ export function SessionList({
         onKillAll={() => setShowKillAllConfirm(true)}
         attentionCount={attentionCount}
         onJumpToAttention={handleJumpToAttention}
-        onCollapse={onCollapse}
       />
 
       {/* Kill All Confirmation */}
