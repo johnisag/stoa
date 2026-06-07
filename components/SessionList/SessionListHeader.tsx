@@ -7,7 +7,6 @@ import {
   MoreHorizontal,
   Trash2,
   AlertCircle,
-  PanelLeftClose,
 } from "lucide-react";
 import {
   Tooltip,
@@ -25,8 +24,6 @@ interface SessionListHeaderProps {
   attentionCount?: number;
   /** Jump to the next session needing attention (badge click). */
   onJumpToAttention?: () => void;
-  /** Collapse the sidebar to its icon rail (renders a chevron when provided). */
-  onCollapse?: () => void;
 }
 
 export function SessionListHeader({
@@ -36,7 +33,6 @@ export function SessionListHeader({
   onKillAll,
   attentionCount = 0,
   onJumpToAttention,
-  onCollapse,
 }: SessionListHeaderProps) {
   return (
     <div className="flex items-center justify-between px-3 py-2">
@@ -106,24 +102,6 @@ export function SessionListHeader({
             }),
           ]}
         />
-        {onCollapse && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onCollapse}
-                aria-label="Collapse sidebar"
-                className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
-              >
-                <PanelLeftClose className="h-4 w-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              <p>Collapse sidebar</p>
-              <p className="text-muted-foreground text-xs">⌘B</p>
-            </TooltipContent>
-          </Tooltip>
-        )}
       </div>
     </div>
   );
