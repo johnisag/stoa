@@ -302,6 +302,34 @@ const migrations: Migration[] = [
       db.exec(`ALTER TABLE issue_dispatches ADD COLUMN fixer_session_id TEXT`);
     },
   },
+  {
+    id: 20,
+    name: "add_session_events_ledger",
+    up: (db) => {
+      // Append-only audit / event ledger. No FK to sessions ON PURPOSE — the
+      // trail must outlive a deleted session (the audit-moat value AND the
+      // analytics substrate). session_key is the backend key (e.g.
+      // "claude-<uuid>"); created_at is epoch millis for cheap ordering.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_key TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          payload TEXT,
+          created_at INTEGER NOT NULL
+        )
+      `);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_session_events_key ON session_events(session_key)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_session_events_created ON session_events(created_at)`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

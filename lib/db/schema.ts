@@ -158,7 +158,23 @@ export function createSchema(db: Database.Database): void {
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
     );
 
+    -- Append-only audit / event ledger (one row per recorded session event).
+    -- Independent of the sessions row (no FK) ON PURPOSE: the trail must outlive
+    -- a deleted session — that's the audit-moat value AND the analytics substrate.
+    -- session_key is the BACKEND key (e.g. "claude-<uuid>"), not sessions.id.
+    -- created_at is epoch MILLIS (integer) for cheap ordering + duration math.
+    CREATE TABLE IF NOT EXISTS session_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_key TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload TEXT,
+      created_at INTEGER NOT NULL
+    );
+
     -- Indexes for common queries
+    CREATE INDEX IF NOT EXISTS idx_session_events_key ON session_events(session_key);
+    CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_session_events_created ON session_events(created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_repo_issue ON issue_dispatches(repo_id, issue_number);
     CREATE INDEX IF NOT EXISTS idx_dispatch_status ON issue_dispatches(status);
     CREATE INDEX IF NOT EXISTS idx_dispatch_repo ON issue_dispatches(repo_id);
