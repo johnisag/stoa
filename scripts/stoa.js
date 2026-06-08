@@ -387,6 +387,19 @@ function cmdStop() {
     }
   }
 
+  // Confirm it actually died before clearing the pid file. If the kill failed
+  // (e.g. taskkill lacked privilege), KEEP the pid file and fail loudly — so a
+  // following cmdRestart/cmdUpdate aborts instead of stacking a second server
+  // on the same port (which then crash-loops on EADDRINUSE).
+  if (isAlive(pid)) {
+    error(`Failed to stop Stoa — PID ${pid} is still alive.`);
+    console.log("  Kill it manually (then retry), e.g.:");
+    console.log(
+      IS_WINDOWS ? `    taskkill /PID ${pid} /T /F` : `    kill -9 ${pid}`
+    );
+    process.exit(1);
+  }
+
   clearPidFile();
   info("Stoa stopped");
 }
