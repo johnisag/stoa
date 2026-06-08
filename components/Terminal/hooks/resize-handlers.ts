@@ -48,31 +48,32 @@ export function setupResizeHandlers(config: ResizeHandlersConfig): () => void {
       }
     };
 
-    // Refit only when the grid would ACTUALLY change. On mobile the keyboard +
-    // Android's dynamic URL bar make visualViewport fire resize/scroll constantly
-    // while typing, each landing here. A fit() that lands on the same cols/rows
-    // still calls term.resize() (a full re-layout + refresh) and re-sends a resize
-    // that makes the agent TUI repaint — wasted main-thread work that stalls the
-    // keystroke echo. proposeDimensions() reads the target size WITHOUT applying,
-    // so we can skip the whole cascade when nothing changed (#116 typing lag).
-    const fitIfChanged = () => {
-      const next = fitAddon.proposeDimensions();
-      if (!next || (next.cols === term.cols && next.rows === term.rows)) return;
+    requestAnimationFrame(() => {
+      // First fit - immediate
       fitAddon.fit();
       fixMobileScrollbarWidth();
       restoreScroll();
       sendResize(term.cols, term.rows);
-    };
-
-    requestAnimationFrame(() => {
-      // First fit - immediate
-      fitIfChanged();
 
       // Second fit - after 100ms (handles most delayed layout updates)
-      fitTimeouts.push(setTimeout(fitIfChanged, 100));
+      fitTimeouts.push(
+        setTimeout(() => {
+          fitAddon.fit();
+          fixMobileScrollbarWidth();
+          restoreScroll();
+          sendResize(term.cols, term.rows);
+        }, 100)
+      );
 
       // Third fit - after 250ms (handles slow layout updates, e.g., DevTools toggle)
-      fitTimeouts.push(setTimeout(fitIfChanged, 250));
+      fitTimeouts.push(
+        setTimeout(() => {
+          fitAddon.fit();
+          fixMobileScrollbarWidth();
+          restoreScroll();
+          sendResize(term.cols, term.rows);
+        }, 250)
+      );
     });
   };
 

@@ -102,7 +102,6 @@ async function generateSummary(conversation: string): Promise<string> {
     const claude = spawn(resolveBinary("claude") || "claude", ["-p", prompt], {
       stdio: ["pipe", "pipe", "pipe"],
       shell: isWindows,
-      windowsHide: isWindows,
     });
 
     let stdout = "";
@@ -271,24 +270,13 @@ export async function POST(
       console.log(
         `[summarize] Creating session: ${newTmuxSession} (${claudeCmd})`
       );
-      try {
-        await backend.create({
-          name: newTmuxSession,
-          cwd: cwdExpanded,
-          command: claudeCmd,
-          binary: "claude",
-          args: claudeArgs,
-        });
-      } catch (createError) {
-        await backend.kill(newTmuxSession).catch((killError) => {
-          console.error(
-            "[summarize] Partial session cleanup failed:",
-            killError
-          );
-        });
-        queries.deleteSession(db).run(newId);
-        throw createError;
-      }
+      await backend.create({
+        name: newTmuxSession,
+        cwd: cwdExpanded,
+        command: claudeCmd,
+        binary: "claude",
+        args: claudeArgs,
+      });
       console.log(`[summarize] Tmux session created: ${newTmuxSession}`);
 
       // Give Claude a moment to start up before polling

@@ -42,12 +42,6 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       body?.mode === "auto" || body?.mode === "review" ? body.mode : repo.mode;
     const enabled =
       body?.enabled !== undefined ? (body.enabled ? 1 : 0) : repo.enabled;
-    const reviewGate =
-      body?.reviewGate !== undefined
-        ? body.reviewGate
-          ? 1
-          : 0
-        : repo.review_gate;
 
     queries
       .updateDispatchRepo(db)
@@ -59,7 +53,6 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         baseBranch,
         mode,
         enabled,
-        reviewGate,
         id
       );
     return NextResponse.json({

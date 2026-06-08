@@ -55,43 +55,37 @@ async function isPidRunning(pid: number): Promise<boolean> {
   }
 }
 
-export function taskkillArgs(pid: number): string[] {
-  return ["/PID", String(pid), "/T", "/F"];
-}
-
-async function killPid(pid: number, tree: boolean): Promise<void> {
-  if (isWindows) {
-    await execFileAsync("taskkill", taskkillArgs(pid), {
-      windowsHide: true,
-    }).catch(() => undefined);
-    return;
-  }
-
-  try {
-    process.kill(tree ? -pid : pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      return;
-    }
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  try {
-    process.kill(tree ? -pid : pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // already gone
-    }
-  }
-}
-
 // Check if a port is in use
 async function isPortInUse(port: number): Promise<boolean> {
   return portInUse(port);
+}
+
+// Get PID using a port
+async function getPidOnPort(port: number): Promise<number | null> {
+  try {
+    if (isWindows) {
+      // netstat -ano lists connections with the owning PID in the last column.
+      const { stdout } = await execFileAsync("netstat", ["-ano"]);
+      for (const line of stdout.split(/\r?\n/)) {
+        const cols = line.trim().split(/\s+/);
+        // Columns: Proto  Local Address  Foreign Address  State  PID
+        if (cols.length < 5 || cols[0].toUpperCase() !== "TCP") continue;
+        const local = cols[1];
+        // Match :PORT at the end of the local address (handles IPv4 and IPv6).
+        if (!local.endsWith(`:${port}`)) continue;
+        if (cols[3].toUpperCase() !== "LISTENING") continue;
+        const pid = parseInt(cols[cols.length - 1], 10);
+        if (!isNaN(pid)) return pid;
+      }
+      return null;
+    }
+
+    const { stdout } = await execFileAsync("lsof", ["-i", `:${port}`, "-t"]);
+    const pid = parseInt(stdout.trim().split(/\r?\n/)[0], 10);
+    return isNaN(pid) ? null : pid;
+  } catch {
+    return null;
+  }
 }
 
 // Check Node.js server status
@@ -99,14 +93,19 @@ async function checkNodeStatus(server: DevServer): Promise<DevServerStatus> {
   if (server.pid) {
     const running = await isPidRunning(server.pid);
     if (running) return "running";
-    return "stopped";
   }
 
   // Check if any of its ports are in use
   const ports: number[] = JSON.parse(server.ports || "[]");
   for (const port of ports) {
     if (await isPortInUse(port)) {
-      return "running";
+      // Port is in use, try to get the PID
+      const pid = await getPidOnPort(port);
+      if (pid) {
+        // Update PID in database
+        queries.updateDevServerPid(db).run(pid, "running", server.id);
+        return "running";
+      }
     }
   }
 
@@ -118,11 +117,12 @@ async function checkDockerStatus(server: DevServer): Promise<DevServerStatus> {
   if (!server.container_id) return "stopped";
 
   try {
-    const { stdout } = await execFileAsync(
-      "docker",
-      ["inspect", "-f", "{{.State.Status}}", server.container_id],
-      { windowsHide: isWindows }
-    );
+    const { stdout } = await execFileAsync("docker", [
+      "inspect",
+      "-f",
+      "{{.State.Status}}",
+      server.container_id,
+    ]);
     const status = stdout.trim();
     if (status === "running") return "running";
     if (status === "starting" || status === "restarting") return "starting";
@@ -215,13 +215,15 @@ async function spawnNodeServer(
     shell: true,
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    windowsHide: isWindows,
   });
 
   if (child.pid) child.unref();
 
   // Close our reference to the fd - the child process has its own
   fs.closeSync(logFd);
+
+  // Give it a moment to start
+  await new Promise((resolve) => setTimeout(resolve, 500));
 
   return { pid: child.pid || 0 };
 }
@@ -235,14 +237,13 @@ async function spawnDockerService(
     // command is expected to be the service name
     await execFileAsync("docker", ["compose", "up", "-d", command], {
       cwd: workingDirectory,
-      windowsHide: isWindows,
     });
 
     // Get container ID
     const { stdout } = await execFileAsync(
       "docker",
       ["compose", "ps", "-q", command],
-      { cwd: workingDirectory, windowsHide: isWindows }
+      { cwd: workingDirectory }
     );
     const containerId = stdout.trim() || null;
 
@@ -310,20 +311,38 @@ export async function stopServer(id: string): Promise<void> {
   if (server.type === "docker") {
     if (server.container_id) {
       try {
-        await execFileAsync("docker", ["stop", server.container_id], {
-          windowsHide: isWindows,
-        });
+        await execFileAsync("docker", ["stop", server.container_id]);
       } catch {
         // Container may already be stopped
       }
     }
   } else {
     if (server.pid) {
-      await killPid(server.pid, true);
+      try {
+        process.kill(server.pid, "SIGTERM");
+        // Give it time to gracefully shut down
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Force kill if still running
+        if (await isPidRunning(server.pid)) {
+          process.kill(server.pid, "SIGKILL");
+        }
+      } catch {
+        // Process may already be dead
+      }
     }
 
-    // Do not kill by port occupancy. A stale DB row or user port collision must
-    // not let Stoa terminate an unrelated listener it did not spawn.
+    // Also check ports and kill anything on them
+    const ports: number[] = JSON.parse(server.ports || "[]");
+    for (const port of ports) {
+      const pid = await getPidOnPort(port);
+      if (pid) {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // Ignore
+        }
+      }
+    }
   }
 
   queries.updateDevServerStatus(db).run("stopped", id);
@@ -383,11 +402,12 @@ export async function getServerLogs(
     try {
       // docker writes logs to both stdout and stderr; merge them to mirror the
       // previous `2>&1` redirection.
-      const { stdout, stderr } = await execFileAsync(
-        "docker",
-        ["logs", "--tail", String(lines), server.container_id],
-        { windowsHide: isWindows }
-      );
+      const { stdout, stderr } = await execFileAsync("docker", [
+        "logs",
+        "--tail",
+        String(lines),
+        server.container_id,
+      ]);
       return (stdout + stderr).split("\n");
     } catch {
       return [];
@@ -463,7 +483,7 @@ export async function detectDockerServices(
         const { stdout } = await execFileAsync(
           "docker",
           ["compose", "-f", file, "config", "--services"],
-          { cwd: workingDir, windowsHide: isWindows }
+          { cwd: workingDir }
         );
         const services = stdout.trim().split(/\r?\n/).filter(Boolean);
 
@@ -508,15 +528,6 @@ export async function cleanupOrphanedServers(): Promise<void> {
     if (server.status === "running" && liveStatus === "stopped") {
       // Server was running but is now dead
       queries.updateDevServerStatus(db).run("stopped", server.id);
-    }
-  }
-}
-
-export async function stopAllRunningServers(): Promise<void> {
-  const servers = queries.getAllDevServers(db).all() as DevServer[];
-  for (const server of servers) {
-    if (server.status === "running" || server.status === "starting") {
-      await stopServer(server.id);
     }
   }
 }

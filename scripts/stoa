@@ -14,8 +14,7 @@ REPO_URL="https://github.com/johnisag/stoa.git"
 # Derived paths
 REPO_DIR="$STOA_HOME/repo"
 PID_FILE="$STOA_HOME/stoa.pid"
-# Logs live under ~/.stoa/logs/ to match the node CLI and docs/setup.
-LOG_FILE="$STOA_HOME/logs/stoa.log"
+LOG_FILE="$STOA_HOME/stoa.log"
 
 # Detect OS
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -66,13 +65,6 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/prerequisites.sh"
 source "$SCRIPT_DIR/lib/ai-clis.sh"
 source "$SCRIPT_DIR/lib/commands.sh"
-
-# Re-derive OS via detect_os() (now sourced) so it is debian/redhat/macos/linux —
-# the values the prerequisite installers switch on. The early uname-based value
-# above only distinguished macos (for Homebrew/PATH setup) and left every Linux as
-# "linux", which matched no install_* case branch and silently skipped prerequisite
-# installs — notably tmux, the Linux session backend, so the first session failed.
-OS="$(detect_os)"
 
 # Main
 case "${1:-}" in

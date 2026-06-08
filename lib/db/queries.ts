@@ -346,8 +346,8 @@ export const queries = {
   createDispatchRepo: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, review_gate, project_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
 
   getDispatchRepo: (db: Database.Database) =>
@@ -365,52 +365,11 @@ export const queries = {
   updateDispatchRepo: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, review_gate = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
   deleteDispatchRepo: (db: Database.Database) =>
     getStmt(db, `DELETE FROM dispatch_repos WHERE id = ?`),
-
-  // Dispatch — reviewer gate
-  listPrOpen: (db: Database.Database) =>
-    getStmt(db, `SELECT * FROM issue_dispatches WHERE status = 'pr_open'`),
-
-  setDispatchReviewer: (db: Database.Database) =>
-    getStmt(
-      db,
-      `UPDATE issue_dispatches SET reviewer_session_id = ?, updated_at = datetime('now') WHERE id = ?`
-    ),
-
-  setDispatchReviewDecision: (db: Database.Database) =>
-    getStmt(
-      db,
-      `UPDATE issue_dispatches SET review_decision = ?, updated_at = datetime('now') WHERE id = ?`
-    ),
-
-  // Fix loop: start a fix round (record the fixer session, bump the counter).
-  startFixRound: (db: Database.Database) =>
-    getStmt(
-      db,
-      `UPDATE issue_dispatches SET fixer_session_id = ?, fix_rounds = fix_rounds + 1, updated_at = datetime('now') WHERE id = ?`
-    ),
-
-  // Fix loop: a fixer finished — clear reviewer + decision + fixer so the next
-  // tick spawns a fresh critic against the updated PR (re-review).
-  resetForReReview: (db: Database.Database) =>
-    getStmt(
-      db,
-      `UPDATE issue_dispatches SET reviewer_session_id = NULL, review_decision = NULL, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
-    ),
-
-  // Retry a failed dispatch: wipe all worker/PR/review state back to a clean
-  // 'pending' so dispatchOne can claim + spawn it fresh (new worktree/branch).
-  resetDispatchForRetry: (db: Database.Database) =>
-    getStmt(
-      db,
-      // WHERE status='failed' so a double-tap retry only resets once (the second
-      // is a no-op; dispatchOne's claimDispatch is still the spawn-once gate).
-      `UPDATE issue_dispatches SET status = 'pending', session_id = NULL, branch_name = NULL, worktree_path = NULL, pr_url = NULL, pr_number = NULL, pr_status = NULL, dispatched_at = NULL, reviewer_session_id = NULL, review_decision = NULL, fix_rounds = 0, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'failed'`
-    ),
 
   // Dispatch — issue pipeline rows
   getDispatchByRepoIssue: (db: Database.Database) =>
@@ -424,30 +383,6 @@ export const queries = {
       db,
       `INSERT OR IGNORE INTO issue_dispatches (id, repo_id, issue_number, issue_title, issue_url, issue_created_at, status)
        VALUES (?, ?, ?, ?, ?, ?, 'pending')`
-    ),
-
-  // Schedule a candidate for a future time: 'scheduled' until the reconciler
-  // promotes it to 'pending' at/after scheduled_at.
-  insertScheduledCandidate: (db: Database.Database) =>
-    getStmt(
-      db,
-      `INSERT OR IGNORE INTO issue_dispatches (id, repo_id, issue_number, issue_title, issue_url, issue_created_at, scheduled_at, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled')`
-    ),
-
-  // All rows with status='scheduled' (the reconciler filters due ones in JS) —
-  // used by the reconciler promotion + the UI list.
-  listScheduled: (db: Database.Database) =>
-    getStmt(
-      db,
-      `SELECT * FROM issue_dispatches WHERE status = 'scheduled' ORDER BY scheduled_at ASC`
-    ),
-
-  // Promote a due scheduled row → pending (then normal headroom/mode applies).
-  promoteScheduledToPending: (db: Database.Database) =>
-    getStmt(
-      db,
-      `UPDATE issue_dispatches SET status = 'pending', updated_at = datetime('now') WHERE id = ? AND status = 'scheduled'`
     ),
 
   getDispatch: (db: Database.Database) =>
@@ -534,42 +469,5 @@ export const queries = {
     getStmt(
       db,
       `UPDATE issue_dispatches SET status = ?, updated_at = datetime('now') WHERE id = ?`
-    ),
-
-  // Audit / event ledger (append-only)
-  appendSessionEvent: (db: Database.Database) =>
-    getStmt(
-      db,
-      `INSERT INTO session_events (session_key, event_type, payload, created_at)
-       VALUES (?, ?, ?, ?)`
-    ),
-
-  getSessionEvents: (db: Database.Database) =>
-    getStmt(
-      db,
-      `SELECT * FROM session_events WHERE session_key = ? ORDER BY id ASC`
-    ),
-
-  // Window-bounded event read for analytics — projects only the columns the
-  // engine reads (NOT payload, which can hold large input/paste bodies) and
-  // orders by created_at so the idx_session_events_created range scan is used
-  // directly. Keeps a busy 90-day window from materializing MBs of payload text.
-  getSessionEventsSince: (db: Database.Database) =>
-    getStmt(
-      db,
-      `SELECT session_key, event_type, created_at FROM session_events
-       WHERE created_at >= ? ORDER BY created_at ASC, id ASC`
-    ),
-
-  getSessionEventsByType: (db: Database.Database) =>
-    getStmt(
-      db,
-      `SELECT * FROM session_events WHERE session_key = ? AND event_type = ? ORDER BY id ASC`
-    ),
-
-  countSessionEvents: (db: Database.Database) =>
-    getStmt(
-      db,
-      `SELECT COUNT(*) AS n FROM session_events WHERE session_key = ?`
     ),
 };

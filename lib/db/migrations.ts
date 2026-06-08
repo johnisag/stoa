@@ -264,72 +264,6 @@ const migrations: Migration[] = [
       );
     },
   },
-  {
-    id: 17,
-    name: "add_scheduled_at_to_issue_dispatches",
-    up: (db) => {
-      // One-shot scheduling: a 'scheduled' row waits until scheduled_at, then the
-      // reconciler promotes it to 'pending' (normal headroom/mode rules apply).
-      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN scheduled_at TEXT`);
-    },
-  },
-  {
-    id: 18,
-    name: "add_reviewer_gate_columns",
-    up: (db) => {
-      // Opt-in reviewer gate (default off). When on, a worker's PR gets a critic
-      // agent; Stoa surfaces the GitHub review decision in the cockpit.
-      db.exec(
-        `ALTER TABLE dispatch_repos ADD COLUMN review_gate INTEGER NOT NULL DEFAULT 0`
-      );
-      // reviewer_session_id: set once a critic is spawned (spawn-once guard).
-      // review_decision: cached GitHub reviewDecision for the cockpit badge.
-      db.exec(
-        `ALTER TABLE issue_dispatches ADD COLUMN reviewer_session_id TEXT`
-      );
-      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN review_decision TEXT`);
-    },
-  },
-  {
-    id: 19,
-    name: "add_fix_loop_columns",
-    up: (db) => {
-      // Fix loop: on CHANGES_REQUESTED a fixer worker addresses the feedback
-      // (capped by fix_rounds); fixer_session_id tracks the in-flight fixer.
-      db.exec(
-        `ALTER TABLE issue_dispatches ADD COLUMN fix_rounds INTEGER NOT NULL DEFAULT 0`
-      );
-      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN fixer_session_id TEXT`);
-    },
-  },
-  {
-    id: 20,
-    name: "add_session_events_ledger",
-    up: (db) => {
-      // Append-only audit / event ledger. No FK to sessions ON PURPOSE — the
-      // trail must outlive a deleted session (the audit-moat value AND the
-      // analytics substrate). session_key is the backend key (e.g.
-      // "claude-<uuid>"); created_at is epoch millis for cheap ordering.
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS session_events (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          session_key TEXT NOT NULL,
-          event_type TEXT NOT NULL,
-          payload TEXT,
-          created_at INTEGER NOT NULL
-        )
-      `);
-      db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_session_events_key ON session_events(session_key)`
-      );
-      db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type)`
-      );
-      db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_session_events_created ON session_events(created_at)`
-      );
-    },
-  },
 ];
 
 export function runMigrations(db: Database.Database): void {
@@ -357,17 +291,9 @@ export function runMigrations(db: Database.Database): void {
   for (const migration of migrations) {
     if (applied.has(migration.id)) continue;
 
-    // Run the migration AND record it in one transaction so a multi-statement
-    // migration that fails partway (SQLITE_BUSY from the dev+install two-writer
-    // setup, disk full, killed process) rolls back atomically and re-runs
-    // cleanly next start — never leaving a half-applied schema recorded as done.
-    const applyOne = db.transaction(() => {
-      migration.up(db);
-      return insertMigration.run(migration.id, migration.name);
-    });
-
     try {
-      const result = applyOne();
+      migration.up(db);
+      const result = insertMigration.run(migration.id, migration.name);
       if (result.changes > 0) {
         console.log(`Migration ${migration.id}: ${migration.name} applied`);
       } else {
@@ -376,10 +302,8 @@ export function runMigrations(db: Database.Database): void {
         );
       }
     } catch (error) {
-      // The transaction above rolled the failed migration back. If it failed only
-      // because its effect already exists (a pre-_migrations-era schema from the
-      // old system), record it as applied so it isn't retried. Any OTHER failure
-      // re-throws (left unrecorded) so it re-runs cleanly next start.
+      // Some migrations may fail if columns already exist (from old system or concurrent worker)
+      // Try to record as applied anyway to prevent re-running
       const errorMsg = error instanceof Error ? error.message : String(error);
       if (
         errorMsg.includes("duplicate column") ||

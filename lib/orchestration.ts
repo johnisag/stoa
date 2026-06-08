@@ -279,11 +279,6 @@ export async function spawnWorker(
     queries.updateWorkerStatus(db).run("running", sessionId);
   } catch (error) {
     console.error("Failed to start worker session:", error);
-    try {
-      await backend.kill(tmuxSessionName);
-    } catch (killError) {
-      console.error("Failed to clean up partial worker session:", killError);
-    }
     queries.updateWorkerStatus(db).run("failed", sessionId);
   }
 
@@ -418,8 +413,7 @@ export function failWorker(workerId: string): void {
  */
 export async function killWorker(
   workerId: string,
-  cleanupWorktree: boolean = false,
-  finalStatus: "completed" | "failed" = "failed"
+  cleanupWorktree: boolean = false
 ): Promise<void> {
   const session = queries.getSession(db).get(workerId) as Session | undefined;
   if (!session) {
@@ -470,7 +464,7 @@ export async function killWorker(
     }
   }
 
-  queries.updateWorkerStatus(db).run(finalStatus, workerId);
+  queries.updateWorkerStatus(db).run("failed", workerId);
 }
 
 /**

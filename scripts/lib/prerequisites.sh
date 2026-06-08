@@ -47,7 +47,7 @@ check_node() {
     if command -v node &> /dev/null; then
         local version
         version=$(node -v | sed 's/v//' | cut -d. -f1)
-        if [[ "$version" -ge 24 ]]; then
+        if [[ "$version" -ge 20 ]]; then
             local node_path=$(command -v node)
             log_success "Found Node.js v$(node -v | sed 's/v//') at $node_path"
             return 0
@@ -60,7 +60,7 @@ check_node() {
     if command -v node &> /dev/null; then
         local version
         version=$(node -v | sed 's/v//' | cut -d. -f1)
-        if [[ "$version" -ge 24 ]]; then
+        if [[ "$version" -ge 20 ]]; then
             local node_path=$(command -v node)
             local manager=""
 
@@ -193,10 +193,10 @@ install_node() {
     if command -v node &> /dev/null; then
         local version
         version=$(node -v | sed 's/v//' | cut -d. -f1)
-        if [[ "$version" -ge 24 ]]; then
+        if [[ "$version" -ge 20 ]]; then
             return 0
         fi
-        log_warn "Node.js $version found, but 24+ required"
+        log_warn "Node.js $version found, but 20+ required"
     fi
 
     log_info "Installing Node.js..."
@@ -215,9 +215,9 @@ install_node() {
                 export PATH="$HOME/.local/share/fnm:$PATH"
                 eval "$(fnm env --use-on-cd)"
 
-                # Install and use Node.js 24
-                fnm install 24
-                fnm use 24
+                # Install and use Node.js 20
+                fnm install 20
+                fnm use 20
 
                 # Add fnm to shell profile
                 local shell_profile=""
@@ -244,15 +244,15 @@ install_node() {
             fi
             ;;
         debian)
-            curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
             sudo apt-get install -y nodejs
             ;;
         redhat)
-            curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash -
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
             sudo yum install -y nodejs
             ;;
         *)
-            log_error "Please install Node.js 24+ manually: https://nodejs.org"
+            log_error "Please install Node.js 20+ manually: https://nodejs.org"
             exit 1
             ;;
     esac
@@ -273,26 +273,11 @@ install_git() {
             done
             ;;
         debian)
-            sudo apt-get update || true
+            sudo apt-get update
             sudo apt-get install -y git
             ;;
         redhat)
             sudo yum install -y git
-            ;;
-        linux)
-            if command -v apt-get &> /dev/null; then sudo apt-get update || true; sudo apt-get install -y git
-            elif command -v dnf &> /dev/null; then sudo dnf install -y git
-            elif command -v yum &> /dev/null; then sudo yum install -y git
-            elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm git
-            elif command -v zypper &> /dev/null; then sudo zypper install -y git
-            else
-                log_error "Could not auto-install git on this Linux distro. Install it manually, then re-run."
-                exit 1
-            fi
-            ;;
-        *)
-            log_error "Unsupported OS '$OS' for automatic git install. Install git manually, then re-run."
-            exit 1
             ;;
     esac
 }
@@ -308,50 +293,24 @@ install_tmux() {
         macos)
             # Check if user is admin
             if ! groups | grep -q admin; then
-                # Don't abort the whole install on a managed/non-admin Mac: tmux
-                # is only the session backend, and Stoa has a pty backend fallback.
-                log_warn "tmux needs admin (Homebrew) to install and you're not an admin."
-                log_warn "Continuing without it - Stoa will use the pty backend (STOA_BACKEND=pty)."
-                log_warn "To use the tmux backend later: have an admin run 'brew install tmux'."
-                # Global flag: cmd_install persists STOA_BACKEND=pty into the
-                # install .env after the clone (the repo isn't cloned yet here),
-                # so the first session uses pty instead of failing on absent tmux.
-                STOA_USE_PTY_BACKEND=1
-                return 0
+                log_error "tmux requires admin privileges to install via Homebrew."
+                log_error ""
+                log_error "Option 1: Ask your administrator to run: brew install tmux"
+                log_error "Option 2: Make yourself an admin:"
+                log_error "  - Open System Settings → Users & Groups"
+                log_error "  - Unlock and check 'Allow user to administer this computer'"
+                exit 1
             else
                 install_homebrew
                 brew install tmux
             fi
             ;;
         debian)
-            sudo apt-get update || true
+            sudo apt-get update
             sudo apt-get install -y tmux
             ;;
         redhat)
             sudo yum install -y tmux
-            ;;
-        linux)
-            # Generic Linux (neither Debian- nor RedHat-family): try the common
-            # package managers rather than silently skipping the session backend.
-            # `apt-get update || true` so a transient index failure under `set -e`
-            # doesn't abort the whole install before the install step even runs.
-            if command -v apt-get &> /dev/null; then sudo apt-get update || true; sudo apt-get install -y tmux
-            elif command -v dnf &> /dev/null; then sudo dnf install -y tmux
-            elif command -v yum &> /dev/null; then sudo yum install -y tmux
-            elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux
-            elif command -v zypper &> /dev/null; then sudo zypper install -y tmux
-            else
-                log_error "Could not auto-install tmux on this Linux distro."
-                log_error "Install it manually (e.g. 'sudo apt install tmux'), then re-run."
-                exit 1
-            fi
-            ;;
-        *)
-            # Never silently no-op: tmux is the macOS/Linux session backend, so a
-            # missing install means the first session fails to spawn.
-            log_error "Unsupported OS '$OS' for automatic tmux install."
-            log_error "Install tmux manually, then re-run 'stoa install'."
-            exit 1
             ;;
     esac
 }
@@ -420,26 +379,11 @@ install_ripgrep() {
             fi
             ;;
         debian)
-            sudo apt-get update || true
+            sudo apt-get update
             sudo apt-get install -y ripgrep
             ;;
         redhat)
             sudo yum install -y ripgrep
-            ;;
-        linux)
-            if command -v apt-get &> /dev/null; then sudo apt-get update || true; sudo apt-get install -y ripgrep
-            elif command -v dnf &> /dev/null; then sudo dnf install -y ripgrep
-            elif command -v yum &> /dev/null; then sudo yum install -y ripgrep
-            elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm ripgrep
-            elif command -v zypper &> /dev/null; then sudo zypper install -y ripgrep
-            else
-                log_warn "Could not auto-install system ripgrep; Stoa ships a bundled rg, so continuing."
-            fi
-            ;;
-        *)
-            # ripgrep is bundled via @vscode/ripgrep, so a system rg is OPTIONAL —
-            # warn rather than abort (unlike tmux/git which are required).
-            log_warn "Skipping system ripgrep on '$OS' (Stoa uses its bundled rg)."
             ;;
     esac
 }

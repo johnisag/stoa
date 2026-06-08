@@ -13,7 +13,6 @@ import { isWindows } from "../platform";
 import type { SessionBackend } from "./types";
 import { TmuxBackend } from "./tmux-backend";
 import { createPtyBackend } from "./pty-backend";
-import { withAudit } from "../audit/ledger";
 
 export type { SessionBackend, SessionActivity } from "./types";
 
@@ -49,13 +48,10 @@ export function usePtyHost(): boolean {
 
 export function getSessionBackend(): SessionBackend {
   if (!backend) {
-    const base =
+    backend =
       getBackendType() === "tmux"
         ? new TmuxBackend()
         : createPtyBackend(usePtyHost());
-    // Wrap with the audit/event ledger (default on) so every lifecycle + input
-    // op is recorded at this single seam, across tmux and both pty tiers.
-    backend = withAudit(base);
   }
   return backend;
 }

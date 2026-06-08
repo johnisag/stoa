@@ -79,7 +79,6 @@ export async function dispatchOne(
   // Tracked so the catch can clean up a half-built dispatch — otherwise a failure
   // after createWorktree leaks the worktree+branch and the next attempt collides.
   let createdWorktree: string | null = null;
-  let backendSessionName: string | null = null;
 
   try {
     const provider = getProvider(repo.agent_type);
@@ -107,7 +106,6 @@ export async function dispatchOne(
       provider: provider.id,
       id: sessionId,
     });
-    backendSessionName = tmuxName;
     queries
       .createSession(db)
       .run(
@@ -156,13 +154,6 @@ export async function dispatchOne(
     });
   } catch (err) {
     console.error(`dispatch failed for ${repo.repo_slug}#${issueNumber}:`, err);
-    if (backendSessionName) {
-      try {
-        await getSessionBackend().kill(backendSessionName);
-      } catch (cleanupErr) {
-        console.error("dispatch backend cleanup failed:", cleanupErr);
-      }
-    }
     // Clean up the worktree+branch so the disk doesn't leak and a future attempt
     // for this issue doesn't collide on the branch name.
     if (createdWorktree) {

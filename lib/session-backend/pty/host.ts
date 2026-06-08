@@ -19,7 +19,6 @@ import {
   getSession,
   hasSession,
   killSession,
-  killAllSessions,
   renameSession,
   listSessions,
 } from "./registry";
@@ -56,29 +55,13 @@ function send(conn: Conn, msg: HostMessage) {
     conn.socket.destroy();
     return;
   }
-  try {
-    conn.socket.write(encode(msg));
-  } catch (err) {
-    // Drop just this connection on a write/encode failure so it reconnects and
-    // repaints from a fresh snapshot, rather than limping along half-broken.
-    // (Crash-safety on the output path is already handled at the source:
-    // PtySession.fanOut isolates each subscriber and the IPC decoder swallows
-    // malformed frames, so a throw here can't escape to crash the daemon — this
-    // catch is about connection hygiene, not keeping the process alive.)
-    console.error("[pty-host] send failed; dropping connection:", err);
-    conn.socket.destroy();
-  }
+  conn.socket.write(encode(msg));
 }
 
 function handleMessage(conn: Conn, msg: ClientMessage) {
   switch (msg.t) {
     case "ping":
-      send(conn, {
-        t: "res",
-        id: msg.id,
-        ok: true,
-        value: { pid: process.pid },
-      });
+      send(conn, { t: "res", id: msg.id, ok: true });
       break;
 
     case "spawn":
@@ -235,16 +218,6 @@ function handleMessage(conn: Conn, msg: ClientMessage) {
       });
       break;
     }
-
-    case "shutdown":
-      send(conn, {
-        t: "res",
-        id: msg.id,
-        ok: true,
-        value: { pid: process.pid },
-      });
-      setTimeout(() => void shutdownHostAndExit(0), 25);
-      break;
   }
 }
 
@@ -262,78 +235,20 @@ let server: net.Server | null = null;
 
 // Idle self-shutdown: the daemon exits once there are NO live sessions and NO
 // connected clients for a sustained period, so it never accumulates as a zombie.
-// If it is orphaned with live sessions (e.g. the Stoa server crashed and never
-// came back), it gives a much longer grace period, then kills its owned sessions
-// and exits instead of keeping agent processes until reboot.
+// It will never exit while a session is alive (that would kill the agent).
 const connections = new Set<net.Socket>();
-function envMs(name: string, fallback: number): number {
-  const n = Number(process.env[name]);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-const IDLE_SHUTDOWN_MS = envMs("STOA_PTY_HOST_IDLE_SHUTDOWN_MS", 5 * 60 * 1000);
-const ORPHAN_SHUTDOWN_MS = envMs(
-  "STOA_PTY_HOST_ORPHAN_SHUTDOWN_MS",
-  30 * 60 * 1000
-);
+const IDLE_SHUTDOWN_MS = 5 * 60 * 1000;
 let lastBusyAt = Date.now();
-let orphanedSince: number | null = null;
 let idleTimer: NodeJS.Timeout | null = null;
-let shuttingDown = false;
-
-export function nextShutdownCheck(input: {
-  connectedClients: number;
-  liveSessions: number;
-  now: number;
-  lastBusyAt: number;
-  orphanedSince: number | null;
-  idleShutdownMs: number;
-  orphanShutdownMs: number;
-}): {
-  action: "none" | "idle" | "orphan";
-  lastBusyAt: number;
-  orphanedSince: number | null;
-} {
-  if (input.connectedClients > 0) {
-    return {
-      action: "none",
-      lastBusyAt: input.now,
-      orphanedSince: null,
-    };
-  }
-
-  if (input.liveSessions > 0) {
-    const since = input.orphanedSince ?? input.now;
-    return {
-      action: input.now - since > input.orphanShutdownMs ? "orphan" : "none",
-      lastBusyAt: input.lastBusyAt,
-      orphanedSince: since,
-    };
-  }
-
-  return {
-    action:
-      input.now - input.lastBusyAt > input.idleShutdownMs ? "idle" : "none",
-    lastBusyAt: input.lastBusyAt,
-    orphanedSince: null,
-  };
-}
 
 function checkIdle(): void {
-  const next = nextShutdownCheck({
-    connectedClients: connections.size,
-    liveSessions: listSessions().filter((s) => s.alive).length,
-    now: Date.now(),
-    lastBusyAt,
-    orphanedSince,
-    idleShutdownMs: IDLE_SHUTDOWN_MS,
-    orphanShutdownMs: ORPHAN_SHUTDOWN_MS,
-  });
-  lastBusyAt = next.lastBusyAt;
-  orphanedSince = next.orphanedSince;
-  if (next.action === "idle") {
+  const busy = connections.size > 0 || listSessions().some((s) => s.alive);
+  if (busy) {
+    lastBusyAt = Date.now();
+    return;
+  }
+  if (Date.now() - lastBusyAt > IDLE_SHUTDOWN_MS) {
     process.exit(0);
-  } else if (next.action === "orphan") {
-    void shutdownHostAndExit(0);
   }
 }
 
@@ -380,8 +295,6 @@ export function startHost(): Promise<boolean> {
     const listen = () => {
       srv.listen(address, () => {
         server = srv;
-        lastBusyAt = Date.now();
-        orphanedSince = null;
         // Periodically self-terminate when fully idle (no sessions, no clients).
         idleTimer = setInterval(checkIdle, 60_000);
         idleTimer.unref?.();
@@ -390,28 +303,8 @@ export function startHost(): Promise<boolean> {
     };
 
     if (!address.startsWith("\\\\")) {
-      // POSIX socket file: only unlink after proving no daemon is listening.
-      const probe = net.connect(address);
-      let settled = false;
-      const finish = (fn: () => void) => {
-        if (settled) return;
-        settled = true;
-        probe.removeAllListeners();
-        probe.destroy();
-        fn();
-      };
-      probe.once("connect", () => {
-        finish(() => resolve(false));
-      });
-      probe.once("error", (err: NodeJS.ErrnoException) => {
-        finish(() => {
-          if (err.code === "ENOENT" || err.code === "ECONNREFUSED") {
-            fs.unlink(address, () => listen());
-          } else {
-            reject(err);
-          }
-        });
-      });
+      // POSIX socket file: clear a stale one first.
+      fs.unlink(address, () => listen());
     } else {
       listen();
     }
@@ -433,53 +326,4 @@ export function stopHost(): Promise<void> {
     connections.clear();
     srv.close(() => resolve());
   });
-}
-
-export async function shutdownHost(): Promise<void> {
-  killAllSessions();
-  await stopHost();
-}
-
-async function shutdownHostAndExit(exitCode: number): Promise<void> {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  await shutdownHost();
-  setTimeout(() => process.exit(exitCode), 250);
-}
-
-/**
- * Last-resort keep-alive for the Tier-2 daemon.
- *
- * The daemon owns EVERY live agent session in one process, so a single
- * unhandled throw / rejected promise would otherwise crash it and kill them all
- * at once — the largest stability blast-radius in the tree. The hot paths are
- * already guarded at the source (the IPC frame decoder swallows malformed
- * frames, PtySession.fanOut isolates each subscriber, and send() drops a single
- * failing connection), but an exception from some unforeseen async seam must
- * NOT take the process down. Log it and keep serving the surviving sessions.
- *
- * Installed ONLY in the standalone daemon entry point (scripts/pty-host.ts) —
- * never when the host runs in-process under the web server or the test runner,
- * where a process-wide handler would mask real crashes elsewhere.
- */
-let guardsInstalled = false;
-function onUncaughtException(err: unknown, origin?: string): void {
-  console.error(`[pty-host] uncaughtException (kept alive, ${origin}):`, err);
-}
-function onUnhandledRejection(reason: unknown): void {
-  console.error("[pty-host] unhandledRejection (kept alive):", reason);
-}
-
-export function installProcessGuards(): void {
-  if (guardsInstalled) return;
-  guardsInstalled = true;
-  process.on("uncaughtException", onUncaughtException);
-  process.on("unhandledRejection", onUnhandledRejection);
-}
-
-export function uninstallProcessGuards(): void {
-  if (!guardsInstalled) return;
-  guardsInstalled = false;
-  process.removeListener("uncaughtException", onUncaughtException);
-  process.removeListener("unhandledRejection", onUnhandledRejection);
 }

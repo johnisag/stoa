@@ -7,7 +7,4 @@ export const dispatchKeys = {
   board: () => [...dispatchKeys.all, "board"] as const, // in-flight + finished
   discover: () => [...dispatchKeys.all, "discover"] as const, // scanned local repos
   github: () => [...dispatchKeys.all, "github"] as const, // gh repo list
-  scheduled: () => [...dispatchKeys.all, "scheduled"] as const, // future-dated rows
-  openIssues: (repoId: string) =>
-    [...dispatchKeys.all, "open-issues", repoId] as const, // on-demand gh issue browse (triage)
 };

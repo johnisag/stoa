@@ -80,7 +80,6 @@ export function searchCode(
       timeout: 10000,
       maxBuffer: 1024 * 1024 * 5,
       stdio: ["ignore", "pipe", "pipe"], // Ignore stdin so ripgrep doesn't wait for it
-      windowsHide: process.platform === "win32",
     });
 
     if (result.error) {

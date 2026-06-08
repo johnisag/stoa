@@ -45,7 +45,6 @@ import { sessionKey } from "@/lib/providers/registry";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { DispatchView } from "@/components/views/DispatchView";
-import { AnalyticsView } from "@/components/views/AnalyticsView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
@@ -136,7 +135,6 @@ function HomeContent() {
     useState(false);
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
   const [showDispatch, setShowDispatch] = useState(false);
-  const [showAnalytics, setShowAnalytics] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [copiedSessionId, setCopiedSessionId] = useState(false);
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
@@ -703,8 +701,6 @@ function HomeContent() {
     setShowQuickSwitcher,
     showDispatch,
     setShowDispatch,
-    showAnalytics,
-    setShowAnalytics,
     onShowShortcuts: () => setShowHelp(true),
     notificationSettings,
     permissionGranted,
@@ -747,9 +743,6 @@ function HomeContent() {
       {/* Dispatch control plane (GitHub-issue -> agent fleet). Self-contained
           dialog; the nav buttons in Desktop/MobileView open it via setShowDispatch. */}
       <DispatchView open={showDispatch} onOpenChange={setShowDispatch} />
-      {/* Insight / analytics over the audit ledger. Self-contained dialog;
-          opened from the Desktop/Mobile nav via setShowAnalytics. */}
-      <AnalyticsView open={showAnalytics} onOpenChange={setShowAnalytics} />
     </>
   );
 }

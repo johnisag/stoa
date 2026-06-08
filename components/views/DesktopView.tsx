@@ -16,7 +16,6 @@ import {
   Check,
   Command,
   Rocket,
-  BarChart3,
 } from "lucide-react";
 import { PaneLayout } from "@/components/PaneLayout";
 import {
@@ -46,7 +45,6 @@ export function DesktopView({
   showQuickSwitcher,
   setShowQuickSwitcher,
   setShowDispatch,
-  setShowAnalytics,
   onShowShortcuts,
   notificationSettings,
   permissionGranted,
@@ -104,6 +102,7 @@ export function DesktopView({
                 onOpenTerminal={handleOpenTerminal}
                 onStartDevServer={handleStartDevServer}
                 onCreateDevServer={handleCreateDevServer}
+                onCollapse={() => setSidebarOpen(false)}
               />
             </div>
 
@@ -208,21 +207,6 @@ export function DesktopView({
           </div>
 
           <div className="flex items-center gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Insight (analytics over the audit ledger)"
-                  onClick={() => setShowAnalytics(true)}
-                >
-                  <BarChart3 className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Insight</p>
-              </TooltipContent>
-            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
