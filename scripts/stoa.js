@@ -16,6 +16,7 @@ const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { pathToFileURL } = require("url");
 
 // ---------------------------------------------------------------------------
 // Configuration / derived paths
@@ -339,14 +340,42 @@ function cmdStart() {
   const out = fs.openSync(LOG_FILE, "a");
   const err = fs.openSync(LOG_FILE, "a");
 
-  // `npm start` runs: cross-env NODE_ENV=production tsx server.ts
-  const child = spawn("npm", ["start"], {
-    cwd: REPO_DIR,
-    detached: true,
-    stdio: ["ignore", out, err],
-    shell: SPAWN_SHELL,
-    env: serverEnv(),
-  });
+  // How to launch the production server detached.
+  // POSIX: `npm start` (cross-env NODE_ENV=production tsx server.ts) via the
+  //   shell — Unix has no console windows, so nothing pops up.
+  // Windows: the npm -> cmd -> cross-env -> node chain pops TWO visible console
+  //   windows. Instead launch ONE hidden `node` that runs server.ts via tsx's
+  //   loader directly (NODE_ENV set inline). No shell = no cmd window;
+  //   windowsHide keeps node's console off-screen. One detached, hidden process.
+  let child;
+  if (IS_WINDOWS) {
+    const tsxDist = path.join(REPO_DIR, "node_modules", "tsx", "dist");
+    child = spawn(
+      process.execPath,
+      [
+        "--require",
+        path.join(tsxDist, "preflight.cjs"),
+        "--import",
+        pathToFileURL(path.join(tsxDist, "loader.mjs")).href,
+        "server.ts",
+      ],
+      {
+        cwd: REPO_DIR,
+        detached: true,
+        stdio: ["ignore", out, err],
+        windowsHide: true,
+        env: { ...serverEnv(), NODE_ENV: "production" },
+      }
+    );
+  } else {
+    child = spawn("npm", ["start"], {
+      cwd: REPO_DIR,
+      detached: true,
+      stdio: ["ignore", out, err],
+      shell: SPAWN_SHELL,
+      env: serverEnv(),
+    });
+  }
 
   if (typeof child.pid !== "number") {
     error("Failed to start Stoa. Check logs: stoa logs");
