@@ -94,9 +94,15 @@ function loadEnvFile(dir) {
 loadEnvFile(path.resolve(__dirname, ".."));
 
 // Port the server listens on. STOA_PORT is the documented knob; a raw PORT is
-// also honored. This single resolved value is used for BOTH the displayed URL
-// and the spawned server's env, so the two can never diverge.
-const PORT = process.env.STOA_PORT || process.env.PORT || "3011";
+// also honored; failing both we fall back to the port the server was LAST started
+// on (persisted in ~/.stoa/stoa.port by `stoa start`/`stoa run`). That last step
+// is what makes `stoa update` restart on the right port even when the port was set
+// via a shell env var (not .env) at start time — the update runs in a fresh shell
+// that no longer has STOA_PORT, and without this it would silently drop to 3011.
+// This single resolved value is used for BOTH the displayed URL and the spawned
+// server's env, so the two can never diverge.
+const PORT =
+  process.env.STOA_PORT || process.env.PORT || readPortFile() || "3011";
 const URL = `http://localhost:${PORT}`;
 
 // Environment for the spawned server. The CLI may have STOA_PORT set without
@@ -192,6 +198,52 @@ function clearPidFile() {
   }
 }
 
+// ── persisted port (~/.stoa/stoa.port) ──
+// Records the port the server was last started on so a later `stoa update` /
+// restart re-applies it even if it was set via a shell env var (not .env). These
+// derive the home from process.env directly (not the STOA_HOME const) so they're
+// hoist-safe to call during the PORT resolution above.
+
+function stoaHomeDir() {
+  return process.env.STOA_HOME || path.join(os.homedir(), ".stoa");
+}
+function portFilePath() {
+  return path.join(stoaHomeDir(), "stoa.port");
+}
+/** The last-started port as a numeric string, or null if none/garbage. */
+function readPortFile() {
+  try {
+    const raw = fs.readFileSync(portFilePath(), "utf8").trim();
+    return /^[0-9]+$/.test(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+/** Persist the port the server is starting on. Best-effort (never throws). */
+function writePortFile(port) {
+  try {
+    fs.mkdirSync(stoaHomeDir(), { recursive: true });
+    fs.writeFileSync(portFilePath(), String(port));
+  } catch {
+    /* ignore — port persistence is a convenience, not load-bearing */
+  }
+}
+
+/**
+ * Lines from `git status --porcelain` that should BLOCK an update — i.e. tracked
+ * changes (staged/modified/deleted/renamed/conflicted), NOT untracked files
+ * (`??`). A `git pull --ff-only` keeps untracked files (and if an incoming file
+ * collides, the checkout fails cleanly and we recover), so blocking on every
+ * untracked artifact left in the install tree was over-strict — the documented
+ * cause of `stoa update` aborting when it shouldn't. Pure (exported for tests).
+ */
+function blockingDirty(porcelain) {
+  if (!porcelain) return [];
+  return porcelain
+    .split(/\r?\n/)
+    .filter((l) => l.trim() && !l.startsWith("??"));
+}
+
 /**
  * Run a command synchronously in the repo root with inherited stdio.
  * Returns the exit code; exits the CLI on failure unless allowFail is set.
@@ -265,6 +317,7 @@ function cmdStart() {
   }
 
   fs.writeFileSync(PID_FILE, String(child.pid));
+  writePortFile(PORT); // so a later `stoa update` restarts on this same port
 
   // Let the child outlive this CLI process.
   child.unref();
@@ -366,6 +419,7 @@ function openBrowser(url) {
 
 /** run: start the server in the foreground and open the browser. */
 function cmdRun() {
+  writePortFile(PORT); // persist the port for a later `stoa update` restart
   info(`Opening ${URL}...`);
   // Open the browser shortly after launch so the server has a moment to boot.
   setTimeout(() => openBrowser(URL), 1500);
@@ -440,11 +494,15 @@ function cmdUpdate() {
     gitCapture(["checkout", "--", f]);
   }
 
-  // Don't blow away genuine uncommitted local changes with a checkout/pull.
-  const dirty = gitCapture(["status", "--porcelain"]);
-  if (dirty) {
+  // Don't blow away genuine uncommitted local changes with a checkout/pull — but
+  // only TRACKED edits block. Untracked artifacts left in the install tree (a
+  // stray log, a scratch file) are safe across a ff-only pull, so they must not
+  // abort a routine update (the documented `stoa update` dirty-tree failure).
+  const blocking = blockingDirty(gitCapture(["status", "--porcelain"]));
+  if (blocking.length) {
     error("You have uncommitted local changes in the install directory.");
     console.log(`  (${REPO_DIR})`);
+    for (const line of blocking.slice(0, 10)) console.log(`    ${line}`);
     console.log(
       "  Those look like real edits, so the update won't touch them."
     );
@@ -498,7 +556,20 @@ function cmdUpdate() {
 
   info("Update complete!");
 
-  if (wasRunning) cmdStart();
+  if (wasRunning) {
+    cmdStart();
+  } else {
+    // No pid-tracked server to restart. If one is still running the OLD code
+    // (started via `stoa run` in the foreground, or externally), it won't pick up
+    // this build until it's restarted — say so instead of silently doing nothing.
+    info("No managed server was running, so none was restarted.");
+    console.log(
+      "  If a Stoa server is still serving the old version, restart it"
+    );
+    console.log(
+      `  (stop it, then 'stoa start') to load this update on port ${PORT}.`
+    );
+  }
 }
 
 /** help: usage text. */
@@ -574,4 +645,13 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { isGitInstall, serverEnv, PORT, parseEnvFile, loadEnvFile };
+module.exports = {
+  isGitInstall,
+  serverEnv,
+  PORT,
+  parseEnvFile,
+  loadEnvFile,
+  blockingDirty,
+  readPortFile,
+  writePortFile,
+};
