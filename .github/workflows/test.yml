@@ -68,11 +68,25 @@ jobs:
           node-version: 20
           cache: npm
 
+      # Cache the installed node_modules (including the built better-sqlite3 /
+      # node-pty native binaries) keyed by the lockfile, so the flaky Windows native
+      # BUILD only runs on a real dependency change — not on every PR. This removes
+      # the trigger for the node-gyp flake rather than just retrying it; the retry
+      # below is the backstop for the cache-MISS (lockfile-changed) case.
+      - name: Cache node_modules
+        id: node-modules-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node20-modules-${{ hashFiles('package-lock.json') }}
+
       - name: Install dependencies
-        # Native modules (better-sqlite3 / node-pty) intermittently fail to build on
-        # the Windows runner: the prebuilt-binary download flakes, forcing a source
-        # build whose node-gyp can't find VS (ERR_CHILD_PROCESS_STDIO_MAXBUFFER). It's
-        # transient (main builds fine), so retry a few times before failing the job.
+        # Skipped entirely on a cache hit (node_modules restored). Only runs on a
+        # dependency change / cold cache, where the native build happens — so wrap it
+        # in a retry: better-sqlite3's prebuilt-binary download flakes on the Windows
+        # runner, forcing a source build whose node-gyp can't find VS
+        # (ERR_CHILD_PROCESS_STDIO_MAXBUFFER). Retry a few times before failing.
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           for attempt in 1 2 3 4; do
