@@ -30,11 +30,10 @@ share the live database. The install is the deployed copy; the dev checkout is
 where you work. This separation is what makes "use Stoa on your phone _while_
 building Stoa" actually work.
 
-The **database** should live in `~/.stoa/stoa.db` (in `STOA_HOME`, beside `token`
-and `vapid.json`), not inside either checkout — so a re-clone or `git reset` of
-the install can never destroy your data. This is **not** the default: without
-`DB_PATH` set, the DB is created in the current directory (i.e. inside the repo).
-Setting `DB_PATH` in step 3 is what puts it in the safe canonical location.
+The **database** lives in `~/.stoa/stoa.db` **by default** (in `STOA_HOME`, beside
+`token` and `vapid.json`), not inside either checkout — so a re-clone or
+`git reset` of the install can never destroy your data. You don't need to set
+`DB_PATH`; override it only to relocate the DB (a leading `~` is expanded).
 
 ---
 
@@ -101,11 +100,9 @@ Create `~/.stoa/repo/.env`:
 STOA_PORT=3011
 PORT=3011
 
-# Canonical database, kept in STOA_HOME so it survives a re-clone of the repo.
-# REQUIRED — without DB_PATH the DB is created inside the repo (cwd/stoa.db).
-# Use an ABSOLUTE path (the value below is an example — use your real home dir).
-DB_PATH=/home/you/.stoa/stoa.db          # macOS/Linux
-# DB_PATH=C:/Users/you/.stoa/stoa.db     # Windows
+# Database — OPTIONAL. Defaults to ~/.stoa/stoa.db (STOA_HOME), outside the repo,
+# so a re-clone/reset can't destroy data. Set only to relocate it (~ is expanded).
+# DB_PATH=~/.stoa/stoa.db
 
 # Token-free access over the Tailscale tailnet (devices are authenticated at the
 # network layer). A non-tailnet LAN/Wi-Fi device still needs the token. Omit this

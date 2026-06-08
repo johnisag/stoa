@@ -77,11 +77,11 @@ You need at least one AI coding CLI installed. The installer will prompt you to 
 
 ### Environment Variables
 
-| Variable    | Default     | Description            |
-| ----------- | ----------- | ---------------------- |
-| `STOA_HOME` | `~/.stoa`   | Installation directory |
-| `STOA_PORT` | `3011`      | Server port            |
-| `DB_PATH`   | `./stoa.db` | SQLite database path   |
+| Variable    | Default           | Description                                                                             |
+| ----------- | ----------------- | --------------------------------------------------------------------------------------- |
+| `STOA_HOME` | `~/.stoa`         | Installation directory                                                                  |
+| `STOA_PORT` | `3011`            | Server port                                                                             |
+| `DB_PATH`   | `~/.stoa/stoa.db` | SQLite database path (optional; defaults to STOA_HOME so a re-clone can't destroy data) |
 
 ### Custom Port
 
