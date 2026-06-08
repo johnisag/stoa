@@ -69,7 +69,9 @@ describe("resolveDbPath (DB lives in STOA_HOME, never inside the repo)", () => {
     writeFileSync(join(repo, "stoa.db"), ""); // a pre-existing legacy DB in the repo
     process.env.STOA_HOME = home;
     process.chdir(repo);
-    expect(resolveDbPath()).toBe(join(repo, "stoa.db"));
+    // Compare against process.cwd(), not `repo`: on macOS chdir into /var/... is
+    // reported as the realpath /private/var/..., and resolveDbPath() uses cwd.
+    expect(resolveDbPath()).toBe(join(process.cwd(), "stoa.db"));
   });
 
   it("prefers the canonical STOA_HOME DB once it exists, ignoring a legacy one", () => {
