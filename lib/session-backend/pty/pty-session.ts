@@ -20,6 +20,7 @@
 import type { IPty } from "node-pty";
 import { Terminal } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { isWindows } from "../../platform";
 
 /**
  * Max raw bytes retained for client replay. This is only a FALLBACK for when
@@ -132,6 +133,10 @@ export class PtySession {
 
   get exitCode(): number | null {
     return this._exitCode;
+  }
+
+  get pid(): number {
+    return this.pty.pid;
   }
 
   /** Raw byte history (legacy / fallback). Prefer serialize() for repaint. */
@@ -255,6 +260,47 @@ export class PtySession {
       } catch {
         // already gone
       }
+    }
+  }
+
+  waitForExit(timeoutMs = 5000): Promise<boolean> {
+    if (!this._alive) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let offExit: (() => void) | null = null;
+      const timer = setTimeout(() => {
+        offExit?.();
+        resolve(!this._alive);
+      }, timeoutMs);
+      timer.unref?.();
+      offExit = this.onExit(() => {
+        clearTimeout(timer);
+        offExit?.();
+        resolve(true);
+      });
+    });
+  }
+
+  async killAndWait(timeoutMs = 5000): Promise<boolean> {
+    const pid = this.pty.pid;
+    this.kill();
+    const exited = await this.waitForExit(timeoutMs);
+    if (isWindows && pid > 0 && this.processExists(pid)) {
+      try {
+        process.kill(pid);
+      } catch {
+        // already gone
+      }
+      return this.waitForExit(1000);
+    }
+    return exited;
+  }
+
+  private processExists(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
     }
   }
 }

@@ -14,7 +14,9 @@ import {
 } from "@/lib/session-backend/pty/registry";
 import { statusDetector, ERROR_PATTERNS } from "@/lib/status-detector";
 
-afterEach(() => _resetRegistryForTests());
+afterEach(async () => {
+  await _resetRegistryForTests();
+});
 
 async function waitFor(fn: () => boolean | Promise<boolean>, ms = 6000) {
   const start = Date.now();

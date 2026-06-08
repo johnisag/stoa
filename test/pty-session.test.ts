@@ -5,12 +5,13 @@ import {
   getSession,
   hasSession,
   killSession,
+  killSessionAndWait,
   renameSession,
   _resetRegistryForTests,
 } from "@/lib/session-backend/pty/registry";
 
-afterEach(() => {
-  _resetRegistryForTests();
+afterEach(async () => {
+  await _resetRegistryForTests();
 });
 
 /** Wait until predicate is true or timeout. */
@@ -21,6 +22,15 @@ async function waitFor(fn: () => boolean, ms = 5000): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 25));
   }
   return fn();
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 describe("pty registry / PtySession", () => {
@@ -150,5 +160,20 @@ describe("pty registry / PtySession", () => {
     expect(hasSession("test-kill")).toBe(true);
     killSession("test-kill");
     expect(hasSession("test-kill")).toBe(false);
+  });
+
+  it("killSessionAndWait waits for the child process to exit", async () => {
+    const session = spawnSession("test-kill-wait", {
+      binary: "node",
+      args: ["-e", "setInterval(() => {}, 1000)"],
+      cwd: process.cwd(),
+    });
+    const pid = session.pid;
+
+    await killSessionAndWait("test-kill-wait");
+
+    expect(hasSession("test-kill-wait")).toBe(false);
+    expect(session.alive).toBe(false);
+    expect(processExists(pid)).toBe(false);
   });
 });
