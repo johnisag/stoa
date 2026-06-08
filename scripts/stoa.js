@@ -509,6 +509,45 @@ function isGitInstall(dir = REPO_DIR) {
  * feature-branch checkout still updates), refuses to clobber local edits, and
  * tells npm-global installs to update via npm instead of git.
  */
+/**
+ * Untracked files in the install tree that collide with paths incoming on the
+ * target ref. `git checkout`/`git pull` aborts on these, and `git stash` does
+ * NOT move untracked files — so name them instead of suggesting a stash.
+ * `porcelain` = `git status --porcelain`; `incoming` = `git diff --name-only`.
+ * Pure (no I/O); exported for tests.
+ */
+function collidingUntracked(porcelain, incoming) {
+  const untracked = String(porcelain || "")
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith("?? "))
+    .map((l) => l.slice(3).trim());
+  const incomingSet = new Set(
+    String(incoming || "")
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+  );
+  return untracked.filter((f) => incomingSet.has(f));
+}
+
+/**
+ * True if something is already listening on the given localhost TCP port.
+ * Synchronous (spawns a short-lived node probe) so cmdUpdate can detect a
+ * supervisor-run server that has no pid file before rebuilding .next under it.
+ */
+function isPortListening(port) {
+  const probe = `const net=require("net");const s=net.connect(${Number(port)},"127.0.0.1");s.on("connect",()=>{s.destroy();process.exit(0)});s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),700);`;
+  try {
+    return (
+      spawnSync(process.execPath, ["-e", probe], { timeout: 3000 }).status === 0
+    );
+  } catch {
+    // Fail-open: if the probe itself can't run (e.g. sandboxed), assume the port
+    // is free rather than block all updates.
+    return false;
+  }
+}
+
 function cmdUpdate() {
   // npm-global installs aren't git checkouts — they can't self-update via git.
   if (!isGitInstall()) {
@@ -547,42 +586,94 @@ function cmdUpdate() {
   }
 
   const wasRunning = !!getRunningPid();
+
+  // Supervisor guard: no pid-tracked server, but the port is being served -> an
+  // external keep-alive supervisor (or `stoa run`) is live. Rebuilding .next
+  // under it would make it serve a half-built app, so refuse. The documented
+  // deploy is: stop the supervisor -> stoa update -> start it again.
+  if (!wasRunning && isPortListening(PORT)) {
+    error(`Port ${PORT} is already in use (not by a 'stoa start' server).`);
+    console.log(
+      "  Likely a keep-alive supervisor or 'stoa run' serving this install (or"
+    );
+    console.log(
+      "  another app). Updating now would rebuild .next under a live server."
+    );
+    console.log(
+      "  Stop it first, then re-run 'stoa update' (and restart the supervisor)."
+    );
+    process.exit(1);
+  }
+
   if (wasRunning) cmdStop();
 
-  // Past this point the server is stopped. On ANY failure (network, diverged
-  // main, npm), restart the existing version so a failed update never leaves the
-  // user's server down — then exit non-zero.
+  const origin = gitCapture(["remote", "get-url", "origin"]) || "origin";
+  info(`Updating from ${origin}`);
+  const before = gitCapture(["rev-parse", "--short", "HEAD"]); // for display/compare
+  const beforeFull = gitCapture(["rev-parse", "HEAD"]); // unambiguous reset target
+
+  // On ANY failure: if the pull already moved HEAD, restore the previous source
+  // (never leave a half-updated tree — new source over an old/partial build),
+  // then restart the existing version if it was managed. Then exit non-zero.
   const recover = (what) => {
     error(`Update failed (${what}).`);
+    const nowHead = gitCapture(["rev-parse", "--short", "HEAD"]);
+    if (before && nowHead && nowHead !== before) {
+      info(`Restoring the previous version (${before})...`);
+      runSync("git", ["reset", "--hard", beforeFull || before], {
+        allowFail: true,
+      });
+    }
     if (wasRunning) {
       info("Restarting the server with the existing version...");
       cmdStart();
     }
+    // node_modules isn't reset; if a partial `npm install` left it inconsistent
+    // and the server won't start, a reinstall reconciles it.
+    console.log(
+      `  If it won't start: cd "${REPO_DIR}" && npm install --include=dev --legacy-peer-deps, then 'stoa start'.`
+    );
     process.exit(1);
   };
   const step = (what, cmd, args) => {
     if (runSync(cmd, args, { allowFail: true }) !== 0) recover(what);
   };
 
-  const origin = gitCapture(["remote", "get-url", "origin"]) || "origin";
-  info(`Updating from ${origin}`);
-  const before = gitCapture(["rev-parse", "--short", "HEAD"]);
-
   step("git fetch", "git", ["fetch", "origin", "--tags"]);
   // Pin to main: an install left on a (now-deleted) feature branch still updates.
   step("git checkout main", "git", ["checkout", "main"]);
-  step(
-    "git pull (local main may have diverged — try `git stash` or reclone)",
-    "git",
-    ["pull", "--ff-only", "origin", "main"]
-  );
+
+  // git pull: on failure, surface untracked files that collide with incoming
+  // changes (a `git stash` won't move those) before recovering.
+  if (
+    runSync("git", ["pull", "--ff-only", "origin", "main"], {
+      allowFail: true,
+    }) !== 0
+  ) {
+    const collisions = collidingUntracked(
+      gitCapture(["status", "--porcelain"]),
+      gitCapture(["diff", "--name-only", "HEAD", "origin/main"])
+    );
+    if (collisions.length) {
+      error(
+        "Untracked files collide with incoming changes (a 'git stash' won't move these):"
+      );
+      for (const f of collisions.slice(0, 10)) console.log(`    ${f}`);
+      console.log("  Remove or move them, then re-run 'stoa update'.");
+    }
+    recover("git pull (local main may have diverged — or reclone)");
+  }
 
   const after = gitCapture(["rev-parse", "--short", "HEAD"]);
+
+  // True no-op: nothing pulled -> skip install/build entirely. Bring the managed
+  // server back (we stopped it above) and return.
   if (before && after && before === after) {
-    info("Already up to date.");
-  } else {
-    info(`Updated ${before || "?"} -> ${after || "?"}`);
+    info("Already up to date — nothing to rebuild.");
+    if (wasRunning) cmdStart();
+    return;
   }
+  info(`Updated ${before || "?"} -> ${after || "?"}`);
 
   info("Installing dependencies...");
   step("npm install", "npm", [
@@ -709,4 +800,5 @@ module.exports = {
   readPortFile,
   writePortFile,
   buildIsComplete,
+  collidingUntracked,
 };

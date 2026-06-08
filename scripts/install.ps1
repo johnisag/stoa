@@ -69,7 +69,13 @@ Write-Info "Git: $((& git --version).Trim())"
 if (Test-Path $InstallDir) {
     Write-Info "Updating existing installation..."
     Push-Location $InstallDir
-    & git pull --ff-only
+    # Match the `stoa update` path: fetch + pin to main, so an install left on a
+    # (now-deleted) feature branch still updates cleanly.
+    & git fetch origin --tags
+    if (-not $?) { Pop-Location; Write-Err "git fetch failed."; exit 1 }
+    & git checkout main
+    if (-not $?) { Pop-Location; Write-Err "git checkout main failed."; exit 1 }
+    & git pull --ff-only origin main
     if (-not $?) { Pop-Location; Write-Err "git pull failed."; exit 1 }
     Pop-Location
 } else {

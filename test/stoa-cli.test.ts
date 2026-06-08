@@ -16,12 +16,17 @@ const {
   loadEnvFile,
   blockingDirty,
   buildIsComplete,
+  collidingUntracked,
 } = require(CLI_PATH) as {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
   loadEnvFile: (dir: string) => Record<string, string>;
   blockingDirty: (porcelain: string | null) => string[];
   buildIsComplete: (dir?: string) => boolean;
+  collidingUntracked: (
+    porcelain: string | null,
+    incoming: string | null
+  ) => string[];
 };
 
 /**
@@ -193,6 +198,25 @@ describe("stoa CLI: buildIsComplete (catch a partial .next before it crash-loops
   });
   it("is false when .next is absent entirely", () => {
     expect(buildIsComplete(freshDir())).toBe(false);
+  });
+});
+
+describe("stoa CLI: collidingUntracked (name files git stash can't move)", () => {
+  it("returns untracked (??) files that collide with incoming paths", () => {
+    const porcelain = "?? app/new-page.tsx\n?? scratch.log\n M server.ts";
+    const incoming = "app/new-page.tsx\nlib/other.ts";
+    expect(collidingUntracked(porcelain, incoming)).toEqual([
+      "app/new-page.tsx",
+    ]);
+  });
+  it("ignores tracked changes and non-colliding untracked files", () => {
+    expect(
+      collidingUntracked(" M server.ts\n?? scratch.log", "lib/x.ts")
+    ).toEqual([]);
+  });
+  it("returns [] for empty/null inputs", () => {
+    expect(collidingUntracked(null, null)).toEqual([]);
+    expect(collidingUntracked("", "")).toEqual([]);
   });
 });
 
