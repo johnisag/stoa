@@ -22,7 +22,7 @@
     ".github/workflows-disabled/README.md": "821fe69b3f74d1b61d069513efcd196af6e0b0afb6e1238b70491df85d9a282c",
     ".github/workflows-disabled/claude-code-review.yml": "e203499ee6261f22d7ec8523021b15414e5b51d2e07834622866728bcbcfdf67",
     ".github/workflows-disabled/claude.yml": "2d89f2c5d04afa2cb64888b1155f5e71a23122319e7d2c8fac4e10b8bf27acb0",
-    ".github/workflows/test.yml": "29982cc39802717cefd6f5bf17acb4a58ce9ed6d6b7c7d2a411ebad26275bdff",
+    ".github/workflows/test.yml": "2e1e1477ea4b6493b09a538b2274c3fbc7e8d3ffd4966c8f0333e1398eb0e614",
     ".husky/pre-commit": "042eaf5386ffbfccd14639db8112e12d297a7d4d2caf25c36a4b10edcb822fc2",
     "scripts/guard-surfaces.mjs": "c0df0792d415c96570b204b69cd49ea9be606a157e2c0683d78c03b07530afd1",
     "scripts/install.ps1": "5e86f980272fe6f6ec7f911b61bd880c7da71a355e67f4960bbc76372cfd9b9f",
