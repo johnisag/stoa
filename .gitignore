@@ -63,6 +63,7 @@ agent-os.db-shm
 docs/*
 !docs/setup/
 !docs/issues/
+!docs/dogfoot.md
 .mcp.json
 .git-evening
 
