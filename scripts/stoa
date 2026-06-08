@@ -66,6 +66,13 @@ source "$SCRIPT_DIR/lib/prerequisites.sh"
 source "$SCRIPT_DIR/lib/ai-clis.sh"
 source "$SCRIPT_DIR/lib/commands.sh"
 
+# Re-derive OS via detect_os() (now sourced) so it is debian/redhat/macos/linux —
+# the values the prerequisite installers switch on. The early uname-based value
+# above only distinguished macos (for Homebrew/PATH setup) and left every Linux as
+# "linux", which matched no install_* case branch and silently skipped prerequisite
+# installs — notably tmux, the Linux session backend, so the first session failed.
+OS="$(detect_os)"
+
 # Main
 case "${1:-}" in
     install)          cmd_install "${2:-}" ;;

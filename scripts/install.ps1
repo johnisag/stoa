@@ -107,6 +107,16 @@ if (-not (Test-Path (Join-Path $InstallDir ".next\prerender-manifest.json"))) {
 Pop-Location
 
 # ---------------------------------------------------------------------------
+# Put `stoa` on PATH (best-effort) so `stoa start/status/update` work anywhere.
+# Without this the advertised `stoa` command is "not recognized" after install.
+# ---------------------------------------------------------------------------
+Push-Location $InstallDir
+Write-Info "Attempting to link the 'stoa' command to your PATH (best-effort)..."
+& npm link
+$linked = $?
+Pop-Location
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 Write-Host ""
@@ -114,10 +124,21 @@ Write-Ok "Stoa installed successfully!"
 Write-Host ""
 Write-Host "Installed at: $InstallDir"
 Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  stoa start          (if the CLI is on your PATH)"
-Write-Host "  - or -"
-Write-Host "  cd `"$InstallDir`"; npm start"
+if ($linked) {
+    Write-Host "Next steps:"
+    Write-Host "  stoa start"
+    Write-Host ""
+    Write-Host "If PowerShell blocks 'stoa' (script execution disabled), run once:"
+    Write-Host "  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
+} else {
+    Write-Err "Could not link 'stoa' to your PATH automatically."
+    Write-Host "  (npm link needs symlink permission - enable Settings / Privacy and security /"
+    Write-Host "   For developers / Developer Mode, or re-run this installer as Administrator.)"
+    Write-Host "Run it directly instead:"
+    Write-Host "  node `"$InstallDir\scripts\stoa.js`" start"
+    Write-Host "  - or -"
+    Write-Host "  cd `"$InstallDir`"; npm start"
+}
 Write-Host ""
 Write-Host "Then open http://localhost:3011 in your browser."
 Write-Host ""
