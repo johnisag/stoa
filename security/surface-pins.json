@@ -30,12 +30,12 @@
     "scripts/lib/ai-clis.sh": "0019827ec924018f9fb91a26cf64cc020ddf097aca7d36dc58feedae2cc048fb",
     "scripts/lib/commands.sh": "fcde4fff330a0c9254ba11934d517c532687b03eb6f94d6705c1f37195a9b2bf",
     "scripts/lib/common.sh": "e6ab975d4bde0ae409664e3f553ab125febbe139313314e4df2de9207762397f",
-    "scripts/lib/prerequisites.sh": "22fc04957756c5eeedee20cdc7c6c9db3eb59c2063c407c64f03dcd9f05e72be",
+    "scripts/lib/prerequisites.sh": "ce4eb3aa1948015c303161fb0ff76e2f1dcac4ffcf595f5c87f7f8d082a6703d",
     "scripts/postinstall.js": "53bb659676007f2c842b753f25436c33471e52581e279057d499b9165cfb8764",
     "scripts/precommit.js": "cd5b697d4d96842b998c975bf955617f18566605779b1d2578f1381c0f4065d7",
     "scripts/pty-host.ts": "01e3c3cd655d9b7732f325c9f31e7c8f6ac3bc07fbecc3bc636c9ceadb8d25c9",
     "scripts/setup.sh": "6bbfd80aee21b7ba1d4c120317df49008e48897936adb905e0169216d7fa7488",
     "scripts/stoa": "33dfb2722e1920e9c65703a839018668dfe5b01e5c11c2fe716ef5752a7cbc9d",
-    "scripts/stoa.js": "f0c15c943f26dc2cf31a51c71142b3af63cb1ce6040a49d49498e07d50be8ee1"
+    "scripts/stoa.js": "8502e3ab4eb4a65a6fd581459dfe3ed180d9ea8a9950386854627a54cc07286c"
   }
 }

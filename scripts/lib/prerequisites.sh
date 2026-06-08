@@ -308,13 +308,13 @@ install_tmux() {
         macos)
             # Check if user is admin
             if ! groups | grep -q admin; then
-                log_error "tmux requires admin privileges to install via Homebrew."
-                log_error ""
-                log_error "Option 1: Ask your administrator to run: brew install tmux"
-                log_error "Option 2: Make yourself an admin:"
-                log_error "  - Open System Settings → Users & Groups"
-                log_error "  - Unlock and check 'Allow user to administer this computer'"
-                exit 1
+                # Don't abort the whole install on a managed/non-admin Mac: tmux
+                # is only the session backend, and Stoa has a pty backend fallback.
+                log_warn "tmux needs admin (Homebrew) to install and you're not an admin."
+                log_warn "Continuing without it - Stoa will use the pty backend instead."
+                log_warn "To use tmux later: have an admin run 'brew install tmux'."
+                log_warn "To silence this: set STOA_BACKEND=pty in ~/.stoa/repo/.env."
+                return 0
             else
                 install_homebrew
                 brew install tmux

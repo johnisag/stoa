@@ -77,11 +77,20 @@ You need at least one AI coding CLI installed. The installer will prompt you to 
 
 ### Environment Variables
 
-| Variable    | Default           | Description                                                                             |
-| ----------- | ----------------- | --------------------------------------------------------------------------------------- |
-| `STOA_HOME` | `~/.stoa`         | Installation directory                                                                  |
-| `STOA_PORT` | `3011`            | Server port                                                                             |
-| `DB_PATH`   | `~/.stoa/stoa.db` | SQLite database path (optional; defaults to STOA_HOME so a re-clone can't destroy data) |
+| Variable                 | Default                 | Description                                                                             |
+| ------------------------ | ----------------------- | --------------------------------------------------------------------------------------- |
+| `STOA_HOME`              | `~/.stoa`               | Installation directory                                                                  |
+| `STOA_PORT`              | `3011`                  | Server port                                                                             |
+| `DB_PATH`                | `~/.stoa/stoa.db`       | SQLite database path (optional; defaults to STOA_HOME so a re-clone can't destroy data) |
+| `STOA_BACKEND`           | auto                    | Session backend: `tmux` (macOS/Linux) or `pty` (Windows); set to override               |
+| `STOA_AUTH`              | on                      | `off` disables auth entirely                                                            |
+| `STOA_REQUIRE_AUTH`      | unset                   | `1` requires the token even on localhost (default trusts loopback)                      |
+| `STOA_TOKEN`             | random                  | Pin the access token instead of the random `~/.stoa/token`                              |
+| `STOA_TRUST_TAILSCALE`   | unset                   | `1` = token-free over the tailnet (see the server's startup-banner caveat)              |
+| `STOA_ALLOWED_ORIGINS`   | unset                   | Comma-separated extra trusted WebSocket origins (reverse-proxy domains)                 |
+| `STOA_VAPID_PUBLIC_KEY`  | generated               | Pin web-push keys so subscriptions survive a re-clone (else regenerated in vapid.json)  |
+| `STOA_VAPID_PRIVATE_KEY` | generated               | Paired with the public key above                                                        |
+| `STOA_VAPID_SUBJECT`     | `mailto:stoa@localhost` | VAPID contact (mailto:) for web push                                                    |
 
 ### Custom Port
 

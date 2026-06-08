@@ -690,10 +690,20 @@ app.prepare().then(() => {
           `> Auth on${TRUST_LOOPBACK ? " (localhost trusted)" : " (token required everywhere)"}. Remote access:`
         );
         console.log(`>   http://<this-host>:${port}/?token=${SERVER_TOKEN}`);
-        if (TRUST_TAILSCALE)
+        if (TRUST_TAILSCALE) {
           console.log(
             `>   Tailscale range (100.64.0.0/10) is trusted — no token over the tailnet.`
           );
+          console.log(
+            `>   WARNING: this trusts ANY peer in that range by IP alone (no tailnet`
+          );
+          console.log(
+            `>   identity check) while bound to ${hostname}. Safe on a private tailnet;`
+          );
+          console.log(
+            `>   risky behind a CGNAT/proxy that shares 100.64.0.0/10. Unset to require the token.`
+          );
+        }
         console.log(
           `>   STOA_AUTH=off disables it; STOA_REQUIRE_AUTH=1 requires it on localhost too.`
         );
