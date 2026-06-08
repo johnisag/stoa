@@ -69,7 +69,21 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        # Native modules (better-sqlite3 / node-pty) intermittently fail to build on
+        # the Windows runner: the prebuilt-binary download flakes, forcing a source
+        # build whose node-gyp can't find VS (ERR_CHILD_PROCESS_STDIO_MAXBUFFER). It's
+        # transient (main builds fine), so retry a few times before failing the job.
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4; do
+            echo "npm install attempt $attempt/4"
+            if npm install --legacy-peer-deps; then exit 0; fi
+            echo "::warning::npm install failed (attempt $attempt/4) — clearing node_modules and retrying"
+            rm -rf node_modules || true
+            sleep 10
+          done
+          echo "::error::npm install failed after 4 attempts"
+          exit 1
 
       - name: Type check
         run: npm run typecheck
