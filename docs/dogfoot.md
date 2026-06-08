@@ -88,18 +88,21 @@ STOA_TRUST_TAILSCALE=1
 unless you want to relocate the DB. See `docs/setup/README.md` for the full list
 of environment variables.
 
-## 4. Run it — the three commands
+## 4. Run it
 
 ```bash
 stoa start     # start the server in the background (pid-tracked)
-stoa status    # show status, PID, and the URL
+stoa update    # update to the latest main (self-contained — see below)
 stoa stop      # stop the server
-stoa update    # pull the latest main, rebuild, and restart — one command
+stoa status    # show status, PID, and the URL
 stoa logs      # tail the server log
 ```
 
-That's the whole lifecycle. **There is no auto-start** — after a reboot or
-logout, run `stoa start` again.
+**`stoa update` is self-contained** — it stops the running server, pulls the
+latest `main`, rebuilds, and restarts it, all on its own. You do **not** run
+`stoa stop` first; just `stoa update`.
+
+**There is no auto-start** — after a reboot or logout, run `stoa start` again.
 
 ## 5. Reach it from your phone (Tailscale)
 
