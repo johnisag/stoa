@@ -175,8 +175,8 @@ Use [Tailscale](https://tailscale.com) for secure access from your phone:
 
 See [AGENTS.md](AGENTS.md) for the architecture and contributor principles, and
 [docs/](docs/) for setup notes and known issues. To run a long-lived self-hosted
-instance (auto-start, one-command updates, multiple machines) while developing in
-a separate checkout, see [docs/dogfoot.md](docs/dogfoot.md).
+instance (one-command updates, multiple machines) while developing in a separate
+checkout, see [docs/dogfoot.md](docs/dogfoot.md).
 
 ## License
 
