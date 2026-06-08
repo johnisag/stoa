@@ -124,6 +124,9 @@ cmd_start() {
 
     cd "$REPO_DIR"
 
+    # Ensure the log directory exists (LOG_FILE is now under ~/.stoa/logs/).
+    mkdir -p "$(dirname "$LOG_FILE")"
+
     # Rotate log if too big (> 10MB)
     if [[ -f "$LOG_FILE" ]]; then
         local size

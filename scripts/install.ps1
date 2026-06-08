@@ -121,6 +121,7 @@ Write-Info "Attempting to link the 'stoa' command to your PATH (best-effort)..."
 & npm link
 $linked = $?
 Pop-Location
+$stoaResolved = $null -ne (Get-Command stoa -ErrorAction SilentlyContinue)
 
 # ---------------------------------------------------------------------------
 # Done
@@ -130,11 +131,20 @@ Write-Ok "Stoa installed successfully!"
 Write-Host ""
 Write-Host "Installed at: $InstallDir"
 Write-Host ""
-if ($linked) {
+if ($linked -and $stoaResolved) {
     Write-Host "Next steps:"
     Write-Host "  stoa start"
     Write-Host ""
-    Write-Host "If PowerShell blocks 'stoa' (script execution disabled), run once:"
+    Write-Host "If PowerShell blocks the 'stoa' script, run once:"
+    Write-Host "  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
+} elseif ($linked) {
+    # Linked, but 'stoa' isn't resolvable in THIS shell yet (PATH not refreshed).
+    Write-Host "Next steps (open a NEW terminal so PATH refreshes):"
+    Write-Host "  stoa start"
+    Write-Host ""
+    Write-Host "If 'stoa' is still not found, ensure the npm global bin is on PATH"
+    Write-Host "  (its location: run 'npm prefix -g' and add the \bin folder to PATH)."
+    Write-Host "If PowerShell blocks the 'stoa' script, run once:"
     Write-Host "  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
 } else {
     Write-Err "Could not link 'stoa' to your PATH automatically."
