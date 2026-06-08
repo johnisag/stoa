@@ -35,6 +35,13 @@ export interface SpawnSpec {
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
+export function windowsConptyOptions(platform = process.platform): {
+  useConptyDll?: true;
+} {
+  // Avoid node-pty's kill-time Node helper on Windows; it can flash a console.
+  return platform === "win32" ? { useConptyDll: true } : {};
+}
+
 /**
  * Resolve a binary + args into a spawnable (file, args) pair, cross-platform.
  *
@@ -104,6 +111,7 @@ export function spawnSession(key: string, spec: SpawnSpec): PtySession {
     rows,
     cwd,
     env: buildEnv(spec.env),
+    ...windowsConptyOptions(),
   });
 
   const session = new PtySession({ key, pty: proc, cwd, cols, rows });
@@ -150,6 +158,10 @@ export function killSession(key: string): void {
   }
 }
 
+export function killAllSessions(): void {
+  for (const key of [...sessions.keys()]) killSession(key);
+}
+
 /** Returns true if the rename happened, false on a no-op (missing/collision). */
 export function renameSession(oldKey: string, newKey: string): boolean {
   if (oldKey === newKey) return true;
@@ -170,6 +182,6 @@ export function resolveCwd(cwd: string): string {
 
 /** Exposed for tests/diagnostics. */
 export function _resetRegistryForTests(): void {
-  for (const session of sessions.values()) session.kill();
+  killAllSessions();
   sessions.clear();
 }

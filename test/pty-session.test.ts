@@ -6,6 +6,7 @@ import {
   hasSession,
   killSession,
   renameSession,
+  windowsConptyOptions,
   _resetRegistryForTests,
 } from "@/lib/session-backend/pty/registry";
 
@@ -24,6 +25,12 @@ async function waitFor(fn: () => boolean, ms = 5000): Promise<boolean> {
 }
 
 describe("pty registry / PtySession", () => {
+  it("uses bundled ConPTY cleanup on Windows to avoid node helper windows", () => {
+    expect(windowsConptyOptions("win32")).toEqual({ useConptyDll: true });
+    expect(windowsConptyOptions("linux")).toEqual({});
+    expect(windowsConptyOptions("darwin")).toEqual({});
+  });
+
   it("spawns a process and exposes rendered capture + raw buffer + live stream", async () => {
     const marker = "PTY_RENDER_OK_77";
     const session = spawnSession("test-render", {

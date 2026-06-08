@@ -14,6 +14,7 @@ const {
   isGitInstall,
   parseEnvFile,
   loadEnvFile,
+  hiddenWindowOption,
   blockingDirty,
   buildIsComplete,
   collidingUntracked,
@@ -21,6 +22,7 @@ const {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
   loadEnvFile: (dir: string) => Record<string, string>;
+  hiddenWindowOption: (platform?: string) => Record<string, boolean>;
   blockingDirty: (porcelain: string | null) => string[];
   buildIsComplete: (dir?: string) => boolean;
   collidingUntracked: (
@@ -91,6 +93,14 @@ describe("stoa CLI: isGitInstall (git-checkout vs npm-global detection)", () => 
     const dir = freshDir();
     mkdirSync(join(dir, ".git"));
     expect(isGitInstall(dir)).toBe(true);
+  });
+});
+
+describe("stoa CLI: Windows child windows", () => {
+  it("requests hidden child windows only on Windows", () => {
+    expect(hiddenWindowOption("win32")).toEqual({ windowsHide: true });
+    expect(hiddenWindowOption("linux")).toEqual({});
+    expect(hiddenWindowOption("darwin")).toEqual({});
   });
 });
 

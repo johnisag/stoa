@@ -169,6 +169,7 @@ export class ClaudeProcessManager {
             PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH}`,
           },
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: isWindows,
     });
 
     session.process = claudeProcess;

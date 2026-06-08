@@ -35,6 +35,10 @@ import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import {
+  cleanupOrphanedServers,
+  stopAllRunningServers,
+} from "./lib/dev-servers";
+import {
   getBudgetConfig,
   budgetEnabled,
   detectBudgetBreaches,
@@ -65,12 +69,17 @@ const AUTH_ENABLED = SERVER_TOKEN !== null;
 const TRUST_LOOPBACK = trustLoopback();
 const TRUST_TAILSCALE = trustTailscale();
 const ALLOWED_ORIGINS = configuredAllowedOrigins();
+const SHUTDOWN_TOKEN = process.env.STOA_SHUTDOWN_TOKEN || null;
 
 const AUTH_REQUIRED_HTML = `<!doctype html><meta charset="utf-8"><title>Stoa — token required</title><body style="font-family:system-ui;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#ddd;background:#111"><h1 style="font-size:1.3rem">🔒 Stoa needs a token</h1><p>This server requires an access token for non-local connections. Open the tokenized URL printed in the server console, or append <code>?token=YOUR_TOKEN</code> to the address.</p></body>`;
 
 const firstQueryValue = (
   v: string | string[] | undefined
 ): string | undefined => (Array.isArray(v) ? v[0] : v);
+
+function isLoopbackAddress(addr?: string): boolean {
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
 
 // Support: npm run dev -- -p 3012
 const pFlagIndex = process.argv.indexOf("-p");
@@ -104,6 +113,29 @@ app.prepare().then(() => {
   const server = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url!, true);
+
+      if (parsedUrl.pathname === "/__stoa/shutdown") {
+        const header = req.headers["x-stoa-shutdown-token"];
+        const token = Array.isArray(header) ? header[0] : header;
+        if (
+          req.method !== "POST" ||
+          !SHUTDOWN_TOKEN ||
+          token !== SHUTDOWN_TOKEN ||
+          !isLoopbackAddress(req.socket.remoteAddress)
+        ) {
+          res.statusCode = 403;
+          res.end("forbidden");
+          return;
+        }
+
+        const stopDevServers = firstQueryValue(parsedUrl.query.dev) !== "0";
+        res.statusCode = 200;
+        res.end("ok");
+        setImmediate(() =>
+          shutdown("local shutdown request", { stopDevServers })
+        );
+        return;
+      }
 
       if (AUTH_ENABLED) {
         const decision = decideHttpAuth({
@@ -147,6 +179,39 @@ app.prepare().then(() => {
       res.end("internal server error");
     }
   });
+
+  let shuttingDown = false;
+  const shutdown = (
+    signal: string,
+    { stopDevServers = true }: { stopDevServers?: boolean } = {}
+  ) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[stoa] ${signal} received; shutting down`);
+    const force = setTimeout(() => process.exit(0), 8000);
+    force.unref?.();
+    if (stopDevServers) {
+      console.log("[stoa] stopping managed dev servers");
+    } else {
+      console.log("[stoa] preserving managed dev servers");
+    }
+    const devServerCleanup = stopDevServers
+      ? stopAllRunningServers()
+      : Promise.resolve();
+    void devServerCleanup
+      .catch((err) =>
+        console.error("[stoa] dev-server shutdown cleanup failed:", err)
+      )
+      .finally(() => {
+        getHostClient().close();
+        server.close(() => process.exit(0));
+      });
+  };
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  if (process.platform === "win32") {
+    process.once("SIGBREAK", () => shutdown("SIGBREAK"));
+  }
 
   // Terminal WebSocket server
   const terminalWss = new WebSocketServer({ noServer: true });
@@ -671,6 +736,9 @@ app.prepare().then(() => {
     // Dispatch startup catch-up: free slots held by workers that didn't survive
     // a Tier-1 restart, then run one reconcile pass immediately so a day missed
     // while Stoa was down is topped up now (not only on the next 60s tick).
+    void cleanupOrphanedServers().catch((err) =>
+      console.error("dev-server startup cleanup failed:", err)
+    );
     void reconcileOrphans()
       .then(() => reconcileTick())
       .catch((err) => console.error("dispatch startup reconcile failed:", err));
