@@ -311,9 +311,12 @@ install_tmux() {
                 # Don't abort the whole install on a managed/non-admin Mac: tmux
                 # is only the session backend, and Stoa has a pty backend fallback.
                 log_warn "tmux needs admin (Homebrew) to install and you're not an admin."
-                log_warn "Continuing without it - Stoa will use the pty backend instead."
-                log_warn "To use tmux later: have an admin run 'brew install tmux'."
-                log_warn "To silence this: set STOA_BACKEND=pty in ~/.stoa/repo/.env."
+                log_warn "Continuing without it - Stoa will use the pty backend (STOA_BACKEND=pty)."
+                log_warn "To use the tmux backend later: have an admin run 'brew install tmux'."
+                # Global flag: cmd_install persists STOA_BACKEND=pty into the
+                # install .env after the clone (the repo isn't cloned yet here),
+                # so the first session uses pty instead of failing on absent tmux.
+                STOA_USE_PTY_BACKEND=1
                 return 0
             else
                 install_homebrew

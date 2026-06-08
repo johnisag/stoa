@@ -625,6 +625,10 @@ function cmdUpdate() {
   info(`Updating from ${origin}`);
   const before = gitCapture(["rev-parse", "--short", "HEAD"]); // for display/compare
   const beforeFull = gitCapture(["rev-parse", "HEAD"]); // unambiguous reset target
+  // The branch we started on (usually "main", but an install could be parked on
+  // a feature branch, or "HEAD" if detached). recover() returns here before any
+  // reset so it never force-moves `main` to a non-main commit.
+  const origBranch = gitCapture(["rev-parse", "--abbrev-ref", "HEAD"]);
 
   // On ANY failure: if the pull already moved HEAD, restore the previous source
   // (never leave a half-updated tree — new source over an old/partial build),
@@ -634,9 +638,29 @@ function cmdUpdate() {
     const nowHead = gitCapture(["rev-parse", "--short", "HEAD"]);
     if (before && nowHead && nowHead !== before) {
       info(`Restoring the previous version (${before})...`);
-      runSync("git", ["reset", "--hard", beforeFull || before], {
-        allowFail: true,
-      });
+      // We may be on `main` after a `git checkout main`; a plain reset here would
+      // move `main` to the captured (possibly feature-branch) commit and brick
+      // every future ff-only pull. So return to the ORIGINAL ref first.
+      if (origBranch && origBranch !== "HEAD") {
+        // Only reset if the branch checkout succeeded — a deleted/renamed branch
+        // must not leave us resetting whatever branch we're currently on (main).
+        if (
+          runSync("git", ["checkout", origBranch], { allowFail: true }) === 0
+        ) {
+          runSync("git", ["reset", "--hard", beforeFull || before], {
+            allowFail: true,
+          });
+        } else {
+          console.log(
+            `  Could not restore branch ${origBranch}; left HEAD as-is (avoided moving main).`
+          );
+        }
+      } else {
+        // Detached HEAD: move HEAD itself to the prior commit, never a branch.
+        runSync("git", ["checkout", "--detach", beforeFull || before], {
+          allowFail: true,
+        });
+      }
     }
     if (wasRunning) {
       info("Restarting the server with the existing version...");

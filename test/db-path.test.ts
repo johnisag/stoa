@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+} from "fs";
 import { tmpdir, homedir } from "os";
 import { join } from "path";
 import { resolveDbPath } from "../lib/db/index";
@@ -63,15 +69,18 @@ describe("resolveDbPath (DB lives in STOA_HOME, never inside the repo)", () => {
     expect(resolveDbPath()).toBe(abs);
   });
 
-  it("falls back to a legacy in-repo ./stoa.db so an upgrade never orphans data", () => {
+  it("migrates a legacy in-repo ./stoa.db into the canonical location (sticky, no fork)", () => {
     const home = fresh(); // STOA_HOME has NO stoa.db yet
     const repo = fresh();
-    writeFileSync(join(repo, "stoa.db"), ""); // a pre-existing legacy DB in the repo
+    writeFileSync(join(repo, "stoa.db"), "legacydata"); // pre-existing legacy DB
     process.env.STOA_HOME = home;
     process.chdir(repo);
-    // Compare against process.cwd(), not `repo`: on macOS chdir into /var/... is
-    // reported as the realpath /private/var/..., and resolveDbPath() uses cwd.
-    expect(resolveDbPath()).toBe(join(process.cwd(), "stoa.db"));
+    const resolved = resolveDbPath();
+    // Converges on the canonical path (not the legacy one) so a later empty
+    // canonical can't shadow it...
+    expect(resolved).toBe(join(home, "stoa.db"));
+    // ...and the legacy data was physically migrated, not abandoned.
+    expect(readFileSync(resolved, "utf8")).toBe("legacydata");
   });
 
   it("prefers the canonical STOA_HOME DB once it exists, ignoring a legacy one", () => {

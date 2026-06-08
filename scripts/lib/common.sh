@@ -87,3 +87,11 @@ get_tailscale_ip() {
         tailscale ip -4 2>/dev/null | head -1
     fi
 }
+
+# True if something is already listening on the given localhost TCP port.
+# Uses bash's /dev/tcp pseudo-device (no nc/lsof dependency).
+port_in_use() {
+    # The subshell opens (and, on exit, closes) FD 3; success means a listener.
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && return 0
+    return 1
+}
