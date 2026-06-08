@@ -51,6 +51,16 @@ cmd_install() {
     log_info "Building for production..."
     npm run build
 
+    # If tmux was unavailable (e.g. non-admin macOS), persist the pty backend so
+    # the first session doesn't fail trying to use the absent tmux backend. The
+    # server self-loads .env at startup, so this is honored regardless of launcher.
+    if [[ "${STOA_USE_PTY_BACKEND:-}" == "1" ]]; then
+        if ! grep -qs '^STOA_BACKEND=' "$REPO_DIR/.env" 2>/dev/null; then
+            echo "STOA_BACKEND=pty" >> "$REPO_DIR/.env"
+            log_info "Set STOA_BACKEND=pty in $REPO_DIR/.env (tmux unavailable)."
+        fi
+    fi
+
     # Create CLI symlink (prefer ~/.local/bin to avoid sudo)
     log_info "Adding stoa to PATH..."
     local bin_dir="$HOME/.local/bin"
@@ -178,6 +188,14 @@ cmd_stop() {
         sleep 1
     fi
 
+    # Verify it's actually dead before clearing the pid file — a failed kill
+    # (privilege mismatch) must not let a following restart/update stack a second
+    # server on the same port.
+    if ps -p "$pid" &> /dev/null; then
+        log_error "Failed to stop Stoa — PID $pid is still alive. Kill it manually (kill -9 $pid)."
+        exit 1
+    fi
+
     rm -f "$PID_FILE"
     log_success "Stoa stopped"
 }
@@ -254,6 +272,23 @@ cmd_logs() {
     tail -f "$LOG_FILE"
 }
 
+# Restore the previous source after a failed update: return to the original
+# branch and reset it to <before>. Only reset if the checkout succeeds, so a
+# deleted/renamed branch can't leave us resetting `main` to a non-main commit
+# (which would brick future ff-only pulls). Handles a detached HEAD too.
+restore_previous() {
+    local ob="$1" bf="$2"
+    if [[ -n "$ob" && "$ob" != "HEAD" ]]; then
+        if git checkout "$ob" 2>/dev/null; then
+            git reset --hard "$bf" 2>/dev/null || true
+        else
+            log_warn "Could not restore branch '$ob'; left HEAD as-is (avoided moving main)."
+        fi
+    else
+        git checkout --detach "$bf" 2>/dev/null || true
+    fi
+}
+
 cmd_update() {
     if [[ ! -d "$REPO_DIR" ]]; then
         log_error "Stoa is not installed. Run 'stoa install' first."
@@ -277,11 +312,25 @@ cmd_update() {
     # Genuine local edits are still protected by the check below.
     git checkout -- next-env.d.ts 2>/dev/null || true
 
-    # Don't clobber genuine uncommitted local changes with a checkout/pull.
-    if [[ -n "$(git status --porcelain)" ]]; then
+    # Don't clobber genuine uncommitted local changes with a checkout/pull — but
+    # only TRACKED edits block; untracked artifacts (a stray log/scratch file) are
+    # safe across a ff-only pull, matching the Node CLI's blockingDirty.
+    local dirty
+    dirty=$(git status --porcelain | grep -v '^??' || true)
+    if [[ -n "$dirty" ]]; then
         log_error "You have uncommitted local changes in $REPO_DIR."
         echo "  Those look like real edits, so the update won't touch them."
         echo "  Commit them (or 'git stash'), then re-run 'stoa update'."
+        exit 1
+    fi
+
+    # Supervisor guard: not pid-tracked but the port is served -> an external
+    # supervisor (or 'stoa run') is live; rebuilding .next under it would serve a
+    # half-built app. Refuse (stop it first), matching the Node CLI.
+    if ! is_running && port_in_use "$PORT"; then
+        log_error "Port $PORT is in use but not by a 'stoa start' server."
+        echo "  A supervisor (or 'stoa run') is serving this install. Stop it first,"
+        echo "  then re-run 'stoa update' (and restart the supervisor)."
         exit 1
     fi
 
@@ -292,8 +341,11 @@ cmd_update() {
     fi
 
     log_info "Updating from $(git remote get-url origin 2>/dev/null || echo origin)"
-    local before after
+    local before after orig_branch
     before=$(git rev-parse --short HEAD)
+    # Branch we start on (usually main; could be a feature branch or "HEAD"). On
+    # failure we return here before resetting so we never force-move main.
+    orig_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 
     # Run the risky steps without set -e so a failure restarts the existing
     # version instead of aborting with the server left down.
@@ -303,7 +355,8 @@ cmd_update() {
     local pull_rc=$?
     set -e
     if [[ $pull_rc -ne 0 ]]; then
-        log_error "Update failed (git pull — local main may have diverged)."
+        log_error "Update failed (git pull — local main may have diverged). Restoring..."
+        restore_previous "$orig_branch" "$before"
         if [[ "$was_running" == true ]]; then
             log_warn "Restarting the server with the existing version..."
             cmd_start
@@ -321,11 +374,19 @@ cmd_update() {
         local build_rc=$?
         set -e
         if [[ $build_rc -ne 0 ]]; then
-            log_error "Update failed (dependency install/build)."
+            log_error "Update failed (dependency install/build). Restoring previous version..."
+            restore_previous "$orig_branch" "$before"
             if [[ "$was_running" == true ]]; then
                 log_warn "Restarting the server with the existing version..."
                 cmd_start
             fi
+            exit 1
+        fi
+        # Guard a build that exited 0 but left an incomplete .next (interrupted/OOM):
+        # don't restart into a partial build — it crash-loops.
+        if [[ ! -f .next/prerender-manifest.json || ! -f .next/BUILD_ID ]]; then
+            log_error "Build incomplete — .next is missing required files. Not restarting."
+            echo "  Fix: cd \"$REPO_DIR\" && npm run build, then 'stoa start'."
             exit 1
         fi
         log_success "Update complete!"

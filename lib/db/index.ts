@@ -27,7 +27,30 @@ export function resolveDbPath(): string {
   const stoaHome = process.env.STOA_HOME || path.join(homeDir(), ".stoa");
   const canonical = path.join(stoaHome, "stoa.db");
   const legacy = path.join(process.cwd(), "stoa.db");
-  if (!fs.existsSync(canonical) && fs.existsSync(legacy)) return legacy;
+  if (!fs.existsSync(canonical) && fs.existsSync(legacy)) {
+    // Sticky migration: copy the legacy in-repo DB (all 3 SQLite parts) into the
+    // canonical STOA_HOME location so this clone — and any sibling clone — both
+    // converge on ONE file. Without this, once an empty canonical DB appears
+    // (e.g. created by another clone), this populated legacy DB would be silently
+    // shadowed. Best-effort: if the copy fails, keep using the legacy path.
+    try {
+      fs.mkdirSync(stoaHome, { recursive: true });
+      // COPYFILE_EXCL: if another process created the canonical DB between the
+      // existsSync check above and now (TOCTOU), don't clobber it — the catch
+      // below then adopts that canonical instead of overwriting it with legacy.
+      fs.copyFileSync(legacy, canonical, fs.constants.COPYFILE_EXCL);
+      for (const suffix of ["-wal", "-shm"]) {
+        if (fs.existsSync(legacy + suffix)) {
+          fs.copyFileSync(legacy + suffix, canonical + suffix);
+        }
+      }
+      return canonical;
+    } catch {
+      // Copy failed (race lost, perms): adopt canonical if it now exists, else
+      // keep using the legacy path.
+      return fs.existsSync(canonical) ? canonical : legacy;
+    }
+  }
   return canonical;
 }
 
