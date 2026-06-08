@@ -10,10 +10,13 @@ import { join } from "path";
 const require = createRequire(import.meta.url);
 const CLI_PATH = "../scripts/stoa.js";
 
-const { isGitInstall, parseEnvFile, loadEnvFile } = require(CLI_PATH) as {
+const { isGitInstall, parseEnvFile, loadEnvFile, blockingDirty } = require(
+  CLI_PATH
+) as {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
   loadEnvFile: (dir: string) => Record<string, string>;
+  blockingDirty: (porcelain: string | null) => string[];
 };
 
 /**
@@ -26,10 +29,15 @@ function loadCliWith(env: Record<string, string | undefined>) {
   // STOA_SKIP_ENV_FILE disables the CLI's repo-root .env load at module load,
   // so a developer's local .env (e.g. STOA_PORT=3022 for dogfooding) can't make
   // these port-resolution assertions non-deterministic. No filesystem mutation.
-  const keys = ["STOA_PORT", "PORT", "STOA_SKIP_ENV_FILE"];
+  const keys = ["STOA_PORT", "PORT", "STOA_SKIP_ENV_FILE", "STOA_HOME"];
   const overrides: Record<string, string | undefined> = {
     ...env,
     STOA_SKIP_ENV_FILE: "1",
+    // Isolate STOA_HOME to a fresh empty temp dir so the new persisted-port
+    // fallback (~/.stoa/stoa.port) can't read the developer's real port file and
+    // make these assertions non-deterministic. A test wanting to exercise the
+    // fallback passes its own STOA_HOME (a dir it pre-seeded with stoa.port).
+    STOA_HOME: env.STOA_HOME ?? freshDir(),
   };
   for (const k of keys) {
     saved[k] = process.env[k];
@@ -132,6 +140,50 @@ describe("stoa CLI: port resolution (STOA_PORT must reach the server)", () => {
         if (!(k in saved)) delete (process.env as Record<string, string>)[k];
       Object.assign(process.env, saved);
     }
+  });
+});
+
+describe("stoa CLI: blockingDirty (update dirty-tree guard ignores untracked)", () => {
+  it("returns [] for a clean tree (null or empty porcelain)", () => {
+    expect(blockingDirty(null)).toEqual([]);
+    expect(blockingDirty("")).toEqual([]);
+  });
+  it("ignores untracked files (?? lines) — safe across a ff-only pull", () => {
+    expect(blockingDirty("?? scratch.log\n?? tmp/output.txt")).toEqual([]);
+  });
+  it("blocks on tracked changes (staged/modified/deleted/renamed/conflict)", () => {
+    const porcelain =
+      " M server.ts\nA  new.ts\n D gone.ts\nR  a.ts -> b.ts\nUU conflict.ts\n?? untracked.txt";
+    const blocked = blockingDirty(porcelain);
+    expect(blocked).toEqual([
+      " M server.ts",
+      "A  new.ts",
+      " D gone.ts",
+      "R  a.ts -> b.ts",
+      "UU conflict.ts",
+    ]);
+    expect(blocked).not.toContain("?? untracked.txt"); // untracked never blocks
+  });
+});
+
+describe("stoa CLI: persisted port fallback (~/.stoa/stoa.port)", () => {
+  it("falls back to stoa.port when neither STOA_PORT nor PORT is set", () => {
+    const home = freshDir();
+    writeFileSync(join(home, "stoa.port"), "3033");
+    const cli = loadCliWith({ STOA_HOME: home });
+    expect(cli.PORT).toBe("3033");
+  });
+  it("env STOA_PORT still wins over the persisted file", () => {
+    const home = freshDir();
+    writeFileSync(join(home, "stoa.port"), "3033");
+    const cli = loadCliWith({ STOA_HOME: home, STOA_PORT: "3022" });
+    expect(cli.PORT).toBe("3022");
+  });
+  it("ignores a garbage (non-numeric) port file and defaults to 3011", () => {
+    const home = freshDir();
+    writeFileSync(join(home, "stoa.port"), "not-a-port");
+    const cli = loadCliWith({ STOA_HOME: home });
+    expect(cli.PORT).toBe("3011");
   });
 });
 
