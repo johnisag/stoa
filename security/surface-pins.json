@@ -25,7 +25,7 @@
     ".github/workflows/test.yml": "0fe3163206193f9b9c7a284377f94a2dbce74e85ca52f7b2fe937e27e47585b0",
     ".husky/pre-commit": "042eaf5386ffbfccd14639db8112e12d297a7d4d2caf25c36a4b10edcb822fc2",
     "scripts/guard-surfaces.mjs": "91f7e9fdb409cf12a132d8035593c0a02e7de37550656da435cb66bf65e4baa8",
-    "scripts/install.ps1": "989125f5d14c2561fc1250ecb13206097c4f23bf2902e4c5274c0418c94e9dff",
+    "scripts/install.ps1": "e27f892e442e4a095bf83ed9873c3d43a44f466a2fd784daa23347f1c7d33fd9",
     "scripts/install.sh": "6b673db658df993ace3291280996f8fca499e4bbabca441c87fd95113ba95149",
     "scripts/lib/ai-clis.sh": "0019827ec924018f9fb91a26cf64cc020ddf097aca7d36dc58feedae2cc048fb",
     "scripts/lib/commands.sh": "fda45d3a4c46b6679339c8e26c1730ff8f2673209a8cdc515f719d32edab8d73",
@@ -36,6 +36,6 @@
     "scripts/pty-host.ts": "01e3c3cd655d9b7732f325c9f31e7c8f6ac3bc07fbecc3bc636c9ceadb8d25c9",
     "scripts/setup.sh": "6bbfd80aee21b7ba1d4c120317df49008e48897936adb905e0169216d7fa7488",
     "scripts/stoa": "025d1b56b00f67008a074bb712f326bfd03d7bef358d5bb2c75b1eeb49910165",
-    "scripts/stoa.js": "649c755250c3f66e9c6bebf5f13ababab0831a612c138ee60c33152a78ed73d2"
+    "scripts/stoa.js": "38b6e0ca33e6e7f434a53c9d4bf4b90b7d63694966ccc7d891229c140a47b64d"
   }
 }

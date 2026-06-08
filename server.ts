@@ -1,5 +1,7 @@
 import { createServer } from "http";
 import { parse } from "url";
+import { existsSync } from "fs";
+import { join } from "path";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import * as pty from "node-pty";
@@ -73,6 +75,21 @@ const firstQueryValue = (
 const pFlagIndex = process.argv.indexOf("-p");
 const portArg = pFlagIndex !== -1 ? process.argv[pFlagIndex + 1] : undefined;
 const port = parseInt(portArg || process.env.PORT || "3011", 10);
+
+// Production preflight: an interrupted `next build` can leave an incomplete
+// .next (missing prerender-manifest.json); app.prepare() then throws an opaque
+// ENOENT and a keep-alive supervisor crash-loops forever. Fail with a clear,
+// actionable message instead so the cause is obvious in the logs.
+if (!dev) {
+  const manifest = join(process.cwd(), ".next", "prerender-manifest.json");
+  if (!existsSync(manifest)) {
+    console.error(
+      `[stoa] Production build is incomplete — ${manifest} is missing.\n` +
+        `[stoa] Run 'npm run build' (or 'stoa update') before starting. Exiting.`
+    );
+    process.exit(1);
+  }
+}
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();

@@ -271,12 +271,33 @@ function runSync(cmd, args, { cwd = REPO_DIR, allowFail = false, env } = {}) {
 // ---------------------------------------------------------------------------
 
 /** install: install dependencies and build for production. */
+/**
+ * A `next build` that's interrupted (Ctrl-C, OOM, sleep, closed terminal) can
+ * leave a partial .next missing prerender-manifest.json — and the production
+ * server then crash-loops forever under a keep-alive supervisor (observed in the
+ * field). Assert the key production artifacts exist so a half-build fails loudly
+ * here instead of silently shipping a crash-loop. `dir` is injectable for tests.
+ */
+function buildIsComplete(dir = REPO_DIR) {
+  const next = path.join(dir, ".next");
+  return (
+    fs.existsSync(path.join(next, "prerender-manifest.json")) &&
+    fs.existsSync(path.join(next, "BUILD_ID"))
+  );
+}
+
 function cmdInstall() {
   info("Installing dependencies...");
   runSync("npm", ["install", "--legacy-peer-deps"]);
 
   info("Building for production...");
   runSync("npm", ["run", "build"]);
+
+  if (!buildIsComplete()) {
+    error("Build incomplete — .next is missing required files.");
+    console.log("  Re-run the build:  npm run build");
+    process.exit(1);
+  }
 
   console.log("");
   info("Stoa installed successfully!");
@@ -554,6 +575,20 @@ function cmdUpdate() {
   info("Rebuilding...");
   step("npm run build", "npm", ["run", "build"]);
 
+  // The build can exit 0 yet leave an incomplete .next (interrupted/OOM). Do NOT
+  // restart into that — a partial build crash-loops. A stopped server beats a
+  // crash-loop, so refuse loudly instead of calling recover() (which restarts).
+  if (!buildIsComplete()) {
+    error("Build incomplete — .next is missing required files after rebuild.");
+    console.log(
+      "  The server was NOT restarted (a partial build would crash-loop)."
+    );
+    console.log(
+      `  Fix:  cd "${REPO_DIR}" && npm run build, then 'stoa start'.`
+    );
+    process.exit(1);
+  }
+
   info("Update complete!");
 
   if (wasRunning) {
@@ -654,4 +689,5 @@ module.exports = {
   blockingDirty,
   readPortFile,
   writePortFile,
+  buildIsComplete,
 };

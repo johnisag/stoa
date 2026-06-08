@@ -94,6 +94,14 @@ Write-Info "Building for production..."
 & npm run build
 if (-not $?) { Pop-Location; Write-Err "npm run build failed."; exit 1 }
 
+# An interrupted build can exit 0 yet leave an incomplete .next (missing
+# prerender-manifest.json), which crash-loops the server. Verify the artifact.
+if (-not (Test-Path (Join-Path $InstallDir ".next\prerender-manifest.json"))) {
+    Pop-Location
+    Write-Err "Build incomplete (.next is missing required files). Re-run: npm run build"
+    exit 1
+}
+
 Pop-Location
 
 # ---------------------------------------------------------------------------
