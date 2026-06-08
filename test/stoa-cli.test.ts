@@ -10,13 +10,18 @@ import { join } from "path";
 const require = createRequire(import.meta.url);
 const CLI_PATH = "../scripts/stoa.js";
 
-const { isGitInstall, parseEnvFile, loadEnvFile, blockingDirty } = require(
-  CLI_PATH
-) as {
+const {
+  isGitInstall,
+  parseEnvFile,
+  loadEnvFile,
+  blockingDirty,
+  buildIsComplete,
+} = require(CLI_PATH) as {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
   loadEnvFile: (dir: string) => Record<string, string>;
   blockingDirty: (porcelain: string | null) => string[];
+  buildIsComplete: (dir?: string) => boolean;
 };
 
 /**
@@ -163,6 +168,31 @@ describe("stoa CLI: blockingDirty (update dirty-tree guard ignores untracked)", 
       "UU conflict.ts",
     ]);
     expect(blocked).not.toContain("?? untracked.txt"); // untracked never blocks
+  });
+});
+
+describe("stoa CLI: buildIsComplete (catch a partial .next before it crash-loops)", () => {
+  it("is true only when .next has prerender-manifest.json AND BUILD_ID", () => {
+    const dir = freshDir();
+    mkdirSync(join(dir, ".next"));
+    writeFileSync(join(dir, ".next", "prerender-manifest.json"), "{}");
+    writeFileSync(join(dir, ".next", "BUILD_ID"), "abc");
+    expect(buildIsComplete(dir)).toBe(true);
+  });
+  it("is false when prerender-manifest.json is missing (the interrupted-build case)", () => {
+    const dir = freshDir();
+    mkdirSync(join(dir, ".next"));
+    writeFileSync(join(dir, ".next", "BUILD_ID"), "abc"); // present, but no manifest
+    expect(buildIsComplete(dir)).toBe(false);
+  });
+  it("is false when BUILD_ID is missing (manifest alone is not enough)", () => {
+    const dir = freshDir();
+    mkdirSync(join(dir, ".next"));
+    writeFileSync(join(dir, ".next", "prerender-manifest.json"), "{}"); // no BUILD_ID
+    expect(buildIsComplete(dir)).toBe(false);
+  });
+  it("is false when .next is absent entirely", () => {
+    expect(buildIsComplete(freshDir())).toBe(false);
   });
 });
 
