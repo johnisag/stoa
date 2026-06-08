@@ -44,6 +44,17 @@ export interface ExecutorDeps {
   sleep: (ms: number) => Promise<void>;
   /** Optional: called with a fresh run snapshot after every state change. */
   onUpdate?: (run: PipelineRun) => void;
+  /**
+   * Optional: tear down a step's worker once the run is terminal. The pty +
+   * agent process are pure leak after the run ends, so this is always called for
+   * every launched step; `cleanupWorktree` is true only for steps that did NOT
+   * succeed (a succeeded step's worktree holds the work product to inspect/merge).
+   * Wired to killWorker in defaultExecutorDeps; omitted in pure-loop tests.
+   */
+  terminate?: (
+    sessionId: string,
+    opts: { cleanupWorktree: boolean; succeeded: boolean }
+  ) => Promise<void>;
 }
 
 export interface RunOptions {
@@ -199,15 +210,53 @@ export async function runPipeline(
     }
   } catch (err) {
     // Unexpected fault: drive the run to a terminal status so it never lingers
-    // as a zombie "running" snapshot, emit it, then rethrow for the bg logger.
+    // as a zombie "running" snapshot, emit it, reap workers, then rethrow.
     const detail = `pipeline executor error: ${err instanceof Error ? err.message : String(err)}`;
     run = forceTerminate(run, deps.now(), detail);
     emit();
+    await reapWorkers(run, deps);
     throw err;
   }
 
   emit();
+  // Run is terminal — tear down every launched worker (pty/process is pure leak
+  // now; worktrees kept only for succeeded steps). Best-effort, never throws.
+  await reapWorkers(run, deps);
   return run;
+}
+
+/**
+ * Tear down the workers of a terminal run. Always kills the pty/agent process
+ * for every step that launched (had a sessionId); removes the git worktree only
+ * for steps that did NOT succeed — a succeeded step's worktree holds the work
+ * product the caller will inspect/merge (policy: reap failures, keep successes).
+ *
+ * Best-effort and fully isolated: a terminate fault for one step is swallowed so
+ * it can neither abort the reap of the others nor escape into the run result.
+ * A no-op when deps.terminate is not wired (pure-loop tests).
+ */
+async function reapWorkers(
+  run: PipelineRun,
+  deps: ExecutorDeps
+): Promise<void> {
+  if (!deps.terminate) return;
+  const terminate = deps.terminate;
+  await Promise.all(
+    Object.values(run.steps).map(async (state) => {
+      if (!state.sessionId) return; // never launched (failed-to-start/skipped)
+      const succeeded = state.status === "succeeded";
+      try {
+        await terminate(state.sessionId, {
+          // Keep a succeeded step's worktree (holds the work product); reap the rest.
+          cleanupWorktree: !succeeded,
+          succeeded,
+        });
+      } catch {
+        // Swallow: a failed teardown must not break the run result or the
+        // reaping of sibling steps. (default-deps logs the underlying cause.)
+      }
+    })
+  );
 }
 
 /**

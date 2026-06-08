@@ -413,7 +413,8 @@ export function failWorker(workerId: string): void {
  */
 export async function killWorker(
   workerId: string,
-  cleanupWorktree: boolean = false
+  cleanupWorktree: boolean = false,
+  finalStatus: "completed" | "failed" = "failed"
 ): Promise<void> {
   const session = queries.getSession(db).get(workerId) as Session | undefined;
   if (!session) {
@@ -462,7 +463,7 @@ export async function killWorker(
     }
   }
 
-  queries.updateWorkerStatus(db).run("failed", workerId);
+  queries.updateWorkerStatus(db).run(finalStatus, workerId);
 }
 
 /**
