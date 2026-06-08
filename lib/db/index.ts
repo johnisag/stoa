@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { homeDir, expandHome } from "../platform";
 import { createSchema } from "./schema";
 import { runMigrations } from "./migrations";
 
@@ -8,13 +9,41 @@ import { runMigrations } from "./migrations";
 export * from "./types";
 export { queries } from "./queries";
 
-const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "stoa.db");
+/**
+ * Resolve where the SQLite database lives. It MUST sit outside the repo clone so
+ * a re-clone / `git reset` / reinstall of `~/.stoa/repo` can never destroy
+ * session history. Resolution order:
+ *   1. An explicit `DB_PATH` (a leading `~` is expanded).
+ *   2. The canonical `STOA_HOME/stoa.db` (`~/.stoa`, where token/vapid.json
+ *      already live) — the safe zero-config default.
+ *   3. Back-compat: if no canonical DB exists yet but a legacy in-repo
+ *      `./stoa.db` does, keep using it so an upgrade never orphans existing data.
+ * Exported for tests.
+ */
+export function resolveDbPath(): string {
+  // An empty DB_PATH ("") is treated as unset. A relative DB_PATH is resolved
+  // from process.cwd() at startup (better-sqlite3's behavior); prefer absolute.
+  if (process.env.DB_PATH) return expandHome(process.env.DB_PATH);
+  const stoaHome = process.env.STOA_HOME || path.join(homeDir(), ".stoa");
+  const canonical = path.join(stoaHome, "stoa.db");
+  const legacy = path.join(process.cwd(), "stoa.db");
+  if (!fs.existsSync(canonical) && fs.existsSync(legacy)) return legacy;
+  return canonical;
+}
+
+const DB_PATH = resolveDbPath();
 const LOCK_PATH = DB_PATH + ".init-lock";
 
 // Simple file-based lock for initialization
 function withInitLock<T>(fn: () => T): T {
   const maxWait = 10000; // 10 seconds
   const start = Date.now();
+
+  // The DB now defaults to STOA_HOME, which may not exist yet on a fresh box —
+  // and the lock file is written into the same directory below. Ensure it exists.
+  try {
+    fs.mkdirSync(path.dirname(LOCK_PATH), { recursive: true });
+  } catch {}
 
   // Wait for lock to be available
   while (fs.existsSync(LOCK_PATH)) {
