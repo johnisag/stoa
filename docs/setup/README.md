@@ -12,7 +12,7 @@ curl -fsSL https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.
 
 The installer will:
 
-1. Download the `stoa` CLI to your PATH
+1. Put the `stoa` CLI on your PATH (symlink on macOS/Linux; best-effort `npm link` on Windows — may need Developer Mode)
 2. Check for prerequisites (Node.js 24+, git, tmux) and offer to install any missing ones
 3. Detect installed AI CLIs or prompt you to install one (Claude Code recommended)
 4. Clone the repository to `~/.stoa/repo`

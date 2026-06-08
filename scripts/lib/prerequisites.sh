@@ -273,11 +273,26 @@ install_git() {
             done
             ;;
         debian)
-            sudo apt-get update
+            sudo apt-get update || true
             sudo apt-get install -y git
             ;;
         redhat)
             sudo yum install -y git
+            ;;
+        linux)
+            if command -v apt-get &> /dev/null; then sudo apt-get update || true; sudo apt-get install -y git
+            elif command -v dnf &> /dev/null; then sudo dnf install -y git
+            elif command -v yum &> /dev/null; then sudo yum install -y git
+            elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm git
+            elif command -v zypper &> /dev/null; then sudo zypper install -y git
+            else
+                log_error "Could not auto-install git on this Linux distro. Install it manually, then re-run."
+                exit 1
+            fi
+            ;;
+        *)
+            log_error "Unsupported OS '$OS' for automatic git install. Install git manually, then re-run."
+            exit 1
             ;;
     esac
 }
@@ -306,11 +321,34 @@ install_tmux() {
             fi
             ;;
         debian)
-            sudo apt-get update
+            sudo apt-get update || true
             sudo apt-get install -y tmux
             ;;
         redhat)
             sudo yum install -y tmux
+            ;;
+        linux)
+            # Generic Linux (neither Debian- nor RedHat-family): try the common
+            # package managers rather than silently skipping the session backend.
+            # `apt-get update || true` so a transient index failure under `set -e`
+            # doesn't abort the whole install before the install step even runs.
+            if command -v apt-get &> /dev/null; then sudo apt-get update || true; sudo apt-get install -y tmux
+            elif command -v dnf &> /dev/null; then sudo dnf install -y tmux
+            elif command -v yum &> /dev/null; then sudo yum install -y tmux
+            elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm tmux
+            elif command -v zypper &> /dev/null; then sudo zypper install -y tmux
+            else
+                log_error "Could not auto-install tmux on this Linux distro."
+                log_error "Install it manually (e.g. 'sudo apt install tmux'), then re-run."
+                exit 1
+            fi
+            ;;
+        *)
+            # Never silently no-op: tmux is the macOS/Linux session backend, so a
+            # missing install means the first session fails to spawn.
+            log_error "Unsupported OS '$OS' for automatic tmux install."
+            log_error "Install tmux manually, then re-run 'stoa install'."
+            exit 1
             ;;
     esac
 }
@@ -379,11 +417,26 @@ install_ripgrep() {
             fi
             ;;
         debian)
-            sudo apt-get update
+            sudo apt-get update || true
             sudo apt-get install -y ripgrep
             ;;
         redhat)
             sudo yum install -y ripgrep
+            ;;
+        linux)
+            if command -v apt-get &> /dev/null; then sudo apt-get update || true; sudo apt-get install -y ripgrep
+            elif command -v dnf &> /dev/null; then sudo dnf install -y ripgrep
+            elif command -v yum &> /dev/null; then sudo yum install -y ripgrep
+            elif command -v pacman &> /dev/null; then sudo pacman -S --noconfirm ripgrep
+            elif command -v zypper &> /dev/null; then sudo zypper install -y ripgrep
+            else
+                log_warn "Could not auto-install system ripgrep; Stoa ships a bundled rg, so continuing."
+            fi
+            ;;
+        *)
+            # ripgrep is bundled via @vscode/ripgrep, so a system rg is OPTIONAL —
+            # warn rather than abort (unlike tmux/git which are required).
+            log_warn "Skipping system ripgrep on '$OS' (Stoa uses its bundled rg)."
             ;;
     esac
 }
