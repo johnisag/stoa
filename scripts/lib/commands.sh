@@ -43,7 +43,9 @@ cmd_install() {
 
     # Install dependencies
     log_info "Installing dependencies..."
-    npm install --legacy-peer-deps
+    # --include=dev: the build needs devDeps (next/tailwind/typescript); a shell
+    # with NODE_ENV=production would otherwise omit them and break the build.
+    npm install --include=dev --legacy-peer-deps
 
     # Build for production
     log_info "Building for production..."
@@ -315,7 +317,7 @@ cmd_update() {
     else
         log_info "Updated $before -> $after"
         set +e
-        npm install --legacy-peer-deps && npm run build
+        npm install --include=dev --legacy-peer-deps && npm run build
         local build_rc=$?
         set -e
         if [[ $build_rc -ne 0 ]]; then

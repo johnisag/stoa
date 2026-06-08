@@ -87,7 +87,9 @@ if (Test-Path $InstallDir) {
 Push-Location $InstallDir
 
 Write-Info "Installing dependencies..."
-& npm install --legacy-peer-deps
+# --include=dev: the build needs devDeps (next/tailwind/typescript); a shell with
+# NODE_ENV=production would otherwise omit them and break `npm run build`.
+& npm install --include=dev --legacy-peer-deps
 if (-not $?) { Pop-Location; Write-Err "npm install failed."; exit 1 }
 
 Write-Info "Building for production..."
