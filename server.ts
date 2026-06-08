@@ -1,3 +1,4 @@
+import "./lib/load-env-auto"; // MUST be first: applies .env before any env read
 import { createServer } from "http";
 import { parse } from "url";
 import { existsSync } from "fs";
@@ -668,6 +669,20 @@ app.prepare().then(() => {
     void reconcileOrphans()
       .then(() => reconcileTick())
       .catch((err) => console.error("dispatch startup reconcile failed:", err));
+    // Fail loudly on a port clash (a second Stoa, or a dev server) instead of
+    // letting an unhandled EADDRINUSE crash-loop under a keep-alive supervisor.
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(
+          `[stoa] Port ${port} is already in use — another Stoa (or a dev server) is running. Stop it first, then start again.`
+        );
+      } else {
+        // A throw inside an EventEmitter handler becomes an opaque
+        // uncaughtException; log the cause explicitly so the supervisor log says why.
+        console.error("[stoa] Fatal server error:", err);
+      }
+      process.exit(1);
+    });
     server.listen(port, () => {
       console.log(`> Stoa ready on http://${hostname}:${port}`);
       if (AUTH_ENABLED) {
