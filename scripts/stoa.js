@@ -288,7 +288,9 @@ function buildIsComplete(dir = REPO_DIR) {
 
 function cmdInstall() {
   info("Installing dependencies...");
-  runSync("npm", ["install", "--legacy-peer-deps"]);
+  // --include=dev: the build needs devDeps (next/tailwind/typescript). A shell
+  // with NODE_ENV=production would otherwise omit them and break `npm run build`.
+  runSync("npm", ["install", "--include=dev", "--legacy-peer-deps"]);
 
   info("Building for production...");
   runSync("npm", ["run", "build"]);
@@ -570,7 +572,11 @@ function cmdUpdate() {
   }
 
   info("Installing dependencies...");
-  step("npm install", "npm", ["install", "--legacy-peer-deps"]);
+  step("npm install", "npm", [
+    "install",
+    "--include=dev",
+    "--legacy-peer-deps",
+  ]);
 
   info("Rebuilding...");
   step("npm run build", "npm", ["run", "build"]);
