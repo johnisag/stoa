@@ -15,7 +15,7 @@ import {
   spawnSession,
   spawnShellSession,
   getSession,
-  killSession,
+  killSessionAndWait,
   renameSession,
   listSessions,
   type SpawnSpec,
@@ -78,7 +78,7 @@ export class LocalTransport implements PtyTransport {
     spawnSession(key, spec);
   }
   async kill(key: string): Promise<void> {
-    killSession(key);
+    await killSessionAndWait(key);
   }
   async rename(oldKey: string, newKey: string): Promise<void> {
     if (!renameSession(oldKey, newKey)) {

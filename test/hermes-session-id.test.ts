@@ -12,7 +12,9 @@ import {
 } from "@/lib/session-backend/pty/registry";
 import { statusDetector, HERMES_SESSION_ID_RE } from "@/lib/status-detector";
 
-afterEach(() => _resetRegistryForTests());
+afterEach(async () => {
+  await _resetRegistryForTests();
+});
 
 async function waitFor(fn: () => boolean | Promise<boolean>, ms = 6000) {
   const start = Date.now();

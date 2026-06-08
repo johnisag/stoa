@@ -18,7 +18,7 @@ import {
   spawnShellSession,
   getSession,
   hasSession,
-  killSession,
+  killSessionAndWait,
   renameSession,
   listSessions,
 } from "./registry";
@@ -58,7 +58,7 @@ function send(conn: Conn, msg: HostMessage) {
   conn.socket.write(encode(msg));
 }
 
-function handleMessage(conn: Conn, msg: ClientMessage) {
+async function handleMessage(conn: Conn, msg: ClientMessage) {
   switch (msg.t) {
     case "ping":
       send(conn, { t: "res", id: msg.id, ok: true });
@@ -144,7 +144,7 @@ function handleMessage(conn: Conn, msg: ClientMessage) {
     }
 
     case "kill":
-      killSession(msg.key);
+      await killSessionAndWait(msg.key);
       send(conn, { t: "res", id: msg.id, ok: true });
       break;
 
@@ -266,9 +266,22 @@ export function startHost(): Promise<boolean> {
       const conn: Conn = { socket, attached: new Map() };
       connections.add(socket);
       lastBusyAt = Date.now();
-      const decode = createDecoder<ClientMessage>((msg) =>
-        handleMessage(conn, msg)
-      );
+      let messageChain = Promise.resolve();
+      const decode = createDecoder<ClientMessage>((msg) => {
+        messageChain = messageChain.then(async () => {
+          try {
+            await handleMessage(conn, msg);
+          } catch (err) {
+            if ("id" in msg)
+              send(conn, {
+                t: "res",
+                id: msg.id,
+                ok: false,
+                error: String(err),
+              });
+          }
+        });
+      });
       // No setEncoding: the decoder reads raw Buffers so length-prefixed frames
       // reassemble byte-exact (multi-byte UTF-8 is never split mid-character).
       socket.on("data", decode);

@@ -150,6 +150,17 @@ export function killSession(key: string): void {
   }
 }
 
+export async function killSessionAndWait(
+  key: string,
+  timeoutMs?: number
+): Promise<void> {
+  const session = sessions.get(key);
+  if (session) {
+    await session.killAndWait(timeoutMs);
+    sessions.delete(key);
+  }
+}
+
 /** Returns true if the rename happened, false on a no-op (missing/collision). */
 export function renameSession(oldKey: string, newKey: string): boolean {
   if (oldKey === newKey) return true;
@@ -169,7 +180,9 @@ export function resolveCwd(cwd: string): string {
 }
 
 /** Exposed for tests/diagnostics. */
-export function _resetRegistryForTests(): void {
-  for (const session of sessions.values()) session.kill();
+export async function _resetRegistryForTests(): Promise<void> {
+  const live = [...sessions.values()];
+  for (const session of live) session.kill();
+  await Promise.all(live.map((session) => session.waitForExit()));
   sessions.clear();
 }

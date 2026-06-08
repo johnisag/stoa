@@ -72,7 +72,9 @@ describe("AttachSession — observer mode is read-only", () => {
 });
 
 describe("LocalTransport observer — no sizing contribution", () => {
-  afterEach(() => _resetRegistryForTests());
+  afterEach(async () => {
+    await _resetRegistryForTests();
+  });
 
   it("an observer never shrinks the pty, but a real client does", async () => {
     const t = new LocalTransport();

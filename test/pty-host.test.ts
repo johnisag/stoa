@@ -17,12 +17,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  _resetRegistryForTests();
+  await _resetRegistryForTests();
   await stopHost();
 });
 
-afterEach(() => {
-  _resetRegistryForTests();
+afterEach(async () => {
+  await _resetRegistryForTests();
 });
 
 async function waitFor(fn: () => boolean | Promise<boolean>, ms = 6000) {

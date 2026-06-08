@@ -102,7 +102,9 @@ function runContract(makeBackend: () => PtyBackend) {
 }
 
 describe("PtyBackend over LocalTransport (Tier 1)", () => {
-  afterEach(() => _resetRegistryForTests());
+  afterEach(async () => {
+    await _resetRegistryForTests();
+  });
   runContract(() => new PtyBackend(new LocalTransport()));
 });
 
@@ -111,10 +113,12 @@ describe("PtyBackend over HostTransport (Tier 2)", () => {
     expect(await startHost()).toBe(true);
   });
   afterAll(async () => {
-    _resetRegistryForTests();
+    await _resetRegistryForTests();
     await stopHost();
   });
-  afterEach(() => _resetRegistryForTests());
+  afterEach(async () => {
+    await _resetRegistryForTests();
+  });
   runContract(() => new PtyBackend(new HostTransport()));
 });
 
