@@ -357,9 +357,17 @@ export function runMigrations(db: Database.Database): void {
   for (const migration of migrations) {
     if (applied.has(migration.id)) continue;
 
-    try {
+    // Run the migration AND record it in one transaction so a multi-statement
+    // migration that fails partway (SQLITE_BUSY from the dev+install two-writer
+    // setup, disk full, killed process) rolls back atomically and re-runs
+    // cleanly next start — never leaving a half-applied schema recorded as done.
+    const applyOne = db.transaction(() => {
       migration.up(db);
-      const result = insertMigration.run(migration.id, migration.name);
+      return insertMigration.run(migration.id, migration.name);
+    });
+
+    try {
+      const result = applyOne();
       if (result.changes > 0) {
         console.log(`Migration ${migration.id}: ${migration.name} applied`);
       } else {
@@ -368,8 +376,10 @@ export function runMigrations(db: Database.Database): void {
         );
       }
     } catch (error) {
-      // Some migrations may fail if columns already exist (from old system or concurrent worker)
-      // Try to record as applied anyway to prevent re-running
+      // The transaction above rolled the failed migration back. If it failed only
+      // because its effect already exists (a pre-_migrations-era schema from the
+      // old system), record it as applied so it isn't retried. Any OTHER failure
+      // re-throws (left unrecorded) so it re-runs cleanly next start.
       const errorMsg = error instanceof Error ? error.message : String(error);
       if (
         errorMsg.includes("duplicate column") ||

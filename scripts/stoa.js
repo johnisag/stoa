@@ -309,6 +309,19 @@ function cmdInstall() {
   console.log("  stoa status    Show status and URL");
 }
 
+/** Rotate the log to .old once it grows past 10 MB (mirrors the bash CLI, so
+ * the single appended ~/.stoa/logs/stoa.log can't grow without bound). */
+function rotateLogIfLarge() {
+  try {
+    const MAX_BYTES = 10 * 1024 * 1024;
+    if (fs.existsSync(LOG_FILE) && fs.statSync(LOG_FILE).size > MAX_BYTES) {
+      fs.renameSync(LOG_FILE, LOG_FILE + ".old");
+    }
+  } catch {
+    /* best-effort: a rotation failure must not block startup */
+  }
+}
+
 /** start: spawn the production server detached in the background. */
 function cmdStart() {
   const running = getRunningPid();
@@ -320,6 +333,7 @@ function cmdStart() {
   info("Starting Stoa...");
   ensureDir(STOA_HOME);
   ensureDir(LOG_DIR);
+  rotateLogIfLarge();
 
   // Open the log file for append; the detached child writes stdout+stderr here.
   const out = fs.openSync(LOG_FILE, "a");
