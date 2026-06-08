@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Mirrors scripts/install.sh for Windows / PowerShell. Checks prerequisites
-    (Node 20+, Git), clones or updates the repo into %USERPROFILE%\.stoa\repo,
+    (Node 24+, Git), clones or updates the repo into %USERPROFILE%\.stoa\repo,
     installs npm dependencies, builds for production, and prints how to start.
 
     Designed to be run via:
@@ -31,7 +31,7 @@ Write-Host "Stoa Installer" -ForegroundColor White
 Write-Host ""
 
 # ---------------------------------------------------------------------------
-# Prerequisite: Node.js 20+
+# Prerequisite: Node.js 24+
 # ---------------------------------------------------------------------------
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
@@ -41,11 +41,11 @@ if (-not $nodeCmd) {
     exit 1
 }
 
-# `node -v` prints e.g. "v20.11.1"; strip the leading "v" and take the major.
+# `node -v` prints e.g. "v24.0.0"; strip the leading "v" and take the major.
 $nodeVersionRaw = (& node -v).Trim()
 $nodeMajor = [int]($nodeVersionRaw.TrimStart("v").Split(".")[0])
-if ($nodeMajor -lt 20) {
-    Write-Err "Node.js 20+ is required (found $nodeVersionRaw)."
+if ($nodeMajor -lt 24) {
+    Write-Err "Node.js 24+ is required (found $nodeVersionRaw)."
     Write-Host "    Upgrade with:  winget install OpenJS.NodeJS.LTS"
     exit 1
 }
