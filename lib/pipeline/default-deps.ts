@@ -17,7 +17,7 @@
  * see docs/ROADMAP.md.
  */
 
-import { spawnWorker } from "../orchestration";
+import { spawnWorker, killWorker } from "../orchestration";
 import { statusDetector } from "../status-detector";
 import { getProvider } from "../providers";
 import { sessionKey } from "../providers/registry";
@@ -90,5 +90,31 @@ export function defaultExecutorDeps(conductorSessionId: string): ExecutorDeps {
 
     now: () => Date.now(),
     sleep: (ms: number) => new Promise((r) => setTimeout(r, ms)),
+
+    async terminate(
+      sessionId: string,
+      opts: { cleanupWorktree: boolean; succeeded: boolean }
+    ): Promise<void> {
+      // Tear down the worker once its run is terminal: always kill the pty/agent
+      // process (pure leak otherwise); remove the worktree only when asked (the
+      // executor keeps succeeded steps' worktrees for inspect/merge). Record the
+      // worker's final DB status truthfully (completed for a succeeded step, else
+      // failed) so a reaped-but-successful step isn't mislabeled "failed". Log on
+      // failure so a silent leak is visible (killWorker itself swallows inner
+      // errors, so this catch is belt-and-suspenders for an unexpected throw).
+      try {
+        await killWorker(
+          sessionId,
+          opts.cleanupWorktree,
+          opts.succeeded ? "completed" : "failed"
+        );
+      } catch (err) {
+        console.warn(
+          `pipeline: failed to terminate worker ${sessionId} ` +
+            `(cleanupWorktree=${opts.cleanupWorktree}):`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    },
   };
 }
