@@ -75,7 +75,12 @@ const firstQueryValue = (
 // Support: npm run dev -- -p 3012
 const pFlagIndex = process.argv.indexOf("-p");
 const portArg = pFlagIndex !== -1 ? process.argv[pFlagIndex + 1] : undefined;
-const port = parseInt(portArg || process.env.PORT || "3011", 10);
+// STOA_PORT is also honored so a direct `tsx server.ts` (no -p, no PORT) picks up
+// the documented knob from .env identically to the CLI, which maps it to PORT.
+const port = parseInt(
+  portArg || process.env.PORT || process.env.STOA_PORT || "3011",
+  10
+);
 
 // Production preflight: an interrupted `next build` can leave an incomplete
 // .next (missing prerender-manifest.json); app.prepare() then throws an opaque

@@ -502,3 +502,15 @@ Lower-profile than the feature horizons but real.
 - **Editor lightness (large bet)** — dropping `@monaco-editor/react` + `monaco-editor`
   and folding git-diff onto `@codemirror/merge` is the biggest bundle win but
   L-effort with real diff/inline-staging UX risk; pursue after the CodeMirror dedup.
+
+## Known edges (deferred from the hardening ultra-review)
+
+- **Migration legacy-overlap edge (narrow).** Migrations now run inside a
+  transaction (atomic — good). One theoretical edge remains: upgrading a
+  **pre-`_migrations`-era** DB (very old installs) where a single migration mixes
+  a brand-new column with one that already exists — the whole migration rolls
+  back yet is recorded applied, leaving the new sibling column unadded. It does
+  NOT affect fresh installs or any DB created after `_migrations` existed.
+  Proper fix (deferred — migration-sensitive, not worth the regression risk for a
+  near-extinct case): make each migration idempotent (a `PRAGMA table_info` guard,
+  as migration #10 does) or split multi-`ALTER` migrations to one column per id.

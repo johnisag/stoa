@@ -14,7 +14,8 @@ REPO_URL="https://github.com/johnisag/stoa.git"
 # Derived paths
 REPO_DIR="$STOA_HOME/repo"
 PID_FILE="$STOA_HOME/stoa.pid"
-LOG_FILE="$STOA_HOME/stoa.log"
+# Logs live under ~/.stoa/logs/ to match the node CLI and docs/setup.
+LOG_FILE="$STOA_HOME/logs/stoa.log"
 
 # Detect OS
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

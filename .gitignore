@@ -48,6 +48,7 @@ coverage/
 stoa.db
 stoa.db-wal
 stoa.db-shm
+stoa.db.init-lock
 # legacy name (pre-Stoa rename); kept ignored so old local DBs don't get committed
 agent-os.db
 agent-os.db-wal
