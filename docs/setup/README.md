@@ -41,17 +41,15 @@ npm start
 
 After installation, use the `stoa` command to manage the server:
 
-| Command          | Description                     |
-| ---------------- | ------------------------------- |
-| `stoa start`     | Start the server in background  |
-| `stoa stop`      | Stop the server                 |
-| `stoa restart`   | Restart the server              |
-| `stoa status`    | Show status, PID, and URLs      |
-| `stoa logs`      | Tail server logs                |
-| `stoa update`    | Pull latest version and rebuild |
-| `stoa enable`    | Enable auto-start on boot       |
-| `stoa disable`   | Disable auto-start              |
-| `stoa uninstall` | Remove Stoa completely          |
+| Command        | Description                            |
+| -------------- | -------------------------------------- |
+| `stoa start`   | Start the server in background         |
+| `stoa stop`    | Stop the server                        |
+| `stoa restart` | Restart the server                     |
+| `stoa status`  | Show status, PID, and URLs             |
+| `stoa logs`    | Tail server logs                       |
+| `stoa update`  | Pull latest version and rebuild        |
+| `stoa run`     | Run in the foreground (Ctrl-C to stop) |
 
 ## Prerequisites
 
@@ -102,35 +100,9 @@ STOA_PORT=8080 stoa start
 export STOA_PORT=8080
 ```
 
-## Auto-Start on Boot
+## After a reboot
 
-### macOS (launchd)
-
-```bash
-stoa enable
-```
-
-This creates a Launch Agent at `~/Library/LaunchAgents/com.stoa.plist`.
-
-To disable:
-
-```bash
-stoa disable
-```
-
-### Linux (systemd)
-
-```bash
-stoa enable
-```
-
-This creates a user service at `~/.config/systemd/user/stoa.service`.
-
-To disable:
-
-```bash
-stoa disable
-```
+There is no auto-start service — run `stoa start` again after a reboot or logout.
 
 ## Mobile Access with Tailscale
 
@@ -231,16 +203,7 @@ stoa install
 ## Uninstalling
 
 ```bash
-stoa uninstall
-```
-
-This removes:
-
-- The `~/.stoa` directory
-- Auto-start configuration (launchd/systemd)
-
-The `stoa` CLI script itself is not removed. Delete it manually:
-
-```bash
-rm $(which stoa)
+stoa stop                 # stop the server if running
+npm rm -g @johnisag/stoa  # remove the `stoa` command (if linked via `npm link`)
+rm -rf ~/.stoa            # remove the install AND its data (this deletes your DB)
 ```
