@@ -17,19 +17,26 @@ import {
   afterEach,
   vi,
 } from "vitest";
+import fs from "fs";
+import net from "net";
 import {
   startHost,
   stopHost,
+  nextShutdownCheck,
   installProcessGuards,
   uninstallProcessGuards,
 } from "@/lib/session-backend/pty/host";
-import { HostClient } from "@/lib/session-backend/pty/host-client";
+import {
+  HostClient,
+  buildPtyHostArgs,
+} from "@/lib/session-backend/pty/host-client";
 import { _resetRegistryForTests } from "@/lib/session-backend/pty/registry";
 import {
   getSessionBackend,
   resetSessionBackend,
   usePtyHost,
 } from "@/lib/session-backend";
+import { hostAddress } from "@/lib/session-backend/pty/protocol";
 
 // The host runs in-process here; each HostClient connects over the real socket,
 // so this exercises the true IPC path. A fresh client simulates the web server
@@ -59,6 +66,74 @@ async function waitFor(fn: () => boolean | Promise<boolean>, ms = 6000) {
 }
 
 describe("pty-host daemon (Tier 2)", () => {
+  it("launches the daemon as one node process via the tsx loader", () => {
+    const args = buildPtyHostArgs("C:\\stoa");
+    expect(args).toContain("--require");
+    expect(args).toContain("--import");
+    expect(args.some((a) => a.endsWith("cli.mjs"))).toBe(false);
+    expect(args.at(-1)).toMatch(/scripts[\\/]pty-host\.ts$/);
+  });
+
+  it("keeps live sessions across short disconnects but reaps orphaned daemons later", () => {
+    const base = {
+      connectedClients: 0,
+      liveSessions: 1,
+      now: 1_000,
+      lastBusyAt: 500,
+      orphanedSince: null,
+      idleShutdownMs: 1_000,
+      orphanShutdownMs: 10_000,
+    };
+    const first = nextShutdownCheck(base);
+    expect(first.action).toBe("none");
+    expect(first.orphanedSince).toBe(1_000);
+
+    expect(
+      nextShutdownCheck({
+        ...base,
+        now: 11_000,
+        orphanedSince: first.orphanedSince,
+      }).action
+    ).toBe("none");
+    expect(
+      nextShutdownCheck({
+        ...base,
+        now: 11_001,
+        orphanedSince: first.orphanedSince,
+      }).action
+    ).toBe("orphan");
+
+    expect(
+      nextShutdownCheck({
+        ...base,
+        connectedClients: 1,
+        now: 20_000,
+        orphanedSince: first.orphanedSince,
+      })
+    ).toMatchObject({ action: "none", orphanedSince: null });
+  });
+
+  it("does not replace a live POSIX daemon socket", async () => {
+    if (process.platform === "win32") {
+      expect(true).toBe(true);
+      return;
+    }
+
+    await stopHost();
+    const address = hostAddress();
+    fs.rmSync(address, { force: true });
+
+    const external = net.createServer((socket) => socket.end());
+    await new Promise<void>((resolve) => external.listen(address, resolve));
+    try {
+      await expect(startHost()).resolves.toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => external.close(() => resolve()));
+      fs.rmSync(address, { force: true });
+      await expect(startHost()).resolves.toBe(true);
+    }
+  });
+
   it("spawns, streams output, and serves a capture over IPC", async () => {
     const client = new HostClient();
     const marker = "HOST_IPC_OK_91";

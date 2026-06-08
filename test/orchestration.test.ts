@@ -97,8 +97,10 @@ function addSession(over: Partial<Record<string, unknown>> = {}): string {
 }
 
 beforeEach(() => {
-  backendCreate.mockClear();
-  backendKill.mockClear();
+  backendCreate.mockReset();
+  backendCreate.mockImplementation(async () => {});
+  backendKill.mockReset();
+  backendKill.mockImplementation(async () => {});
   db().prepare("DELETE FROM sessions").run();
 });
 
@@ -129,6 +131,24 @@ describe("spawnWorker — conductor FK guard", () => {
     const workers = await getWorkers(conductor);
     expect(workers).toHaveLength(1);
     expect(workers[0].task).toBe("implement the feature");
+  });
+
+  it("kills a partial backend session when create fails", async () => {
+    backendCreate.mockRejectedValueOnce(new Error("spawn failed"));
+    const conductor = addSession();
+    const worker = await spawnWorker({
+      conductorSessionId: conductor,
+      task: "leaky task",
+      workingDirectory: "/repo",
+      useWorktree: false,
+    });
+
+    expect(backendKill).toHaveBeenCalledTimes(1);
+    expect(backendKill).toHaveBeenCalledWith(worker.tmux_name);
+    const row = db()
+      .prepare("SELECT worker_status FROM sessions WHERE id = ?")
+      .get(worker.id) as { worker_status: string };
+    expect(row.worker_status).toBe("failed");
   });
 });
 

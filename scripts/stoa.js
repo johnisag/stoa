@@ -13,6 +13,7 @@
 "use strict";
 
 const { spawn, spawnSync } = require("child_process");
+const { randomBytes } = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -23,6 +24,10 @@ const { pathToFileURL } = require("url");
 // ---------------------------------------------------------------------------
 
 const IS_WINDOWS = process.platform === "win32";
+
+function hiddenWindowOption(platform = process.platform) {
+  return platform === "win32" ? { windowsHide: true } : {};
+}
 
 // ---------------------------------------------------------------------------
 // .env loader (dependency-free)
@@ -121,12 +126,15 @@ function serverEnv() {
     if (k.toUpperCase() !== "PORT") env[k] = v;
   }
   env.PORT = PORT;
+  env.STOA_SHUTDOWN_TOKEN = ensureShutdownToken();
   return env;
 }
 
 // ~/.stoa is the Stoa home; everything (pid, logs) lives under it.
 const STOA_HOME = process.env.STOA_HOME || path.join(os.homedir(), ".stoa");
 const PID_FILE = path.join(STOA_HOME, "stoa.pid");
+const HOST_PID_FILE = path.join(STOA_HOME, "pty-host.pid");
+const SHUTDOWN_TOKEN_FILE = path.join(STOA_HOME, "stoa.shutdown-token");
 const LOG_DIR = path.join(STOA_HOME, "logs");
 const LOG_FILE = path.join(LOG_DIR, "stoa.log");
 
@@ -199,6 +207,245 @@ function clearPidFile() {
   }
 }
 
+function ensureShutdownToken() {
+  try {
+    const existing = fs.readFileSync(SHUTDOWN_TOKEN_FILE, "utf8").trim();
+    if (/^[a-f0-9]{64}$/i.test(existing)) return existing;
+  } catch {
+    /* create below */
+  }
+
+  const token = randomBytes(32).toString("hex");
+  try {
+    ensureDir(STOA_HOME);
+    fs.writeFileSync(SHUTDOWN_TOKEN_FILE, token, { mode: 0o600 });
+  } catch {
+    // The HTTP shutdown path is best-effort; signal/taskkill fallback remains.
+  }
+  return token;
+}
+
+function readShutdownToken() {
+  try {
+    const token = fs.readFileSync(SHUTDOWN_TOKEN_FILE, "utf8").trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
+function ptyHostAddress() {
+  const name = process.env.STOA_PTY_HOST_NAME || "stoa-pty-host";
+  if (IS_WINDOWS) return `\\\\.\\pipe\\${name}`;
+  return path.join(os.tmpdir(), `${name}.sock`);
+}
+
+function requestServerShutdown(stopDevServers) {
+  const token = readShutdownToken();
+  if (!token) return false;
+
+  const script = `
+const http = require("http");
+const url = new URL(process.argv[1]);
+const token = process.argv[2];
+const req = http.request({
+  hostname: url.hostname,
+  port: url.port,
+  path: url.pathname + url.search,
+  method: "POST",
+  headers: { "x-stoa-shutdown-token": token },
+}, (res) => {
+  res.resume();
+  res.on("end", () => process.exit(res.statusCode === 200 ? 0 : 1));
+});
+const done = (code) => { try { req.destroy(); } catch {} process.exit(code); };
+req.setTimeout(2500, () => done(1));
+req.once("error", () => done(1));
+req.end();
+`;
+
+  try {
+    return (
+      spawnSync(
+        process.execPath,
+        [
+          "-e",
+          script,
+          `http://127.0.0.1:${PORT}/__stoa/shutdown?dev=${
+            stopDevServers ? "1" : "0"
+          }`,
+          token,
+        ],
+        {
+          timeout: 4000,
+          stdio: "ignore",
+          ...hiddenWindowOption(),
+        }
+      ).status === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+function normalizePid(value) {
+  const pid = typeof value === "number" ? value : parseInt(String(value), 10);
+  return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function requestPtyHostControl(type) {
+  const script = `
+const net = require("net");
+const address = process.argv[1];
+const type = process.argv[2];
+const body = Buffer.from(JSON.stringify({ t: type, id: 1 }), "utf8");
+const payload = Buffer.allocUnsafe(1 + body.length);
+payload[0] = 1;
+body.copy(payload, 1);
+const frame = Buffer.allocUnsafe(4 + payload.length);
+frame.writeUInt32BE(payload.length, 0);
+payload.copy(frame, 4);
+const s = net.connect(address);
+let buf = Buffer.alloc(0);
+const done = (code) => { try { s.destroy(); } catch {} process.exit(code); };
+s.setTimeout(1500, () => done(1));
+s.once("error", () => done(1));
+s.once("connect", () => s.write(frame));
+s.on("data", (chunk) => {
+  buf = Buffer.concat([buf, chunk]);
+  if (buf.length < 4) return;
+  const len = buf.readUInt32BE(0);
+  if (buf.length < 4 + len) return;
+  const payload = buf.subarray(4, 4 + len);
+  if (payload[0] !== 1) done(1);
+  try {
+    const msg = JSON.parse(payload.subarray(1).toString("utf8"));
+    if (msg.t !== "res" || msg.id !== 1 || !msg.ok) done(1);
+    process.stdout.write(JSON.stringify(msg.value || {}));
+    done(0);
+  } catch {
+    done(1);
+  }
+});
+`;
+  try {
+    const res = spawnSync(
+      process.execPath,
+      ["-e", script, ptyHostAddress(), type],
+      {
+        timeout: 3000,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        ...hiddenWindowOption(),
+      }
+    );
+    if (res.status !== 0) return { ok: false, pid: null };
+    const value = JSON.parse((res.stdout || "{}").trim() || "{}");
+    return { ok: true, pid: normalizePid(value.pid) };
+  } catch {
+    return { ok: false, pid: null };
+  }
+}
+
+function readPtyHostPid() {
+  try {
+    const raw = fs.readFileSync(HOST_PID_FILE, "utf8").trim();
+    const pid = parseInt(raw, 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPtyHostPidFile() {
+  try {
+    fs.unlinkSync(HOST_PID_FILE);
+  } catch {
+    /* ignore */
+  }
+}
+
+function signalProcessTree(pid, signal) {
+  if (!pid) return false;
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    try {
+      process.kill(pid, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function killProcessTree(pid) {
+  if (!pid) return false;
+  if (IS_WINDOWS) {
+    const res = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      ...hiddenWindowOption(),
+    });
+    return res.status === 0;
+  }
+  return signalProcessTree(pid, "SIGKILL");
+}
+
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function waitForExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return true;
+    sleepMs(100);
+  }
+  return !isAlive(pid);
+}
+
+function stopPtyHost() {
+  const shutdown = requestPtyHostControl("shutdown");
+  const filePid = readPtyHostPid();
+
+  if (!shutdown.ok) {
+    if (filePid && !isAlive(filePid)) clearPtyHostPidFile();
+    return false;
+  }
+
+  const pid = shutdown.pid;
+  if (pid) waitForExit(pid, 2500);
+  if (pid && isAlive(pid)) killProcessTree(pid);
+
+  const stopped = !pid || !isAlive(pid);
+  if (stopped) clearPtyHostPidFile();
+  return stopped;
+}
+
+function getPtyHostStatus() {
+  const ping = requestPtyHostControl("ping");
+  if (ping.ok) {
+    return { state: "running", pid: ping.pid || readPtyHostPid() };
+  }
+
+  const filePid = readPtyHostPid();
+  if (filePid && isAlive(filePid)) {
+    return { state: "unknown", pid: filePid };
+  }
+  if (filePid) clearPtyHostPidFile();
+  return { state: "stopped", pid: null };
+}
+
+function printPreservedDaemonNote() {
+  const host = getPtyHostStatus();
+  if (host.state === "running" || host.state === "unknown") {
+    console.log(
+      "  Terminal daemon kept running to preserve sessions; run 'stoa stop' to restart it."
+    );
+  }
+}
+
 // ── persisted port (~/.stoa/stoa.port) ──
 // Records the port the server was last started on so a later `stoa update` /
 // restart re-applies it even if it was set via a shell env var (not .env). These
@@ -255,6 +502,7 @@ function runSync(cmd, args, { cwd = REPO_DIR, allowFail = false, env } = {}) {
     stdio: "inherit",
     shell: SPAWN_SHELL,
     ...(env ? { env } : {}),
+    ...hiddenWindowOption(),
   });
   if (result.error) {
     error(`Failed to run "${cmd}": ${result.error.message}`);
@@ -363,7 +611,7 @@ function cmdStart() {
         cwd: REPO_DIR,
         detached: true,
         stdio: ["ignore", out, err],
-        windowsHide: true,
+        ...hiddenWindowOption(),
         env: { ...serverEnv(), NODE_ENV: "production" },
       }
     );
@@ -395,39 +643,38 @@ function cmdStart() {
   console.log("Run 'stoa logs' to view logs");
 }
 
-/** stop: kill the running server cross-platform and clean up the pid file. */
-function cmdStop() {
+/** stop: shut down the running server cross-platform and clean up the pid file. */
+function cmdStop({ stopHost = true, stopDevServers = true } = {}) {
   const pid = getRunningPid();
   if (!pid) {
     warn("Stoa is not running");
     clearPidFile();
+    if (stopHost && stopPtyHost()) info("pty-host daemon stopped");
     return;
   }
 
   info(`Stopping Stoa (PID: ${pid})...`);
 
-  if (IS_WINDOWS) {
-    // /T kills the process tree (npm -> tsx -> node); /F forces termination.
-    const res = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      stdio: "ignore",
-    });
-    if (res.status !== 0) {
-      warn("taskkill reported a non-zero exit; process may already be gone");
+  const graceful = requestServerShutdown(stopDevServers);
+  if (graceful) waitForExit(pid, 10_000);
+
+  if (isAlive(pid)) {
+    warn(
+      graceful
+        ? "Graceful shutdown timed out; using process-tree fallback"
+        : "Graceful shutdown request failed; using process-tree fallback"
+    );
+    if (!IS_WINDOWS) {
+      signalProcessTree(pid, "SIGTERM");
+      waitForExit(pid, 3000);
     }
-  } else {
-    // Try a graceful SIGTERM first, then SIGKILL if still alive.
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      /* already gone */
+  }
+
+  if (isAlive(pid)) {
+    if (!killProcessTree(pid)) {
+      warn("Process-tree kill reported a non-zero exit; process may be gone");
     }
-    if (isAlive(pid)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }
+    waitForExit(pid, 3000);
   }
 
   // Confirm it actually died before clearing the pid file. If the kill failed
@@ -444,18 +691,21 @@ function cmdStop() {
   }
 
   clearPidFile();
+  if (stopHost && stopPtyHost()) info("pty-host daemon stopped");
   info("Stoa stopped");
 }
 
 /** restart: stop then start. */
 function cmdRestart() {
-  cmdStop();
+  cmdStop({ stopHost: false, stopDevServers: false });
+  printPreservedDaemonNote();
   cmdStart();
 }
 
 /** status: report running state and URL. */
 function cmdStatus() {
   const pid = getRunningPid();
+  const host = getPtyHostStatus();
   console.log("");
   if (pid) {
     console.log(`  Status:  Running (PID: ${pid})`);
@@ -466,6 +716,15 @@ function cmdStatus() {
   } else {
     console.log("  Status:  Stopped");
     console.log(`  Install: ${REPO_DIR}`);
+  }
+  if (host.state === "running") {
+    console.log(`  Pty:     Running${host.pid ? ` (PID: ${host.pid})` : ""}`);
+  } else if (host.state === "unknown") {
+    console.log(`  Pty:     PID file only (PID: ${host.pid})`);
+  } else {
+    console.log("  Pty:     Stopped");
+  }
+  if (!pid) {
     console.log("");
     console.log("  Run 'stoa start' to start the server");
   }
@@ -489,7 +748,11 @@ function openBrowser(url) {
     args = [url];
   }
 
-  const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+  const child = spawn(cmd, args, {
+    stdio: "ignore",
+    detached: true,
+    ...hiddenWindowOption(),
+  });
   child.on("error", () => {
     warn(`Could not open a browser. Open manually: ${url}`);
   });
@@ -536,6 +799,7 @@ function gitCapture(args) {
     cwd: REPO_DIR,
     shell: SPAWN_SHELL,
     encoding: "utf8",
+    ...hiddenWindowOption(),
   });
   return r.status === 0 ? (r.stdout || "").trim() : null;
 }
@@ -582,7 +846,10 @@ function isPortListening(port) {
   const probe = `const net=require("net");const s=net.connect(${Number(port)},"127.0.0.1");s.on("connect",()=>{s.destroy();process.exit(0)});s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),700);`;
   try {
     return (
-      spawnSync(process.execPath, ["-e", probe], { timeout: 3000 }).status === 0
+      spawnSync(process.execPath, ["-e", probe], {
+        timeout: 3000,
+        ...hiddenWindowOption(),
+      }).status === 0
     );
   } catch {
     // Fail-open: if the probe itself can't run (e.g. sandboxed), assume the port
@@ -648,7 +915,10 @@ function cmdUpdate() {
     process.exit(1);
   }
 
-  if (wasRunning) cmdStop();
+  if (wasRunning) {
+    cmdStop({ stopHost: false, stopDevServers: false });
+    printPreservedDaemonNote();
+  }
 
   const origin = gitCapture(["remote", "get-url", "origin"]) || "origin";
   info(`Updating from ${origin}`);
@@ -795,9 +1065,11 @@ function cmdHelp() {
   console.log("  install     Install dependencies and build");
   console.log("  run         Start server (foreground) and open in browser");
   console.log("  start       Start the server in the background");
-  console.log("  stop        Stop the server");
-  console.log("  restart     Restart the server");
-  console.log("  status      Show server status and URL");
+  console.log(
+    "  stop        Stop Stoa, terminal sessions, and managed dev servers"
+  );
+  console.log("  restart     Restart the web server");
+  console.log("  status      Show server and terminal-daemon status");
   console.log("  logs        Tail server logs");
   console.log("  update      Update to the latest version");
   console.log("");
@@ -863,6 +1135,7 @@ module.exports = {
   PORT,
   parseEnvFile,
   loadEnvFile,
+  hiddenWindowOption,
   blockingDirty,
   readPortFile,
   writePortFile,

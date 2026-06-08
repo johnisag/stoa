@@ -178,13 +178,14 @@ async function spawnInWorktree(
   onSpawn: (sessionId: string) => void
 ): Promise<string | null> {
   if (!d.worktree_path) return null;
+  let tmuxName: string | null = null;
   try {
     const db = getDb();
     const provider = getProvider(repo.agent_type);
     const model = resolveModelForAgent(repo.agent_type, undefined);
     const cwd = expandHome(d.worktree_path);
     const sessionId = randomUUID();
-    const tmuxName = sessionKey({
+    tmuxName = sessionKey({
       kind: "agent",
       provider: provider.id,
       id: sessionId,
@@ -231,6 +232,13 @@ async function spawnInWorktree(
       `spawn (${sessionName}) failed for ${repo.repo_slug}#${d.issue_number}:`,
       err
     );
+    if (tmuxName) {
+      try {
+        await getSessionBackend().kill(tmuxName);
+      } catch (cleanupErr) {
+        console.error(`spawn (${sessionName}) cleanup failed:`, cleanupErr);
+      }
+    }
     return null;
   }
 }

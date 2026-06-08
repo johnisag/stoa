@@ -279,6 +279,11 @@ export async function spawnWorker(
     queries.updateWorkerStatus(db).run("running", sessionId);
   } catch (error) {
     console.error("Failed to start worker session:", error);
+    try {
+      await backend.kill(tmuxSessionName);
+    } catch (killError) {
+      console.error("Failed to clean up partial worker session:", killError);
+    }
     queries.updateWorkerStatus(db).run("failed", sessionId);
   }
 

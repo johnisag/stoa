@@ -17,8 +17,10 @@
 import net from "net";
 import { spawn } from "child_process";
 import path from "path";
+import { pathToFileURL } from "url";
 import {
   hostAddress,
+  hostPidFile,
   encode,
   createDecoder,
   type ClientMessage,
@@ -45,6 +47,17 @@ export interface AttachResult {
 const CONNECT_ATTEMPTS = 40;
 const CONNECT_RETRY_MS = 100;
 const REQUEST_TIMEOUT_MS = 10_000;
+
+export function buildPtyHostArgs(root: string): string[] {
+  const tsxDist = path.join(root, "node_modules", "tsx", "dist");
+  return [
+    "--require",
+    path.join(tsxDist, "preflight.cjs"),
+    "--import",
+    pathToFileURL(path.join(tsxDist, "loader.mjs")).href,
+    path.join(root, "scripts", "pty-host.ts"),
+  ];
+}
 
 export class HostClient {
   private socket: net.Socket | null = null;
@@ -106,14 +119,16 @@ export class HostClient {
     if (this.spawnedThisCycle) return;
     this.spawnedThisCycle = true;
     const root = path.join(__dirname, "..", "..", "..");
-    const script = path.join(root, "scripts", "pty-host.ts");
-    // Run through the tsx CLI under the current node binary. This avoids the
-    // tsx .cmd shim on Windows and the --import named-export resolution issue.
-    const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
-    const child = spawn(process.execPath, [tsxCli, script], {
+    const child = spawn(process.execPath, buildPtyHostArgs(root), {
+      cwd: root,
       detached: true,
       stdio: "ignore",
       windowsHide: true,
+      env: {
+        ...process.env,
+        STOA_PTY_HOST_PID_FILE:
+          process.env.STOA_PTY_HOST_PID_FILE || hostPidFile(),
+      },
     });
     child.unref();
   }
@@ -358,6 +373,11 @@ export class HostClient {
 
   async kill(key: string): Promise<void> {
     await this.request<void>({ t: "kill", key });
+  }
+
+  async shutdown(): Promise<void> {
+    await this.request<void>({ t: "shutdown" });
+    this.close();
   }
 
   async rename(oldKey: string, newKey: string): Promise<void> {
