@@ -64,15 +64,33 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        id: setup-node
         with:
           node-version: 20
           cache: npm
 
+      # Cache the installed node_modules (including the built better-sqlite3 /
+      # node-pty native binaries) keyed by the lockfile + resolved Node version, so
+      # the flaky Windows native BUILD is skipped whenever the cache hits (the common
+      # case: a PR that doesn't touch dependencies). Lockfile changes — e.g. a
+      # dependabot bump — miss the cache and still build; the retry below is the
+      # backstop for that case. The Node version is in the key because the cached
+      # native binaries are ABI-bound to it (a future node-version bump must not
+      # restore a stale, mismatched node_modules).
+      - name: Cache node_modules
+        id: node-modules-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node${{ steps.setup-node.outputs.node-version }}-modules-${{ hashFiles('package-lock.json') }}
+
       - name: Install dependencies
-        # Native modules (better-sqlite3 / node-pty) intermittently fail to build on
-        # the Windows runner: the prebuilt-binary download flakes, forcing a source
-        # build whose node-gyp can't find VS (ERR_CHILD_PROCESS_STDIO_MAXBUFFER). It's
-        # transient (main builds fine), so retry a few times before failing the job.
+        # Skipped entirely on a cache hit (node_modules restored). Only runs on a
+        # dependency change / cold cache, where the native build happens — so wrap it
+        # in a retry: better-sqlite3's prebuilt-binary download flakes on the Windows
+        # runner, forcing a source build whose node-gyp can't find VS
+        # (ERR_CHILD_PROCESS_STDIO_MAXBUFFER). Retry a few times before failing.
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           for attempt in 1 2 3 4; do
