@@ -36,12 +36,7 @@ fi
 if [[ -d "$INSTALL_DIR" ]]; then
     log_info "Updating existing installation..."
     cd "$INSTALL_DIR"
-    # Pin to main with guarded steps (mirror install.ps1 / `stoa update`) so a
-    # diverged/off-main checkout fails with an actionable message, not a raw git
-    # error aborting under set -e.
-    git fetch origin --tags || { log_error "git fetch failed."; exit 1; }
-    git checkout main || { log_error "git checkout main failed."; exit 1; }
-    git pull --ff-only origin main || { log_error "git pull failed (local main may have diverged — move/remove colliding untracked files, or reclone ~/.stoa/repo)."; exit 1; }
+    git pull --ff-only
 else
     log_info "Downloading Stoa..."
     mkdir -p "$(dirname "$INSTALL_DIR")"

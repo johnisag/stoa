@@ -34,7 +34,7 @@ npm run dev  # http://localhost:3011
 
 Stoa runs natively on Windows — no WSL or tmux required.
 
-Requires Node.js 24+ and Git. Install them via [winget](https://learn.microsoft.com/windows/package-manager/winget/) if needed:
+Requires Node.js 20+ and Git. Install them via [winget](https://learn.microsoft.com/windows/package-manager/winget/) if needed:
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
@@ -67,7 +67,7 @@ On Windows the native pty backend is selected automatically (no tmux/WSL needed)
 
 ### Prerequisites
 
-- Node.js 24+
+- Node.js 20+
 - tmux (macOS/Linux only — Windows uses the native pty backend)
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (for code search - auto-installed by installer script, or run `stoa update`)
 - At least one AI CLI: [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), or Hermes
@@ -117,52 +117,6 @@ Stops the server (if running), pulls the latest `main`, reinstalls dependencies,
 rebuilds, and restarts. It pins to `main`, and if anything fails it restarts the
 existing version — so a bad update never leaves the server down.
 
-> **Heads-up:** `stoa update` refuses to run if the install tree has uncommitted
-> changes (it won't clobber your edits). Keep your local config in `.env` (which
-> is gitignored) rather than editing tracked files, and updates stay frictionless.
-
-## Configuration
-
-Stoa reads configuration from the environment, and from a gitignored `.env` file
-in the repo root (copy `.env.example` to `.env` to start):
-
-```bash
-cp .env.example .env   # then edit
-```
-
-| Variable    | Default | Purpose                                                   |
-| ----------- | ------- | --------------------------------------------------------- |
-| `STOA_PORT` | `3011`  | Port the server listens on (and the URL the CLI reports). |
-| `PORT`      | `3011`  | Same; `STOA_PORT` takes precedence if both are set.       |
-
-A value already exported in your shell **overrides** the `.env` file, so
-`STOA_PORT=4000 stoa start` is a one-off override. Set it once in `.env` and the
-CLI keeps the displayed and listening port in sync across `start`, `status`, and
-the post-`update` restart. (Note: `#` only starts a comment at the **start** of a
-line in `.env`; inline comments are not stripped.)
-
-## Local development & dogfooding
-
-Run your own always-current instance on a custom port:
-
-```bash
-git clone https://github.com/johnisag/stoa && cd stoa
-npm install --legacy-peer-deps
-npm link                       # puts `stoa` on your PATH
-printf 'STOA_PORT=3022\n' > .env
-npm run build
-stoa start                     # serves on http://localhost:3022
-```
-
-Then, to stay current as the project evolves:
-
-```bash
-stoa update                    # pulls main, rebuilds, restarts — still on 3022
-```
-
-Because `.env` is gitignored, your port (and any other local config) survives
-every update untouched.
-
 ## Mobile Access
 
 Use [Tailscale](https://tailscale.com) for secure access from your phone:
@@ -174,9 +128,7 @@ Use [Tailscale](https://tailscale.com) for secure access from your phone:
 ## Documentation
 
 See [AGENTS.md](AGENTS.md) for the architecture and contributor principles, and
-[docs/](docs/) for setup notes and known issues. To run a long-lived self-hosted
-instance (one-command updates, multiple machines) while developing in a separate
-checkout, see [docs/dogfoot.md](docs/dogfoot.md).
+[docs/](docs/) for setup notes and known issues.
 
 ## License
 

@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Mirrors scripts/install.sh for Windows / PowerShell. Checks prerequisites
-    (Node 24+, Git), clones or updates the repo into %USERPROFILE%\.stoa\repo,
+    (Node 20+, Git), clones or updates the repo into %USERPROFILE%\.stoa\repo,
     installs npm dependencies, builds for production, and prints how to start.
 
     Designed to be run via:
@@ -31,7 +31,7 @@ Write-Host "Stoa Installer" -ForegroundColor White
 Write-Host ""
 
 # ---------------------------------------------------------------------------
-# Prerequisite: Node.js 24+
+# Prerequisite: Node.js 20+
 # ---------------------------------------------------------------------------
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
@@ -41,11 +41,11 @@ if (-not $nodeCmd) {
     exit 1
 }
 
-# `node -v` prints e.g. "v24.0.0"; strip the leading "v" and take the major.
+# `node -v` prints e.g. "v20.11.1"; strip the leading "v" and take the major.
 $nodeVersionRaw = (& node -v).Trim()
 $nodeMajor = [int]($nodeVersionRaw.TrimStart("v").Split(".")[0])
-if ($nodeMajor -lt 24) {
-    Write-Err "Node.js 24+ is required (found $nodeVersionRaw)."
+if ($nodeMajor -lt 20) {
+    Write-Err "Node.js 20+ is required (found $nodeVersionRaw)."
     Write-Host "    Upgrade with:  winget install OpenJS.NodeJS.LTS"
     exit 1
 }
@@ -69,13 +69,7 @@ Write-Info "Git: $((& git --version).Trim())"
 if (Test-Path $InstallDir) {
     Write-Info "Updating existing installation..."
     Push-Location $InstallDir
-    # Match the `stoa update` path: fetch + pin to main, so an install left on a
-    # (now-deleted) feature branch still updates cleanly.
-    & git fetch origin --tags
-    if (-not $?) { Pop-Location; Write-Err "git fetch failed."; exit 1 }
-    & git checkout main
-    if (-not $?) { Pop-Location; Write-Err "git checkout main failed."; exit 1 }
-    & git pull --ff-only origin main
+    & git pull --ff-only
     if (-not $?) { Pop-Location; Write-Err "git pull failed."; exit 1 }
     Pop-Location
 } else {
@@ -93,35 +87,14 @@ if (Test-Path $InstallDir) {
 Push-Location $InstallDir
 
 Write-Info "Installing dependencies..."
-# --include=dev: the build needs devDeps (next/tailwind/typescript); a shell with
-# NODE_ENV=production would otherwise omit them and break `npm run build`.
-& npm install --include=dev --legacy-peer-deps
+& npm install --legacy-peer-deps
 if (-not $?) { Pop-Location; Write-Err "npm install failed."; exit 1 }
 
 Write-Info "Building for production..."
 & npm run build
 if (-not $?) { Pop-Location; Write-Err "npm run build failed."; exit 1 }
 
-# An interrupted build can exit 0 yet leave an incomplete .next (missing
-# prerender-manifest.json), which crash-loops the server. Verify the artifact.
-if (-not (Test-Path (Join-Path $InstallDir ".next\prerender-manifest.json"))) {
-    Pop-Location
-    Write-Err "Build incomplete (.next is missing required files). Re-run: npm run build"
-    exit 1
-}
-
 Pop-Location
-
-# ---------------------------------------------------------------------------
-# Put `stoa` on PATH (best-effort) so `stoa start/status/update` work anywhere.
-# Without this the advertised `stoa` command is "not recognized" after install.
-# ---------------------------------------------------------------------------
-Push-Location $InstallDir
-Write-Info "Attempting to link the 'stoa' command to your PATH (best-effort)..."
-& npm link
-$linked = $?
-Pop-Location
-$stoaResolved = $null -ne (Get-Command stoa -ErrorAction SilentlyContinue)
 
 # ---------------------------------------------------------------------------
 # Done
@@ -131,30 +104,10 @@ Write-Ok "Stoa installed successfully!"
 Write-Host ""
 Write-Host "Installed at: $InstallDir"
 Write-Host ""
-if ($linked -and $stoaResolved) {
-    Write-Host "Next steps:"
-    Write-Host "  stoa start"
-    Write-Host ""
-    Write-Host "If PowerShell blocks the 'stoa' script, run once:"
-    Write-Host "  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
-} elseif ($linked) {
-    # Linked, but 'stoa' isn't resolvable in THIS shell yet (PATH not refreshed).
-    Write-Host "Next steps (open a NEW terminal so PATH refreshes):"
-    Write-Host "  stoa start"
-    Write-Host ""
-    Write-Host "If 'stoa' is still not found, ensure the npm global bin is on PATH"
-    Write-Host "  (its location: run 'npm prefix -g' and add the \bin folder to PATH)."
-    Write-Host "If PowerShell blocks the 'stoa' script, run once:"
-    Write-Host "  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
-} else {
-    Write-Err "Could not link 'stoa' to your PATH automatically."
-    Write-Host "  (npm link needs symlink permission - enable Settings / Privacy and security /"
-    Write-Host "   For developers / Developer Mode, or re-run this installer as Administrator.)"
-    Write-Host "Run it directly instead:"
-    Write-Host "  node `"$InstallDir\scripts\stoa.js`" start"
-    Write-Host "  - or -"
-    Write-Host "  cd `"$InstallDir`"; npm start"
-}
+Write-Host "Next steps:"
+Write-Host "  stoa start          (if the CLI is on your PATH)"
+Write-Host "  - or -"
+Write-Host "  cd `"$InstallDir`"; npm start"
 Write-Host ""
 Write-Host "Then open http://localhost:3011 in your browser."
 Write-Host ""

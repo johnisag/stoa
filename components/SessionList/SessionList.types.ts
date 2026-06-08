@@ -20,4 +20,6 @@ export interface SessionListProps {
     workingDirectory: string;
     ports?: number[];
   }) => Promise<void>;
+  /** Collapse the sidebar to its icon rail (renders a chevron in the header). */
+  onCollapse?: () => void;
 }

@@ -29,15 +29,12 @@ export interface DispatchRepo {
   mode: DispatchMode;
   /** 0/1 — paused vs active. */
   enabled: number;
-  /** 0/1 — opt-in reviewer gate: spawn a critic agent on each worker's PR. */
-  review_gate: number;
   project_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export type DispatchStatus =
-  | "scheduled"
   | "pending"
   | "dispatched"
   | "pr_open"
@@ -62,16 +59,6 @@ export interface IssueDispatch {
   pr_status: string | null;
   /** When Stoa spawned the worker (counts against the daily cap). */
   dispatched_at: string | null;
-  /** ISO time a 'scheduled' row becomes eligible (promoted to 'pending'). */
-  scheduled_at: string | null;
-  /** Session id of the spawned critic agent (spawn-once guard). */
-  reviewer_session_id: string | null;
-  /** Cached GitHub reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED). */
-  review_decision: string | null;
-  /** How many fix rounds the worker has done in response to review feedback. */
-  fix_rounds: number;
-  /** Session id of the in-flight fixer worker (null when none running). */
-  fixer_session_id: string | null;
   created_at: string;
   updated_at: string;
 }

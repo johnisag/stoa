@@ -14,7 +14,7 @@
 
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { resolveBinary, expandHome } from "../platform";
+import { resolveBinary } from "../platform";
 import type { DispatchRepo, EligibleIssue } from "./types";
 
 const execFileAsync = promisify(execFile);
@@ -77,90 +77,31 @@ export function parseIssues(rawJson: string): EligibleIssue[] {
 export async function listEligibleIssues(
   repo: DispatchRepo
 ): Promise<EligibleIssue[]> {
-  try {
-    // Same gh issue-list command as the on-demand browse, bound to the repo's
-    // standing label filter (single source of truth: buildOpenIssueArgs).
-    const { stdout } = await execFileAsync(
-      gh,
-      buildOpenIssueArgs(repo.repo_slug, { label: repo.label_filter }),
-      { cwd: expandHome(repo.repo_path), encoding: "utf-8", timeout: 15000 }
-    );
-    return parseIssues(stdout);
-  } catch (err) {
-    console.warn(
-      `dispatch: gh issue list failed for ${repo.repo_slug}:`,
-      err instanceof Error ? err.message : err
-    );
-    return [];
-  }
-}
-
-/**
- * On-demand backlog browse query. Unlike the reconciler path it is NOT bound to
- * the repo's standing `label_filter` — a human triaging the backlog passes an
- * explicit (optional) label/search, so the WHOLE open backlog is reachable.
- */
-export interface OpenIssueQuery {
-  /** Narrow to a single gh label; omit/empty = all open issues. */
-  label?: string | null;
-  /** gh `--search` query (e.g. "sort:created-desc no:assignee"). */
-  search?: string | null;
-  /** Page size; clamped to [1, MAX_ISSUES]. */
-  limit?: number;
-}
-
-/**
- * Build the argv for an on-demand `gh issue list` browse. Pure (no spawn) so the
- * command string is unit-locked (AGENTS.md). Deliberately does NOT read
- * repo.label_filter — callers pass the label explicitly so triage can see issues
- * the standing filter would hide.
- */
-export function buildOpenIssueArgs(
-  repoSlug: string,
-  opts: OpenIssueQuery = {}
-): string[] {
-  const limit =
-    typeof opts.limit === "number" && opts.limit > 0
-      ? Math.min(Math.floor(opts.limit), MAX_ISSUES)
-      : MAX_ISSUES;
   const args = [
     "issue",
     "list",
     "--repo",
-    repoSlug,
+    repo.repo_slug,
     "--state",
     "open",
     "--json",
     ISSUE_FIELDS,
     "--limit",
-    String(limit),
+    String(MAX_ISSUES),
   ];
-  const label = opts.label?.trim();
+  const label = repo.label_filter?.trim();
   if (label) args.push("--label", label);
-  const search = opts.search?.trim();
-  if (search) args.push("--search", search);
-  return args;
-}
 
-/**
- * Browse a tracked repo's OPEN issues on demand for triage. Returns [] on any
- * failure (gh missing/unauthenticated/repo unreachable), logged. Mirrors
- * listEligibleIssues' spawn recipe (execFile, no shell; cwd = checkout).
- */
-export async function listOpenIssues(
-  repo: DispatchRepo,
-  opts: OpenIssueQuery = {}
-): Promise<EligibleIssue[]> {
   try {
-    const { stdout } = await execFileAsync(
-      gh,
-      buildOpenIssueArgs(repo.repo_slug, opts),
-      { cwd: expandHome(repo.repo_path), encoding: "utf-8", timeout: 15000 }
-    );
+    const { stdout } = await execFileAsync(gh, args, {
+      cwd: repo.repo_path,
+      encoding: "utf-8",
+      timeout: 15000,
+    });
     return parseIssues(stdout);
   } catch (err) {
     console.warn(
-      `dispatch: gh issue list (browse) failed for ${repo.repo_slug}:`,
+      `dispatch: gh issue list failed for ${repo.repo_slug}:`,
       err instanceof Error ? err.message : err
     );
     return [];

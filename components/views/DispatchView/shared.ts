@@ -30,10 +30,6 @@ export const STATUS_META: Record<
   DispatchStatus,
   { label: string; badge: string }
 > = {
-  scheduled: {
-    label: "Scheduled",
-    badge: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-  },
   pending: { label: "Pending", badge: "bg-muted text-muted-foreground" },
   dispatched: {
     label: "Working",

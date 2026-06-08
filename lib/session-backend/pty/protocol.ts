@@ -25,7 +25,7 @@
 
 import os from "os";
 import path from "path";
-import { homeDir, isWindows } from "../../platform";
+import { isWindows } from "../../platform";
 
 /**
  * Absolute address of the host's listening socket. The basename can be
@@ -38,11 +38,6 @@ export function hostAddress(): string {
     return `\\\\.\\pipe\\${name}`;
   }
   return path.join(os.tmpdir(), `${name}.sock`);
-}
-
-export function hostPidFile(): string {
-  const home = process.env.STOA_HOME || path.join(homeDir(), ".stoa");
-  return path.join(home, "pty-host.pid");
 }
 
 export interface SpawnSpecMsg {
@@ -76,7 +71,6 @@ export type ClientMessage =
   | { t: "list"; id: number }
   | { t: "listActivity"; id: number }
   | { t: "panePath"; id: number; key: string }
-  | { t: "shutdown"; id: number }
   | { t: "ping"; id: number };
 
 // Host -> Client

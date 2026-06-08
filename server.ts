@@ -1,8 +1,5 @@
-import "./lib/load-env-auto"; // MUST be first: applies .env before any env read
 import { createServer } from "http";
 import { parse } from "url";
-import { existsSync } from "fs";
-import { join } from "path";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import * as pty from "node-pty";
@@ -35,10 +32,6 @@ import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import {
-  cleanupOrphanedServers,
-  stopAllRunningServers,
-} from "./lib/dev-servers";
-import {
   getBudgetConfig,
   budgetEnabled,
   detectBudgetBreaches,
@@ -69,7 +62,6 @@ const AUTH_ENABLED = SERVER_TOKEN !== null;
 const TRUST_LOOPBACK = trustLoopback();
 const TRUST_TAILSCALE = trustTailscale();
 const ALLOWED_ORIGINS = configuredAllowedOrigins();
-const SHUTDOWN_TOKEN = process.env.STOA_SHUTDOWN_TOKEN || null;
 
 const AUTH_REQUIRED_HTML = `<!doctype html><meta charset="utf-8"><title>Stoa — token required</title><body style="font-family:system-ui;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#ddd;background:#111"><h1 style="font-size:1.3rem">🔒 Stoa needs a token</h1><p>This server requires an access token for non-local connections. Open the tokenized URL printed in the server console, or append <code>?token=YOUR_TOKEN</code> to the address.</p></body>`;
 
@@ -77,34 +69,10 @@ const firstQueryValue = (
   v: string | string[] | undefined
 ): string | undefined => (Array.isArray(v) ? v[0] : v);
 
-function isLoopbackAddress(addr?: string): boolean {
-  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
-}
-
 // Support: npm run dev -- -p 3012
 const pFlagIndex = process.argv.indexOf("-p");
 const portArg = pFlagIndex !== -1 ? process.argv[pFlagIndex + 1] : undefined;
-// STOA_PORT is also honored so a direct `tsx server.ts` (no -p, no PORT) picks up
-// the documented knob from .env identically to the CLI, which maps it to PORT.
-const port = parseInt(
-  portArg || process.env.PORT || process.env.STOA_PORT || "3011",
-  10
-);
-
-// Production preflight: an interrupted `next build` can leave an incomplete
-// .next (missing prerender-manifest.json); app.prepare() then throws an opaque
-// ENOENT and a keep-alive supervisor crash-loops forever. Fail with a clear,
-// actionable message instead so the cause is obvious in the logs.
-if (!dev) {
-  const manifest = join(process.cwd(), ".next", "prerender-manifest.json");
-  if (!existsSync(manifest)) {
-    console.error(
-      `[stoa] Production build is incomplete — ${manifest} is missing.\n` +
-        `[stoa] Run 'npm run build' (or 'stoa update') before starting. Exiting.`
-    );
-    process.exit(1);
-  }
-}
+const port = parseInt(portArg || process.env.PORT || "3011", 10);
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -113,29 +81,6 @@ app.prepare().then(() => {
   const server = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url!, true);
-
-      if (parsedUrl.pathname === "/__stoa/shutdown") {
-        const header = req.headers["x-stoa-shutdown-token"];
-        const token = Array.isArray(header) ? header[0] : header;
-        if (
-          req.method !== "POST" ||
-          !SHUTDOWN_TOKEN ||
-          token !== SHUTDOWN_TOKEN ||
-          !isLoopbackAddress(req.socket.remoteAddress)
-        ) {
-          res.statusCode = 403;
-          res.end("forbidden");
-          return;
-        }
-
-        const stopDevServers = firstQueryValue(parsedUrl.query.dev) !== "0";
-        res.statusCode = 200;
-        res.end("ok");
-        setImmediate(() =>
-          shutdown("local shutdown request", { stopDevServers })
-        );
-        return;
-      }
 
       if (AUTH_ENABLED) {
         const decision = decideHttpAuth({
@@ -180,39 +125,6 @@ app.prepare().then(() => {
     }
   });
 
-  let shuttingDown = false;
-  const shutdown = (
-    signal: string,
-    { stopDevServers = true }: { stopDevServers?: boolean } = {}
-  ) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log(`[stoa] ${signal} received; shutting down`);
-    const force = setTimeout(() => process.exit(0), 8000);
-    force.unref?.();
-    if (stopDevServers) {
-      console.log("[stoa] stopping managed dev servers");
-    } else {
-      console.log("[stoa] preserving managed dev servers");
-    }
-    const devServerCleanup = stopDevServers
-      ? stopAllRunningServers()
-      : Promise.resolve();
-    void devServerCleanup
-      .catch((err) =>
-        console.error("[stoa] dev-server shutdown cleanup failed:", err)
-      )
-      .finally(() => {
-        getHostClient().close();
-        server.close(() => process.exit(0));
-      });
-  };
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
-  process.once("SIGINT", () => shutdown("SIGINT"));
-  if (process.platform === "win32") {
-    process.once("SIGBREAK", () => shutdown("SIGBREAK"));
-  }
-
   // Terminal WebSocket server
   const terminalWss = new WebSocketServer({ noServer: true });
   // Live status-events server: pushes session status deltas to the UI.
@@ -230,14 +142,6 @@ app.prepare().then(() => {
           : null;
     // Let HMR and other WebSocket connections pass through to Next.js.
     if (!wss) return;
-
-    // Disable Nagle's algorithm on the terminal/events socket. Keystrokes are
-    // tiny (one WS frame per character); with Nagle on, TCP holds each small
-    // packet waiting for the previous ACK (~40ms, up to 200ms with delayed
-    // ACKs), so every character's echo round-trips late — a constant, "always
-    // there" typing lag, worst over WiFi to a phone. SSH and terminals disable
-    // Nagle for exactly this reason; do the same so keystrokes flush instantly.
-    request.socket.setNoDelay(true);
 
     // Origin allowlist (always — CSWSH defense) + token gate. The browser sends
     // the auth cookie on a same-origin upgrade, so no client wiring is needed.
@@ -575,14 +479,6 @@ app.prepare().then(() => {
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
   function handleTmuxConnection(ws: WebSocket) {
     let ptyProcess: pty.IPty;
-    // Last size pushed to the shell pty (spawned at 80×24 below). A resize to the
-    // SAME dimensions still raises SIGWINCH, which makes tmux + the agent TUI
-    // repaint — flooding output and burying fresh keystrokes. Android's soft
-    // keyboard fires visualViewport `resize` repeatedly while typing (re-sending an
-    // identical size each time), so dedupe here too — the PtySession path has the
-    // same guard. Keeps the POSIX tmux experience snappy under mobile typing (#116).
-    let ptyCols = 80;
-    let ptyRows = 24;
     try {
       const shell = process.env.SHELL || "/bin/zsh";
       // Use minimal env - only essentials for shell to work
@@ -634,13 +530,7 @@ app.prepare().then(() => {
             ptyProcess.write(msg.data);
             break;
           case "resize":
-            // Skip a no-op resize (see ptyCols/ptyRows) — it would re-SIGWINCH the
-            // shell and stall typing for no layout change.
-            if (msg.cols !== ptyCols || msg.rows !== ptyRows) {
-              ptyProcess.resize(msg.cols, msg.rows);
-              ptyCols = msg.cols;
-              ptyRows = msg.rows;
-            }
+            ptyProcess.resize(msg.cols, msg.rows);
             break;
           case "command":
             ptyProcess.write(msg.data + "\r");
@@ -736,26 +626,9 @@ app.prepare().then(() => {
     // Dispatch startup catch-up: free slots held by workers that didn't survive
     // a Tier-1 restart, then run one reconcile pass immediately so a day missed
     // while Stoa was down is topped up now (not only on the next 60s tick).
-    void cleanupOrphanedServers().catch((err) =>
-      console.error("dev-server startup cleanup failed:", err)
-    );
     void reconcileOrphans()
       .then(() => reconcileTick())
       .catch((err) => console.error("dispatch startup reconcile failed:", err));
-    // Fail loudly on a port clash (a second Stoa, or a dev server) instead of
-    // letting an unhandled EADDRINUSE crash-loop under a keep-alive supervisor.
-    server.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EADDRINUSE") {
-        console.error(
-          `[stoa] Port ${port} is already in use — another Stoa (or a dev server) is running. Stop it first, then start again.`
-        );
-      } else {
-        // A throw inside an EventEmitter handler becomes an opaque
-        // uncaughtException; log the cause explicitly so the supervisor log says why.
-        console.error("[stoa] Fatal server error:", err);
-      }
-      process.exit(1);
-    });
     server.listen(port, () => {
       console.log(`> Stoa ready on http://${hostname}:${port}`);
       if (AUTH_ENABLED) {
@@ -763,20 +636,10 @@ app.prepare().then(() => {
           `> Auth on${TRUST_LOOPBACK ? " (localhost trusted)" : " (token required everywhere)"}. Remote access:`
         );
         console.log(`>   http://<this-host>:${port}/?token=${SERVER_TOKEN}`);
-        if (TRUST_TAILSCALE) {
+        if (TRUST_TAILSCALE)
           console.log(
             `>   Tailscale range (100.64.0.0/10) is trusted — no token over the tailnet.`
           );
-          console.log(
-            `>   WARNING: this trusts ANY peer in that range by IP alone (no tailnet`
-          );
-          console.log(
-            `>   identity check) while bound to ${hostname}. Safe on a private tailnet;`
-          );
-          console.log(
-            `>   risky behind a CGNAT/proxy that shares 100.64.0.0/10. Unset to require the token.`
-          );
-        }
         console.log(
           `>   STOA_AUTH=off disables it; STOA_REQUIRE_AUTH=1 requires it on localhost too.`
         );

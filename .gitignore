@@ -32,11 +32,6 @@ npm-debug.log*
 *.swp
 *.swo
 
-# Claude Code local settings (machine-local; the rest of .claude/ — agent
-# configs — stays tracked). Untracked, so without this it would block
-# `stoa update`'s clean-tree check.
-.claude/settings.local.json
-
 # Testing
 coverage/
 .cache/
@@ -48,7 +43,6 @@ coverage/
 stoa.db
 stoa.db-wal
 stoa.db-shm
-stoa.db.init-lock
 # legacy name (pre-Stoa rename); kept ignored so old local DBs don't get committed
 agent-os.db
 agent-os.db-wal
@@ -64,7 +58,6 @@ agent-os.db-shm
 docs/*
 !docs/setup/
 !docs/issues/
-!docs/dogfoot.md
 .mcp.json
 .git-evening
 

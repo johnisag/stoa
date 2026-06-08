@@ -12,8 +12,8 @@ curl -fsSL https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.
 
 The installer will:
 
-1. Put the `stoa` CLI on your PATH (symlink on macOS/Linux; best-effort `npm link` on Windows — may need Developer Mode)
-2. Check for prerequisites (Node.js 24+, git, tmux) and offer to install any missing ones
+1. Download the `stoa` CLI to your PATH
+2. Check for prerequisites (Node.js 20+, git, tmux) and offer to install any missing ones
 3. Detect installed AI CLIs or prompt you to install one (Claude Code recommended)
 4. Clone the repository to `~/.stoa/repo`
 5. Install dependencies and build for production
@@ -41,21 +41,23 @@ npm start
 
 After installation, use the `stoa` command to manage the server:
 
-| Command        | Description                            |
-| -------------- | -------------------------------------- |
-| `stoa start`   | Start the server in background         |
-| `stoa stop`    | Stop the server                        |
-| `stoa restart` | Restart the server                     |
-| `stoa status`  | Show status, PID, and URLs             |
-| `stoa logs`    | Tail server logs                       |
-| `stoa update`  | Pull latest version and rebuild        |
-| `stoa run`     | Run in the foreground (Ctrl-C to stop) |
+| Command          | Description                     |
+| ---------------- | ------------------------------- |
+| `stoa start`     | Start the server in background  |
+| `stoa stop`      | Stop the server                 |
+| `stoa restart`   | Restart the server              |
+| `stoa status`    | Show status, PID, and URLs      |
+| `stoa logs`      | Tail server logs                |
+| `stoa update`    | Pull latest version and rebuild |
+| `stoa enable`    | Enable auto-start on boot       |
+| `stoa disable`   | Disable auto-start              |
+| `stoa uninstall` | Remove Stoa completely          |
 
 ## Prerequisites
 
 The installer can automatically install these on macOS and Linux:
 
-- **Node.js 24+** - JavaScript runtime
+- **Node.js 20+** - JavaScript runtime
 - **npm** - Package manager (comes with Node.js)
 - **git** - Version control
 - **tmux** - Terminal multiplexer for session management
@@ -75,20 +77,11 @@ You need at least one AI coding CLI installed. The installer will prompt you to 
 
 ### Environment Variables
 
-| Variable                 | Default                 | Description                                                                             |
-| ------------------------ | ----------------------- | --------------------------------------------------------------------------------------- |
-| `STOA_HOME`              | `~/.stoa`               | Installation directory                                                                  |
-| `STOA_PORT`              | `3011`                  | Server port                                                                             |
-| `DB_PATH`                | `~/.stoa/stoa.db`       | SQLite database path (optional; defaults to STOA_HOME so a re-clone can't destroy data) |
-| `STOA_BACKEND`           | auto                    | Session backend: `tmux` (macOS/Linux) or `pty` (Windows); set to override               |
-| `STOA_AUTH`              | on                      | `off` disables auth entirely                                                            |
-| `STOA_REQUIRE_AUTH`      | unset                   | `1` requires the token even on localhost (default trusts loopback)                      |
-| `STOA_TOKEN`             | random                  | Pin the access token instead of the random `~/.stoa/token`                              |
-| `STOA_TRUST_TAILSCALE`   | unset                   | `1` = token-free over the tailnet (see the server's startup-banner caveat)              |
-| `STOA_ALLOWED_ORIGINS`   | unset                   | Comma-separated extra trusted WebSocket origins (reverse-proxy domains)                 |
-| `STOA_VAPID_PUBLIC_KEY`  | generated               | Pin web-push keys so subscriptions survive a re-clone (else regenerated in vapid.json)  |
-| `STOA_VAPID_PRIVATE_KEY` | generated               | Paired with the public key above                                                        |
-| `STOA_VAPID_SUBJECT`     | `mailto:stoa@localhost` | VAPID contact (mailto:) for web push                                                    |
+| Variable    | Default     | Description            |
+| ----------- | ----------- | ---------------------- |
+| `STOA_HOME` | `~/.stoa`   | Installation directory |
+| `STOA_PORT` | `3011`      | Server port            |
+| `DB_PATH`   | `./stoa.db` | SQLite database path   |
 
 ### Custom Port
 
@@ -100,9 +93,35 @@ STOA_PORT=8080 stoa start
 export STOA_PORT=8080
 ```
 
-## After a reboot
+## Auto-Start on Boot
 
-There is no auto-start service — run `stoa start` again after a reboot or logout.
+### macOS (launchd)
+
+```bash
+stoa enable
+```
+
+This creates a Launch Agent at `~/Library/LaunchAgents/com.stoa.plist`.
+
+To disable:
+
+```bash
+stoa disable
+```
+
+### Linux (systemd)
+
+```bash
+stoa enable
+```
+
+This creates a user service at `~/.config/systemd/user/stoa.service`.
+
+To disable:
+
+```bash
+stoa disable
+```
 
 ## Mobile Access with Tailscale
 
@@ -180,7 +199,7 @@ Common issues:
 
 - Port already in use: Change `STOA_PORT`
 - Missing dependencies: Run `stoa install` again
-- Node.js version: Ensure Node.js 24+ is installed
+- Node.js version: Ensure Node.js 20+ is installed
 
 ### Can't connect from phone
 
@@ -203,7 +222,16 @@ stoa install
 ## Uninstalling
 
 ```bash
-stoa stop                 # stop the server if running
-npm rm -g @johnisag/stoa  # remove the `stoa` command (if linked via `npm link`)
-rm -rf ~/.stoa            # remove the install AND its data (this deletes your DB)
+stoa uninstall
+```
+
+This removes:
+
+- The `~/.stoa` directory
+- Auto-start configuration (launchd/systemd)
+
+The `stoa` CLI script itself is not removed. Delete it manually:
+
+```bash
+rm $(which stoa)
 ```

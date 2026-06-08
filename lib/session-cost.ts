@@ -88,50 +88,40 @@ export async function readClaudeSessionUsage(
 
 /**
  * Estimated cost for every session, keyed by id (Claude-only; others
- * supported:false). Reads transcripts with BOUNDED concurrency (a large window
- * could otherwise fan out hundreds of concurrent file reads → fd exhaustion +
- * a memory spike). Shared by the cost API, the analytics layer, and the
- * server-side budget enforcement loop.
+ * supported:false). Reads transcripts concurrently. Shared by the cost API and
+ * the server-side budget enforcement loop.
  */
-const COST_READ_CONCURRENCY = 12;
-
 export async function computeSessionCosts(
   sessions: Session[]
 ): Promise<Record<string, SessionCost>> {
-  const mapOne = async (s: Session): Promise<[string, SessionCost]> => {
-    const base = { name: s.name, model: s.model };
-    if (
-      s.agent_type !== "claude" ||
-      !s.claude_session_id ||
-      !s.working_directory
-    ) {
+  const entries = await Promise.all(
+    sessions.map(async (s): Promise<[string, SessionCost]> => {
+      const base = { name: s.name, model: s.model };
+      if (
+        s.agent_type !== "claude" ||
+        !s.claude_session_id ||
+        !s.working_directory
+      ) {
+        return [
+          s.id,
+          { ...base, tokens: ZERO_USAGE, costUsd: null, supported: false },
+        ];
+      }
+      const tokens =
+        (await readClaudeSessionUsage(
+          s.working_directory,
+          s.claude_session_id
+        )) ?? ZERO_USAGE;
       return [
         s.id,
-        { ...base, tokens: ZERO_USAGE, costUsd: null, supported: false },
+        {
+          ...base,
+          tokens,
+          costUsd: computeCostUsd(tokens, s.model),
+          supported: true,
+        },
       ];
-    }
-    const tokens =
-      (await readClaudeSessionUsage(
-        s.working_directory,
-        s.claude_session_id
-      )) ?? ZERO_USAGE;
-    return [
-      s.id,
-      {
-        ...base,
-        tokens,
-        costUsd: computeCostUsd(tokens, s.model),
-        supported: true,
-      },
-    ];
-  };
-
-  // Process in fixed-size batches so at most COST_READ_CONCURRENCY transcripts
-  // are read at once, regardless of how many sessions the window holds.
-  const entries: Array<[string, SessionCost]> = [];
-  for (let i = 0; i < sessions.length; i += COST_READ_CONCURRENCY) {
-    const batch = sessions.slice(i, i + COST_READ_CONCURRENCY);
-    entries.push(...(await Promise.all(batch.map(mapOne))));
-  }
+    })
+  );
   return Object.fromEntries(entries);
 }

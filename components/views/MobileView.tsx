@@ -25,7 +25,6 @@ export function MobileView({
   showQuickSwitcher,
   setShowQuickSwitcher,
   setShowDispatch,
-  setShowAnalytics,
   onShowShortcuts,
   attachToSession,
   openSessionInNewTab,
@@ -86,10 +85,6 @@ export function MobileView({
 
           <SidebarFooter
             onShowShortcuts={onShowShortcuts}
-            onShowAnalytics={() => {
-              setShowAnalytics(true);
-              setSidebarOpen(false);
-            }}
             onShowDispatch={() => {
               setShowDispatch(true);
               setSidebarOpen(false);
