@@ -36,7 +36,7 @@ npm start  # http://localhost:3011
 
 Stoa runs natively on Windows — no WSL or tmux required.
 
-Requires Node.js 20+ and Git. Install them via [winget](https://learn.microsoft.com/windows/package-manager/winget/) if needed:
+Requires Node.js 24+ and Git. Install them via [winget](https://learn.microsoft.com/windows/package-manager/winget/) if needed:
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
@@ -69,7 +69,7 @@ On Windows the native pty backend is selected automatically (no tmux/WSL needed)
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 24+
 - tmux (macOS/Linux only — Windows uses the native pty backend)
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (for code search - auto-installed by installer script, or run `stoa update`)
 - At least one AI CLI: [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), or Hermes

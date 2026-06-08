@@ -820,7 +820,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 20
+          node-version: 24
       # Run the guard CODE from a TRUSTED ref (base branch), not the PR head, so a
       # PR cannot weaken the guard LOGIC and pass its own check. (Pins/config are
       # read from the PR head; a re-pinned trojan is blocked by the CODEOWNERS gate
