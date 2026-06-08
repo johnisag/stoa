@@ -64,21 +64,25 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        id: setup-node
         with:
           node-version: 20
           cache: npm
 
       # Cache the installed node_modules (including the built better-sqlite3 /
-      # node-pty native binaries) keyed by the lockfile, so the flaky Windows native
-      # BUILD only runs on a real dependency change — not on every PR. This removes
-      # the trigger for the node-gyp flake rather than just retrying it; the retry
-      # below is the backstop for the cache-MISS (lockfile-changed) case.
+      # node-pty native binaries) keyed by the lockfile + resolved Node version, so
+      # the flaky Windows native BUILD is skipped whenever the cache hits (the common
+      # case: a PR that doesn't touch dependencies). Lockfile changes — e.g. a
+      # dependabot bump — miss the cache and still build; the retry below is the
+      # backstop for that case. The Node version is in the key because the cached
+      # native binaries are ABI-bound to it (a future node-version bump must not
+      # restore a stale, mismatched node_modules).
       - name: Cache node_modules
         id: node-modules-cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: node_modules
-          key: ${{ runner.os }}-node20-modules-${{ hashFiles('package-lock.json') }}
+          key: ${{ runner.os }}-node${{ steps.setup-node.outputs.node-version }}-modules-${{ hashFiles('package-lock.json') }}
 
       - name: Install dependencies
         # Skipped entirely on a cache hit (node_modules restored). Only runs on a
