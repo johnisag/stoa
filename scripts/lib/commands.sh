@@ -365,108 +365,6 @@ cmd_update() {
     fi
 }
 
-cmd_enable() {
-    if [[ ! -d "$REPO_DIR" ]]; then
-        log_error "Stoa is not installed. Run 'stoa install' first."
-        exit 1
-    fi
-
-    local script_path
-    script_path=$(realpath "$0")
-
-    if [[ "$OS" == "macos" ]]; then
-        local plist_path="$HOME/Library/LaunchAgents/com.stoa.plist"
-
-        cat > "$plist_path" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.stoa</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$script_path</string>
-        <string>start</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <false/>
-    <key>StandardOutPath</key>
-    <string>$LOG_FILE</string>
-    <key>StandardErrorPath</key>
-    <string>$LOG_FILE</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-    </dict>
-</dict>
-</plist>
-EOF
-
-        launchctl load "$plist_path" 2>/dev/null || true
-        log_success "Auto-start enabled (launchd)"
-        echo "  Plist: $plist_path"
-
-    elif [[ -d /etc/systemd ]]; then
-        local service_dir="$HOME/.config/systemd/user"
-        local service_path="$service_dir/stoa.service"
-
-        mkdir -p "$service_dir"
-
-        cat > "$service_path" << EOF
-[Unit]
-Description=Stoa - AI Coding Session Manager
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=$script_path start-foreground
-Restart=on-failure
-RestartSec=10
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-
-[Install]
-WantedBy=default.target
-EOF
-
-        systemctl --user daemon-reload
-        systemctl --user enable stoa
-        log_success "Auto-start enabled (systemd)"
-        echo "  Service: $service_path"
-
-    else
-        log_error "Could not detect init system (launchd/systemd)"
-        exit 1
-    fi
-}
-
-cmd_disable() {
-    if [[ "$OS" == "macos" ]]; then
-        local plist_path="$HOME/Library/LaunchAgents/com.stoa.plist"
-
-        if [[ -f "$plist_path" ]]; then
-            launchctl unload "$plist_path" 2>/dev/null || true
-            rm -f "$plist_path"
-            log_success "Auto-start disabled"
-        else
-            log_warn "Auto-start was not enabled"
-        fi
-
-    elif [[ -d /etc/systemd ]]; then
-        systemctl --user disable stoa 2>/dev/null || true
-        rm -f "$HOME/.config/systemd/user/stoa.service"
-        systemctl --user daemon-reload
-        log_success "Auto-start disabled"
-
-    else
-        log_error "Could not detect init system"
-        exit 1
-    fi
-}
-
 cmd_uninstall() {
     echo ""
     log_warn "This will remove Stoa and all its data."
@@ -487,8 +385,12 @@ cmd_uninstall() {
         cmd_stop
     fi
 
-    # Disable auto-start
-    cmd_disable 2>/dev/null || true
+    # Clean up any auto-start config left by older versions. The launchd/systemd
+    # enable/disable feature was removed — Stoa is manual start/stop/update only.
+    launchctl unload "$HOME/Library/LaunchAgents/com.stoa.plist" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/com.stoa.plist" 2>/dev/null || true
+    systemctl --user disable stoa 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/stoa.service" 2>/dev/null || true
 
     # Remove CLI symlink (only for non-npm installs)
     if [[ "$installed_via_npm" == false ]]; then
@@ -553,8 +455,6 @@ cmd_help() {
     echo "  status      Show server status and URLs"
     echo "  logs        Tail server logs"
     echo "  update      Update to latest version"
-    echo "  enable      Enable auto-start on boot"
-    echo "  disable     Disable auto-start"
     echo "  uninstall   Remove Stoa completely"
     echo ""
     echo "Environment variables:"

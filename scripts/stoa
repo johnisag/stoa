@@ -118,8 +118,6 @@ case "${1:-}" in
     status)           cmd_status ;;
     logs)             cmd_logs ;;
     update)           cmd_update ;;
-    enable)           cmd_enable ;;
-    disable)          cmd_disable ;;
     uninstall)        cmd_uninstall ;;
     start-foreground) cmd_start_foreground ;;
     help|--help|-h)   cmd_help ;;

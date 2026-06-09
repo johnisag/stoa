@@ -28,14 +28,14 @@
     "scripts/install.ps1": "b4f451e77f41ac48862344c3d8d4b5856a609c6140a97fc736c5e67b5960a633",
     "scripts/install.sh": "6b673db658df993ace3291280996f8fca499e4bbabca441c87fd95113ba95149",
     "scripts/lib/ai-clis.sh": "0019827ec924018f9fb91a26cf64cc020ddf097aca7d36dc58feedae2cc048fb",
-    "scripts/lib/commands.sh": "965d62217c4eb0bde4c2a51cc8580f2390bd122ac2ae1de8385b8a0e59bda89f",
+    "scripts/lib/commands.sh": "46bc5ae0cb41db3af2ef99874e9cf0953b8bba6adadc1b1d6ce964e40e44fc2c",
     "scripts/lib/common.sh": "e6ab975d4bde0ae409664e3f553ab125febbe139313314e4df2de9207762397f",
     "scripts/lib/prerequisites.sh": "0bf66698f1721358f4eacbaff50b4f696b1c3661662d93e122f118094d8fa94b",
     "scripts/postinstall.js": "53bb659676007f2c842b753f25436c33471e52581e279057d499b9165cfb8764",
     "scripts/precommit.js": "2481c0499afe3cbf71244606615c6af2804e57f2ab40fc6ebd3f6fedf45b83d5",
     "scripts/pty-host.ts": "fbefb477e3cbc695116715d4d00959352476756736cd17851d6165d675f7e5df",
     "scripts/setup.sh": "6bbfd80aee21b7ba1d4c120317df49008e48897936adb905e0169216d7fa7488",
-    "scripts/stoa": "c9f088bcec55208741500869b15ece1f230efe708fee1acd199a669eee47524a",
+    "scripts/stoa": "4d3a59d282d745607517e128c148a9c8f0ac19fe248fccd81ed8235da71b76db",
     "scripts/stoa.js": "84387c034bfb13be4e0ab0c82f543693d81960194f109ff7791255b616e1991d"
   }
 }
