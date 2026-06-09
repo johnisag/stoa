@@ -83,7 +83,12 @@ export async function listEligibleIssues(
     const { stdout } = await execFileAsync(
       gh,
       buildOpenIssueArgs(repo.repo_slug, { label: repo.label_filter }),
-      { cwd: expandHome(repo.repo_path), encoding: "utf-8", timeout: 15000 }
+      {
+        cwd: expandHome(repo.repo_path),
+        encoding: "utf-8",
+        timeout: 15000,
+        windowsHide: true,
+      }
     );
     return parseIssues(stdout);
   } catch (err) {

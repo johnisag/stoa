@@ -22,6 +22,7 @@ function git(
   const options: ExecFileSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf-8",
+    windowsHide: true,
   };
   if (opts.timeout) options.timeout = opts.timeout;
   if (opts.stdio) options.stdio = opts.stdio;
@@ -46,7 +47,11 @@ export interface CommitInfo {
  */
 export function checkGhCli(): boolean {
   try {
-    execFileSync(gh, ["auth", "status"], { timeout: 5000, stdio: "pipe" });
+    execFileSync(gh, ["auth", "status"], {
+      timeout: 5000,
+      stdio: "pipe",
+      windowsHide: true,
+    });
     return true;
   } catch {
     return false;
@@ -190,6 +195,7 @@ export function getPRForBranch(
         cwd: workingDir,
         encoding: "utf-8",
         timeout: 10000,
+        windowsHide: true,
       }
     );
     const prs = JSON.parse(output);
@@ -230,6 +236,7 @@ export function createPR(
       cwd: workingDir,
       encoding: "utf-8",
       timeout: 30000,
+      windowsHide: true,
     }
   );
 
@@ -271,6 +278,7 @@ export function getBaseBranch(workingDir: string): string {
         cwd: workingDir,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
       }
     ).trim();
     return output

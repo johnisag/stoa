@@ -60,7 +60,7 @@ export async function getReviewDecision(
     const { stdout } = await execFileAsync(
       gh,
       ["pr", "view", String(prNumber), "--json", "reviewDecision"],
-      { cwd, encoding: "utf-8", timeout: 15000 }
+      { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
     );
     return parseReviewDecision(stdout);
   } catch {

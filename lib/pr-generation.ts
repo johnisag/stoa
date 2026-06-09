@@ -1,4 +1,4 @@
-import { execSync, execFileSync } from "child_process";
+import { execFileSync } from "child_process";
 import { resolveBinary } from "./platform";
 
 export interface GeneratedPRContent {
@@ -57,17 +57,19 @@ function getGitContext(
     // Try to get the remote base branch reference
     let baseBranchRef = baseBranch;
     try {
-      execSync(`git rev-parse --verify origin/${baseBranch}`, {
+      execFileSync("git", ["rev-parse", "--verify", `origin/${baseBranch}`], {
         cwd: workingDir,
         stdio: "pipe",
+        windowsHide: true,
       });
       baseBranchRef = `origin/${baseBranch}`;
     } catch {
       // Fall back to local branch
       try {
-        execSync(`git rev-parse --verify ${baseBranch}`, {
+        execFileSync("git", ["rev-parse", "--verify", baseBranch], {
           cwd: workingDir,
           stdio: "pipe",
+          windowsHide: true,
         });
       } catch {
         // Base branch doesn't exist
@@ -77,20 +79,27 @@ function getGitContext(
 
     // Get diff stats
     try {
-      diff = execSync(`git diff ${baseBranchRef}...HEAD --stat`, {
-        cwd: workingDir,
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024,
-      });
+      diff = execFileSync(
+        "git",
+        ["diff", `${baseBranchRef}...HEAD`, "--stat"],
+        {
+          cwd: workingDir,
+          encoding: "utf-8",
+          maxBuffer: 10 * 1024 * 1024,
+          windowsHide: true,
+        }
+      );
     } catch {}
 
     // Get changed files
     try {
-      const filesOut = execSync(
-        `git diff --name-only ${baseBranchRef}...HEAD`,
+      const filesOut = execFileSync(
+        "git",
+        ["diff", "--name-only", `${baseBranchRef}...HEAD`],
         {
           cwd: workingDir,
           encoding: "utf-8",
+          windowsHide: true,
         }
       );
       changedFiles = filesOut
@@ -101,11 +110,13 @@ function getGitContext(
 
     // Get commit messages
     try {
-      const commitsOut = execSync(
-        `git log ${baseBranchRef}..HEAD --pretty=format:"%s"`,
+      const commitsOut = execFileSync(
+        "git",
+        ["log", `${baseBranchRef}..HEAD`, "--pretty=format:%s"],
         {
           cwd: workingDir,
           encoding: "utf-8",
+          windowsHide: true,
         }
       );
       commits = commitsOut
@@ -116,18 +127,20 @@ function getGitContext(
 
     // Also include uncommitted changes
     try {
-      const workingDiff = execSync("git diff --stat", {
+      const workingDiff = execFileSync("git", ["diff", "--stat"], {
         cwd: workingDir,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
       });
       if (workingDiff) {
         diff = diff ? `${diff}\n${workingDiff}` : workingDiff;
       }
 
-      const uncommittedFiles = execSync("git diff --name-only", {
+      const uncommittedFiles = execFileSync("git", ["diff", "--name-only"], {
         cwd: workingDir,
         encoding: "utf-8",
+        windowsHide: true,
       })
         .split("\n")
         .map((f) => f.trim())
@@ -152,7 +165,11 @@ async function generateWithClaude(
 ): Promise<GeneratedPRContent | null> {
   // Check if Claude CLI is available
   try {
-    execSync("claude --version", { stdio: "pipe", timeout: 5000 });
+    execFileSync(resolveBinary("claude") || "claude", ["--version"], {
+      stdio: "pipe",
+      timeout: 5000,
+      windowsHide: true,
+    });
   } catch {
     return null;
   }
@@ -170,6 +187,7 @@ async function generateWithClaude(
       encoding: "utf-8",
       timeout: 30000,
       maxBuffer: 1024 * 1024,
+      windowsHide: true,
     });
 
     return parseClaudeResponse(output);

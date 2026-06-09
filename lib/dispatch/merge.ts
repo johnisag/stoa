@@ -35,5 +35,6 @@ export async function mergePR(opts: {
     cwd: opts.cwd,
     encoding: "utf-8",
     timeout: 60000,
+    windowsHide: true,
   });
 }

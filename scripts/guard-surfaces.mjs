@@ -400,6 +400,7 @@ function gitList(root, extraArgs) {
     encoding: "utf-8",
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "ignore"],
+    windowsHide: true,
   });
   return out.split("\0").filter(Boolean);
 }
@@ -416,6 +417,7 @@ function submoduleDirs(root) {
       encoding: "utf-8",
       maxBuffer: 64 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     });
     for (const entry of out.split("\0").filter(Boolean)) {
       const tab = entry.indexOf("\t"); // "<mode> <sha> <stage>\t<path>"

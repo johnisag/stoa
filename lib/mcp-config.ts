@@ -98,7 +98,11 @@ function ensureGitExcluded(workingDirectory: string, entry: string): void {
         "--path-format=absolute",
         "--git-common-dir",
       ],
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+      {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+      }
     ).trim();
     if (!commonDir) return;
 
@@ -280,6 +284,7 @@ export function ensureHermesMcpRegistered(): void {
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 10000,
       killSignal: "SIGKILL",
+      windowsHide: true,
     });
     const stoaListed = /(^|\s)stoa(\s|$)/m.test(list);
     const plan = planHermesRegistration(
@@ -294,6 +299,7 @@ export function ensureHermesMcpRegistered(): void {
           stdio: "ignore",
           timeout: 10000,
           killSignal: "SIGKILL",
+          windowsHide: true,
         });
       } catch {
         // ignore — the add below overwrites anyway on most Hermes versions
@@ -304,6 +310,7 @@ export function ensureHermesMcpRegistered(): void {
       stdio: ["pipe", "ignore", "ignore"],
       timeout: 20000,
       killSignal: "SIGKILL",
+      windowsHide: true,
     });
     writeRegisteredHermesPath(serverPath);
   } catch {

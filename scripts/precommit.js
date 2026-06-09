@@ -29,7 +29,7 @@ console.log("💅 Formatting staged files...");
 const out = execFileSync(
   "git",
   ["diff", "--cached", "--name-only", "--diff-filter=ACMR"],
-  { encoding: "utf8" }
+  { encoding: "utf8", windowsHide: true }
 );
 const staged = out
   .split(/\r?\n/)

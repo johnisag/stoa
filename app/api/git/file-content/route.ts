@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { expandPath } from "@/lib/git-status";
 
 /**
@@ -30,10 +30,11 @@ export async function GET(request: NextRequest) {
 
     try {
       // Get file content from HEAD
-      const content = execSync(`git show HEAD:"${file}"`, {
+      const content = execFileSync("git", ["show", `HEAD:${file}`], {
         cwd: expandedPath,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024, // 10MB
+        windowsHide: true,
       });
 
       return NextResponse.json({ content });
