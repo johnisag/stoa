@@ -14,7 +14,8 @@ It's built for the way agents actually work: run several side by side, dictate p
 
 ### Quick install (curl)
 
-Installs prerequisites, clones the repo, and builds:
+Installs prerequisites, clones the repo, installs dependencies, builds for
+production, and links the `stoa` command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.sh | bash
@@ -26,8 +27,9 @@ stoa start
 ```bash
 git clone https://github.com/johnisag/stoa
 cd stoa
-npm install
-npm run dev  # http://localhost:3011
+npm install --include=dev --legacy-peer-deps
+npm run build
+npm start  # http://localhost:3011
 ```
 
 ### Windows (native)
@@ -46,7 +48,7 @@ Then clone and run:
 ```powershell
 git clone https://github.com/johnisag/stoa
 cd stoa
-npm install --legacy-peer-deps
+npm install --include=dev --legacy-peer-deps
 npm run build
 npm start  # or: stoa start
 ```
@@ -114,8 +116,8 @@ stoa update
 ```
 
 Stops the server (if running), pulls the latest `main`, reinstalls dependencies,
-rebuilds, and restarts. It pins to `main`, and if anything fails it restarts the
-existing version — so a bad update never leaves the server down.
+rebuilds, and restarts after the production build artifacts are verified. It
+pins to `main`; if an update fails, it refuses to start from an incomplete build.
 
 ## Mobile Access
 

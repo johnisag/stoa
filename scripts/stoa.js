@@ -16,6 +16,7 @@ const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { pathToFileURL } = require("url");
 
 // ---------------------------------------------------------------------------
 // Configuration / derived paths
@@ -23,22 +24,68 @@ const path = require("path");
 
 const IS_WINDOWS = process.platform === "win32";
 
-// Port the server listens on (matches server.ts default and the bash CLI).
-const PORT = process.env.STOA_PORT || "3011";
+// The repo this script lives in: scripts/stoa.js -> repo root is one up.
+const REPO_DIR = path.resolve(__dirname, "..");
+
+function parseEnvFile(content) {
+  const out = {};
+  const text = String(content).replace(/^\uFEFF/, "");
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const body = line.startsWith("export ") ? line.slice(7).trim() : line;
+    const eq = body.indexOf("=");
+    if (eq === -1) continue;
+    const key = body.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let value = body.slice(eq + 1).trim();
+    if (
+      value.length >= 2 &&
+      ((value[0] === '"' && value[value.length - 1] === '"') ||
+        (value[0] === "'" && value[value.length - 1] === "'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function loadEnvFile(dir) {
+  if (process.env.STOA_SKIP_ENV_FILE === "1") return {};
+  const envPath = path.join(dir, ".env");
+  if (!fs.existsSync(envPath)) return {};
+  try {
+    const parsed = parseEnvFile(fs.readFileSync(envPath, "utf8"));
+    for (const [k, v] of Object.entries(parsed)) {
+      if (process.env[k] === undefined) process.env[k] = v;
+    }
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+loadEnvFile(REPO_DIR);
+
+// Port the server listens on. STOA_PORT is the documented knob; a raw PORT is
+// also honored. The resolved value is used for both display and server env.
+const PORT = process.env.STOA_PORT || process.env.PORT || "3011";
 const URL = `http://localhost:${PORT}`;
+
+function serverEnv(extra = {}) {
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.toUpperCase() !== "PORT") env[k] = v;
+  }
+  return { ...env, PORT, ...extra };
+}
 
 // ~/.stoa is the Stoa home; everything (pid, logs) lives under it.
 const STOA_HOME = process.env.STOA_HOME || path.join(os.homedir(), ".stoa");
 const PID_FILE = path.join(STOA_HOME, "stoa.pid");
 const LOG_DIR = path.join(STOA_HOME, "logs");
 const LOG_FILE = path.join(LOG_DIR, "stoa.log");
-
-// The repo this script lives in: scripts/stoa.js -> repo root is one up.
-const REPO_DIR = path.resolve(__dirname, "..");
-
-// On Windows, npm/git are .cmd shims, so they must be invoked via the shell.
-// Using `shell: true` lets spawn resolve `npm`/`git` from PATH on all OSes.
-const SPAWN_SHELL = true;
 
 // ---------------------------------------------------------------------------
 // Small logging helpers
@@ -102,25 +149,105 @@ function clearPidFile() {
   }
 }
 
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function waitUntilDead(pid, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!isAlive(pid)) return true;
+    sleepSync(100);
+  }
+  return !isAlive(pid);
+}
+
+function isExecutableFile(file) {
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) return false;
+    return IS_WINDOWS || (stat.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+function envValue(name) {
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.toUpperCase() === name.toUpperCase()) return v;
+  }
+  return undefined;
+}
+
+function resolveCommand(cmd) {
+  if (cmd.includes("/") || cmd.includes("\\") || path.isAbsolute(cmd)) {
+    return isExecutableFile(cmd) ? cmd : null;
+  }
+
+  const dirs = (envValue("PATH") || "").split(path.delimiter).filter(Boolean);
+  const exts = IS_WINDOWS
+    ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
+        .split(";")
+        .map((e) => e.trim())
+        .filter(Boolean)
+    : [""];
+  const names =
+    IS_WINDOWS && path.extname(cmd) ? [cmd] : exts.map((e) => cmd + e);
+
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      if (isExecutableFile(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function commandSpec(cmd, args = []) {
+  const resolved = resolveCommand(cmd) || cmd;
+  if (IS_WINDOWS && /\.(cmd|bat)$/i.test(resolved)) {
+    return {
+      file: process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", resolved, ...args],
+    };
+  }
+  return { file: resolved, args };
+}
+
 /**
  * Run a command synchronously in the repo root with inherited stdio.
  * Returns the exit code; exits the CLI on failure unless allowFail is set.
  */
-function runSync(cmd, args, { cwd = REPO_DIR, allowFail = false } = {}) {
-  const result = spawnSync(cmd, args, {
+function runSync(cmd, args, { cwd = REPO_DIR, allowFail = false, env } = {}) {
+  const spec = commandSpec(cmd, args);
+  const result = spawnSync(spec.file, spec.args, {
     cwd,
     stdio: "inherit",
-    shell: SPAWN_SHELL,
+    ...(env ? { env } : {}),
   });
   if (result.error) {
     error(`Failed to run "${cmd}": ${result.error.message}`);
     if (!allowFail) process.exit(1);
     return 1;
   }
-  if (result.status !== 0 && !allowFail) {
-    process.exit(result.status || 1);
+  const status = result.status ?? 1;
+  if (status !== 0 && !allowFail) {
+    process.exit(status);
   }
-  return result.status || 0;
+  return status;
+}
+
+function spawnDetached(cmd, args, options) {
+  const spec = commandSpec(cmd, args);
+  return spawn(spec.file, spec.args, options);
+}
+
+function buildIsComplete(dir = REPO_DIR) {
+  const next = path.join(dir, ".next");
+  return (
+    fs.existsSync(path.join(next, "prerender-manifest.json")) &&
+    fs.existsSync(path.join(next, "BUILD_ID"))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -130,10 +257,16 @@ function runSync(cmd, args, { cwd = REPO_DIR, allowFail = false } = {}) {
 /** install: install dependencies and build for production. */
 function cmdInstall() {
   info("Installing dependencies...");
-  runSync("npm", ["install", "--legacy-peer-deps"]);
+  runSync("npm", ["install", "--include=dev", "--legacy-peer-deps"]);
 
   info("Building for production...");
   runSync("npm", ["run", "build"]);
+
+  if (!buildIsComplete()) {
+    error("Build incomplete: .next is missing required production artifacts.");
+    console.log("  Re-run the build: npm run build");
+    process.exit(1);
+  }
 
   console.log("");
   info("Stoa installed successfully!");
@@ -151,6 +284,12 @@ function cmdStart() {
     return;
   }
 
+  if (!buildIsComplete()) {
+    error("Production build is missing or incomplete.");
+    console.log("  Run: stoa install");
+    process.exit(1);
+  }
+
   info("Starting Stoa...");
   ensureDir(STOA_HOME);
   ensureDir(LOG_DIR);
@@ -159,14 +298,34 @@ function cmdStart() {
   const out = fs.openSync(LOG_FILE, "a");
   const err = fs.openSync(LOG_FILE, "a");
 
-  // `npm start` runs: cross-env NODE_ENV=production tsx server.ts
-  const child = spawn("npm", ["start"], {
-    cwd: REPO_DIR,
-    detached: true,
-    stdio: ["ignore", out, err],
-    shell: SPAWN_SHELL,
-    env: process.env,
-  });
+  let child;
+  if (IS_WINDOWS) {
+    const tsxDist = path.join(REPO_DIR, "node_modules", "tsx", "dist");
+    child = spawn(
+      process.execPath,
+      [
+        "--require",
+        path.join(tsxDist, "preflight.cjs"),
+        "--import",
+        pathToFileURL(path.join(tsxDist, "loader.mjs")).href,
+        "server.ts",
+      ],
+      {
+        cwd: REPO_DIR,
+        detached: true,
+        stdio: ["ignore", out, err],
+        windowsHide: true,
+        env: serverEnv({ NODE_ENV: "production" }),
+      }
+    );
+  } else {
+    child = spawnDetached("npm", ["start"], {
+      cwd: REPO_DIR,
+      detached: true,
+      stdio: ["ignore", out, err],
+      env: serverEnv(),
+    });
+  }
 
   if (typeof child.pid !== "number") {
     error("Failed to start Stoa. Check logs: stoa logs");
@@ -174,6 +333,13 @@ function cmdStart() {
   }
 
   fs.writeFileSync(PID_FILE, String(child.pid));
+
+  sleepSync(1200);
+  if (!isAlive(child.pid)) {
+    clearPidFile();
+    error("Failed to start Stoa. Check logs: stoa logs");
+    process.exit(1);
+  }
 
   // Let the child outlive this CLI process.
   child.unref();
@@ -218,6 +384,15 @@ function cmdStop() {
         /* already gone */
       }
     }
+  }
+
+  if (!waitUntilDead(pid)) {
+    error(`Failed to stop Stoa: PID ${pid} is still alive.`);
+    console.log("  Kill it manually, then retry:");
+    console.log(
+      IS_WINDOWS ? `    taskkill /PID ${pid} /T /F` : `    kill -9 ${pid}`
+    );
+    process.exit(1);
   }
 
   clearPidFile();
@@ -266,7 +441,7 @@ function openBrowser(url) {
     args = [url];
   }
 
-  const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+  const child = spawnDetached(cmd, args, { stdio: "ignore", detached: true });
   child.on("error", () => {
     warn(`Could not open a browser. Open manually: ${url}`);
   });
@@ -275,12 +450,18 @@ function openBrowser(url) {
 
 /** run: start the server in the foreground and open the browser. */
 function cmdRun() {
+  if (!buildIsComplete()) {
+    error("Production build is missing or incomplete.");
+    console.log("  Run: stoa install");
+    process.exit(1);
+  }
+
   info(`Opening ${URL}...`);
   // Open the browser shortly after launch so the server has a moment to boot.
   setTimeout(() => openBrowser(URL), 1500);
 
   // Run in the foreground with inherited stdio (Ctrl+C stops it).
-  runSync("npm", ["start"]);
+  runSync("npm", ["start"], { env: serverEnv() });
 }
 
 /** logs: tail the log file if present. */
@@ -308,9 +489,9 @@ function cmdLogs() {
 
 /** Capture a git command's trimmed stdout in REPO_DIR, or null on failure. */
 function gitCapture(args) {
-  const r = spawnSync("git", args, {
+  const spec = commandSpec("git", args);
+  const r = spawnSync(spec.file, spec.args, {
     cwd: REPO_DIR,
-    shell: SPAWN_SHELL,
     encoding: "utf8",
   });
   return r.status === 0 ? (r.stdout || "").trim() : null;
@@ -364,14 +545,17 @@ function cmdUpdate() {
   const wasRunning = !!getRunningPid();
   if (wasRunning) cmdStop();
 
-  // Past this point the server is stopped. On ANY failure (network, diverged
-  // main, npm), restart the existing version so a failed update never leaves the
-  // user's server down — then exit non-zero.
+  // Past this point the server is stopped. On failure, restart only if the
+  // production build artifacts are still intact; never boot a partial build.
   const recover = (what) => {
     error(`Update failed (${what}).`);
     if (wasRunning) {
-      info("Restarting the server with the existing version...");
-      cmdStart();
+      if (buildIsComplete()) {
+        info("Restarting the server with the current build...");
+        cmdStart();
+      } else {
+        warn("Server was not restarted because the build is incomplete.");
+      }
     }
     process.exit(1);
   };
@@ -400,10 +584,18 @@ function cmdUpdate() {
   }
 
   info("Installing dependencies...");
-  step("npm install", "npm", ["install", "--legacy-peer-deps"]);
+  step("npm install", "npm", [
+    "install",
+    "--include=dev",
+    "--legacy-peer-deps",
+  ]);
 
   info("Rebuilding...");
   step("npm run build", "npm", ["run", "build"]);
+
+  if (!buildIsComplete()) {
+    recover("build incomplete");
+  }
 
   info("Update complete!");
 
@@ -483,4 +675,13 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { isGitInstall };
+module.exports = {
+  isGitInstall,
+  parseEnvFile,
+  loadEnvFile,
+  serverEnv,
+  commandSpec,
+  buildIsComplete,
+  waitUntilDead,
+  PORT,
+};
