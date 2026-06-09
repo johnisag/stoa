@@ -84,6 +84,7 @@ export async function createIssue(
     cwd: expandHome(opts.repoPath),
     encoding: "utf-8",
     timeout: 20000,
+    windowsHide: true,
   });
   const created = parseCreatedIssueUrl(stdout);
   if (!created)

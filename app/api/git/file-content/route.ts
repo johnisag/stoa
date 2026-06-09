@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
         cwd: expandedPath,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024, // 10MB
+        windowsHide: true,
       });
 
       return NextResponse.json({ content });

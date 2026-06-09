@@ -25,7 +25,10 @@ interface PRInfo {
  */
 async function checkGhCli(): Promise<boolean> {
   try {
-    await execFileAsync("gh", ["auth", "status"], { timeout: 5000 });
+    await execFileAsync("gh", ["auth", "status"], {
+      timeout: 5000,
+      windowsHide: true,
+    });
     return true;
   } catch {
     return false;
@@ -52,7 +55,7 @@ async function getPRForBranch(
         "--limit",
         "1",
       ],
-      { cwd: projectPath, timeout: 10000 }
+      { cwd: projectPath, timeout: 10000, windowsHide: true }
     );
     const prs = JSON.parse(stdout);
     return prs.length > 0 ? prs[0] : null;
@@ -76,6 +79,7 @@ async function createPR(
     await execFileAsync("git", ["push", "-u", "origin", branchName], {
       cwd: projectPath,
       timeout: 30000,
+      windowsHide: true,
     });
   } catch {
     // Branch might already be pushed, continue
@@ -95,7 +99,7 @@ async function createPR(
       "--json",
       "number,url,state,title",
     ],
-    { cwd: projectPath, timeout: 30000 }
+    { cwd: projectPath, timeout: 30000, windowsHide: true }
   );
   return JSON.parse(stdout);
 }

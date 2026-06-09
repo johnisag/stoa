@@ -63,7 +63,7 @@ export function getCommitHistory(
     const format = "%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%at";
     const output = execSync(
       `git log --format="${format}" -n ${limit} --shortstat`,
-      { cwd, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 }
+      { cwd, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, windowsHide: true }
     );
 
     const commits: CommitSummary[] = [];
@@ -164,6 +164,7 @@ export function getCommitDetail(
       {
         cwd,
         encoding: "utf-8",
+        windowsHide: true,
       }
     ).trim();
 
@@ -177,13 +178,13 @@ export function getCommitDetail(
     // Get file stats using numstat
     const statOutput = execSync(
       `git show --numstat --format="" ${commitHash}`,
-      { cwd, encoding: "utf-8" }
+      { cwd, encoding: "utf-8", windowsHide: true }
     );
 
     // Get name-status for detecting renames
     const nameStatusOutput = execSync(
       `git show --name-status --format="" ${commitHash}`,
-      { cwd, encoding: "utf-8" }
+      { cwd, encoding: "utf-8", windowsHide: true }
     );
 
     const files: CommitFile[] = [];
@@ -284,7 +285,7 @@ export function getCommitFileDiff(
     // Use -m to handle merge commits (shows diff against first parent)
     const diff = execSync(
       `git show -m --first-parent ${commitHash} -- "${filePath}"`,
-      { cwd, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 }
+      { cwd, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, windowsHide: true }
     );
     return diff;
   } catch (error) {

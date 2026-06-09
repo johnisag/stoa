@@ -60,6 +60,7 @@ function getGitContext(
       execSync(`git rev-parse --verify origin/${baseBranch}`, {
         cwd: workingDir,
         stdio: "pipe",
+        windowsHide: true,
       });
       baseBranchRef = `origin/${baseBranch}`;
     } catch {
@@ -68,6 +69,7 @@ function getGitContext(
         execSync(`git rev-parse --verify ${baseBranch}`, {
           cwd: workingDir,
           stdio: "pipe",
+          windowsHide: true,
         });
       } catch {
         // Base branch doesn't exist
@@ -81,6 +83,7 @@ function getGitContext(
         cwd: workingDir,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
       });
     } catch {}
 
@@ -91,6 +94,7 @@ function getGitContext(
         {
           cwd: workingDir,
           encoding: "utf-8",
+          windowsHide: true,
         }
       );
       changedFiles = filesOut
@@ -106,6 +110,7 @@ function getGitContext(
         {
           cwd: workingDir,
           encoding: "utf-8",
+          windowsHide: true,
         }
       );
       commits = commitsOut
@@ -120,6 +125,7 @@ function getGitContext(
         cwd: workingDir,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
       });
       if (workingDiff) {
         diff = diff ? `${diff}\n${workingDiff}` : workingDiff;
@@ -128,6 +134,7 @@ function getGitContext(
       const uncommittedFiles = execSync("git diff --name-only", {
         cwd: workingDir,
         encoding: "utf-8",
+        windowsHide: true,
       })
         .split("\n")
         .map((f) => f.trim())
@@ -152,7 +159,11 @@ async function generateWithClaude(
 ): Promise<GeneratedPRContent | null> {
   // Check if Claude CLI is available
   try {
-    execSync("claude --version", { stdio: "pipe", timeout: 5000 });
+    execSync("claude --version", {
+      stdio: "pipe",
+      timeout: 5000,
+      windowsHide: true,
+    });
   } catch {
     return null;
   }
@@ -170,6 +181,7 @@ async function generateWithClaude(
       encoding: "utf-8",
       timeout: 30000,
       maxBuffer: 1024 * 1024,
+      windowsHide: true,
     });
 
     return parseClaudeResponse(output);
