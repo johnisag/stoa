@@ -48,6 +48,12 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
           ? 1
           : 0
         : repo.review_gate;
+    const ciAutofix =
+      body?.ciAutofix !== undefined
+        ? body.ciAutofix
+          ? 1
+          : 0
+        : repo.ci_autofix;
 
     queries
       .updateDispatchRepo(db)
@@ -60,6 +66,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         mode,
         enabled,
         reviewGate,
+        ciAutofix,
         id
       );
     return NextResponse.json({

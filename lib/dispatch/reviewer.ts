@@ -280,9 +280,10 @@ export function buildFixPrompt(repo: DispatchRepo, d: IssueDispatch): string {
  * the session id on the dispatch row via `onSpawn` BEFORE the backend create, so
  * the spawn-once guard holds even if create throws. Returns the session id or
  * null on failure. autoApprove so the agent runs gh/git unattended (prompt-
- * bounded; the inherent opt-in risk).
+ * bounded; the inherent opt-in risk). Exported so the CI-fix loop reuses the
+ * exact same spawn recipe (worktree session + spawn-once via onSpawn).
  */
-async function spawnInWorktree(
+export async function spawnInWorktree(
   repo: DispatchRepo,
   d: IssueDispatch,
   sessionName: string,

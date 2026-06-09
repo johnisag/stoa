@@ -245,4 +245,21 @@ describe("autoMergePass", () => {
     expect(state.mergeCalls).toHaveLength(1);
     expect(state.statusUpdates).toHaveLength(0);
   });
+
+  // On a review-gated repo, the gate uses Stoa's OWN cached panel verdict
+  // (d.review_decision), NOT GitHub's reviewDecision — the panel posts comments,
+  // so GitHub's field is null and would otherwise wedge a gated PR forever.
+  it("waits on a gated PR until the cached panel verdict is APPROVED", async () => {
+    state.repo = { review_gate: 1, repo_path: "/repo" };
+    state.rows = [row({ review_decision: null })];
+    await autoMergePass();
+    expect(state.mergeCalls).toHaveLength(0);
+  });
+
+  it("merges a gated PR once the cached panel verdict is APPROVED", async () => {
+    state.repo = { review_gate: 1, repo_path: "/repo" };
+    state.rows = [row({ review_decision: "APPROVED" })];
+    await autoMergePass();
+    expect(state.mergeCalls).toEqual([{ cwd: "/wt", prNumber: 7 }]);
+  });
 });

@@ -44,6 +44,7 @@ const EMPTY: CreateRepoInput = {
   mode: "review",
   enabled: false,
   reviewGate: false,
+  ciAutofix: false,
 };
 
 /** A small single-select segmented control (radiogroup). Shared by the mode
@@ -241,6 +242,23 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
             }
           />
           critic
+        </label>
+
+        {/* CI auto-fix (opt-in): spawn a fixer on a worker's PR with red checks */}
+        <label
+          className="text-muted-foreground flex items-center gap-1 text-xs"
+          title="Auto-fix failing CI on each worker's PR (read the failures, fix, push)"
+        >
+          <Switch
+            checked={repo.ci_autofix === 1}
+            onCheckedChange={(v) => patch({ ciAutofix: v })}
+            aria-label={
+              repo.ci_autofix === 1
+                ? "Disable CI auto-fix"
+                : "Enable CI auto-fix"
+            }
+          />
+          ci-fix
         </label>
 
         {/* browse open issues for one-tap triage */}

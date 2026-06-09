@@ -29,8 +29,10 @@ export interface DispatchRepo {
   mode: DispatchMode;
   /** 0/1 — paused vs active. */
   enabled: number;
-  /** 0/1 — opt-in reviewer gate: spawn a critic agent on each worker's PR. */
+  /** 0/1 — opt-in reviewer gate: spawn a critic panel on each worker's PR. */
   review_gate: number;
+  /** 0/1 — opt-in CI auto-fix: spawn a fixer on a worker's PR with RED checks. */
+  ci_autofix: number;
   project_id: string | null;
   created_at: string;
   updated_at: string;
@@ -74,6 +76,10 @@ export interface IssueDispatch {
   fixer_session_id: string | null;
   /** 0/1 — opt-in: auto-merge this issue's PR once it's ready (the reconciler). */
   auto_merge: number;
+  /** How many CI-fix rounds have run on this PR's red checks (capped). */
+  ci_fix_rounds: number;
+  /** Session id of the in-flight CI fixer (null when none running). */
+  ci_fixer_session_id: string | null;
   created_at: string;
   updated_at: string;
 }

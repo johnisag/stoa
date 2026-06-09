@@ -18,6 +18,7 @@ import { expandHome } from "../platform";
 import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
 import { autoMergePass } from "./auto-merge";
+import { ciFixPass } from "./ci-fix";
 import {
   nextReviewAction,
   spawnReviewPanel,
@@ -139,8 +140,13 @@ export async function reconcileTick(): Promise<void> {
     // cockpit + fix loop. Non-gated repos are skipped (no-op unless review_gate).
     await reviewGatePass();
 
-    // 6. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
-    // After the reviewer pass so a just-approved gated PR can merge same tick.
+    // 6. CI auto-fix (opt-in per repo): spawn a fixer on any open PR with red
+    // checks so it self-heals. Before auto-merge so a fix can start the same tick
+    // a failure is seen. Non-armed repos are skipped.
+    await ciFixPass();
+
+    // 7. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
+    // After the reviewer + CI passes so a just-approved, just-green PR can merge.
     await autoMergePass();
   } catch (err) {
     console.error("dispatch reconcile tick failed:", err);
