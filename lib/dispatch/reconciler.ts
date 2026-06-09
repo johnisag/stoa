@@ -20,9 +20,9 @@ import { dispatchOne } from "./dispatcher";
 import { autoMergePass } from "./auto-merge";
 import {
   nextReviewAction,
-  spawnReviewer,
+  spawnReviewPanel,
   spawnFixer,
-  getReviewDecision,
+  aggregatePanelVerdict,
   MAX_FIX_ROUNDS,
 } from "./reviewer";
 import type { DispatchRepo, IssueDispatch, SlotInputs } from "./types";
@@ -134,9 +134,9 @@ export async function reconcileTick(): Promise<void> {
     // list genuinely means "no live sessions" and dead workers should be swept.
     await sweepActiveWorkers({ guardEmptyList: false });
 
-    // 5. Reviewer gate (opt-in per repo): spawn a critic on each new PR and
-    // refresh the cached GitHub review decision for the cockpit. Non-gated repos
-    // are skipped, so this is a no-op unless a repo armed `review_gate`.
+    // 5. Reviewer gate (opt-in per repo): spawn a 3-critic panel on each new PR
+    // and aggregate their verdict comments into the cached decision for the
+    // cockpit + fix loop. Non-gated repos are skipped (no-op unless review_gate).
     await reviewGatePass();
 
     // 6. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
@@ -206,15 +206,10 @@ export async function sweepActiveWorkers(opts: {
 }
 
 /**
- * Startup reconcile: link any PRs opened just before a restart and free slots
- * held by workers that didn't survive a Tier-1 restart. Uses the empty-list guard
- * so a Tier-2 daemon mid-rehydration doesn't get its live workers mass-failed;
- * any genuinely-dead worker it skips is swept by the first 60s tick.
- */
-/**
- * Reviewer-gate pass: for every open PR whose repo armed `review_gate`, spawn a
- * critic once and keep its GitHub review decision cached on the row. A no-op for
- * non-gated repos (the common case).
+ * Reviewer-gate pass: for every open PR whose repo armed `review_gate`, spawn the
+ * 3-critic panel once, then aggregate the critics' verdict comments into the
+ * cached decision that drives the fix loop + cockpit badge. A no-op for non-gated
+ * repos (the common case).
  */
 export async function reviewGatePass(): Promise<void> {
   const db = getDb();
@@ -242,7 +237,8 @@ export async function reviewGatePass(): Promise<void> {
 
     const fixerAlive = isAlive(d.fixer_session_id);
 
-    // Keep the cached decision fresh once a critic has run and no fixer is active.
+    // Once the panel is spawned and no fixer is active, aggregate the critics'
+    // verdict comments (this fix round only) and cache the decision when complete.
     let decision = d.review_decision;
     if (
       d.reviewer_session_id &&
@@ -250,13 +246,18 @@ export async function reviewGatePass(): Promise<void> {
       d.worktree_path &&
       d.pr_number != null
     ) {
-      const fresh = await getReviewDecision(
+      const verdict = await aggregatePanelVerdict(
         expandHome(d.worktree_path),
-        d.pr_number
+        d.pr_number,
+        d.fix_rounds
       );
-      if (fresh && fresh !== decision) {
-        queries.setDispatchReviewDecision(db).run(fresh, d.id);
-        decision = fresh;
+      if (
+        verdict.complete &&
+        verdict.decision &&
+        verdict.decision !== decision
+      ) {
+        queries.setDispatchReviewDecision(db).run(verdict.decision, d.id);
+        decision = verdict.decision;
       }
     }
 
@@ -272,13 +273,19 @@ export async function reviewGatePass(): Promise<void> {
       maxFixRounds: MAX_FIX_ROUNDS,
     });
 
-    if (action === "spawn_critic") await spawnReviewer(repo, d);
+    if (action === "spawn_critic") await spawnReviewPanel(repo, d);
     else if (action === "spawn_fixer") await spawnFixer(repo, d);
     else if (action === "rereview") queries.resetForReReview(db).run(d.id);
     // wait / approved / stuck / idle → nothing to do this tick
   }
 }
 
+/**
+ * Startup reconcile: link any PRs opened just before a restart and free slots
+ * held by workers that didn't survive a Tier-1 restart. Uses the empty-list guard
+ * so a Tier-2 daemon mid-rehydration doesn't get its live workers mass-failed;
+ * any genuinely-dead worker it skips is swept by the first 60s tick.
+ */
 export async function reconcileOrphans(): Promise<void> {
   await sweepActiveWorkers({ guardEmptyList: true });
 }

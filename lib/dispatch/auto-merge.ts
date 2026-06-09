@@ -4,7 +4,7 @@
  * A row with auto_merge=1 and status 'pr_open' is merged by the reconciler when:
  *   - there are no merge conflicts (gh mergeable === "MERGEABLE"),
  *   - its checks are green (or there are none), and
- *   - if the repo armed review_gate, the critic's GitHub review is APPROVED.
+ *   - if the repo armed review_gate, the critic panel's verdict is APPROVED.
  * The HARD gate is `gh pr merge` itself (it refuses an unmergeable PR); the
  * readiness check just avoids spamming doomed merge attempts every tick.
  *
