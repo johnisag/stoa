@@ -25,17 +25,17 @@
     ".github/workflows/test.yml": "29982cc39802717cefd6f5bf17acb4a58ce9ed6d6b7c7d2a411ebad26275bdff",
     ".husky/pre-commit": "042eaf5386ffbfccd14639db8112e12d297a7d4d2caf25c36a4b10edcb822fc2",
     "scripts/guard-surfaces.mjs": "c0df0792d415c96570b204b69cd49ea9be606a157e2c0683d78c03b07530afd1",
-    "scripts/install.ps1": "5e86f980272fe6f6ec7f911b61bd880c7da71a355e67f4960bbc76372cfd9b9f",
+    "scripts/install.ps1": "2170051529e952e1ec8edb2f9b63f0aa9baba31fc7777ae778c7103aea1e6adf",
     "scripts/install.sh": "6b673db658df993ace3291280996f8fca499e4bbabca441c87fd95113ba95149",
     "scripts/lib/ai-clis.sh": "0019827ec924018f9fb91a26cf64cc020ddf097aca7d36dc58feedae2cc048fb",
-    "scripts/lib/commands.sh": "fda45d3a4c46b6679339c8e26c1730ff8f2673209a8cdc515f719d32edab8d73",
+    "scripts/lib/commands.sh": "965d62217c4eb0bde4c2a51cc8580f2390bd122ac2ae1de8385b8a0e59bda89f",
     "scripts/lib/common.sh": "e6ab975d4bde0ae409664e3f553ab125febbe139313314e4df2de9207762397f",
-    "scripts/lib/prerequisites.sh": "a4e99781938cfc2add823e82abd365da33c627296ed019f1379072a4e6b76a9f",
+    "scripts/lib/prerequisites.sh": "bcc67e29ee2a713550fed269fc00af11155f8d45722350e83feeb9f534f789f5",
     "scripts/postinstall.js": "53bb659676007f2c842b753f25436c33471e52581e279057d499b9165cfb8764",
     "scripts/precommit.js": "cd5b697d4d96842b998c975bf955617f18566605779b1d2578f1381c0f4065d7",
     "scripts/pty-host.ts": "490174e586be52ae510ed339d67b1852f0a541c1de5fcde622205ee31a82c19a",
     "scripts/setup.sh": "cfdeb6f0ad53698ab160a5c218b9a1cf20fa38333913371f4279d4a56e71be7a",
-    "scripts/stoa": "025d1b56b00f67008a074bb712f326bfd03d7bef358d5bb2c75b1eeb49910165",
-    "scripts/stoa.js": "18ebd7fadfcfca9b8d6a9d0b14591328c782225d4979b839213e011e69f2c946"
+    "scripts/stoa": "c9f088bcec55208741500869b15ece1f230efe708fee1acd199a669eee47524a",
+    "scripts/stoa.js": "84387c034bfb13be4e0ab0c82f543693d81960194f109ff7791255b616e1991d"
   }
 }

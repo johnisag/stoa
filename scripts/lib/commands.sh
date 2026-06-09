@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Command implementations for stoa
 
+build_is_complete() {
+    [[ -f "$REPO_DIR/.next/BUILD_ID" ]] && [[ -f "$REPO_DIR/.next/prerender-manifest.json" ]]
+}
+
 cmd_install() {
     local use_local=false
     [[ "${1:-}" == "--local" ]] && use_local=true
@@ -43,11 +47,17 @@ cmd_install() {
 
     # Install dependencies
     log_info "Installing dependencies..."
-    npm install --legacy-peer-deps
+    npm install --include=dev --legacy-peer-deps
 
     # Build for production
     log_info "Building for production..."
     npm run build
+
+    if ! build_is_complete; then
+        log_error "Build incomplete: .next is missing required production artifacts."
+        echo "  Re-run the build: npm run build"
+        exit 1
+    fi
 
     # Create CLI symlink (prefer ~/.local/bin to avoid sudo)
     log_info "Adding stoa to PATH..."
@@ -91,7 +101,6 @@ cmd_install() {
 
     echo "Next steps:"
     echo "  stoa start     Start the server"
-    echo "  stoa enable    Auto-start on boot"
     echo "  stoa status    Show URLs"
 }
 
@@ -105,6 +114,12 @@ cmd_start() {
 
     if [[ ! -d "$REPO_DIR" ]]; then
         log_error "Stoa is not installed. Run 'stoa install' first."
+        exit 1
+    fi
+
+    if ! build_is_complete; then
+        log_error "Production build is missing or incomplete."
+        echo "  Run: stoa install"
         exit 1
     fi
 
@@ -122,7 +137,7 @@ cmd_start() {
     fi
 
     # Start server in background
-    nohup npm start >> "$LOG_FILE" 2>&1 &
+    PORT="$PORT" nohup npm start >> "$LOG_FILE" 2>&1 &
     local pid=$!
     echo "$pid" > "$PID_FILE"
 
@@ -150,6 +165,7 @@ cmd_start() {
 cmd_stop() {
     if ! is_running; then
         log_warn "Stoa is not running"
+        rm -f "$PID_FILE"
         return 0
     fi
 
@@ -174,6 +190,13 @@ cmd_stop() {
         log_warn "Force killing..."
         kill -9 "$pid" 2>/dev/null || true
         sleep 1
+    fi
+
+    if ps -p "$pid" &> /dev/null; then
+        log_error "Failed to stop Stoa: PID $pid is still alive."
+        echo "  Kill it manually, then retry:"
+        echo "    kill -9 $pid"
+        exit 1
     fi
 
     rm -f "$PID_FILE"
@@ -315,11 +338,19 @@ cmd_update() {
     else
         log_info "Updated $before -> $after"
         set +e
-        npm install --legacy-peer-deps && npm run build
+        npm install --include=dev --legacy-peer-deps && npm run build
         local build_rc=$?
         set -e
         if [[ $build_rc -ne 0 ]]; then
             log_error "Update failed (dependency install/build)."
+            if [[ "$was_running" == true ]]; then
+                log_warn "Restarting the server with the existing version..."
+                cmd_start
+            fi
+            exit 1
+        fi
+        if ! build_is_complete; then
+            log_error "Update failed (build incomplete)."
             if [[ "$was_running" == true ]]; then
                 log_warn "Restarting the server with the existing version..."
                 cmd_start
@@ -495,10 +526,16 @@ cmd_start_foreground() {
 
     cd "$REPO_DIR"
 
+    if ! build_is_complete; then
+        log_error "Production build is missing or incomplete."
+        echo "  Run: stoa install"
+        exit 1
+    fi
+
     # Create PID file before exec (PID stays the same after exec)
     echo "$$" > "$PID_FILE"
 
-    exec npm start
+    exec env PORT="$PORT" npm start
 }
 
 cmd_help() {

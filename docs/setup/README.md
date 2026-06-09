@@ -12,11 +12,12 @@ curl -fsSL https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.
 
 The installer will:
 
-1. Download the `stoa` CLI to your PATH
+1. Clone or update Stoa in `~/.stoa/repo`
 2. Check for prerequisites (Node.js 20+, git, tmux) and offer to install any missing ones
-3. Detect installed AI CLIs or prompt you to install one (Claude Code recommended)
-4. Clone the repository to `~/.stoa/repo`
-5. Install dependencies and build for production
+3. Detect installed AI CLIs or prompt you to install one
+4. Install dependencies with development build tools included
+5. Build for production and verify the required `.next` artifacts exist
+6. Link `stoa` into `~/.local/bin`
 
 ## Manual Install
 
@@ -28,7 +29,7 @@ git clone https://github.com/johnisag/stoa ~/.stoa/repo
 cd ~/.stoa/repo
 
 # Install dependencies
-npm install
+npm install --include=dev --legacy-peer-deps
 
 # Build for production
 npm run build
@@ -49,8 +50,6 @@ After installation, use the `stoa` command to manage the server:
 | `stoa status`    | Show status, PID, and URLs      |
 | `stoa logs`      | Tail server logs                |
 | `stoa update`    | Pull latest version and rebuild |
-| `stoa enable`    | Enable auto-start on boot       |
-| `stoa disable`   | Disable auto-start              |
 | `stoa uninstall` | Remove Stoa completely          |
 
 ## Prerequisites
@@ -89,38 +88,10 @@ You need at least one AI coding CLI installed. The installer will prompt you to 
 # Start on a different port
 STOA_PORT=8080 stoa start
 
-# Or set permanently in your shell config
-export STOA_PORT=8080
-```
-
-## Auto-Start on Boot
-
-### macOS (launchd)
-
-```bash
-stoa enable
-```
-
-This creates a Launch Agent at `~/Library/LaunchAgents/com.stoa.plist`.
-
-To disable:
-
-```bash
-stoa disable
-```
-
-### Linux (systemd)
-
-```bash
-stoa enable
-```
-
-This creates a user service at `~/.config/systemd/user/stoa.service`.
-
-To disable:
-
-```bash
-stoa disable
+# Or set permanently in the install directory
+cd ~/.stoa/repo
+cp .env.example .env
+# edit .env and set STOA_PORT=8080
 ```
 
 ## Mobile Access with Tailscale
@@ -165,10 +136,9 @@ The `stoa status` command will show your Tailscale URL if Tailscale is installed
 
 ```
 ~/.stoa/
-├── repo/              # Cloned Stoa repository
-├── stoa.pid       # PID file when running
-├── stoa.log       # Server logs
-└── stoa.log.old   # Rotated logs (if > 10MB)
+|-- repo/          # Cloned Stoa repository
+|-- stoa.pid       # PID file when running
+`-- stoa.log       # Server logs
 ```
 
 ## Updating
@@ -228,7 +198,7 @@ stoa uninstall
 This removes:
 
 - The `~/.stoa` directory
-- Auto-start configuration (launchd/systemd)
+- Any launchd/systemd configuration created by older installs
 
 The `stoa` CLI script itself is not removed. Delete it manually:
 

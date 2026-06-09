@@ -277,7 +277,30 @@ install_git() {
             sudo apt-get install -y git
             ;;
         redhat)
-            sudo yum install -y git
+            if command -v dnf &> /dev/null; then
+                sudo dnf install -y git
+            else
+                sudo yum install -y git
+            fi
+            ;;
+        linux)
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update
+                sudo apt-get install -y git
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y git
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y git
+            elif command -v pacman &> /dev/null; then
+                sudo pacman -S --noconfirm git
+            else
+                log_error "Please install git manually, then re-run stoa install."
+                exit 1
+            fi
+            ;;
+        *)
+            log_error "Please install git manually, then re-run stoa install."
+            exit 1
             ;;
     esac
 }
@@ -310,7 +333,30 @@ install_tmux() {
             sudo apt-get install -y tmux
             ;;
         redhat)
-            sudo yum install -y tmux
+            if command -v dnf &> /dev/null; then
+                sudo dnf install -y tmux
+            else
+                sudo yum install -y tmux
+            fi
+            ;;
+        linux)
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update
+                sudo apt-get install -y tmux
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y tmux
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y tmux
+            elif command -v pacman &> /dev/null; then
+                sudo pacman -S --noconfirm tmux
+            else
+                log_error "Please install tmux manually, then re-run stoa install."
+                exit 1
+            fi
+            ;;
+        *)
+            log_error "Please install tmux manually, then re-run stoa install."
+            exit 1
             ;;
     esac
 }
@@ -383,7 +429,30 @@ install_ripgrep() {
             sudo apt-get install -y ripgrep
             ;;
         redhat)
-            sudo yum install -y ripgrep
+            if command -v dnf &> /dev/null; then
+                sudo dnf install -y ripgrep
+            else
+                sudo yum install -y ripgrep
+            fi
+            ;;
+        linux)
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update
+                sudo apt-get install -y ripgrep
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y ripgrep
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y ripgrep
+            elif command -v pacman &> /dev/null; then
+                sudo pacman -S --noconfirm ripgrep
+            else
+                log_error "Please install ripgrep manually, then re-run stoa install."
+                exit 1
+            fi
+            ;;
+        *)
+            log_error "Please install ripgrep manually, then re-run stoa install."
+            exit 1
             ;;
     esac
 }

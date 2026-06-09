@@ -629,6 +629,16 @@ app.prepare().then(() => {
     void reconcileOrphans()
       .then(() => reconcileTick())
       .catch((err) => console.error("dispatch startup reconcile failed:", err));
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(
+          `[stoa] Port ${port} is already in use. Stop the other server, then start again.`
+        );
+      } else {
+        console.error("[stoa] Fatal server error:", err);
+      }
+      process.exit(1);
+    });
     server.listen(port, () => {
       console.log(`> Stoa ready on http://${hostname}:${port}`);
       if (AUTH_ENABLED) {

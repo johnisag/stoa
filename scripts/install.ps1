@@ -63,6 +63,16 @@ if (-not $gitCmd) {
 }
 Write-Info "Git: $((& git --version).Trim())"
 
+$npmCmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
+if (-not $npmCmd) {
+    $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+}
+if (-not $npmCmd) {
+    Write-Err "npm is required but was not found."
+    Write-Host "    npm should come with Node.js. Reinstall Node.js, then retry."
+    exit 1
+}
+
 # ---------------------------------------------------------------------------
 # Clone or update the repository (idempotent)
 # ---------------------------------------------------------------------------
@@ -87,13 +97,28 @@ if (Test-Path $InstallDir) {
 Push-Location $InstallDir
 
 Write-Info "Installing dependencies..."
-& npm install --legacy-peer-deps
+& $npmCmd.Source install --include=dev --legacy-peer-deps
 if (-not $?) { Pop-Location; Write-Err "npm install failed."; exit 1 }
 
 Write-Info "Building for production..."
-& npm run build
+& $npmCmd.Source run build
 if (-not $?) { Pop-Location; Write-Err "npm run build failed."; exit 1 }
 
+if (
+    -not (Test-Path (Join-Path $InstallDir ".next\BUILD_ID")) -or
+    -not (Test-Path (Join-Path $InstallDir ".next\prerender-manifest.json"))
+) {
+    Pop-Location
+    Write-Err "Build incomplete (.next is missing required files). Re-run: npm run build"
+    exit 1
+}
+
+Pop-Location
+
+Push-Location $InstallDir
+Write-Info "Attempting to link the 'stoa' command to your PATH (best-effort)..."
+& $npmCmd.Source link
+$linked = $?
 Pop-Location
 
 # ---------------------------------------------------------------------------
@@ -104,10 +129,19 @@ Write-Ok "Stoa installed successfully!"
 Write-Host ""
 Write-Host "Installed at: $InstallDir"
 Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  stoa start          (if the CLI is on your PATH)"
-Write-Host "  - or -"
-Write-Host "  cd `"$InstallDir`"; npm start"
+if ($linked) {
+    Write-Host "Next steps:"
+    Write-Host "  stoa start"
+    Write-Host ""
+    Write-Host "If PowerShell blocks 'stoa' (script execution disabled), run:"
+    Write-Host "  stoa.cmd start"
+} else {
+    Write-Err "Could not link 'stoa' to your PATH automatically."
+    Write-Host "Run it directly instead:"
+    Write-Host "  node `"$InstallDir\scripts\stoa.js`" start"
+    Write-Host "  - or -"
+    Write-Host "  cd `"$InstallDir`"; npm start"
+}
 Write-Host ""
 Write-Host "Then open http://localhost:3011 in your browser."
 Write-Host ""
