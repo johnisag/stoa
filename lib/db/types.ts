@@ -115,3 +115,33 @@ export interface DevServer {
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * One row in the append-only audit / event ledger. Independent of the sessions
+ * row (no FK) so the trail outlives a deleted session — the Windows-safety moat
+ * ("what did the agent run") AND the raw substrate for analytics.
+ */
+export interface SessionEvent {
+  id: number;
+  /** Backend session key (e.g. "claude-<uuid>"), not sessions.id. */
+  session_key: string;
+  event_type: SessionEventType;
+  /** JSON-encoded structured detail, or null for payload-less events. */
+  payload: string | null;
+  /** Epoch millis. */
+  created_at: number;
+}
+
+/**
+ * Recorded event kinds. Lifecycle + input/control at the SessionBackend seam
+ * (web-server side). Deliberately omits raw pty output (daemon-side, high
+ * volume — the rendered-screen capture already serves that need).
+ */
+export type SessionEventType =
+  | "session_create"
+  | "session_kill"
+  | "session_rename"
+  | "input_text"
+  | "input_paste"
+  | "input_enter"
+  | "input_escape";

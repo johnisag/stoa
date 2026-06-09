@@ -535,4 +535,41 @@ export const queries = {
       db,
       `UPDATE issue_dispatches SET status = ?, updated_at = datetime('now') WHERE id = ?`
     ),
+
+  // Audit / event ledger (append-only)
+  appendSessionEvent: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO session_events (session_key, event_type, payload, created_at)
+       VALUES (?, ?, ?, ?)`
+    ),
+
+  getSessionEvents: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM session_events WHERE session_key = ? ORDER BY id ASC`
+    ),
+
+  // Window-bounded event read for analytics — projects only the columns the
+  // engine reads (NOT payload, which can hold large input/paste bodies) and
+  // orders by created_at so the idx_session_events_created range scan is used
+  // directly. Keeps a busy 90-day window from materializing MBs of payload text.
+  getSessionEventsSince: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT session_key, event_type, created_at FROM session_events
+       WHERE created_at >= ? ORDER BY created_at ASC, id ASC`
+    ),
+
+  getSessionEventsByType: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM session_events WHERE session_key = ? AND event_type = ? ORDER BY id ASC`
+    ),
+
+  countSessionEvents: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n FROM session_events WHERE session_key = ?`
+    ),
 };
