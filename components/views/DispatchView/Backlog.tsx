@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -32,6 +33,7 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [labels, setLabels] = useState("");
+  const [autoMerge, setAutoMerge] = useState(false);
   const [scheduledAt, setScheduledAt] = useState("");
   const [pending, setPending] = useState<
     null | "backlog" | "now" | "scheduled"
@@ -78,6 +80,7 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
           .map((s) => s.trim())
           .filter(Boolean),
         disposition,
+        autoMerge,
         ...(disposition === "scheduled"
           ? { scheduledAt: new Date(scheduledAt).toISOString() }
           : {}),
@@ -91,11 +94,12 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
                 : disposition === "scheduled"
                   ? "scheduled"
                   : "added to backlog"
-            }`
+            }${autoMerge ? " · auto-merge on" : ""}`
           );
           setTitle("");
           setBody("");
           setLabels("");
+          setAutoMerge(false);
           if (disposition === "scheduled") setScheduledAt("");
         },
         onError: (e) => toast.error((e as Error).message),
@@ -143,6 +147,17 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
           onChange={(e) => setLabels(e.target.value)}
           className="h-8 w-48"
         />
+        <label
+          className="text-muted-foreground flex items-center gap-1.5 text-xs"
+          title="Merge the worker's PR automatically once it's ready (no conflicts, checks green, critic-approved if the repo is review-gated)."
+        >
+          <Switch
+            checked={autoMerge}
+            onCheckedChange={setAutoMerge}
+            aria-label="Auto-merge the PR when ready"
+          />
+          auto-merge
+        </label>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1">
             <Input

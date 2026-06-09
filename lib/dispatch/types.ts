@@ -72,6 +72,8 @@ export interface IssueDispatch {
   fix_rounds: number;
   /** Session id of the in-flight fixer worker (null when none running). */
   fixer_session_id: string | null;
+  /** 0/1 — opt-in: auto-merge this issue's PR once it's ready (the reconciler). */
+  auto_merge: number;
   created_at: string;
   updated_at: string;
 }

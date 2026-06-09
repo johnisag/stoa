@@ -209,6 +209,8 @@ export interface CreateIssueInput {
   disposition: "now" | "backlog" | "scheduled";
   /** ISO time — required when disposition === "scheduled". */
   scheduledAt?: string;
+  /** Opt-in: auto-merge the worker's PR once it's ready. */
+  autoMerge?: boolean;
 }
 
 /** Create a real GitHub issue on a tracked repo and either dispatch it now or
