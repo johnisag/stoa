@@ -2,6 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   buildIssueCreateArgs,
   parseCreatedIssueUrl,
+  buildLabelListArgs,
+  parseLabelList,
+  computeMissingLabels,
+  buildLabelCreateArgs,
 } from "../lib/dispatch/create";
 
 describe("buildIssueCreateArgs", () => {
@@ -93,5 +97,83 @@ describe("parseCreatedIssueUrl", () => {
     expect(
       parseCreatedIssueUrl("https://github.com/octo/app/pull/9")
     ).toBeNull();
+  });
+});
+
+describe("buildLabelListArgs", () => {
+  it("requests label names as JSON for the repo", () => {
+    expect(buildLabelListArgs("octo/app")).toEqual([
+      "label",
+      "list",
+      "--repo",
+      "octo/app",
+      "--limit",
+      "500",
+      "--json",
+      "name",
+    ]);
+  });
+});
+
+describe("parseLabelList", () => {
+  it("extracts names from gh's JSON output", () => {
+    const out = JSON.stringify([{ name: "bug" }, { name: "ready" }]);
+    expect(parseLabelList(out)).toEqual(["bug", "ready"]);
+  });
+
+  it("skips entries without a string name, and returns [] on junk", () => {
+    expect(
+      parseLabelList(JSON.stringify([{ name: "ok" }, {}, { name: 3 }]))
+    ).toEqual(["ok"]);
+    expect(parseLabelList("not json")).toEqual([]);
+    expect(parseLabelList(JSON.stringify({ name: "x" }))).toEqual([]);
+  });
+});
+
+describe("computeMissingLabels", () => {
+  it("returns requested labels absent from existing (case-insensitive)", () => {
+    expect(
+      computeMissingLabels(["bug", "MIT", "license"], ["Bug", "enhancement"])
+    ).toEqual(["MIT", "license"]);
+  });
+
+  it("trims, drops blanks, and de-dupes while preserving first casing", () => {
+    expect(
+      computeMissingLabels([" mit ", "MIT", "", "  ", "license"], [])
+    ).toEqual(["mit", "license"]);
+  });
+
+  it("returns [] when every requested label already exists", () => {
+    expect(computeMissingLabels(["bug", "ready"], ["ready", "bug"])).toEqual(
+      []
+    );
+  });
+});
+
+describe("buildLabelCreateArgs", () => {
+  it("creates a label after a -- sentinel (gh assigns a random color)", () => {
+    expect(buildLabelCreateArgs("octo/app", "mit")).toEqual([
+      "label",
+      "create",
+      "--repo",
+      "octo/app",
+      "--",
+      "mit",
+    ]);
+  });
+
+  it("puts a dash-leading label name after -- so gh can't read it as a flag", () => {
+    // A label literally named "--force" must be the positional name, never a flag.
+    const args = buildLabelCreateArgs("octo/app", "--force");
+    const dashDash = args.indexOf("--");
+    expect(dashDash).toBeGreaterThanOrEqual(0);
+    expect(args[dashDash + 1]).toBe("--force");
+    expect(args[args.length - 1]).toBe("--force");
+  });
+
+  it("keeps a label with spaces/specials as one discrete token", () => {
+    const args = buildLabelCreateArgs("octo/app", "needs triage; rm -rf");
+    expect(args).toContain("needs triage; rm -rf");
+    expect(args[args.length - 1]).toBe("needs triage; rm -rf");
   });
 });
