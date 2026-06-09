@@ -36,6 +36,6 @@
     "scripts/pty-host.ts": "490174e586be52ae510ed339d67b1852f0a541c1de5fcde622205ee31a82c19a",
     "scripts/setup.sh": "cfdeb6f0ad53698ab160a5c218b9a1cf20fa38333913371f4279d4a56e71be7a",
     "scripts/stoa": "c9f088bcec55208741500869b15ece1f230efe708fee1acd199a669eee47524a",
-    "scripts/stoa.js": "af49138ee4640d1c45c203d59baaa0f09e4368c6242391f11712b626616b1cd0"
+    "scripts/stoa.js": "84387c034bfb13be4e0ab0c82f543693d81960194f109ff7791255b616e1991d"
   }
 }

@@ -140,15 +140,19 @@ describe("multi-client fan-out + sizing", () => {
 
 describe("error-state detection", () => {
   it("classifies a structured error on the rendered screen as 'error'", async () => {
-    spawnSession("vt-err", {
+    const s = spawnSession("vt-err", {
       binary: "node",
       args: printAndHold(
         "Error code: 400 - {'type': 'invalid_request_error'}\r\n"
       ),
       cwd: process.cwd(),
     });
+    expect(
+      await waitFor(() => s.capture().includes("invalid_request_error"), 12000)
+    ).toBe(true);
     const ok = await waitFor(
-      async () => (await statusDetector.getStatus("vt-err")) === "error"
+      async () => (await statusDetector.getStatus("vt-err")) === "error",
+      12000
     );
     expect(ok).toBe(true);
     killSession("vt-err");
