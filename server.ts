@@ -1,3 +1,4 @@
+import "./lib/load-env"; // FIRST: load a cwd .env so `npm run dev` honours it
 import { createServer } from "http";
 import { parse } from "url";
 import next from "next";
