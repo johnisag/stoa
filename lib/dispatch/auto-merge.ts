@@ -110,12 +110,12 @@ export function nextAutoMergeAction(input: {
 
 export interface PrReadiness {
   mergeable: string | null;
-  reviewDecision: string | null;
   checks: CheckSummary;
 }
 
-/** Read a PR's merge readiness via gh. On any failure, returns a never-ready
- * shape (mergeable null + checks "pending") so the caller simply waits. */
+/** Read a PR's merge readiness via gh (conflicts + checks; the review verdict is
+ * Stoa's own cached panel decision, not GitHub's). On any failure, returns a
+ * never-ready shape (mergeable null + checks "pending") so the caller waits. */
 export async function getPrReadiness(
   cwd: string,
   prNumber: number
@@ -123,30 +123,19 @@ export async function getPrReadiness(
   try {
     const { stdout } = await execFileAsync(
       gh,
-      [
-        "pr",
-        "view",
-        String(prNumber),
-        "--json",
-        "mergeable,reviewDecision,statusCheckRollup",
-      ],
+      ["pr", "view", String(prNumber), "--json", "mergeable,statusCheckRollup"],
       { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
     );
     const parsed = JSON.parse(stdout) as {
       mergeable?: unknown;
-      reviewDecision?: unknown;
       statusCheckRollup?: unknown;
     };
     return {
       mergeable: typeof parsed.mergeable === "string" ? parsed.mergeable : null,
-      reviewDecision:
-        typeof parsed.reviewDecision === "string" && parsed.reviewDecision
-          ? parsed.reviewDecision
-          : null,
       checks: summarizePrChecks(parsed.statusCheckRollup),
     };
   } catch {
-    return { mergeable: null, reviewDecision: null, checks: "pending" };
+    return { mergeable: null, checks: "pending" };
   }
 }
 
@@ -176,7 +165,10 @@ export async function autoMergePass(): Promise<void> {
       status: d.status,
       prNumber: d.pr_number,
       reviewGate: repo.review_gate === 1,
-      reviewDecision: readiness.reviewDecision,
+      // Stoa's OWN aggregated panel verdict (cached on the row by reviewGatePass),
+      // NOT GitHub's reviewDecision — the panel posts comments, not GitHub reviews,
+      // so GitHub's field stays null and would block a gated PR forever.
+      reviewDecision: d.review_decision,
       mergeable: readiness.mergeable,
       checks: readiness.checks,
     });

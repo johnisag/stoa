@@ -342,6 +342,26 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 22,
+    name: "add_ci_autofix_columns",
+    up: (db) => {
+      // Opt-in per-repo CI auto-fix (default off). When on, the reconciler spawns
+      // a fixer on a worker's PR whose checks are RED, to read the failures, fix
+      // them, and push — making red PRs self-heal toward a green, mergeable state.
+      db.exec(
+        `ALTER TABLE dispatch_repos ADD COLUMN ci_autofix INTEGER NOT NULL DEFAULT 0`
+      );
+      // ci_fix_rounds caps the CI-fix attempts; ci_fixer_session_id tracks the
+      // in-flight CI fixer (separate from the review fixer so the two don't clash).
+      db.exec(
+        `ALTER TABLE issue_dispatches ADD COLUMN ci_fix_rounds INTEGER NOT NULL DEFAULT 0`
+      );
+      db.exec(
+        `ALTER TABLE issue_dispatches ADD COLUMN ci_fixer_session_id TEXT`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

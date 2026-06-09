@@ -164,6 +164,15 @@ function Card({
         </span>
       )}
 
+      {/* CI auto-fix (advisory) — a fixer is/has been working this PR's red checks
+          on a ci_autofix repo. Shows the round count so a stuck PR is visible. */}
+      {repo?.ci_autofix === 1 && isPrOpen && d.ci_fixer_session_id && (
+        <span className="inline-flex w-fit items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+          ci-fix: fixing…
+          {d.ci_fix_rounds > 0 && ` (round ${d.ci_fix_rounds})`}
+        </span>
+      )}
+
       {/* Armed to auto-merge: the reconciler will merge this PR once it's ready
           (no conflicts, checks green, critic-approved if the repo is gated). */}
       {d.auto_merge === 1 && isPrOpen && (

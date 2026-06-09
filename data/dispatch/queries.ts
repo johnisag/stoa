@@ -182,6 +182,7 @@ export interface CreateRepoInput {
   mode: DispatchMode;
   enabled: boolean;
   reviewGate: boolean;
+  ciAutofix: boolean;
 }
 
 export function useCreateRepo() {
@@ -249,6 +250,7 @@ export type UpdateRepoPatch = Partial<{
   mode: DispatchMode;
   enabled: boolean;
   reviewGate: boolean;
+  ciAutofix: boolean;
 }>;
 
 export function useUpdateRepo() {
@@ -300,6 +302,9 @@ export function useUpdateRepo() {
                   : {}),
                 ...(patch.reviewGate !== undefined
                   ? { review_gate: patch.reviewGate ? 1 : 0 }
+                  : {}),
+                ...(patch.ciAutofix !== undefined
+                  ? { ci_autofix: patch.ciAutofix ? 1 : 0 }
                   : {}),
               }
             : r
