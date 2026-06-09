@@ -36,6 +36,17 @@ const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
 /**
+ * On Windows, opt node-pty into the bundled conpty.dll path. This avoids
+ * node-pty's kill-time Node helper (the `conpty_console_list` agent), which can
+ * flash a console window when a session is spawned or killed. No-op off Windows.
+ */
+export function windowsConptyOptions(
+  platform: NodeJS.Platform = process.platform
+): { useConptyDll?: true } {
+  return platform === "win32" ? { useConptyDll: true } : {};
+}
+
+/**
  * Resolve a binary + args into a spawnable (file, args) pair, cross-platform.
  *
  * On Windows, npm-installed CLIs are `.cmd`/`.bat` shims that CreateProcess
@@ -104,6 +115,7 @@ export function spawnSession(key: string, spec: SpawnSpec): PtySession {
     rows,
     cwd,
     env: buildEnv(spec.env),
+    ...windowsConptyOptions(),
   });
 
   const session = new PtySession({ key, pty: proc, cwd, cols, rows });

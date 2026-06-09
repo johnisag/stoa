@@ -65,7 +65,9 @@ async function getPidOnPort(port: number): Promise<number | null> {
   try {
     if (isWindows) {
       // netstat -ano lists connections with the owning PID in the last column.
-      const { stdout } = await execFileAsync("netstat", ["-ano"]);
+      const { stdout } = await execFileAsync("netstat", ["-ano"], {
+        windowsHide: true,
+      });
       for (const line of stdout.split(/\r?\n/)) {
         const cols = line.trim().split(/\s+/);
         // Columns: Proto  Local Address  Foreign Address  State  PID
@@ -117,12 +119,11 @@ async function checkDockerStatus(server: DevServer): Promise<DevServerStatus> {
   if (!server.container_id) return "stopped";
 
   try {
-    const { stdout } = await execFileAsync("docker", [
-      "inspect",
-      "-f",
-      "{{.State.Status}}",
-      server.container_id,
-    ]);
+    const { stdout } = await execFileAsync(
+      "docker",
+      ["inspect", "-f", "{{.State.Status}}", server.container_id],
+      { windowsHide: isWindows }
+    );
     const status = stdout.trim();
     if (status === "running") return "running";
     if (status === "starting" || status === "restarting") return "starting";
@@ -215,6 +216,7 @@ async function spawnNodeServer(
     shell: true,
     detached: true,
     stdio: ["ignore", logFd, logFd],
+    windowsHide: isWindows,
   });
 
   if (child.pid) child.unref();
@@ -237,13 +239,14 @@ async function spawnDockerService(
     // command is expected to be the service name
     await execFileAsync("docker", ["compose", "up", "-d", command], {
       cwd: workingDirectory,
+      windowsHide: isWindows,
     });
 
     // Get container ID
     const { stdout } = await execFileAsync(
       "docker",
       ["compose", "ps", "-q", command],
-      { cwd: workingDirectory }
+      { cwd: workingDirectory, windowsHide: isWindows }
     );
     const containerId = stdout.trim() || null;
 
@@ -311,7 +314,9 @@ export async function stopServer(id: string): Promise<void> {
   if (server.type === "docker") {
     if (server.container_id) {
       try {
-        await execFileAsync("docker", ["stop", server.container_id]);
+        await execFileAsync("docker", ["stop", server.container_id], {
+          windowsHide: isWindows,
+        });
       } catch {
         // Container may already be stopped
       }
@@ -402,12 +407,11 @@ export async function getServerLogs(
     try {
       // docker writes logs to both stdout and stderr; merge them to mirror the
       // previous `2>&1` redirection.
-      const { stdout, stderr } = await execFileAsync("docker", [
-        "logs",
-        "--tail",
-        String(lines),
-        server.container_id,
-      ]);
+      const { stdout, stderr } = await execFileAsync(
+        "docker",
+        ["logs", "--tail", String(lines), server.container_id],
+        { windowsHide: isWindows }
+      );
       return (stdout + stderr).split("\n");
     } catch {
       return [];
@@ -483,7 +487,7 @@ export async function detectDockerServices(
         const { stdout } = await execFileAsync(
           "docker",
           ["compose", "-f", file, "config", "--services"],
-          { cwd: workingDir }
+          { cwd: workingDir, windowsHide: isWindows }
         );
         const services = stdout.trim().split(/\r?\n/).filter(Boolean);
 

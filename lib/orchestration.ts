@@ -439,13 +439,11 @@ export async function killWorker(
     try {
       // Get the main worktree (original project) from git. The first porcelain
       // entry is the main worktree; parse it in JS (no head/sed shell tools).
-      const { stdout } = await execFileAsync("git", [
-        "-C",
-        session.worktree_path,
-        "worktree",
-        "list",
-        "--porcelain",
-      ]);
+      const { stdout } = await execFileAsync(
+        "git",
+        ["-C", session.worktree_path, "worktree", "list", "--porcelain"],
+        { windowsHide: process.platform === "win32" }
+      );
       const firstLine = stdout.split(/\r?\n/)[0] || "";
       const projectPath = firstLine.startsWith("worktree ")
         ? firstLine.slice("worktree ".length).trim()

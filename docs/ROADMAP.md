@@ -21,6 +21,21 @@ under "🔭 Next horizons."
 
 ---
 
+## 🔧 Top follow-up (committed)
+
+- **Consolidate the git-status spawn fan-out.** Each git-status refresh
+  (`useGitStatus` / `useMultiRepoGitStatus`, ~15s while a git panel is open)
+  shells out to **5–8 separate `git` processes** — `rev-parse` (isGitRepo) +
+  `branch --show-current` + `rev-list @{upstream}...HEAD` + `status
+  --porcelain=v1` + `worktree list --porcelain` — and `getWorktreeBaseChanges`
+  runs a **second full `getGitStatus`** on the base worktree. Collapse branch +
+  ahead/behind + changes into a single `git status --porcelain=v2 --branch`
+  call and cache `isGitRepo`. Pure efficiency (no behavior change); surfaced
+  while fixing the Windows console-flash bug (`windowsHide` on every child
+  spawn). Files: `lib/git-status.ts` (`getGitStatus`, `getWorktreeBaseChanges`).
+
+---
+
 ## 🚨 CRITICAL — open bugs (fix first)
 
 _None open._ The macOS · Hermes scrollbar + invisible jump-to-bottom bug is
