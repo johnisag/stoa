@@ -102,6 +102,7 @@ async function generateSummary(conversation: string): Promise<string> {
     const claude = spawn(resolveBinary("claude") || "claude", ["-p", prompt], {
       stdio: ["pipe", "pipe", "pipe"],
       shell: isWindows,
+      windowsHide: isWindows,
     });
 
     let stdout = "";

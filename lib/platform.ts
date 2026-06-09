@@ -73,6 +73,7 @@ export function resolveBinary(name: string): string | null {
     const out = execFileSync(finder, [name], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: isWindows,
     });
     const lines = out
       .split(/\r?\n/)

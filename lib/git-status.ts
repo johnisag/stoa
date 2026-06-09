@@ -26,6 +26,9 @@ function git(
   const options: ExecFileSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf-8",
+    // Windows: don't let each short-lived git child allocate a visible console
+    // (a flashing conhost.exe). No-op on POSIX.
+    windowsHide: isWindows,
   };
   if (opts.stdio) options.stdio = opts.stdio;
   if (opts.maxBuffer) options.maxBuffer = opts.maxBuffer;

@@ -6,7 +6,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs";
-import { expandHome } from "./platform";
+import { expandHome, isWindows } from "./platform";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,6 +24,8 @@ function git(
   return execFileAsync("git", args, {
     cwd,
     timeout,
+    // Windows: suppress the per-call conhost.exe console flash. No-op on POSIX.
+    windowsHide: isWindows,
     ...(maxBuffer != null ? { maxBuffer } : {}),
     // Merge onto process.env so extra vars (e.g. GIT_INDEX_FILE for a throwaway
     // index) don't drop PATH/HOME and break the git invocation.

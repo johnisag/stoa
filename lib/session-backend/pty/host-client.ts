@@ -17,6 +17,7 @@
 import net from "net";
 import { spawn } from "child_process";
 import path from "path";
+import { pathToFileURL } from "url";
 import {
   hostAddress,
   encode,
@@ -107,14 +108,24 @@ export class HostClient {
     this.spawnedThisCycle = true;
     const root = path.join(__dirname, "..", "..", "..");
     const script = path.join(root, "scripts", "pty-host.ts");
-    // Run through the tsx CLI under the current node binary. This avoids the
-    // tsx .cmd shim on Windows and the --import named-export resolution issue.
-    const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
-    const child = spawn(process.execPath, [tsxCli, script], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
+    const tsxDist = path.join(root, "node_modules", "tsx", "dist");
+    // Launch the daemon through tsx's loader directly. Using the tsx CLI adds a
+    // second node process which can open a visible console window on Windows.
+    const child = spawn(
+      process.execPath,
+      [
+        "--require",
+        path.join(tsxDist, "preflight.cjs"),
+        "--import",
+        pathToFileURL(path.join(tsxDist, "loader.mjs")).href,
+        script,
+      ],
+      {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      }
+    );
     child.unref();
   }
 

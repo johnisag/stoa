@@ -97,6 +97,7 @@ export async function listEligibleIssues(
       cwd: repo.repo_path,
       encoding: "utf-8",
       timeout: 15000,
+      windowsHide: process.platform === "win32",
     });
     return parseIssues(stdout);
   } catch (err) {
@@ -140,7 +141,12 @@ export async function getPRForBranchAnyState(
         "--limit",
         "1",
       ],
-      { cwd: workingDir, encoding: "utf-8", timeout: 15000 }
+      {
+        cwd: workingDir,
+        encoding: "utf-8",
+        timeout: 15000,
+        windowsHide: process.platform === "win32",
+      }
     );
     const prs = JSON.parse(stdout);
     return Array.isArray(prs) && prs.length > 0 ? prs[0] : null;
