@@ -64,9 +64,9 @@ export interface IssueDispatch {
   dispatched_at: string | null;
   /** ISO time a 'scheduled' row becomes eligible (promoted to 'pending'). */
   scheduled_at: string | null;
-  /** Session id of the spawned critic agent (spawn-once guard). */
+  /** Session id of the first review panelist (spawn-once guard for the panel). */
   reviewer_session_id: string | null;
-  /** Cached GitHub reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED). */
+  /** Stoa's aggregated panel verdict (APPROVED / CHANGES_REQUESTED), null while reviewing. */
   review_decision: string | null;
   /** How many fix rounds the worker has done in response to review feedback. */
   fix_rounds: number;

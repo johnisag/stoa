@@ -139,8 +139,8 @@ function Card({
         </a>
       )}
 
-      {/* Reviewer-gate verdict (advisory) — the critic's GitHub review decision.
-          Shows "pending" while a gated repo's critic hasn't posted yet. */}
+      {/* Reviewer-gate verdict (advisory) — the critic panel's aggregated verdict.
+          Shows "pending" while a gated repo's panel hasn't all weighed in yet. */}
       {(d.review_decision || (repo?.review_gate === 1 && isPrOpen)) && (
         <span
           className={cn(

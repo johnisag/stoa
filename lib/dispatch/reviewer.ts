@@ -1,12 +1,15 @@
 /**
  * Dispatch — reviewer gate (opt-in).
  *
- * When a repo has `review_gate` on, each worker's PR gets an INDEPENDENT critic
- * agent spawned in the worker's worktree. The critic reviews across three lenses
- * and posts ONE GitHub PR review (approve / request-changes). Stoa reads the
- * resulting `reviewDecision` and surfaces it in the cockpit (advisory — merge
- * stays the user's tap). Pure helpers (shouldSpawnReviewer / parseReviewDecision
- * / buildReviewPrompt) are unit-tested; the spawn + gh reads are I/O.
+ * When a repo has `review_gate` on, each worker's PR gets a PANEL of three
+ * INDEPENDENT critic agents (one per lens) spawned in the worker's worktree.
+ * Each posts a lens-tagged PR comment ending in a verdict marker; Stoa aggregates
+ * the markers (any "request changes" ⇒ CHANGES_REQUESTED, else APPROVED) and
+ * caches the decision on the row, driving the fix loop and the cockpit badge.
+ * A panel (rather than one agent across three lenses) keeps the perspectives
+ * genuinely independent. Pure helpers (buildLensReviewPrompt / parsePanelComments)
+ * are unit-tested; the spawn + gh reads are I/O. Only Stoa's own comments count
+ * toward a verdict (anti-forgery — see parsePanelComments).
  */
 
 import { randomUUID } from "crypto";
@@ -25,72 +28,181 @@ const execFileAsync = promisify(execFile);
 const gh = resolveBinary("gh") || "gh";
 
 /**
- * Whether a row should get a critic spawned now: the gate is on, the PR exists,
- * and we haven't already spawned one. Pure (unit-tested).
+ * The three independent critic lenses. Each is reviewed by its OWN agent (a
+ * panel), not one agent juggling all three — independence catches what a single
+ * reviewer rationalizes past. `key` is the machine tag in the verdict marker.
  */
-export function shouldSpawnReviewer(
-  repo: Pick<DispatchRepo, "review_gate">,
-  d: Pick<IssueDispatch, "status" | "pr_number" | "reviewer_session_id">
-): boolean {
-  return (
-    repo.review_gate === 1 &&
-    d.status === "pr_open" &&
-    d.pr_number != null &&
-    !d.reviewer_session_id
-  );
-}
+export const REVIEW_LENSES = [
+  {
+    key: "correctness",
+    title: "correctness & security",
+    focus:
+      "logic bugs, edge cases, error handling, and security holes — and whether the change actually resolves the issue without regressions",
+  },
+  {
+    key: "conventions",
+    title: "conventions & cross-platform",
+    focus:
+      "house style and naming, and cross-platform safety: no POSIX-only assumptions, no shell-string exec, no hardcoded paths/separators",
+  },
+  {
+    key: "simplicity",
+    title: "simplicity & scope",
+    focus:
+      "unnecessary complexity, scope creep beyond the issue, duplication, and dead code — name the simpler form",
+  },
+] as const;
 
-/** Parse `gh pr view --json reviewDecision` → the decision string, or null. */
-export function parseReviewDecision(rawJson: string): string | null {
-  try {
-    const parsed = JSON.parse(rawJson) as { reviewDecision?: unknown };
-    const dec = parsed?.reviewDecision;
-    return typeof dec === "string" && dec ? dec : null;
-  } catch {
-    return null;
-  }
-}
+/** The lens keys, derived once (the aggregator's required-lens set). */
+const LENS_KEYS: readonly string[] = REVIEW_LENSES.map((l) => l.key);
 
-/** Read the current GitHub review decision for a PR (null on any failure). */
-export async function getReviewDecision(
-  cwd: string,
-  prNumber: number
-): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      gh,
-      ["pr", "view", String(prNumber), "--json", "reviewDecision"],
-      { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
-    );
-    return parseReviewDecision(stdout);
-  } catch {
-    return null;
-  }
-}
-
-/** The critic's brief: read-only review across three lenses, ending in exactly
- * one GitHub PR review. Pure (unit-tested for the key instructions). */
-export function buildReviewPrompt(
+/**
+ * One panelist's brief: read-only review through a SINGLE lens, ending in a PR
+ * comment whose final line is a machine-parseable verdict marker that embeds the
+ * lens + the current fix round (so a re-review's stale comments are ignored).
+ * Pure (unit-tested for the key instructions).
+ */
+export function buildLensReviewPrompt(
   repo: DispatchRepo,
-  d: IssueDispatch
+  d: IssueDispatch,
+  lens: (typeof REVIEW_LENSES)[number]
 ): string {
+  const round = d.fix_rounds;
   return (
-    `[Stoa] You are an INDEPENDENT REVIEWER for pull request #${d.pr_number} in ` +
-    `${repo.repo_slug} (it resolves issue #${d.issue_number}: ` +
+    `[Stoa] You are ONE of three INDEPENDENT reviewers for pull request ` +
+    `#${d.pr_number} in ${repo.repo_slug} (it resolves issue #${d.issue_number}: ` +
     `"${d.issue_title ?? ""}").\n\n` +
+    `YOUR LENS: ${lens.title}. Judge ONLY through this lens — ${lens.focus}.\n\n` +
     `Review ONLY — do NOT modify code, commit, or push anything.\n\n` +
     `1. Read the change and the issue:\n` +
     `   gh pr diff ${d.pr_number}\n` +
     `   gh issue view ${d.issue_number} --repo ${repo.repo_slug}\n` +
-    `2. Review across three independent lenses: (a) correctness & security, ` +
-    `(b) conventions & cross-platform, (c) simplicity & scope. Confirm it ` +
-    `actually resolves the issue and adds no regressions.\n` +
-    `3. Post EXACTLY ONE verdict as a GitHub review:\n` +
-    `   - Solid:       gh pr review ${d.pr_number} --approve --body "<short why>"\n` +
-    `   - Needs work:  gh pr review ${d.pr_number} --request-changes ` +
-    `--body "<numbered, specific, actionable findings>"\n\n` +
-    `Be concrete and terse. Do not open new PRs.`
+    `2. Assess it through your lens. Be concrete and terse.\n` +
+    `3. Post ONE PR comment on #${d.pr_number} (gh pr comment ${d.pr_number}) — a ` +
+    `few lines of findings, then the LAST line EXACTLY this marker, verbatim, ` +
+    `nothing after it:\n` +
+    `   STOA_REVIEW lens=${lens.key} round=${round} verdict=APPROVE\n` +
+    `Use verdict=REQUEST_CHANGES instead of APPROVE if your lens finds a blocking ` +
+    `problem. If a multi-line --body is awkward in your shell, write the body to ` +
+    `a file and use \`gh pr comment ${d.pr_number} --body-file <file>\`. Do NOT ` +
+    `post a GitHub review or open a new PR — only the one comment.`
   );
+}
+
+export interface PanelVerdict {
+  /** Per-lens verdict parsed from the panel's PR comments (current round only). */
+  byLens: Record<string, "APPROVE" | "REQUEST_CHANGES">;
+  /** True once every lens has posted a verdict for this round. */
+  complete: boolean;
+  /** Aggregate once complete: any REQUEST_CHANGES ⇒ CHANGES_REQUESTED, else APPROVED. */
+  decision: "APPROVED" | "CHANGES_REQUESTED" | null;
+}
+
+interface PanelComment {
+  body?: unknown;
+  /** GitHub login of the comment author — only Stoa's own count (anti-forgery). */
+  author?: { login?: unknown } | null;
+}
+
+/**
+ * Aggregate the panel's verdict markers out of a PR's comments. Pure + tested.
+ * SECURITY: only comments authored by `actor` (Stoa's gh account) count — without
+ * this, any repo collaborator could post a forged marker to force APPROVED (and,
+ * with auto-merge armed, a merge). Only markers for `round` count (a fixer bumps
+ * the round, so the prior round's comments are ignored); the latest comment wins
+ * per lens. The decision is set only once ALL lenses have weighed in. Callers
+ * must pass `comments` already sorted oldest→newest so "latest wins" holds.
+ */
+export function parsePanelComments(
+  comments: PanelComment[],
+  lensKeys: readonly string[],
+  round: number,
+  actor: string
+): PanelVerdict {
+  const byLens: Record<string, "APPROVE" | "REQUEST_CHANGES"> = {};
+  for (const c of comments) {
+    const login =
+      c?.author && typeof c.author.login === "string" ? c.author.login : "";
+    if (!actor || login !== actor) continue; // not Stoa's comment → ignore
+    const body = typeof c.body === "string" ? c.body : "";
+    // Fresh regex per body so the /g lastIndex can never leak across comments.
+    const marker =
+      /STOA_REVIEW\s+lens=(\w+)\s+round=(\d+)\s+verdict=(APPROVE|REQUEST_CHANGES)/g;
+    for (const m of body.matchAll(marker)) {
+      const [, lens, r, verdict] = m;
+      if (Number(r) !== round || !lensKeys.includes(lens)) continue;
+      byLens[lens] = verdict as "APPROVE" | "REQUEST_CHANGES";
+    }
+  }
+  const complete = lensKeys.every((k) => k in byLens);
+  const decision = !complete
+    ? null
+    : lensKeys.some((k) => byLens[k] === "REQUEST_CHANGES")
+      ? "CHANGES_REQUESTED"
+      : "APPROVED";
+  return { byLens, complete, decision };
+}
+
+// Stoa's own gh login, resolved once and cached for the process (constant for a
+// given auth). The panel's anti-forgery check compares comment authors to this.
+// undefined = not fetched yet; null = couldn't determine (→ never approve).
+let cachedActor: string | null | undefined;
+
+/** The authenticated gh account's login (cached). null on failure. */
+export async function getGhActor(cwd: string): Promise<string | null> {
+  if (cachedActor !== undefined) return cachedActor;
+  try {
+    const { stdout } = await execFileAsync(
+      gh,
+      ["api", "user", "--jq", ".login"],
+      { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
+    );
+    cachedActor = stdout.trim() || null;
+  } catch {
+    cachedActor = null;
+  }
+  return cachedActor;
+}
+
+interface RawComment {
+  body?: unknown;
+  author?: { login?: unknown } | null;
+  createdAt?: unknown;
+}
+
+/** Read the panel's aggregated verdict for a PR from its comments (this round).
+ * Returns an incomplete verdict on any gh failure — or if Stoa's own login can't
+ * be resolved (so a forged comment can never stand in for the panel) — so the
+ * caller keeps polling rather than acting on an unverifiable verdict. */
+export async function aggregatePanelVerdict(
+  cwd: string,
+  prNumber: number,
+  round: number
+): Promise<PanelVerdict> {
+  const incomplete: PanelVerdict = {
+    byLens: {},
+    complete: false,
+    decision: null,
+  };
+  try {
+    const actor = await getGhActor(cwd);
+    if (!actor) return incomplete;
+    const { stdout } = await execFileAsync(
+      gh,
+      ["pr", "view", String(prNumber), "--json", "comments"],
+      { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
+    );
+    const parsed = JSON.parse(stdout) as { comments?: RawComment[] };
+    const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
+    // Sort oldest→newest so parsePanelComments' "latest wins per lens" is correct
+    // regardless of the order gh happens to return them in.
+    comments.sort((a, b) =>
+      String(a?.createdAt ?? "").localeCompare(String(b?.createdAt ?? ""))
+    );
+    return parsePanelComments(comments, LENS_KEYS, round, actor);
+  } catch {
+    return incomplete;
+  }
 }
 
 /** Max worker fix rounds before a PR is left for a human (env-overridable;
@@ -235,19 +347,36 @@ async function spawnInWorktree(
   }
 }
 
-/** Spawn the critic that reviews the PR (records reviewer_session_id). */
-export async function spawnReviewer(
+/**
+ * Spawn the review PANEL: one independent critic per lens, all in the worker's
+ * worktree (read-only, so sharing the worktree is safe). `reviewer_session_id`
+ * is set ONCE — on the first panelist — as the spawn-once guard for the whole
+ * panel; the panel's completion is then judged from the PR comments, not session
+ * liveness. Returns the first panelist's session id (or null if none spawned).
+ */
+export async function spawnReviewPanel(
   repo: DispatchRepo,
   d: IssueDispatch
 ): Promise<string | null> {
   if (d.pr_number == null) return null;
-  return spawnInWorktree(
-    repo,
-    d,
-    `review #${d.pr_number}`,
-    buildReviewPrompt(repo, d),
-    (sid) => queries.setDispatchReviewer(getDb()).run(sid, d.id)
-  );
+  let guardSet = false;
+  let firstId: string | null = null;
+  for (const lens of REVIEW_LENSES) {
+    const sid = await spawnInWorktree(
+      repo,
+      d,
+      `review #${d.pr_number} · ${lens.key}`,
+      buildLensReviewPrompt(repo, d, lens),
+      (id) => {
+        if (!guardSet) {
+          queries.setDispatchReviewer(getDb()).run(id, d.id);
+          guardSet = true;
+        }
+      }
+    );
+    if (sid && !firstId) firstId = sid;
+  }
+  return firstId;
 }
 
 /** Spawn a fixer that addresses review feedback (records fixer + bumps round). */
