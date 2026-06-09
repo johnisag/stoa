@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Plus, Trash2, ExternalLink, Loader2 } from "lucide-react";
+import { Plus, Trash2, ExternalLink, Loader2, Inbox } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import {
 } from "@/data/dispatch/queries";
 import { useProjectsQuery } from "@/data/projects";
 import { AGENT_BADGE, repoUrl } from "./shared";
+import { OpenIssuesBrowser } from "./OpenIssuesBrowser";
 
 const EMPTY: CreateRepoInput = {
   repoPath: "",
@@ -42,6 +43,7 @@ const EMPTY: CreateRepoInput = {
   baseBranch: "main",
   mode: "review",
   enabled: false,
+  reviewGate: false,
 };
 
 /** A small single-select segmented control (radiogroup). Shared by the mode
@@ -114,6 +116,7 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
   const [quota, setQuota] = useState(String(repo.daily_quota));
   const [conc, setConc] = useState(String(repo.max_concurrency));
   const [label, setLabel] = useState(repo.label_filter ?? "");
+  const [browsing, setBrowsing] = useState(false);
 
   const patch = (p: UpdateRepoPatch) =>
     update.mutate(
@@ -133,111 +136,148 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
   };
 
   return (
-    <div className="hover:bg-muted/40 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3 py-2 text-sm">
-      {/* enabled */}
-      <Switch
-        checked={repo.enabled === 1}
-        onCheckedChange={(v) => patch({ enabled: v })}
-        aria-label={repo.enabled === 1 ? "Disable repo" : "Enable repo"}
-      />
+    <div className="space-y-2">
+      <div className="hover:bg-muted/40 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3 py-2 text-sm">
+        {/* enabled */}
+        <Switch
+          checked={repo.enabled === 1}
+          onCheckedChange={(v) => patch({ enabled: v })}
+          aria-label={repo.enabled === 1 ? "Disable repo" : "Enable repo"}
+        />
 
-      {/* slug + path */}
-      <div className="min-w-0 flex-1">
-        <a
-          href={repoUrl(repo.repo_slug)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 font-medium hover:underline"
-        >
-          {repo.repo_slug}
-          <ExternalLink className="h-3 w-3 opacity-60" />
-        </a>
-        <div
-          className="text-muted-foreground truncate text-xs"
-          title={repo.repo_path}
-        >
-          {repo.repo_path}
+        {/* slug + path */}
+        <div className="min-w-0 flex-1">
+          <a
+            href={repoUrl(repo.repo_slug)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 font-medium hover:underline"
+          >
+            {repo.repo_slug}
+            <ExternalLink className="h-3 w-3 opacity-60" />
+          </a>
+          <div
+            className="text-muted-foreground truncate text-xs"
+            title={repo.repo_path}
+          >
+            {repo.repo_path}
+          </div>
         </div>
-      </div>
 
-      {/* agent */}
-      <Select
-        value={repo.agent_type}
-        onValueChange={(v) => patch({ agentType: v as AgentType })}
-      >
-        <SelectTrigger className="h-8 w-[120px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {AGENT_OPTIONS.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+        {/* agent */}
+        <Select
+          value={repo.agent_type}
+          onValueChange={(v) => patch({ agentType: v as AgentType })}
+        >
+          <SelectTrigger className="h-8 w-[120px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {AGENT_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-      {/* quota / day */}
-      <label className="text-muted-foreground flex items-center gap-1 text-xs">
+        {/* quota / day */}
+        <label className="text-muted-foreground flex items-center gap-1 text-xs">
+          <Input
+            type="number"
+            min={0}
+            value={quota}
+            onChange={(e) => setQuota(e.target.value)}
+            onBlur={() =>
+              commitNumber(quota, repo.daily_quota, "dailyQuota", 0)
+            }
+            className="h-8 w-16"
+          />
+          / day
+        </label>
+
+        {/* concurrency */}
+        <label className="text-muted-foreground flex items-center gap-1 text-xs">
+          <Input
+            type="number"
+            min={1}
+            value={conc}
+            onChange={(e) => setConc(e.target.value)}
+            onBlur={() =>
+              commitNumber(conc, repo.max_concurrency, "maxConcurrency", 1)
+            }
+            className="h-8 w-16"
+          />
+          conc.
+        </label>
+
+        {/* label filter */}
         <Input
-          type="number"
-          min={0}
-          value={quota}
-          onChange={(e) => setQuota(e.target.value)}
-          onBlur={() => commitNumber(quota, repo.daily_quota, "dailyQuota", 0)}
-          className="h-8 w-16"
+          placeholder="label filter"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          onBlur={() => {
+            const next = label.trim() || null;
+            if (next !== repo.label_filter) patch({ labelFilter: next });
+          }}
+          className="h-8 w-28"
         />
-        / day
-      </label>
 
-      {/* concurrency */}
-      <label className="text-muted-foreground flex items-center gap-1 text-xs">
-        <Input
-          type="number"
-          min={1}
-          value={conc}
-          onChange={(e) => setConc(e.target.value)}
-          onBlur={() =>
-            commitNumber(conc, repo.max_concurrency, "maxConcurrency", 1)
-          }
-          className="h-8 w-16"
-        />
-        conc.
-      </label>
+        {/* mode */}
+        <ModeToggle value={repo.mode} onChange={(m) => patch({ mode: m })} />
 
-      {/* label filter */}
-      <Input
-        placeholder="label filter"
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
-        onBlur={() => {
-          const next = label.trim() || null;
-          if (next !== repo.label_filter) patch({ labelFilter: next });
-        }}
-        className="h-8 w-28"
-      />
+        {/* reviewer gate (opt-in): spawn a critic agent on each worker's PR */}
+        <label
+          className="text-muted-foreground flex items-center gap-1 text-xs"
+          title="Spawn an independent critic agent to review each worker's PR"
+        >
+          <Switch
+            checked={repo.review_gate === 1}
+            onCheckedChange={(v) => patch({ reviewGate: v })}
+            aria-label={
+              repo.review_gate === 1
+                ? "Disable reviewer gate"
+                : "Enable reviewer gate"
+            }
+          />
+          critic
+        </label>
 
-      {/* mode */}
-      <ModeToggle value={repo.mode} onChange={(m) => patch({ mode: m })} />
+        {/* browse open issues for one-tap triage */}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={browsing ? "Hide open issues" : "Browse open issues"}
+          onClick={() => setBrowsing((b) => !b)}
+        >
+          <Inbox
+            className={cn(
+              "h-4 w-4",
+              browsing ? "text-foreground" : "text-muted-foreground"
+            )}
+          />
+        </Button>
 
-      {/* delete */}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Remove repo"
-        onClick={() => {
-          if (
-            confirm(
-              `Stop tracking ${repo.repo_slug}? In-flight workers are unaffected.`
+        {/* delete */}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Remove repo"
+          onClick={() => {
+            if (
+              confirm(
+                `Stop tracking ${repo.repo_slug}? In-flight workers are unaffected.`
+              )
             )
-          )
-            del.mutate(repo.id, {
-              onError: (e) => toast.error((e as Error).message),
-            });
-        }}
-      >
-        <Trash2 className="text-muted-foreground hover:text-destructive h-4 w-4" />
-      </Button>
+              del.mutate(repo.id, {
+                onError: (e) => toast.error((e as Error).message),
+              });
+          }}
+        >
+          <Trash2 className="text-muted-foreground hover:text-destructive h-4 w-4" />
+        </Button>
+      </div>
+      {browsing && <OpenIssuesBrowser repo={repo} />}
     </div>
   );
 }

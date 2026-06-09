@@ -1,13 +1,31 @@
 "use client";
 
-import { Loader2, GitPullRequest, ExternalLink, GitBranch } from "lucide-react";
+import { useState } from "react";
+import {
+  Loader2,
+  GitPullRequest,
+  ExternalLink,
+  GitBranch,
+  GitMerge,
+  GitCompare,
+  RotateCcw,
+  X,
+} from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { SessionDiffModal } from "@/components/SessionDiffModal";
 import type {
   DispatchRepo,
   DispatchStatus,
   IssueDispatch,
 } from "@/lib/dispatch/types";
-import { useBoardQuery, useDispatchReposQuery } from "@/data/dispatch/queries";
+import {
+  useBoardQuery,
+  useDispatchAction,
+  useDispatchReposQuery,
+  useMergeDispatch,
+} from "@/data/dispatch/queries";
 import { AGENT_BADGE, STATUS_META, repoUrl, timeAgo } from "./shared";
 
 function Card({
@@ -18,6 +36,25 @@ function Card({
   repo: DispatchRepo | undefined;
 }) {
   const meta = STATUS_META[d.status];
+  const [showDiff, setShowDiff] = useState(false);
+  const merge = useMergeDispatch();
+  const action = useDispatchAction();
+  const isPrOpen = d.status === "pr_open";
+  const isFailed = d.status === "failed";
+  const doMerge = () =>
+    merge.mutate(d.id, {
+      onSuccess: () => toast.success(`Merged PR #${d.pr_number}`),
+      onError: (e) => toast.error((e as Error).message),
+    });
+  const doFailedAction = (act: "retry" | "dismiss") =>
+    action.mutate(
+      { id: d.id, action: act },
+      {
+        onSuccess: () =>
+          toast.success(act === "retry" ? "Re-dispatched" : "Dismissed"),
+        onError: (e) => toast.error((e as Error).message),
+      }
+    );
   return (
     <div className="bg-card flex flex-col gap-1.5 rounded-md border p-3 text-sm">
       <div className="flex items-center gap-2">
@@ -100,6 +137,99 @@ function Card({
             </span>
           )}
         </a>
+      )}
+
+      {/* Reviewer-gate verdict (advisory) — the critic's GitHub review decision.
+          Shows "pending" while a gated repo's critic hasn't posted yet. */}
+      {(d.review_decision || (repo?.review_gate === 1 && isPrOpen)) && (
+        <span
+          className={cn(
+            "inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[11px] font-medium",
+            d.review_decision === "APPROVED"
+              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+              : d.review_decision === "CHANGES_REQUESTED"
+                ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                : "bg-muted text-muted-foreground"
+          )}
+        >
+          review:{" "}
+          {d.fixer_session_id
+            ? "fixing…"
+            : d.review_decision === "CHANGES_REQUESTED"
+              ? "changes requested"
+              : d.review_decision
+                ? d.review_decision.toLowerCase().replace(/_/g, " ")
+                : "pending"}
+          {d.fix_rounds > 0 && ` (round ${d.fix_rounds})`}
+        </span>
+      )}
+
+      {/* Review the diff + merge the PR, right from Stoa (merge is your tap;
+          Stoa never auto-merges). Only while the PR is open. */}
+      {isPrOpen && (
+        <div className="mt-1 flex items-center gap-2">
+          {d.session_id && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowDiff(true)}
+            >
+              <GitCompare className="h-3.5 w-3.5" /> Review
+            </Button>
+          )}
+          {d.pr_number != null && (
+            <Button
+              size="sm"
+              onClick={doMerge}
+              disabled={merge.isPending}
+              className="ml-auto"
+            >
+              {merge.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <GitMerge className="h-3.5 w-3.5" />
+              )}
+              Merge
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Failed rows: retry (re-dispatch fresh) or dismiss (hide; stays parked). */}
+      {isFailed && (
+        <div className="mt-1 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={action.isPending}
+            onClick={() => doFailedAction("retry")}
+          >
+            {action.isPending && action.variables?.action === "retry" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            Retry
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Dismiss failed dispatch"
+            disabled={action.isPending}
+            className="ml-auto"
+            onClick={() => doFailedAction("dismiss")}
+          >
+            <X className="text-muted-foreground hover:text-destructive h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
+      {showDiff && d.session_id && (
+        <SessionDiffModal
+          sessionId={d.session_id}
+          name={`#${d.issue_number} ${d.issue_title ?? ""}`.trim()}
+          onClose={() => setShowDiff(false)}
+        />
       )}
     </div>
   );

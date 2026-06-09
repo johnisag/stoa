@@ -264,6 +264,44 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 17,
+    name: "add_scheduled_at_to_issue_dispatches",
+    up: (db) => {
+      // One-shot scheduling: a 'scheduled' row waits until scheduled_at, then the
+      // reconciler promotes it to 'pending' (normal headroom/mode rules apply).
+      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN scheduled_at TEXT`);
+    },
+  },
+  {
+    id: 18,
+    name: "add_reviewer_gate_columns",
+    up: (db) => {
+      // Opt-in reviewer gate (default off). When on, a worker's PR gets a critic
+      // agent; Stoa surfaces the GitHub review decision in the cockpit.
+      db.exec(
+        `ALTER TABLE dispatch_repos ADD COLUMN review_gate INTEGER NOT NULL DEFAULT 0`
+      );
+      // reviewer_session_id: set once a critic is spawned (spawn-once guard).
+      // review_decision: cached GitHub reviewDecision for the cockpit badge.
+      db.exec(
+        `ALTER TABLE issue_dispatches ADD COLUMN reviewer_session_id TEXT`
+      );
+      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN review_decision TEXT`);
+    },
+  },
+  {
+    id: 19,
+    name: "add_fix_loop_columns",
+    up: (db) => {
+      // Fix loop: on CHANGES_REQUESTED a fixer worker addresses the feedback
+      // (capped by fix_rounds); fixer_session_id tracks the in-flight fixer.
+      db.exec(
+        `ALTER TABLE issue_dispatches ADD COLUMN fix_rounds INTEGER NOT NULL DEFAULT 0`
+      );
+      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN fixer_session_id TEXT`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

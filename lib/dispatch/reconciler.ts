@@ -14,8 +14,16 @@
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session } from "../db";
 import { getSessionBackend } from "../session-backend";
+import { expandHome } from "../platform";
 import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
+import {
+  nextReviewAction,
+  spawnReviewer,
+  spawnFixer,
+  getReviewDecision,
+  MAX_FIX_ROUNDS,
+} from "./reviewer";
 import type { DispatchRepo, IssueDispatch, SlotInputs } from "./types";
 
 /**
@@ -36,6 +44,24 @@ export function pickCandidates(
   return slots <= 0 ? [] : pending.slice(0, slots);
 }
 
+/**
+ * IDs of scheduled rows that are due (`scheduled_at <= now`). Pure + unit-tested.
+ * A missing/unparseable `scheduled_at` is treated as due (fail-open, so a bad
+ * timestamp can never strand an issue in 'scheduled' forever).
+ */
+export function dueDispatchIds(
+  rows: { id: string; scheduled_at: string | null }[],
+  nowMs: number
+): string[] {
+  return rows
+    .filter((r) => {
+      if (!r.scheduled_at) return true;
+      const t = Date.parse(r.scheduled_at);
+      return Number.isNaN(t) || t <= nowMs;
+    })
+    .map((r) => r.id);
+}
+
 let tickBusy = false;
 
 /**
@@ -48,6 +74,14 @@ export async function reconcileTick(): Promise<void> {
   tickBusy = true;
   try {
     const db = getDb();
+    // 0. Promote any scheduled rows that have come due → pending, so the normal
+    // headroom/mode logic below dispatches or surfaces them this tick.
+    const dueIds = dueDispatchIds(
+      queries.listScheduled(db).all() as IssueDispatch[],
+      Date.now()
+    );
+    for (const id of dueIds) queries.promoteScheduledToPending(db).run(id);
+
     const repos = queries.getEnabledDispatchRepos(db).all() as DispatchRepo[];
     for (const repo of repos) {
       // 1. Ingest eligible open issues as `pending` candidates (idempotent).
@@ -98,6 +132,11 @@ export async function reconcileTick(): Promise<void> {
     // broadcast. guardEmptyList=false: 60s in, the backend is ready, so an empty
     // list genuinely means "no live sessions" and dead workers should be swept.
     await sweepActiveWorkers({ guardEmptyList: false });
+
+    // 5. Reviewer gate (opt-in per repo): spawn a critic on each new PR and
+    // refresh the cached GitHub review decision for the cockpit. Non-gated repos
+    // are skipped, so this is a no-op unless a repo armed `review_gate`.
+    await reviewGatePass();
   } catch (err) {
     console.error("dispatch reconcile tick failed:", err);
   } finally {
@@ -167,6 +206,74 @@ export async function sweepActiveWorkers(opts: {
  * so a Tier-2 daemon mid-rehydration doesn't get its live workers mass-failed;
  * any genuinely-dead worker it skips is swept by the first 60s tick.
  */
+/**
+ * Reviewer-gate pass: for every open PR whose repo armed `review_gate`, spawn a
+ * critic once and keep its GitHub review decision cached on the row. A no-op for
+ * non-gated repos (the common case).
+ */
+export async function reviewGatePass(): Promise<void> {
+  const db = getDb();
+  const prOpen = queries.listPrOpen(db).all() as IssueDispatch[];
+  if (prOpen.length === 0) return;
+
+  // One backend list for the whole pass — used to tell if a fixer is still live.
+  let liveNames: Set<string>;
+  try {
+    liveNames = new Set(await getSessionBackend().list());
+  } catch {
+    liveNames = new Set();
+  }
+  const isAlive = (sessionId: string | null): boolean => {
+    if (!sessionId) return false;
+    const s = queries.getSession(db).get(sessionId) as Session | undefined;
+    return !!s && liveNames.has(s.tmux_name);
+  };
+
+  for (const d of prOpen) {
+    const repo = queries.getDispatchRepo(db).get(d.repo_id) as
+      | DispatchRepo
+      | undefined;
+    if (!repo || repo.review_gate !== 1) continue;
+
+    const fixerAlive = isAlive(d.fixer_session_id);
+
+    // Keep the cached decision fresh once a critic has run and no fixer is active.
+    let decision = d.review_decision;
+    if (
+      d.reviewer_session_id &&
+      !fixerAlive &&
+      d.worktree_path &&
+      d.pr_number != null
+    ) {
+      const fresh = await getReviewDecision(
+        expandHome(d.worktree_path),
+        d.pr_number
+      );
+      if (fresh && fresh !== decision) {
+        queries.setDispatchReviewDecision(db).run(fresh, d.id);
+        decision = fresh;
+      }
+    }
+
+    const action = nextReviewAction({
+      reviewGate: true,
+      status: d.status,
+      prNumber: d.pr_number,
+      reviewerSessionId: d.reviewer_session_id,
+      reviewDecision: decision,
+      fixerSessionId: d.fixer_session_id,
+      fixerAlive,
+      fixRounds: d.fix_rounds,
+      maxFixRounds: MAX_FIX_ROUNDS,
+    });
+
+    if (action === "spawn_critic") await spawnReviewer(repo, d);
+    else if (action === "spawn_fixer") await spawnFixer(repo, d);
+    else if (action === "rereview") queries.resetForReReview(db).run(d.id);
+    // wait / approved / stuck / idle → nothing to do this tick
+  }
+}
+
 export async function reconcileOrphans(): Promise<void> {
   await sweepActiveWorkers({ guardEmptyList: true });
 }
