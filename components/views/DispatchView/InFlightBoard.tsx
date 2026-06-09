@@ -164,8 +164,16 @@ function Card({
         </span>
       )}
 
-      {/* Review the diff + merge the PR, right from Stoa (merge is your tap;
-          Stoa never auto-merges). Only while the PR is open. */}
+      {/* Armed to auto-merge: the reconciler will merge this PR once it's ready
+          (no conflicts, checks green, critic-approved if the repo is gated). */}
+      {d.auto_merge === 1 && isPrOpen && (
+        <span className="inline-flex w-fit items-center gap-1 rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] font-medium text-sky-600 dark:text-sky-400">
+          <GitMerge className="h-3 w-3" /> auto-merge
+        </span>
+      )}
+
+      {/* Review the diff + merge the PR, right from Stoa. Merge is your tap unless
+          this row armed auto-merge (badge above). Only while the PR is open. */}
       {isPrOpen && (
         <div className="mt-1 flex items-center gap-2">
           {d.session_id && (

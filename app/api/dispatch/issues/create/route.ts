@@ -33,6 +33,7 @@ export async function POST(request: NextRequest) {
           : "backlog";
     const scheduledAt =
       typeof body?.scheduledAt === "string" ? body.scheduledAt.trim() : "";
+    const autoMerge = body?.autoMerge === true;
 
     if (!repoId || !title) {
       return NextResponse.json(
@@ -85,6 +86,11 @@ export async function POST(request: NextRequest) {
       queries
         .upsertDispatchCandidate(db)
         .run(id, repo.id, created.number, title, created.url, nowIso);
+    }
+    // Opt-in auto-merge: persist the flag so the reconciler merges this row's PR
+    // once it's ready (no conflicts, checks green, critic-approved if gated).
+    if (autoMerge) {
+      queries.setDispatchAutoMerge(db).run(1, id);
     }
     const row = queries.getDispatch(db).get(id) as IssueDispatch | undefined;
     if (!row) {

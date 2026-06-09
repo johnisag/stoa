@@ -17,6 +17,7 @@ import { getSessionBackend } from "../session-backend";
 import { expandHome } from "../platform";
 import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
+import { autoMergePass } from "./auto-merge";
 import {
   nextReviewAction,
   spawnReviewer,
@@ -137,6 +138,10 @@ export async function reconcileTick(): Promise<void> {
     // refresh the cached GitHub review decision for the cockpit. Non-gated repos
     // are skipped, so this is a no-op unless a repo armed `review_gate`.
     await reviewGatePass();
+
+    // 6. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
+    // After the reviewer pass so a just-approved gated PR can merge same tick.
+    await autoMergePass();
   } catch (err) {
     console.error("dispatch reconcile tick failed:", err);
   } finally {

@@ -330,6 +330,18 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 21,
+    name: "add_auto_merge_to_issue_dispatches",
+    up: (db) => {
+      // Opt-in per-issue auto-merge (default off). When on, the reconciler merges
+      // the worker's PR once it's ready (no conflicts, checks green, and — if the
+      // repo armed review_gate — the critic approved).
+      db.exec(
+        `ALTER TABLE issue_dispatches ADD COLUMN auto_merge INTEGER NOT NULL DEFAULT 0`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

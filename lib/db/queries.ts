@@ -453,6 +453,14 @@ export const queries = {
   getDispatch: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM issue_dispatches WHERE id = ?`),
 
+  // Opt-in per-issue auto-merge flag (0/1): the reconciler merges this row's PR
+  // once it's ready. Set at creation; toggleable from the board.
+  setDispatchAutoMerge: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET auto_merge = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
   // Daily cap: rows DISPATCHED today (calendar day, UTC) for a repo.
   countDispatchesToday: (db: Database.Database) =>
     getStmt(
