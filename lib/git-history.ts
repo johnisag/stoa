@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { expandPath } from "./git-status";
 
 export interface CommitSummary {
@@ -61,8 +61,9 @@ export function getCommitHistory(
     // Format: hash|shortHash|subject|body|author|email|timestamp
     // Using %x00 as separator to handle commit messages with |
     const format = "%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%at";
-    const output = execSync(
-      `git log --format="${format}" -n ${limit} --shortstat`,
+    const output = execFileSync(
+      "git",
+      ["log", `--format=${format}`, "-n", String(limit), "--shortstat"],
       { cwd, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, windowsHide: true }
     );
 
@@ -159,8 +160,9 @@ export function getCommitDetail(
   try {
     // Get commit info
     const format = "%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%at";
-    const infoOutput = execSync(
-      `git show --format="${format}" -s ${commitHash}`,
+    const infoOutput = execFileSync(
+      "git",
+      ["show", `--format=${format}`, "-s", commitHash],
       {
         cwd,
         encoding: "utf-8",
@@ -176,14 +178,16 @@ export function getCommitDetail(
     const timestamp = parseInt(timestampStr, 10);
 
     // Get file stats using numstat
-    const statOutput = execSync(
-      `git show --numstat --format="" ${commitHash}`,
+    const statOutput = execFileSync(
+      "git",
+      ["show", "--numstat", "--format=", commitHash],
       { cwd, encoding: "utf-8", windowsHide: true }
     );
 
     // Get name-status for detecting renames
-    const nameStatusOutput = execSync(
-      `git show --name-status --format="" ${commitHash}`,
+    const nameStatusOutput = execFileSync(
+      "git",
+      ["show", "--name-status", "--format=", commitHash],
       { cwd, encoding: "utf-8", windowsHide: true }
     );
 
@@ -283,8 +287,9 @@ export function getCommitFileDiff(
   try {
     // Get diff for the specific file in this commit
     // Use -m to handle merge commits (shows diff against first parent)
-    const diff = execSync(
-      `git show -m --first-parent ${commitHash} -- "${filePath}"`,
+    const diff = execFileSync(
+      "git",
+      ["show", "-m", "--first-parent", commitHash, "--", filePath],
       { cwd, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, windowsHide: true }
     );
     return diff;

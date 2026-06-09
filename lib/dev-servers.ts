@@ -82,7 +82,9 @@ async function getPidOnPort(port: number): Promise<number | null> {
       return null;
     }
 
-    const { stdout } = await execFileAsync("lsof", ["-i", `:${port}`, "-t"]);
+    const { stdout } = await execFileAsync("lsof", ["-i", `:${port}`, "-t"], {
+      windowsHide: true,
+    });
     const pid = parseInt(stdout.trim().split(/\r?\n/)[0], 10);
     return isNaN(pid) ? null : pid;
   } catch {
