@@ -47,7 +47,7 @@ check_node() {
     if command -v node &> /dev/null; then
         local version
         version=$(node -v | sed 's/v//' | cut -d. -f1)
-        if [[ "$version" -ge 20 ]]; then
+        if [[ "$version" -ge 24 ]]; then
             local node_path=$(command -v node)
             log_success "Found Node.js v$(node -v | sed 's/v//') at $node_path"
             return 0
@@ -60,7 +60,7 @@ check_node() {
     if command -v node &> /dev/null; then
         local version
         version=$(node -v | sed 's/v//' | cut -d. -f1)
-        if [[ "$version" -ge 20 ]]; then
+        if [[ "$version" -ge 24 ]]; then
             local node_path=$(command -v node)
             local manager=""
 
@@ -193,10 +193,10 @@ install_node() {
     if command -v node &> /dev/null; then
         local version
         version=$(node -v | sed 's/v//' | cut -d. -f1)
-        if [[ "$version" -ge 20 ]]; then
+        if [[ "$version" -ge 24 ]]; then
             return 0
         fi
-        log_warn "Node.js $version found, but 20+ required"
+        log_warn "Node.js $version found, but 24+ required"
     fi
 
     log_info "Installing Node.js..."
@@ -215,9 +215,9 @@ install_node() {
                 export PATH="$HOME/.local/share/fnm:$PATH"
                 eval "$(fnm env --use-on-cd)"
 
-                # Install and use Node.js 20
-                fnm install 20
-                fnm use 20
+                # Install and use Node.js 24
+                fnm install 24
+                fnm use 24
 
                 # Add fnm to shell profile
                 local shell_profile=""
@@ -244,15 +244,15 @@ install_node() {
             fi
             ;;
         debian)
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+            curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
             sudo apt-get install -y nodejs
             ;;
         redhat)
-            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+            curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash -
             sudo yum install -y nodejs
             ;;
         *)
-            log_error "Please install Node.js 20+ manually: https://nodejs.org"
+            log_error "Please install Node.js 24+ manually: https://nodejs.org"
             exit 1
             ;;
     esac

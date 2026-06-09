@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.
 The installer will:
 
 1. Clone or update Stoa in `~/.stoa/repo`
-2. Check for prerequisites (Node.js 20+, git, tmux) and offer to install any missing ones
+2. Check for prerequisites (Node.js 24+, git, tmux) and offer to install any missing ones
 3. Detect installed AI CLIs or prompt you to install one
 4. Install dependencies with development build tools included
 5. Build for production and verify the required `.next` artifacts exist
@@ -56,7 +56,7 @@ After installation, use the `stoa` command to manage the server:
 
 The installer can automatically install these on macOS and Linux:
 
-- **Node.js 20+** - JavaScript runtime
+- **Node.js 24+** - JavaScript runtime
 - **npm** - Package manager (comes with Node.js)
 - **git** - Version control
 - **tmux** - Terminal multiplexer for session management
@@ -169,7 +169,7 @@ Common issues:
 
 - Port already in use: Change `STOA_PORT`
 - Missing dependencies: Run `stoa install` again
-- Node.js version: Ensure Node.js 20+ is installed
+- Node.js version: Ensure Node.js 24+ is installed
 
 ### Can't connect from phone
 
