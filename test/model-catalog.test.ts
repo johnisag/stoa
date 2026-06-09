@@ -26,12 +26,15 @@ describe("model catalog — free-text agents (hermes)", () => {
     expect(isFreeTextModelAgent("codex")).toBe(false);
   });
 
-  it("offers no static list and no default (the agent picks its own)", () => {
+  it("offers no static list but has an explicit default model", () => {
     expect(getModelOptions("hermes")).toEqual([]);
-    expect(getDefaultModelForAgent("hermes")).toBe("");
+    // Hermes is free-text (no dropdown) but Stoa gives it an explicit default so
+    // a fresh session launches `hermes -m claude-opus-4-8` (a full model name —
+    // the shorthand "opus" 404s).
+    expect(getDefaultModelForAgent("hermes")).toBe("claude-opus-4-8");
   });
 
-  it("accepts any non-empty model verbatim; empty → agent default", () => {
+  it("accepts any non-empty model verbatim; empty → the configured default", () => {
     expect(
       isSupportedModelForAgent("hermes", "anthropic/claude-sonnet-4.6")
     ).toBe(true);
@@ -40,16 +43,33 @@ describe("model catalog — free-text agents (hermes)", () => {
     expect(resolveModelForAgent("hermes", "  openrouter/x  ")).toBe(
       "openrouter/x"
     );
-    expect(resolveModelForAgent("hermes", "")).toBe("");
-    expect(resolveModelForAgent("hermes", null)).toBe("");
-    expect(resolveModelForAgent("hermes", undefined)).toBe("");
+    // empty/missing → the configured Hermes default
+    expect(resolveModelForAgent("hermes", "")).toBe("claude-opus-4-8");
+    expect(resolveModelForAgent("hermes", null)).toBe("claude-opus-4-8");
+    expect(resolveModelForAgent("hermes", undefined)).toBe("claude-opus-4-8");
+  });
+
+  it("does NOT inherit another agent's static model (the opus 404 bug)", () => {
+    // A project's default_model column defaults to "sonnet" (Claude-centric) and
+    // can be "opus"/a Codex id. Passing that to Hermes would yield `hermes -m
+    // opus` → Anthropic 404 model: opus. resolveModelForAgent must drop a
+    // foreign static model and fall back to Hermes's own default instead.
+    expect(resolveModelForAgent("hermes", "opus")).toBe("claude-opus-4-8");
+    expect(resolveModelForAgent("hermes", "sonnet")).toBe("claude-opus-4-8");
+    expect(resolveModelForAgent("hermes", "haiku")).toBe("claude-opus-4-8");
+    expect(resolveModelForAgent("hermes", "gpt-5.4")).toBe("claude-opus-4-8");
+    // but a genuine provider-qualified Hermes model still passes through
+    expect(resolveModelForAgent("hermes", "anthropic/claude-opus-4.8")).toBe(
+      "anthropic/claude-opus-4.8"
+    );
   });
 });
 
 describe("nextModelOnAgentChange (model carry-over on agent switch)", () => {
-  it("static -> free-text: resets (no static model name leaks into Hermes)", () => {
-    expect(nextModelOnAgentChange("hermes", "sonnet")).toBe("");
-    expect(nextModelOnAgentChange("hermes", "gpt-5.4")).toBe("");
+  it("static -> free-text: resets to the free-text agent's default (no leak)", () => {
+    // No static model name leaks into Hermes; it resets to Hermes's own default.
+    expect(nextModelOnAgentChange("hermes", "sonnet")).toBe("claude-opus-4-8");
+    expect(nextModelOnAgentChange("hermes", "gpt-5.4")).toBe("claude-opus-4-8");
   });
 
   it("free-text -> static: drops the free-text value for the static default", () => {

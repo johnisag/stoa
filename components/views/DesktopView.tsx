@@ -102,7 +102,6 @@ export function DesktopView({
                 onOpenTerminal={handleOpenTerminal}
                 onStartDevServer={handleStartDevServer}
                 onCreateDevServer={handleCreateDevServer}
-                onCollapse={() => setSidebarOpen(false)}
               />
             </div>
 
