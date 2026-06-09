@@ -8,10 +8,28 @@ process.env.STOA_BACKEND = "pty";
 // (the fallback test asserts the transport type directly, not through a wrapper).
 process.env.STOA_AUDIT = "0";
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
-import { startHost, stopHost } from "@/lib/session-backend/pty/host";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  afterEach,
+  vi,
+} from "vitest";
+import {
+  startHost,
+  stopHost,
+  installProcessGuards,
+  uninstallProcessGuards,
+} from "@/lib/session-backend/pty/host";
 import { HostClient } from "@/lib/session-backend/pty/host-client";
 import { _resetRegistryForTests } from "@/lib/session-backend/pty/registry";
+import {
+  getSessionBackend,
+  resetSessionBackend,
+  usePtyHost,
+} from "@/lib/session-backend";
 
 // The host runs in-process here; each HostClient connects over the real socket,
 // so this exercises the true IPC path. A fresh client simulates the web server
@@ -180,6 +198,149 @@ describe("pty-host daemon (Tier 2)", () => {
     obs.detach();
     await client.kill("host-obs");
     client.close();
+  });
+
+  it("delivers an exit frame over IPC when the agent process exits", async () => {
+    // Contract: when a session's pty exits, the daemon pushes an `exit` frame to
+    // every attached client (it doesn't just silently reap). The browser relies
+    // on this to flip a card to \"exited\" without polling.
+    const client = new HostClient();
+    let exitCode: number | null = null;
+    await client.spawn("host-exit", {
+      binary: "node",
+      // Live briefly so attach lands first, then exit with a distinct code.
+      args: ["-e", "setTimeout(() => process.exit(7), 150)"],
+      cwd: process.cwd(),
+    });
+    await client.attach(
+      "host-exit",
+      () => {},
+      (code) => (exitCode = code)
+    );
+
+    const got = await waitFor(() => exitCode !== null);
+    expect(got).toBe(true);
+    expect(exitCode).toBe(7);
+    client.close();
+  });
+
+  it("reports a session that exited during a socket drop as gone, not alive", async () => {
+    // Regression: a short-lived agent that exits WHILE the client's socket is
+    // dropped must not repaint as alive after the transparent reconnect. The
+    // daemon reaps it on exit, so the reconnecting client's exists() must read
+    // false (the listener bookkeeping survives the drop, but the session does not).
+    const client = new HostClient();
+    await client.spawn("host-exit-drop", {
+      binary: "node",
+      args: ["-e", "setTimeout(() => process.exit(0), 250)"],
+      cwd: process.cwd(),
+    });
+    await client.attach(
+      "host-exit-drop",
+      () => {},
+      () => {}
+    );
+
+    // Drop the socket, then let the process exit while disconnected.
+    (
+      client as unknown as { socket: { destroy(): void } | null }
+    ).socket?.destroy();
+    await new Promise((r) => setTimeout(r, 100)); // let the close settle
+
+    // The next calls auto-reconnect; once the pty exits the daemon reaps it, so
+    // exists() must settle on false (poll — node-pty's exit can lag the timer).
+    const gone = await waitFor(
+      async () => !(await client.exists("host-exit-drop"))
+    );
+    expect(gone).toBe(true);
+    expect(await client.list()).not.toContain("host-exit-drop");
+    client.close();
+  });
+});
+
+describe("Tier-2 → Tier-1 fallback (no split brain)", () => {
+  it("re-resolves the backend transport when host mode is disabled mid-flight", () => {
+    // server.ts probes the daemon once at startup; if it's unreachable it sets
+    // STOA_PTY_HOST=0 and calls resetSessionBackend() so the WHOLE process
+    // agrees on Tier 1 — even a backend cached before the flip. Lock that the
+    // selection actually flips HostTransport → LocalTransport on that signal.
+    const prev = process.env.STOA_PTY_HOST;
+    try {
+      process.env.STOA_PTY_HOST = "1";
+      resetSessionBackend();
+      expect(usePtyHost()).toBe(true);
+      const tier2 = getSessionBackend() as unknown as {
+        transport: { constructor: { name: string } };
+      };
+      expect(tier2.transport.constructor.name).toBe("HostTransport");
+
+      // Simulate the probe failing: host mode off + re-resolve.
+      process.env.STOA_PTY_HOST = "0";
+      resetSessionBackend();
+      expect(usePtyHost()).toBe(false);
+      const tier1 = getSessionBackend() as unknown as {
+        transport: { constructor: { name: string } };
+      };
+      expect(tier1.transport.constructor.name).toBe("LocalTransport");
+    } finally {
+      if (prev === undefined) delete process.env.STOA_PTY_HOST;
+      else process.env.STOA_PTY_HOST = prev;
+      resetSessionBackend();
+    }
+  });
+});
+
+describe("Tier-2 daemon process guards (keep-alive)", () => {
+  it("installs and removes the uncaughtException / unhandledRejection handlers", () => {
+    // The daemon owns every live session; one unhandled throw must not crash it.
+    // The entry point installs these last-resort guards. Lock that install adds
+    // exactly one of each (idempotently) and uninstall fully removes them — so
+    // the test runner's own handlers aren't left shadowed after this file.
+    const before = {
+      ue: process.listenerCount("uncaughtException"),
+      ur: process.listenerCount("unhandledRejection"),
+    };
+    try {
+      installProcessGuards();
+      installProcessGuards(); // idempotent
+      expect(process.listenerCount("uncaughtException")).toBe(before.ue + 1);
+      expect(process.listenerCount("unhandledRejection")).toBe(before.ur + 1);
+    } finally {
+      uninstallProcessGuards();
+    }
+    expect(process.listenerCount("uncaughtException")).toBe(before.ue);
+    expect(process.listenerCount("unhandledRejection")).toBe(before.ur);
+  });
+
+  it("the installed handlers swallow + log instead of rethrowing (keep-alive semantics)", () => {
+    // The listenerCount test above locks the bookkeeping; this locks the BEHAVIOR
+    // that matters — the handler bodies log and DON'T rethrow, so the daemon
+    // stays up. Invoke the freshly-registered listeners directly (rather than
+    // emitting on the real process, which would trip vitest's own handlers).
+    const ueBefore = new Set(process.listeners("uncaughtException"));
+    const urBefore = new Set(process.listeners("unhandledRejection"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      installProcessGuards();
+      const ue = process
+        .listeners("uncaughtException")
+        .find((l) => !ueBefore.has(l)) as
+        | ((e: unknown, o?: string) => void)
+        | undefined;
+      const ur = process
+        .listeners("unhandledRejection")
+        .find((l) => !urBefore.has(l)) as ((r: unknown) => void) | undefined;
+      expect(ue).toBeDefined();
+      expect(ur).toBeDefined();
+
+      // Neither may throw — that's the whole point of the keep-alive guard.
+      expect(() => ue!(new Error("boom"), "uncaughtException")).not.toThrow();
+      expect(() => ur!(new Error("rejected"))).not.toThrow();
+      expect(errSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      uninstallProcessGuards();
+      errSpy.mockRestore();
+    }
   });
 });
 
