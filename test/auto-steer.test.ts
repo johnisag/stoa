@@ -24,13 +24,39 @@ describe("detectPrompt — classification", () => {
     expect(detectPrompt("Overwrite the file? [Y/n]")?.kind).toBe("continue");
   });
 
-  it("classifies a highlighted-Yes permission menu as affirmative", () => {
+  it("classifies a highlighted single-shot Yes menu as affirmative (any real glyph)", () => {
     const screen =
       "Bash(npm run build)\nDo you want to proceed?\n❯ 1. Yes\n  2. No";
     expect(detectPrompt(screen)?.kind).toBe("affirmative");
     expect(
-      detectPrompt("> 1. Yes\n  2. No, tell Claude what to do")?.kind
+      detectPrompt("› 1. Yes\n  2. No, tell Claude what to do")?.kind
     ).toBe("affirmative");
+    expect(detectPrompt("❯ 1. Yes, proceed\n  2. No")?.kind).toBe(
+      "affirmative"
+    );
+  });
+
+  it("does NOT treat the ASCII '>' input box / redirect as a menu cursor", () => {
+    // A half-typed message in the input box must never submit itself on Enter.
+    expect(detectPrompt("> 1. yes go ahead with the refactor")?.kind).not.toBe(
+      "affirmative"
+    );
+  });
+
+  it("escalates a QUALIFIED highlighted Yes (allowlist is fail-closed)", () => {
+    // The structural safety: only a BARE single-shot yes is accepted. New standing-
+    // grant phrasings a provider invents fall through to escalate automatically.
+    for (const opt of [
+      "Yes, allow always",
+      "Yes, without asking for approval",
+      "Yes, auto-approve from now on",
+      "Yes, allow for this session",
+      "Yes, and remember my choice",
+    ]) {
+      expect(detectPrompt(`❯ 1. ${opt}\n  2. No`)?.kind).not.toBe(
+        "affirmative"
+      );
+    }
   });
 
   it("answers the REAL Claude Code menu (highlighted single-shot Yes) even though a blanket option exists below it", () => {
@@ -62,6 +88,14 @@ describe("detectPrompt — classification", () => {
         "Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No"
       )?.kind
     ).not.toBe("affirmative");
+  });
+
+  it("escalates folder-trust even when the trust question scrolled above the menu", () => {
+    const screen =
+      "Do you trust the files in this folder?\n" +
+      Array(8).fill("  (explanation line)").join("\n") +
+      "\n❯ 1. Yes\n  2. No";
+    expect(detectPrompt(screen)?.kind).not.toBe("affirmative");
   });
 
   it("escalates blanket / standing-permission grants in non-menu prompts", () => {
@@ -102,8 +136,16 @@ describe("detectPrompt — classification", () => {
     expect(detectPrompt("Bash(gh repo delete acme/app)\n❯ 1. Yes")?.kind).toBe(
       "destructive"
     );
-    // A command split across a wrapped line still escalates (newline-healed scan).
+    // A command split across a wrapped line still escalates (newline-healed scan),
+    // INCLUDING the terminal's padding spaces at the wrap boundary.
     expect(detectPrompt("Bash(git push --fo\nrce)\nProceed? [Y/n]")?.kind).toBe(
+      "destructive"
+    );
+    expect(
+      detectPrompt("Bash(git push --fo   \nrce)\nProceed? [Y/n]")?.kind
+    ).toBe("destructive");
+    // Force via short flag / refspec (the long --force isn't the only form).
+    expect(detectPrompt("Bash(git push -f origin main)\n❯ 1. Yes")?.kind).toBe(
       "destructive"
     );
   });

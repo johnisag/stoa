@@ -52,24 +52,30 @@ const PROMPT_HINTS: RegExp[] = [
   /\(yes\/no\)/i,
   /Do you want to/i,
   /Enter to confirm/i,
-  /(?:❯|›|▶|>)\s*\d+\.\s/, // a highlighted numbered menu option
+  /(?:❯|›|▶)\s*\d+\.\s/, // a highlighted numbered menu option
   /\b\d+\.\s*Yes\b/i,
 ];
 
 // A highlighted menu option — the line Enter will SELECT. Group 1 = the option
-// text after the number. Must precede a NUMBERED option so a shell ">" / blockquote
-// / redirect isn't mistaken for a menu cursor.
-const HIGHLIGHT = /(?:❯|›|▶|>)\s*\d+\.\s*(.+)$/;
+// text after the number. ONLY the real selection glyphs (❯/›/▶) count — NOT the
+// ASCII ">", which is also the input-box prompt and a shell redirect (matching it
+// would let a half-typed "> 1. yes…" message submit itself on Enter).
+const HIGHLIGHT = /(?:❯|›|▶)\s*\d+\.\s*(.+)$/;
 
-// Classify the HIGHLIGHTED option's text, most-dangerous-first. A standing-grant
-// ("allow all" / "don't ask again" / "always") must be checked BEFORE the bare
-// "yes" so "Yes, and don't ask again" escalates, not accepts.
+// The affirmative is an ALLOWLIST, not a denylist — fail CLOSED. We accept a
+// highlighted option ONLY when its WHOLE text is a bare single-shot yes (the real
+// Claude Code default is literally "Yes" / "Yes, proceed"). Anything qualified —
+// "Yes, allow always", "Yes, without asking", "Yes, and don't ask again", "Trust" —
+// is NOT a single-shot and falls through to escalate, no matter what new standing-
+// grant phrasing a provider invents.
+const SINGLE_SHOT_YES =
+  /^(y|yes|ok|okay|sure|allow|approve|accept|confirm|proceed|continue|run it|do it|go ahead)(\s*,?\s*(yes|proceed|continue|and continue|once|now|please|go ahead|run it|do it|this time))*\s*[.!]?$/i;
+// Standing-grant phrasings — checked first only to LABEL the escalation as
+// "blanket" (the allowlist above already refuses to accept them). Broad on purpose.
 const OPT_BLANKET =
-  /\b(allow all|all edits|all commands|don'?t ask( me)? again|and don'?t ask|always (allow|approve|accept)|every time|for the rest of)\b/i;
+  /\b(allow all|all edits|all commands|don'?t ask( me)? again|and don'?t ask|always (allow|approve|accept)|allow always|auto[- ]?approve|from now on|remember (this|my)|for (this|the) session|without (asking|confirm)|no confirmation|accept all|apply to all|every time|for the rest of|bypass|yolo)\b/i;
 const OPT_NEGATIVE =
   /\b(no\b|don'?t|do not|cancel|reject|deny|decline|tell (claude|the agent|me)|something else|go back|abort|quit|exit|skip)\b/i;
-const OPT_AFFIRMATIVE =
-  /\b(yes|proceed|continue|allow|approve|confirm|accept|ok|sure|go ahead|do it|trust)\b/i;
 
 // The command being approved usually renders near the prompt; scan the WHOLE
 // capture (commands can scroll above the prompt window) AND a newline-stripped copy
@@ -103,6 +109,12 @@ const DESTRUCTIVE = new RegExp(
     "helm\\s+(delete|uninstall)",
     "gh\\s+repo\\s+delete",
     "docker\\s+(rm|rmi|system\\s+prune|volume\\s+rm|.*prune)",
+    "git\\s+push\\b[^\\n]*(\\s-f\\b|\\s\\+)", // force via -f / +refspec
+    "git\\s+checkout\\s+--\\s", // discard working-tree changes
+    "git\\s+stash\\s+(drop|clear)",
+    "chmod\\s+[0-7]*7[0-7]{2}", // world-writable/executable
+    "/dev/null\\b",
+    "rmtree\\b",
     // Windows deletions (this product runs natively on Windows):
     "\\bformat\\s+[a-z]:",
     "Remove-Item\\b",
@@ -123,12 +135,22 @@ const TEXT_BLANKET =
 
 // A folder/workspace-trust prompt grants the target repo's hooks/settings — an
 // escalation primitive, so always leave it for the human even if the cursor is on Yes.
-const SENSITIVE = /\btrust\b[^\n]*\b(folder|files|workspace|director|repo)/i;
+const SENSITIVE =
+  /\btrust\b[^\n]{0,80}\b(folder|files|workspace|director|repo)|\bdo you trust\b/i;
+
+// Heal terminal line-wrap: strip a newline AND the padding spaces a terminal
+// inserts at the wrap boundary, so a token split across the wrap (e.g.
+// "--fo  \nrce") rejoins ("--force") for the denylist scan. Tested raw too.
+const healWrap = (screen: string): string =>
+  screen.replace(/[ \t]*\r?\n[ \t]*/g, "");
 
 function isDangerous(screen: string): boolean {
-  return (
-    DESTRUCTIVE.test(screen) || DESTRUCTIVE.test(screen.replace(/\n/g, ""))
-  );
+  return DESTRUCTIVE.test(screen) || DESTRUCTIVE.test(healWrap(screen));
+}
+
+function isSensitive(screen: string): boolean {
+  // Whole-capture (the trust question can render above the menu) + wrap-healed.
+  return SENSITIVE.test(screen) || SENSITIVE.test(healWrap(screen));
 }
 
 /**
@@ -155,7 +177,7 @@ export function detectPrompt(renderedScreen: string): PromptState | null {
   if (!PROMPT_HINTS.some((re) => re.test(tailText))) return null;
 
   const danger = isDangerous(renderedScreen);
-  const sensitive = SENSITIVE.test(tailText);
+  const sensitive = isSensitive(renderedScreen);
 
   // MENU: Enter selects the HIGHLIGHTED option. Classify THAT line — the structural
   // safety. If multiple highlight markers render, the last one wins (the live one).
@@ -169,7 +191,8 @@ export function detectPrompt(renderedScreen: string): PromptState | null {
     if (danger) return { kind: "destructive", line };
     if (OPT_BLANKET.test(opt)) return { kind: "blanket", line };
     if (OPT_NEGATIVE.test(opt)) return { kind: "negative", line };
-    if (OPT_AFFIRMATIVE.test(opt) && !sensitive) {
+    // Accept ONLY a bare single-shot yes, and never a folder-trust grant.
+    if (SINGLE_SHOT_YES.test(opt) && !sensitive) {
       return { kind: "affirmative", line };
     }
     return { kind: "freeform", line };
