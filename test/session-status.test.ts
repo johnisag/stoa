@@ -16,7 +16,13 @@ const wt = (
   id: string,
   status: ManagedStatus["status"],
   lastLine = ""
-): ManagedStatus => ({ id, name: `claude-${id}`, status, lastLine });
+): ManagedStatus => ({
+  id,
+  name: `claude-${id}`,
+  status,
+  lastLine,
+  rateLimit: null,
+});
 
 describe("diffStatuses", () => {
   it("emits everything against an empty snapshot (first tick)", () => {
@@ -29,7 +35,13 @@ describe("diffStatuses", () => {
     const prev = snapshotStatuses([wt("a", "running"), wt("b", "idle")]);
     const deltas = diffStatuses(prev, [wt("a", "waiting"), wt("b", "idle")]);
     expect(deltas).toEqual([
-      { id: "a", name: "claude-a", status: "waiting", lastLine: "" },
+      {
+        id: "a",
+        name: "claude-a",
+        status: "waiting",
+        lastLine: "",
+        rateLimit: null,
+      },
     ]);
   });
 
@@ -37,7 +49,13 @@ describe("diffStatuses", () => {
     const prev = snapshotStatuses([wt("a", "running", "step 1")]);
     const deltas = diffStatuses(prev, [wt("a", "running", "step 2")]);
     expect(deltas).toEqual([
-      { id: "a", name: "claude-a", status: "running", lastLine: "step 2" },
+      {
+        id: "a",
+        name: "claude-a",
+        status: "running",
+        lastLine: "step 2",
+        rateLimit: null,
+      },
     ]);
   });
 
@@ -50,7 +68,13 @@ describe("diffStatuses", () => {
     const prev = snapshotStatuses([wt("a", "running")]);
     const deltas = diffStatuses(prev, [wt("a", "running"), wt("b", "idle")]);
     expect(deltas).toEqual([
-      { id: "b", name: "claude-b", status: "idle", lastLine: "" },
+      {
+        id: "b",
+        name: "claude-b",
+        status: "idle",
+        lastLine: "",
+        rateLimit: null,
+      },
     ]);
   });
 });

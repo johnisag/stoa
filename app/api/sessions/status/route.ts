@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { statusDetector, type SessionStatus } from "@/lib/status-detector";
+import type { RateLimitState } from "@/lib/rate-limit";
 import type { AgentType } from "@/lib/providers";
 import {
   getManagedSessionPattern,
@@ -21,6 +22,8 @@ interface SessionStatusResponse {
   lastLine?: string;
   claudeSessionId?: string | null;
   agentType?: AgentType;
+  /** Rate-limit state off the rendered screen (null when not limited). */
+  rateLimit?: RateLimitState | null;
 }
 
 async function getTmuxSessions(): Promise<string[]> {
@@ -167,8 +170,8 @@ export async function GET() {
     const sessionPromises = managedSessions.map(async (sessionName) => {
       const agentType = getAgentTypeFromSessionName(sessionName);
       const id = getSessionIdFromName(sessionName);
-      // One screen capture yields both the status and the preview line.
-      const { status, lastLine } =
+      // One screen capture yields the status, the preview line, and rate-limit.
+      const { status, lastLine, rateLimit } =
         await statusDetector.getStatusDetail(sessionName);
       // Resolve the agent resume-id AFTER getStatusDetail: its capturePane()
       // populates the Hermes banner-id cache, so reading it here captures the id
@@ -180,7 +183,15 @@ export async function GET() {
         if (claudeSessionId) resolvedSessionIds.set(id, claudeSessionId);
       }
 
-      return { sessionName, id, status, claudeSessionId, lastLine, agentType };
+      return {
+        sessionName,
+        id,
+        status,
+        claudeSessionId,
+        lastLine,
+        agentType,
+        rateLimit,
+      };
     });
 
     const results = await Promise.all(sessionPromises);
@@ -192,6 +203,7 @@ export async function GET() {
       claudeSessionId,
       lastLine,
       agentType,
+      rateLimit,
     } of results) {
       // Track status changes - update DB when session becomes active
       const prevStatus = previousStatuses.get(id);
@@ -208,6 +220,7 @@ export async function GET() {
         lastLine,
         claudeSessionId,
         agentType,
+        rateLimit,
       };
     }
 

@@ -1,5 +1,6 @@
 import { getSessionBackend } from "./session-backend";
 import { statusDetector, type SessionStatus } from "./status-detector";
+import type { RateLimitState } from "./rate-limit";
 import {
   getManagedSessionPattern,
   getSessionIdFromName,
@@ -12,6 +13,8 @@ export interface ManagedStatus {
   name: string;
   status: SessionStatus;
   lastLine: string;
+  /** Rate-limit state read off the same capture, or null if not limited. */
+  rateLimit: RateLimitState | null;
 }
 
 const MANAGED = getManagedSessionPattern();
@@ -35,8 +38,15 @@ export async function computeManagedStatuses(): Promise<ManagedStatus[]> {
   await Promise.all(
     names.map(async (name) => {
       try {
-        const { status, lastLine } = await statusDetector.getStatusDetail(name);
-        out.push({ id: getSessionIdFromName(name), name, status, lastLine });
+        const { status, lastLine, rateLimit } =
+          await statusDetector.getStatusDetail(name);
+        out.push({
+          id: getSessionIdFromName(name),
+          name,
+          status,
+          lastLine,
+          rateLimit,
+        });
       } catch {
         // Session vanished / capture failed — skip; the client poll backstops.
       }
@@ -50,12 +60,21 @@ export interface StatusDelta {
   name: string;
   status: SessionStatus;
   lastLine: string;
+  /** Rate-limit state, so the client can badge "limited / resets in N". */
+  rateLimit: RateLimitState | null;
 }
 
 // One snapshot value per session, so a diff is a cheap string compare. NUL
-// separates the two fields (can't appear in a status or a rendered line).
-const snapKey = (s: { status: SessionStatus; lastLine: string }) =>
-  `${s.status}\0${s.lastLine}`;
+// separates the fields (can't appear in a status, rendered line, or our marker) —
+// rateLimit is included so a limit appearing/clearing broadcasts a delta.
+const snapKey = (s: {
+  status: SessionStatus;
+  lastLine: string;
+  rateLimit: RateLimitState | null;
+}) =>
+  `${s.status}\0${s.lastLine}\0${
+    s.rateLimit ? `${s.rateLimit.reason}@${s.rateLimit.resetAt ?? ""}` : ""
+  }`;
 
 /**
  * Entries that CHANGED vs the previous snapshot (new id, different status, or
@@ -75,6 +94,7 @@ export function diffStatuses(
         name: s.name,
         status: s.status,
         lastLine: s.lastLine,
+        rateLimit: s.rateLimit,
       });
     }
   }

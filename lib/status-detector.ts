@@ -17,6 +17,7 @@
  */
 
 import { getSessionBackend } from "./session-backend";
+import { detectRateLimit, type RateLimitState } from "./rate-limit";
 
 // Resolve the backend lazily (per use). Capturing it at module load would lock
 // in the wrong choice before server.ts finalizes the pty-host fallback decision.
@@ -362,11 +363,19 @@ class SessionStatusDetector {
    * getStatus, one for the preview line) — halving capture round-trips, which on
    * the Tier-2 pty-host backend are IPC requests.
    */
-  async getStatusDetail(
-    sessionName: string
-  ): Promise<{ status: SessionStatus; lastLine: string }> {
+  async getStatusDetail(sessionName: string): Promise<{
+    status: SessionStatus;
+    lastLine: string;
+    rateLimit: RateLimitState | null;
+  }> {
     const { status, content } = await this.evaluate(sessionName);
-    return { status, lastLine: lastNonEmptyLine(content) };
+    // Rate-limit detection rides on the SAME rendered capture (no extra round-
+    // trip). Surfaced always-on; the auto-resume decision/action lives upstream.
+    return {
+      status,
+      lastLine: lastNonEmptyLine(content),
+      rateLimit: detectRateLimit(content),
+    };
   }
 
   // Capture the screen once, then classify. Shared by getStatus/getStatusDetail

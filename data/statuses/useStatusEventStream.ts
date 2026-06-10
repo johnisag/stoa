@@ -15,6 +15,7 @@ interface StatusDelta {
   name: string;
   status: SessionStatus["status"];
   lastLine: string;
+  rateLimit?: SessionStatus["rateLimit"];
 }
 
 /**
@@ -60,6 +61,7 @@ export function useStatusEventStream() {
                 status: d.status,
                 lastLine: d.lastLine,
                 claudeSessionId: statuses[d.id]?.claudeSessionId ?? null,
+                rateLimit: d.rateLimit ?? null,
               };
             }
             return { statuses };

@@ -64,6 +64,11 @@ interface SessionCardProps {
   /** Last rendered terminal line — a live one-line preview for running/waiting
    * agents. A primitive string so React.memo only repaints when it changes. */
   lastLine?: string;
+  /** Provider rate-limit state, passed as PRIMITIVES (not an object) so the card's
+   * React.memo still skips unchanged repaints: whether it's limited + the epoch-ms
+   * reset (or null when the provider didn't state one). */
+  rateLimited?: boolean;
+  rateLimitResetAt?: number | null;
   groups?: Group[];
   projects?: ProjectWithDevServers[];
   // Selection props
@@ -138,6 +143,8 @@ function SessionCardComponent({
   isSummarizing,
   tmuxStatus,
   lastLine,
+  rateLimited,
+  rateLimitResetAt,
   groups = EMPTY_GROUPS,
   projects = EMPTY_PROJECTS,
   isSelected,
@@ -529,6 +536,28 @@ function SessionCardComponent({
                 : "O"}
           </span>
         </a>
+      )}
+
+      {/* Rate-limit badge — the provider hit a usage/rate limit. Shows "resets in
+          ~Nm" when a reset time was parsed (refreshes on the next status poll). */}
+      {rateLimited && (
+        <span
+          className="flex flex-shrink-0 items-center gap-0.5 rounded bg-amber-500/20 px-1 text-[10px] text-amber-500"
+          title={
+            rateLimitResetAt
+              ? `Rate-limited — resets ${new Date(rateLimitResetAt).toLocaleTimeString()}`
+              : "Rate-limited"
+          }
+        >
+          limited
+          {rateLimitResetAt != null && rateLimitResetAt > Date.now() && (
+            <span>
+              ·{" "}
+              {Math.max(1, Math.round((rateLimitResetAt - Date.now()) / 60000))}
+              m
+            </span>
+          )}
+        </span>
       )}
 
       {/* Time ago — yields the space to quick actions when they're present */}

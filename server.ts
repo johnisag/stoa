@@ -30,6 +30,7 @@ import { actionsForKind } from "./lib/notification-actions";
 import { sanitizeNotificationText } from "./lib/notification-text";
 import { captureSnapshot } from "./lib/snapshots";
 import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
+import { nextRateLimitAction, autoResumeEnabled } from "./lib/rate-limit";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import {
@@ -219,6 +220,17 @@ app.prepare().then(() => {
   // Sessions with a queued prompt already sent this idle period (cleared when the
   // session next goes non-idle) — so one prompt dispatches per idle, not per tick.
   const queueDispatched = new Set<string>();
+  // Rate-limit auto-resume (opt-in via STOA_AUTO_RESUME=1; detection is always
+  // on). Tracks sessions we've already nudged once per rate-limited episode, so
+  // we resume exactly once at reset — not every 2.5s tick — and clear it when the
+  // session is no longer rate-limited (next episode can resume again).
+  const AUTO_RESUME_ENABLED = autoResumeEnabled();
+  const rateLimitResumed = new Set<string>();
+  if (AUTO_RESUME_ENABLED) {
+    console.log(
+      "> Rate-limit auto-resume on (STOA_AUTO_RESUME=1): a session that hit a provider limit is nudged (queued prompt or Enter) once its reset time passes."
+    );
+  }
   if (SNAPSHOTS_ENABLED) {
     console.log(
       "> Per-turn snapshots on (STOA_SNAPSHOTS=1): the status ticker runs continuously and writes refs/stoa/snap/* at each turn boundary."
@@ -286,11 +298,20 @@ app.prepare().then(() => {
     // push subscription exists (computeManagedStatuses is cheap when idle).
     const pushEnabled = hasPushSubscriptions();
     const queuesPending = hasAnyQueued();
-    if (!wsListening && !pushEnabled && !SNAPSHOTS_ENABLED && !queuesPending) {
+    // When auto-resume is armed, keep the ticker running with no UI/push/queue:
+    // a rate-limited session resumes itself only if we keep capturing screens.
+    if (
+      !wsListening &&
+      !pushEnabled &&
+      !SNAPSHOTS_ENABLED &&
+      !queuesPending &&
+      !AUTO_RESUME_ENABLED
+    ) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
       if (lastPushStatusById.size) lastPushStatusById = new Map();
       if (lastSnapStatusById.size) lastSnapStatusById = new Map();
       if (queueDispatched.size) queueDispatched.clear();
+      if (rateLimitResumed.size) rateLimitResumed.clear();
       return;
     }
     if (statusTickBusy) return; // don't stack ticks if a capture runs slow
@@ -360,6 +381,8 @@ app.prepare().then(() => {
       const liveIds = new Set(curr.map((s) => s.id));
       for (const id of [...queueDispatched])
         if (!liveIds.has(id)) queueDispatched.delete(id);
+      for (const id of [...rateLimitResumed])
+        if (!liveIds.has(id)) rateLimitResumed.delete(id);
       for (const s of curr) {
         const next = peekPrompt(s.id);
         if (
@@ -388,6 +411,58 @@ app.prepare().then(() => {
           .catch((err) => {
             queueDispatched.delete(s.id); // let the next tick retry
             console.error("queue dispatch failed:", err);
+          });
+      }
+
+      // Rate-limit auto-resume (opt-in). Detection rides on the same capture
+      // (s.rateLimit) and is always surfaced; the unattended NUDGE is gated by
+      // STOA_AUTO_RESUME=1 — injecting input into a session unattended is the
+      // risky part, so it's off by default (mirrors the budget caps). For each
+      // session, the pure nextRateLimitAction decides wait/resume/idle from the
+      // detected state + reset time; we act only on "resume" (reset has passed)
+      // and only once per episode. Clear the once-guard the moment a session is
+      // no longer rate-limited so a later limit can resume again.
+      for (const s of curr) {
+        if (!s.rateLimit) {
+          rateLimitResumed.delete(s.id);
+          continue;
+        }
+        // A "rate limit exceeded" line can ALSO classify the session as `error`
+        // (the patterns overlap). Never nudge an errored/dead session — that's not
+        // a recoverable count-down-and-resume wait.
+        if (s.status === "error" || s.status === "dead") {
+          rateLimitResumed.delete(s.id);
+          continue;
+        }
+        if (!AUTO_RESUME_ENABLED || rateLimitResumed.has(s.id)) continue;
+        const action = nextRateLimitAction({
+          detected: true,
+          resetAtMs: s.rateLimit.resetAt,
+          nowMs: Date.now(),
+        });
+        if (action !== "resume") continue; // still counting down (or no reset)
+        // If the queue loop above already sent this session's queued prompt this
+        // idle period, that IS the resume — don't also nudge (would double-send).
+        if (queueDispatched.has(s.id)) {
+          rateLimitResumed.add(s.id);
+          continue;
+        }
+        // A queued prompt is the natural resume payload; otherwise nudge with a
+        // bare Enter to re-trigger the agent's pending turn. Guard once-per-
+        // episode BEFORE the async send so a slow send can't double-fire.
+        rateLimitResumed.add(s.id);
+        const queued = peekPrompt(s.id);
+        const backend = getSessionBackend();
+        const send = queued
+          ? backend.pasteText(s.name, queued, { enter: true })
+          : backend.sendEnter(s.name);
+        void send
+          .then(() => {
+            if (queued) dequeuePrompt(s.id);
+          })
+          .catch((err) => {
+            rateLimitResumed.delete(s.id); // let the next tick retry
+            console.error("rate-limit resume failed:", err);
           });
       }
     } catch (err) {

@@ -12,11 +12,13 @@ import { DevServerCard } from "@/components/DevServers/DevServerCard";
 import { selectionStore, selectionActions } from "@/stores/sessionSelection";
 import type { Session, Group, DevServer } from "@/lib/db";
 import type { ProjectWithDevServers } from "@/lib/projects";
+import type { RateLimitState } from "@/lib/rate-limit";
 
 interface SessionStatus {
   sessionName: string;
   status: "idle" | "running" | "waiting" | "error" | "dead";
   lastLine?: string;
+  rateLimit?: RateLimitState | null;
 }
 
 interface ProjectsSectionProps {
@@ -278,6 +280,13 @@ export function ProjectsSection({
                               }
                               tmuxStatus={sessionStatuses?.[session.id]?.status}
                               lastLine={sessionStatuses?.[session.id]?.lastLine}
+                              rateLimited={
+                                !!sessionStatuses?.[session.id]?.rateLimit
+                              }
+                              rateLimitResetAt={
+                                sessionStatuses?.[session.id]?.rateLimit
+                                  ?.resetAt ?? null
+                              }
                               groups={groups}
                               projects={projects}
                               isSelected={selectedIds.has(session.id)}
@@ -342,6 +351,14 @@ export function ProjectsSection({
                                         }
                                         lastLine={
                                           sessionStatuses?.[worker.id]?.lastLine
+                                        }
+                                        rateLimited={
+                                          !!sessionStatuses?.[worker.id]
+                                            ?.rateLimit
+                                        }
+                                        rateLimitResetAt={
+                                          sessionStatuses?.[worker.id]
+                                            ?.rateLimit?.resetAt ?? null
                                         }
                                         groups={groups}
                                         projects={projects}
