@@ -78,6 +78,32 @@ describe("detectPrompt — classification", () => {
     ).toBe("negative");
   });
 
+  it("escalates a standing grant in the QUESTION even with a bare Yes option", () => {
+    // The blanket grant can live in the question, not the option. Scanning only the
+    // highlighted option would miss it; scanning the WHOLE menu would regress the
+    // real CC menu (whose option 2 legitimately says "don't ask again").
+    for (const q of [
+      "Always allow edits in this folder?",
+      "Do you want to allow all future bash commands?",
+      "Enable auto-approve mode?",
+      "Don't ask again for this command?",
+    ]) {
+      expect(detectPrompt(`${q}\n❯ 1. Yes\n  2. No`)?.kind).not.toBe(
+        "affirmative"
+      );
+    }
+    // …but the real CC menu (blanket in OPTION 2, plain question) still answers.
+    expect(
+      detectPrompt(
+        "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No"
+      )?.kind
+    ).toBe("affirmative");
+    // And a non-menu auto-approve grant escalates too.
+    expect(detectPrompt("Enable auto-approve mode? [Y/n]")?.kind).toBe(
+      "blanket"
+    );
+  });
+
   it("escalates a default-No prompt (never flip No to Yes)", () => {
     expect(detectPrompt("Delete this file? [y/N]")?.kind).toBe("negative");
   });

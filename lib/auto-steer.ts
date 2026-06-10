@@ -129,9 +129,6 @@ const DESTRUCTIVE = new RegExp(
 const ENTER_TO_PROCEED = /Press Enter to (continue|confirm|proceed)/i;
 const YES_DEFAULT = /\[Y\/n\]/; // capital Y default → Enter = yes
 const NO_DEFAULT = /\[y\/N\]/; // capital N default → Enter = no
-// Standing-grant wording in a non-menu prompt's text → escalate.
-const TEXT_BLANKET =
-  /\b(allow all|don'?t ask( me)? again|and don'?t ask|always allow|allow every|trust all)\b/i;
 
 // A folder/workspace-trust prompt grants the target repo's hooks/settings — an
 // escalation primitive, so always leave it for the human even if the cursor is on Yes.
@@ -178,6 +175,14 @@ export function detectPrompt(renderedScreen: string): PromptState | null {
 
   const danger = isDangerous(renderedScreen);
   const sensitive = isSensitive(renderedScreen);
+  // A standing grant can live in the QUESTION ("Always allow edits in this folder?")
+  // with a bare "Yes" option. Scan blanket over the NON-OPTION lines only — NOT the
+  // numbered options, because a real Claude Code menu legitimately lists a blanket
+  // OPTION ("2. …don't ask again") that must not poison the highlighted single-shot.
+  const isOptionLine = (l: string) => /^\s*(?:❯|›|▶)?\s*\d+\.\s/.test(l);
+  const questionBlanket = OPT_BLANKET.test(
+    tail.filter((l) => !isOptionLine(l)).join("\n")
+  );
 
   // MENU: Enter selects the HIGHLIGHTED option. Classify THAT line — the structural
   // safety. If multiple highlight markers render, the last one wins (the live one).
@@ -189,7 +194,9 @@ export function detectPrompt(renderedScreen: string): PromptState | null {
     const opt = hi[1].trim();
     const line = hi[0].trim();
     if (danger) return { kind: "destructive", line };
-    if (OPT_BLANKET.test(opt)) return { kind: "blanket", line };
+    if (OPT_BLANKET.test(opt) || questionBlanket) {
+      return { kind: "blanket", line };
+    }
     if (OPT_NEGATIVE.test(opt)) return { kind: "negative", line };
     // Accept ONLY a bare single-shot yes, and never a folder-trust grant.
     if (SINGLE_SHOT_YES.test(opt) && !sensitive) {
@@ -204,7 +211,7 @@ export function detectPrompt(renderedScreen: string): PromptState | null {
   const bottom = tail.slice(-2).join("\n");
   const line = tail[tail.length - 1].trim();
   if (danger) return { kind: "destructive", line };
-  if (TEXT_BLANKET.test(bottom)) return { kind: "blanket", line };
+  if (OPT_BLANKET.test(bottom)) return { kind: "blanket", line };
   if (NO_DEFAULT.test(bottom)) return { kind: "negative", line };
   if (
     (ENTER_TO_PROCEED.test(bottom) || YES_DEFAULT.test(bottom)) &&
