@@ -52,7 +52,7 @@ const VERIFY: Record<string, { label: string; badge: string }> = {
     badge: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
   },
   fail: {
-    label: "build failed",
+    label: "verify failed",
     badge: "bg-red-500/15 text-red-600 dark:text-red-400",
   },
   error: {

@@ -189,6 +189,11 @@ function Card({
       {repo?.verify_gate === 1 && isPrOpen && d.verify_status && (
         <div className="flex flex-col gap-0.5">
           <span
+            title={
+              d.verify_ran_at
+                ? `verified ${timeAgo(d.verify_ran_at)}`
+                : undefined
+            }
             className={cn(
               "inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[11px] font-medium",
               d.verify_status === "pass"
@@ -203,7 +208,7 @@ function Card({
             {d.verify_status === "pass"
               ? "verified"
               : d.verify_status === "fail"
-                ? "build failed"
+                ? "verify failed"
                 : d.verify_status === "error"
                   ? "verify error"
                   : "verifying…"}

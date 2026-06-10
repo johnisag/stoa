@@ -84,7 +84,9 @@ export function listInboxItems(): InboxItem[] {
       reviewGate: repo?.review_gate === 1,
       verifyStatus: d.verify_status,
       verifyOutput: d.verify_output,
-      verifyGate: repo?.verify_gate === 1,
+      // Armed == gate on AND a command set (matches verifyPass / autoMergePass), so
+      // a gate-on-but-no-command repo doesn't hide the Merge button forever.
+      verifyGate: repo?.verify_gate === 1 && !!repo?.verify_command,
       fixRounds: d.fix_rounds,
       autoMerge: d.auto_merge === 1,
       updatedAt: d.updated_at,

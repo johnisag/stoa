@@ -452,6 +452,24 @@ export const queries = {
       `UPDATE issue_dispatches SET verify_status = ?, verify_output = ?, verify_sha = ?, verify_ran_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // Verify harness: clear ONE row's verdict — the head moved off the verified SHA,
+  // so the verdict is stale (the board/inbox must stop showing it; auto-merge/inbox
+  // must stop trusting it). The next tick re-verifies the new head.
+  clearVerify: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET verify_status = NULL, verify_output = NULL, verify_sha = NULL, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Verify harness: clear a REPO's open dispatches' verdicts — the verify_command
+  // changed, so prior verdicts no longer reflect what would run. The next tick
+  // re-verifies (recovers a PR stuck on a misconfigured-command 'error').
+  clearVerifyForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET verify_status = NULL, verify_output = NULL, verify_sha = NULL, updated_at = datetime('now') WHERE repo_id = ? AND status = 'pr_open'`
+    ),
+
   // Fix loop: a fixer finished — clear reviewer + decision + fixer so the next
   // tick spawns a fresh critic against the updated PR (re-review).
   resetForReReview: (db: Database.Database) =>

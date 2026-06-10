@@ -135,7 +135,7 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           runs it in each worker&apos;s PR checkout (typecheck/test/build) and
           shows the result on the card —{" "}
           <span className="text-foreground">verified</span>,{" "}
-          <span className="text-foreground">build failed</span> (output one tap
+          <span className="text-foreground">verify failed</span> (output one tap
           away), or <span className="text-foreground">verify error</span>. So
           you approve from evidence, not by reading code — and auto-merge waits
           for a local pass. Especially useful for repos with no GitHub CI. If

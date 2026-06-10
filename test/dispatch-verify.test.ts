@@ -15,18 +15,23 @@ const { state } = vi.hoisted(() => ({
     sessions: {} as Record<string, { tmux_name: string }>,
     launches: [] as string[],
     setRunning: [] as Array<[string | null, string]>,
+    cleared: [] as string[],
     tasks: [] as Promise<unknown>[],
+    onWindows: false,
+    resolvedBin: null as string | null,
+    spawned: [] as Array<{ file: string; args: string[] }>,
   },
 }));
 
 // Mock child_process so promisify(execFile) is fully controllable (no real builds).
 vi.mock("child_process", () => ({
   execFile: (
-    _file: string,
-    _args: string[],
+    file: string,
+    args: string[],
     _opts: unknown,
     cb: (err: unknown, res?: { stdout: string; stderr: string }) => void
   ) => {
+    state.spawned.push({ file, args });
     if (state.exec === "pass") return cb(null, { stdout: "ok\n", stderr: "" });
     if (state.exec === "fail") {
       const e = Object.assign(new Error("nonzero"), {
@@ -39,6 +44,13 @@ vi.mock("child_process", () => ({
     if (state.exec === "enoent") {
       return cb(Object.assign(new Error("spawn"), { code: "ENOENT" }));
     }
+    if (state.exec === "maxbuffer") {
+      return cb(
+        Object.assign(new Error("maxBuffer exceeded"), {
+          code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+        })
+      );
+    }
     // timeout
     return cb(
       Object.assign(new Error("killed"), { killed: true, signal: "SIGKILL" })
@@ -46,8 +58,12 @@ vi.mock("child_process", () => ({
   },
 }));
 vi.mock("@/lib/platform", () => ({
-  resolveBinary: (name: string) => (name === "missing" ? null : `/bin/${name}`),
+  resolveBinary: (name: string) =>
+    name === "missing" ? null : (state.resolvedBin ?? `/bin/${name}`),
   expandHome: (p: string) => p,
+  get isWindows() {
+    return state.onWindows;
+  },
 }));
 vi.mock("@/lib/db", () => ({
   getDb: () => ({}),
@@ -59,6 +75,7 @@ vi.mock("@/lib/db", () => ({
       run: (sha: string | null, id: string) => state.setRunning.push([sha, id]),
     }),
     setVerifyResult: () => ({ run: () => {} }),
+    clearVerify: () => ({ run: (id: string) => state.cleared.push(id) }),
   },
 }));
 vi.mock("@/lib/session-backend", () => ({
@@ -80,9 +97,38 @@ import {
   parseVerifySteps,
   summarizeVerifyExit,
   nextVerifyAction,
+  spawnArgs,
   runVerify,
   verifyPass,
 } from "../lib/dispatch/verify";
+
+describe("spawnArgs — Windows .cmd routing (the must-fix)", () => {
+  it("routes a .cmd/.bat shim through cmd.exe /c on Windows (no shell:true)", () => {
+    const r = spawnArgs(
+      "C:\\Program Files\\nodejs\\npm.cmd",
+      ["run", "v"],
+      true
+    );
+    expect(r.file.toLowerCase()).toContain("cmd"); // ComSpec / cmd.exe
+    expect(r.args).toEqual([
+      "/c",
+      "C:\\Program Files\\nodejs\\npm.cmd",
+      "run",
+      "v",
+    ]);
+  });
+
+  it("spawns directly for a non-shim binary, and never routes off Windows", () => {
+    expect(spawnArgs("/usr/bin/node", ["x.js"], true)).toEqual({
+      file: "/usr/bin/node",
+      args: ["x.js"],
+    });
+    expect(spawnArgs("C:\\x\\npm.cmd", ["run"], false)).toEqual({
+      file: "C:\\x\\npm.cmd",
+      args: ["run"],
+    });
+  });
+});
 
 describe("parseVerifySteps — the no-shell safety gate", () => {
   it("splits on && into argv steps", () => {
@@ -117,6 +163,9 @@ describe("parseVerifySteps — the no-shell safety gate", () => {
       "echo `id`",
       "rm ${HOME}",
       "a (b)",
+      "echo %PATH%", // cmd.exe expands % even quoted → reject (routing safety)
+      "a ^ b", // cmd.exe escape
+      "vitest --filter 'a b'", // single quotes unsupported → reject, don't mangle
     ]) {
       const r = parseVerifySteps(cmd);
       expect("error" in r, `expected reject: ${cmd}`).toBe(true);
@@ -237,6 +286,26 @@ describe("runVerify (mocked execFile, no real build)", () => {
     expect(r.status).toBe("error");
     expect(r.output).toMatch(/shell operators/i);
   });
+
+  it("an over-8MB-but-otherwise-passing build reads as 'error' with an honest message (not a misleading spawn error)", async () => {
+    state.exec = "maxbuffer";
+    const r = await runVerify("/wt", "npm test");
+    expect(r.status).toBe("error");
+    expect(r.output).toMatch(/output exceeded/i);
+    expect(r.output).not.toMatch(/spawn error/i);
+  });
+
+  it("routes a Windows .cmd shim through cmd.exe (the EINVAL fix) end-to-end", async () => {
+    state.onWindows = true;
+    state.resolvedBin = "C:\\Program Files\\nodejs\\npm.cmd";
+    state.spawned = [];
+    await runVerify("/wt", "npm run verify");
+    expect(state.spawned).toHaveLength(1);
+    expect(state.spawned[0].file.toLowerCase()).toContain("cmd");
+    expect(state.spawned[0].args[0]).toBe("/c");
+    state.onWindows = false;
+    state.resolvedBin = null;
+  });
 });
 
 describe("verifyPass", () => {
@@ -262,6 +331,8 @@ describe("verifyPass", () => {
     state.sessions = {};
     state.launches = [];
     state.setRunning = [];
+    state.cleared = [];
+    state.spawned = [];
     state.tasks = [];
     state.exec = "pass";
   });
@@ -311,5 +382,30 @@ describe("verifyPass", () => {
     state.headRefOid = null;
     await runPass();
     expect(state.launches).toHaveLength(0);
+  });
+
+  it("clears a STALE verdict when the head moved off the verified SHA (even mid-fixer)", async () => {
+    // A rebase fixer pushed: head is sha-2 but the row's 'pass' is for sha-1.
+    state.headRefOid = "sha-2";
+    state.rows = [
+      row({
+        verify_status: "pass",
+        verify_sha: "sha-1",
+        rebase_fixer_session_id: "rb",
+      }),
+    ];
+    state.sessions = { rb: { tmux_name: "tmux-rb" } };
+    state.live = ["tmux-rb"];
+    await runPass();
+    expect(state.cleared).toEqual(["d1"]); // stale 'pass' wiped
+    expect(state.launches).toHaveLength(0); // fixer alive → don't launch yet
+  });
+
+  it("caps concurrent builds at VERIFY_MAX_CONCURRENT", async () => {
+    // 5 armed, fresh PRs; default cap is 2 → only 2 launch this tick.
+    state.rows = [1, 2, 3, 4, 5].map((n) => row({ id: `d${n}`, pr_number: n }));
+    await verifyPass(); // don't drain — keep them "in flight" to hit the cap
+    expect(state.launches.length).toBe(2);
+    await Promise.all(state.tasks); // drain so the module set clears for later tests
   });
 });

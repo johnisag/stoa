@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries } from "@/lib/db";
 import { isValidAgentType } from "@/lib/providers";
+import { parseVerifySteps } from "@/lib/dispatch/verify";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -66,12 +67,25 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
           ? 1
           : 0
         : repo.verify_gate;
-    const verifyCommand =
-      body?.verifyCommand !== undefined
-        ? typeof body.verifyCommand === "string" && body.verifyCommand.trim()
+    let verifyCommand = repo.verify_command;
+    if (body?.verifyCommand !== undefined) {
+      const next =
+        typeof body.verifyCommand === "string" && body.verifyCommand.trim()
           ? body.verifyCommand.trim()
-          : null
-        : repo.verify_command;
+          : null;
+      // Validate at SAVE time with the same pure parser the runner uses, so a bad
+      // command fails loudly here (the client toasts it) — not minutes later.
+      if (next) {
+        const parsed = parseVerifySteps(next);
+        if (!("steps" in parsed)) {
+          return NextResponse.json(
+            { error: `verify command: ${parsed.error}` },
+            { status: 400 }
+          );
+        }
+      }
+      verifyCommand = next;
+    }
 
     queries
       .updateDispatchRepo(db)
@@ -90,6 +104,12 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         verifyCommand,
         id
       );
+    // The verify command changed → prior verdicts no longer reflect what would run;
+    // clear this repo's open dispatches so the next tick re-verifies (recovers a PR
+    // stuck on a now-fixed misconfiguration).
+    if (verifyCommand !== repo.verify_command) {
+      queries.clearVerifyForRepo(db).run(id);
+    }
     return NextResponse.json({
       repo: queries.getDispatchRepo(db).get(id) as DispatchRepo,
     });

@@ -202,7 +202,9 @@ export async function autoMergePass(): Promise<void> {
       reviewDecision: d.review_decision,
       mergeable: readiness.mergeable,
       checks: readiness.checks,
-      verifyGate: repo.verify_gate === 1,
+      // Armed == gate on AND a command set (else verifyPass never runs and the
+      // gate would wait forever — match verifyPass's own skip condition).
+      verifyGate: repo.verify_gate === 1 && !!repo.verify_command,
       // SHA-PIN: a verify pass only counts for the EXACT head it ran on. A stale
       // pass (head moved after) must never greenlight the newer, unverified push.
       verifyStatus:
