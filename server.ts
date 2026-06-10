@@ -31,7 +31,11 @@ import { sanitizeNotificationText } from "./lib/notification-text";
 import { captureSnapshot } from "./lib/snapshots";
 import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
 import { nextRateLimitAction, autoResumeEnabled } from "./lib/rate-limit";
-import { nextAutoAnswerAction, autoAnswerEnabled } from "./lib/auto-steer";
+import {
+  nextAutoAnswerAction,
+  autoAnswerEnabled,
+  promptSignature,
+} from "./lib/auto-steer";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import {
@@ -240,7 +244,7 @@ app.prepare().then(() => {
   const autoAnswered = new Map<string, string>();
   if (AUTO_ANSWER_ENABLED) {
     console.log(
-      "> Auto-answer on (STOA_AUTO_ANSWER=1): a routine prompt whose default is the safe affirmative (Press-Enter / [Y/n] / highlighted Yes) is accepted with Enter; blanket-permission and destructive-looking prompts are always left for you."
+      "> Auto-answer on (STOA_AUTO_ANSWER=1): Enter accepts a routine prompt ONLY when it takes the highlighted single-shot Yes (or an explicit Press-Enter / [Y/n] default); blanket-permission, default-No, and destructive-looking prompts are left for you (and still pushed)."
     );
   }
   if (SNAPSHOTS_ENABLED) {
@@ -355,6 +359,18 @@ app.prepare().then(() => {
         // "don't double-notify" decision is made PER-DEVICE in the service
         // worker (suppress when any Stoa window is open on that device).
         for (const ev of events) {
+          // Auto-steer silences the routine prompts → don't fire a "needs your
+          // input" push for one we're about to auto-answer this tick; the escalated
+          // prompts (blanket/destructive/freeform) still push — they DO need you.
+          if (ev.kind === "waiting" && AUTO_ANSWER_ENABLED) {
+            const s = curr.find((c) => c.id === ev.id);
+            if (
+              s?.prompt &&
+              nextAutoAnswerAction({ prompt: s.prompt, status: s.status }) ===
+                "answer"
+            )
+              continue;
+          }
           if (shouldPush(ev))
             void pushFor(ev).catch((err) =>
               console.error("web push failed:", err)
@@ -490,8 +506,10 @@ app.prepare().then(() => {
       // handled by the loop above, never here (its prompt, if any, isn't routine).
       if (AUTO_ANSWER_ENABLED) {
         for (const s of curr) {
-          if (!s.prompt || s.rateLimit) {
-            autoAnswered.delete(s.id); // prompt cleared / limited → re-arm
+          // Re-arm when the prompt clears, the session leaves "waiting", or it
+          // becomes rate-limited (the resume loop above owns that case).
+          if (!s.prompt || s.rateLimit || s.status !== "waiting") {
+            autoAnswered.delete(s.id);
             continue;
           }
           const action = nextAutoAnswerAction({
@@ -499,9 +517,14 @@ app.prepare().then(() => {
             status: s.status,
           });
           if (action !== "answer") continue; // escalate / idle → leave it waiting
-          if (autoAnswered.get(s.id) === s.prompt.line) continue; // already pressed
+          // Once per DISTINCT prompt (stable signature: a countdown can't re-trigger).
+          const sig = promptSignature(s.prompt);
+          if (autoAnswered.get(s.id) === sig) continue;
           // Guard BEFORE the async send so a slow send can't double-fire.
-          autoAnswered.set(s.id, s.prompt.line);
+          autoAnswered.set(s.id, sig);
+          console.log(
+            `auto-answer: accepted ${s.prompt.kind} prompt in ${s.name} (${s.prompt.line})`
+          );
           void getSessionBackend()
             .sendEnter(s.name)
             .catch((err) => {

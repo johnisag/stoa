@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   detectPrompt,
   nextAutoAnswerAction,
+  promptSignature,
   type PromptState,
 } from "../lib/auto-steer";
 
@@ -32,20 +33,44 @@ describe("detectPrompt — classification", () => {
     ).toBe("affirmative");
   });
 
+  it("answers the REAL Claude Code menu (highlighted single-shot Yes) even though a blanket option exists below it", () => {
+    // The value fix: option 2 being "allow all / don't ask again" must NOT veto the
+    // whole prompt — Enter selects the HIGHLIGHTED option 1, the safe single-shot.
+    const cc =
+      "Bash(npm run test)\nDo you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again for npm run test commands\n  3. No, and tell Claude what to do differently";
+    expect(detectPrompt(cc)?.kind).toBe("affirmative");
+  });
+
+  it("escalates when the cursor sits ON the blanket / No option (Enter would select it)", () => {
+    // Highlight on the standing-grant option → Enter would grant it → escalate.
+    expect(
+      detectPrompt("  1. Yes\n❯ 2. Yes, and don't ask again\n  3. No")?.kind
+    ).toBe("blanket");
+    // Highlight on the No option → Enter would answer No → escalate.
+    expect(
+      detectPrompt("  1. Yes\n❯ 2. No, and tell Claude what to do")?.kind
+    ).toBe("negative");
+  });
+
   it("escalates a default-No prompt (never flip No to Yes)", () => {
     expect(detectPrompt("Delete this file? [y/N]")?.kind).toBe("negative");
   });
 
-  it("escalates blanket / standing-permission grants", () => {
+  it("escalates a folder/workspace-trust prompt even with a highlighted Yes", () => {
+    expect(
+      detectPrompt(
+        "Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No"
+      )?.kind
+    ).not.toBe("affirmative");
+  });
+
+  it("escalates blanket / standing-permission grants in non-menu prompts", () => {
     expect(
       detectPrompt("Do you want to proceed?\n  2. Yes, allow all edits")?.kind
     ).toBe("blanket");
     expect(
       detectPrompt("Allow this command? Yes, and don't ask again")?.kind
     ).toBe("blanket");
-    expect(detectPrompt("❯ 1. Yes\n  2. Yes, allow all commands")?.kind).toBe(
-      "blanket"
-    );
   });
 
   it("escalates a destructive-looking gated command even with a Yes default", () => {
@@ -61,6 +86,24 @@ describe("detectPrompt — classification", () => {
       "destructive"
     );
     expect(detectPrompt("Run: sudo rm /etc/hosts\nContinue? [Y/n]")?.kind).toBe(
+      "destructive"
+    );
+    // Windows deletions (this product runs natively on Windows).
+    expect(detectPrompt("Bash(rd /s /q build)\n❯ 1. Yes")?.kind).toBe(
+      "destructive"
+    );
+    expect(detectPrompt("Bash(del /f /q dist)\n❯ 1. Yes")?.kind).toBe(
+      "destructive"
+    );
+    // Infra teardown the POSIX-y denylist would have missed before.
+    expect(
+      detectPrompt("Bash(terraform destroy -auto-approve)\n❯ 1. Yes")?.kind
+    ).toBe("destructive");
+    expect(detectPrompt("Bash(gh repo delete acme/app)\n❯ 1. Yes")?.kind).toBe(
+      "destructive"
+    );
+    // A command split across a wrapped line still escalates (newline-healed scan).
+    expect(detectPrompt("Bash(git push --fo\nrce)\nProceed? [Y/n]")?.kind).toBe(
       "destructive"
     );
   });
@@ -121,5 +164,28 @@ describe("nextAutoAnswerAction", () => {
         })
       ).toBe("idle");
     }
+  });
+});
+
+describe("promptSignature", () => {
+  it("is stable across a volatile countdown (no Enter re-spam)", () => {
+    const a = promptSignature({
+      kind: "continue",
+      line: "Press Enter (auto in 5s)",
+    });
+    const b = promptSignature({
+      kind: "continue",
+      line: "Press Enter (auto in 3s)",
+    });
+    expect(a).toBe(b);
+  });
+
+  it("distinguishes different prompts on the same session", () => {
+    const yes = promptSignature({ kind: "affirmative", line: "❯ 1. Yes" });
+    const cont = promptSignature({
+      kind: "continue",
+      line: "Press Enter to continue",
+    });
+    expect(yes).not.toBe(cont);
   });
 });
