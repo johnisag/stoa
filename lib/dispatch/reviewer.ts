@@ -298,6 +298,73 @@ export async function aggregateSessionVerdict(
   }
 }
 
+/** One lens's finding for the Verdict Inbox: the verdict + the critic's prose
+ * (the comment body minus the marker line). */
+export interface ReviewerFinding {
+  lens: string;
+  verdict: "APPROVE" | "REQUEST_CHANGES";
+  text: string;
+}
+
+// Matches either marker family (dispatch round-marker OR session sha-marker),
+// capturing the lens + verdict for display. Order-tolerant across the two shapes.
+const DISPATCH_FINDING =
+  /STOA_REVIEW\s+lens=(\w+)\s+round=\d+\s+verdict=(APPROVE|REQUEST_CHANGES)/;
+const SESSION_FINDING =
+  /STOA_SESSION_REVIEW\s+sha=[0-9a-fA-F]+\s+lens=(\w+)\s+verdict=(APPROVE|REQUEST_CHANGES)/;
+
+/**
+ * Pure: extract the panel's per-lens findings (verdict + prose) from a PR's
+ * comments. Only `actor`-authored comments count (anti-forgery, same as the
+ * verdict). Latest comment per lens wins (caller pre-sorts oldest→newest). The
+ * prose is the comment body with the marker line stripped. Unit-tested.
+ */
+export function parseReviewerFindings(
+  comments: PanelComment[],
+  actor: string
+): ReviewerFinding[] {
+  const byLens: Record<string, ReviewerFinding> = {};
+  if (!actor) return [];
+  for (const c of comments) {
+    const login =
+      c?.author && typeof c.author.login === "string" ? c.author.login : "";
+    if (login !== actor) continue;
+    const body = typeof c.body === "string" ? c.body : "";
+    const m = DISPATCH_FINDING.exec(body) ?? SESSION_FINDING.exec(body);
+    if (!m) continue;
+    const lens = m[1];
+    const verdict = m[2] as "APPROVE" | "REQUEST_CHANGES";
+    const text = body.replace(m[0], "").trim();
+    byLens[lens] = { lens, verdict, text };
+  }
+  return Object.values(byLens);
+}
+
+/** Read a PR's per-lens reviewer findings (verdict + prose) via gh. Empty on any
+ * failure or unresolvable actor — the Verdict Inbox just shows the cached verdict. */
+export async function readReviewerFindings(
+  cwd: string,
+  prNumber: number
+): Promise<ReviewerFinding[]> {
+  try {
+    const actor = await getGhActor(cwd);
+    if (!actor) return [];
+    const { stdout } = await execFileAsync(
+      gh,
+      ["pr", "view", String(prNumber), "--json", "comments"],
+      { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
+    );
+    const parsed = JSON.parse(stdout) as { comments?: RawComment[] };
+    const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
+    comments.sort((a, b) =>
+      String(a?.createdAt ?? "").localeCompare(String(b?.createdAt ?? ""))
+    );
+    return parseReviewerFindings(comments, actor);
+  } catch {
+    return [];
+  }
+}
+
 /** Max worker fix rounds before a PR is left for a human (env-overridable;
  * `STOA_MAX_FIX_ROUNDS=0` validly disables the fixer, leaving critic-only). */
 export const MAX_FIX_ROUNDS = (() => {
