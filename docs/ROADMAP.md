@@ -45,19 +45,24 @@ three symptoms — delete, attach, reclaim — resolve at once):
 3. ✅ **Reclaim** — same root cause as #1; fixed by the shared hardening.
 
 ### Workflows — the agent-pipeline DAG (`lib/pipeline/`)
-4. **Analyze / evaluate / optimize the workflows backend engine.** Pure DAG
-   reducer (`lib/pipeline/engine.ts`) + thin executor (`executor.ts`) over
-   `spawnWorker`. FIRST establish whether it's load-bearing or dormant (reachable
-   from any route/UI today?). Decide build-vs-prune before investing in 5–7.
-   Check: fan-in/out, failure→skip propagation, concurrency cap, retry, run
-   persistence.
-5. **Workflows UI — none today (NA).** Design + build the control surface
-   (author/visualize/run a DAG, live step states). Biggest single item; gated on
-   #4's verdict.
-6. **In-app workflow examples + documentation.** Ship runnable example
-   `PipelineSpec`s with docs in the app.
-7. **Workflow templates.** Pre-built, parameterizable specs (e.g.
-   "fix-issue → review → fix → merge", mirroring the dispatch loop).
+4. ✅ **DONE — engine evaluation. Verdict: build, don't prune.** The pure DAG
+   reducer (`engine.ts` validateSpec/initRun) + executor over `spawnWorker` is
+   sound — fan-in/out, failure→skip cascade, `maxParallelism` cap, and run
+   persistence all present. It's **wired-but-headless**: `app/api/pipelines/`
+   routes exist with **no UI consumer**. The one real gap: **no data channel
+   between steps** (a step's worker gets only its `task`; no `outputs`), so
+   composition is convention-by-prompt for now. Clears #5–7.
+5. ✅ **SHIPPED — Workflows UI.** A `WorkflowsView` dialog (Desktop header +
+   Mobile footer nav): a **Templates** tab (catalog → param form → pick a
+   conductor session → start) and a **Runs** tab (recent runs → a live step board
+   that polls each step's status/agent/deps/elapsed). Thin `data/pipelines/` hooks
+   over the existing `/api/pipelines` backend; no engine changes. Renders the #177
+   `PIPELINE_TEMPLATES`. _Follow-up: tap a step to attach to its worker session._
+6. **In-app workflow examples + documentation. ← NEXT.** Ship runnable example
+   `PipelineSpec`s with docs in the app (the 16-example catalog).
+7. ✅ **SHIPPED (#177) — Workflow templates.** `lib/pipeline/templates.ts`
+   (`PIPELINE_TEMPLATES` — 9 parameterizable specs incl. a read-only `docs-audit`,
+   `mutates:false`) + `buildSpec(params)`, locked by `test/pipeline-templates.test.ts`.
 
 ### Autonomy — always behind the ceremony gate
 8. **Session "go to auto" button (with or without a prompt) — always ceremony.**
@@ -201,11 +206,13 @@ gate advisory-with-override first, enforcing later.
   dispatch follow-ups in order on idle, no interrupt (claude-code #50246 = 68
   reactions, closed "not planned" upstream → wrapper-shaped). Stoa owns stdin + the
   idle/working signal.
-- [ ] **Auto-resume after rate-limit reset** ⭐ _(D:high · E:S–M)_ — detect "usage
-  limit reached" off the rendered screen, count down, auto-continue when the window
-  resets, ping via the shipped push. 8+ duplicate issues across Claude/Codex;
-  Anthropic declined to ship → the natural wrapper home. Makes overnight/AFK runs
-  actually finish.
+- [x] ✅ **Auto-resume after rate-limit reset — SHIPPED (#178).** `lib/rate-limit.ts`
+  detects the limit off the rendered screen, parses the reset time, counts down, and
+  resumes in the server status tick via the `SessionBackend` seam + dequeues the
+  prompt queue. The unattended resume is opt-in (`STOA_AUTO_RESUME=1`); detection +
+  the "limited · ~Nm" card badge are always-on. Makes overnight/AFK runs finish.
+  _Follow-up: a push when a session limits/resumes; an escalation cap after N
+  failed auto-resumes._
 - [ ] **Fire-and-forget dispatch from the phone** ⭐ _(D:high · E:S–M)_ — start a
   brand-new task server-side from mobile (not just steer running ones); matches
   Anthropic "Dispatch" / Codex "start something new". Stoa already spawns sessions

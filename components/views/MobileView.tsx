@@ -26,6 +26,7 @@ export function MobileView({
   setShowQuickSwitcher,
   setShowDispatch,
   setShowAnalytics,
+  setShowWorkflows,
   onShowShortcuts,
   attachToSession,
   openSessionInNewTab,
@@ -92,6 +93,10 @@ export function MobileView({
             }}
             onShowDispatch={() => {
               setShowDispatch(true);
+              setSidebarOpen(false);
+            }}
+            onShowWorkflows={() => {
+              setShowWorkflows(true);
               setSidebarOpen(false);
             }}
           />

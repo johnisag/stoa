@@ -46,6 +46,7 @@ import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { DispatchView } from "@/components/views/DispatchView";
 import { AnalyticsView } from "@/components/views/AnalyticsView";
+import { WorkflowsView } from "@/components/views/WorkflowsView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
@@ -137,6 +138,7 @@ function HomeContent() {
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
   const [showDispatch, setShowDispatch] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [showWorkflows, setShowWorkflows] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [copiedSessionId, setCopiedSessionId] = useState(false);
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
@@ -705,6 +707,8 @@ function HomeContent() {
     setShowDispatch,
     showAnalytics,
     setShowAnalytics,
+    showWorkflows,
+    setShowWorkflows,
     onShowShortcuts: () => setShowHelp(true),
     notificationSettings,
     permissionGranted,
@@ -750,6 +754,14 @@ function HomeContent() {
       {/* Insight / analytics over the audit ledger. Self-contained dialog;
           opened from the Desktop/Mobile nav via setShowAnalytics. */}
       <AnalyticsView open={showAnalytics} onOpenChange={setShowAnalytics} />
+      {/* Workflows — run agent pipelines from the template catalog. Needs the
+          sessions list for the conductor picker; opened via setShowWorkflows. */}
+      <WorkflowsView
+        open={showWorkflows}
+        onOpenChange={setShowWorkflows}
+        sessions={sessions}
+        activeSessionId={focusedActiveTab?.sessionId ?? undefined}
+      />
     </>
   );
 }

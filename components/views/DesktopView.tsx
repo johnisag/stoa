@@ -17,6 +17,7 @@ import {
   Command,
   Rocket,
   BarChart3,
+  Workflow,
 } from "lucide-react";
 import { PaneLayout } from "@/components/PaneLayout";
 import {
@@ -47,6 +48,7 @@ export function DesktopView({
   setShowQuickSwitcher,
   setShowDispatch,
   setShowAnalytics,
+  setShowWorkflows,
   onShowShortcuts,
   notificationSettings,
   permissionGranted,
@@ -236,6 +238,21 @@ export function DesktopView({
               </TooltipTrigger>
               <TooltipContent>
                 <p>Dispatch</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Workflows (run an agent pipeline from a template)"
+                  onClick={() => setShowWorkflows(true)}
+                >
+                  <Workflow className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Workflows</p>
               </TooltipContent>
             </Tooltip>
             <Tooltip>

@@ -1,5 +1,5 @@
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Keyboard, Rocket, BarChart3 } from "lucide-react";
+import { Keyboard, Rocket, BarChart3, Workflow } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -14,12 +14,15 @@ interface SidebarFooterProps {
   onShowDispatch?: () => void;
   /** Opens the Insight / analytics view over the audit ledger. */
   onShowAnalytics?: () => void;
+  /** Opens the Workflows view (run an agent pipeline from a template). */
+  onShowWorkflows?: () => void;
 }
 
 export function SidebarFooter({
   onShowShortcuts,
   onShowDispatch,
   onShowAnalytics,
+  onShowWorkflows,
 }: SidebarFooterProps = {}) {
   return (
     <div className="mt-auto px-3 pt-2 pb-3">
@@ -57,6 +60,23 @@ export function SidebarFooter({
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p>Dispatch</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {onShowWorkflows && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={onShowWorkflows}
+                  aria-label="Workflows"
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
+                >
+                  <Workflow className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Workflows</p>
               </TooltipContent>
             </Tooltip>
           )}
