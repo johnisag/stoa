@@ -60,12 +60,21 @@ export interface StatusDelta {
   name: string;
   status: SessionStatus;
   lastLine: string;
+  /** Rate-limit state, so the client can badge "limited / resets in N". */
+  rateLimit: RateLimitState | null;
 }
 
 // One snapshot value per session, so a diff is a cheap string compare. NUL
-// separates the two fields (can't appear in a status or a rendered line).
-const snapKey = (s: { status: SessionStatus; lastLine: string }) =>
-  `${s.status}\0${s.lastLine}`;
+// separates the fields (can't appear in a status, rendered line, or our marker) —
+// rateLimit is included so a limit appearing/clearing broadcasts a delta.
+const snapKey = (s: {
+  status: SessionStatus;
+  lastLine: string;
+  rateLimit: RateLimitState | null;
+}) =>
+  `${s.status}\0${s.lastLine}\0${
+    s.rateLimit ? `${s.rateLimit.reason}@${s.rateLimit.resetAt ?? ""}` : ""
+  }`;
 
 /**
  * Entries that CHANGED vs the previous snapshot (new id, different status, or
@@ -85,6 +94,7 @@ export function diffStatuses(
         name: s.name,
         status: s.status,
         lastLine: s.lastLine,
+        rateLimit: s.rateLimit,
       });
     }
   }

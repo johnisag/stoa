@@ -427,6 +427,13 @@ app.prepare().then(() => {
           rateLimitResumed.delete(s.id);
           continue;
         }
+        // A "rate limit exceeded" line can ALSO classify the session as `error`
+        // (the patterns overlap). Never nudge an errored/dead session — that's not
+        // a recoverable count-down-and-resume wait.
+        if (s.status === "error" || s.status === "dead") {
+          rateLimitResumed.delete(s.id);
+          continue;
+        }
         if (!AUTO_RESUME_ENABLED || rateLimitResumed.has(s.id)) continue;
         const action = nextRateLimitAction({
           detected: true,

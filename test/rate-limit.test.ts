@@ -32,7 +32,10 @@ describe("detectRateLimit", () => {
     expect(
       detectRateLimit("Error 429: rate limit exceeded, too many requests")
     ).not.toBeNull();
-    expect(detectRateLimit("too many requests")).not.toBeNull();
+    expect(detectRateLimit("HTTP 429 Too Many Requests")).not.toBeNull();
+    // Only in an error/HTTP context — a bare phrase must NOT trip (false-positive
+    // guard: an agent narrating about rate limiting in your code).
+    expect(detectRateLimit("too many requests")).toBeNull();
   });
 
   it("detects a 'rate_limit_error … try again' envelope", () => {
@@ -60,6 +63,9 @@ describe("detectRateLimit", () => {
     expect(
       detectRateLimit("// TODO: handle the API rate limit gracefully")
     ).toBeNull();
+    // "resets"/"try again" without a DIGIT after at/in must not trip.
+    expect(detectRateLimit("the counter resets at midnight")).toBeNull();
+    expect(detectRateLimit("Let me try again in a fresh approach")).toBeNull();
   });
 
   it("only looks at recent lines (old scrollback can't trip it)", () => {

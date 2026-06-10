@@ -39,6 +39,12 @@ const LIMIT_PATTERNS: { re: RegExp; reason: string }[] = [
     re: /\b(reached|hit)\b[^\n]*\b(rate|usage|message|daily|weekly)\s+limit\b/i,
     reason: "usage limit reached",
   },
+  // "rate/usage/quota limit exceeded|exhausted" (a strong, specific provider
+  // signal — not a bare "rate limit" an agent might print discussing your code).
+  {
+    re: /\b(?:rate|usage|quota)\s+limit\s+(?:exceeded|exhausted)\b/i,
+    reason: "usage limit reached",
+  },
   // Anthropic/OpenAI API 429 envelope phrasings.
   {
     re: /\brate[_ ]limit(_error|ed)?\b[^\n]*\btry again\b/i,
@@ -48,9 +54,19 @@ const LIMIT_PATTERNS: { re: RegExp; reason: string }[] = [
     re: /\b429\b[^\n]*\b(rate limit|too many requests)\b/i,
     reason: "rate limited",
   },
-  { re: /\btoo many requests\b/i, reason: "rate limited" },
-  // Explicit "try again at/in …" or "resets at/in …" reset notices.
-  { re: /\b(try again|resets?)\b[^\n]*\b(at|in)\b/i, reason: "rate limited" },
+  // "Too many requests" ONLY inside an error/HTTP envelope — not an agent
+  // narrating about rate limiting in your code ("the API returns too many…").
+  {
+    re: /\b(?:error|status|http)\b[^\n]{0,24}\btoo many requests\b/i,
+    reason: "rate limited",
+  },
+  // Reset notices: require a DIGIT right after at/in, so "resets at midnight" or
+  // "try again in a new conversation" / "in CI" don't trip it — only a real
+  // clock ("at 3pm") or countdown ("in 30s") does.
+  {
+    re: /\b(?:try again|resets?)\b[^\n]*\b(?:at|in)\s+\d/i,
+    reason: "rate limited",
+  },
 ];
 
 /**
@@ -151,8 +167,19 @@ function parseAbsoluteReset(text: string, nowMs: number): number | null {
     0
   );
   let t = candidate.getTime();
-  // If that time already passed today, it's the same time tomorrow.
-  if (t <= nowMs) t += 24 * 3600_000;
+  // If that time already passed today, it's the same clock time TOMORROW — built
+  // in local time (not +24h) so a DST transition night stays on the right hour.
+  if (t <= nowMs) {
+    t = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1,
+      hour,
+      minute,
+      0,
+      0
+    ).getTime();
+  }
   return t;
 }
 
@@ -177,7 +204,8 @@ export function nextRateLimitAction(input: {
   return input.nowMs >= input.resetAtMs ? "resume" : "wait";
 }
 
-/** Is unattended auto-resume armed? Off by default (STOA_AUTO_RESUME=1 enables). */
+/** Is unattended auto-resume armed? Off by default (STOA_AUTO_RESUME=1 enables).
+ * Read ONCE at startup (server.ts captures it in a const), like budget.ts. */
 export function autoResumeEnabled(): boolean {
   return process.env.STOA_AUTO_RESUME === "1";
 }
