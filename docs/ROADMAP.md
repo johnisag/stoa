@@ -21,10 +21,10 @@ under "🔭 Next horizons."
 
 ---
 
-## ✅ 2026-06-10 — PART 1 complete + PART 2 (the 2–3× multipliers) 5 of 6 SHIPPED
+## 🏆 2026-06-10 — PART 1 complete + PART 2 (the 2–3× multipliers) ALL 6 SHIPPED
 
-The day's mandate landed: PART 1 (Workflows #4–7, Autonomy #8) all merged, and 5 of
-the 6 PART-2 multipliers shipped through the full gate + a 3-agent review:
+The day's mandate landed in full: PART 1 (Workflows #4–7, Autonomy #8) all merged,
+and **all 6 PART-2 multipliers** shipped through the full gate + a 3-agent review:
 
 - **#1 Merge Train** (#184) — auto-rebase-and-repair a ready-but-conflicting PR.
 - **#2 Verdict Inbox** (#183) — fleet-wide review queue, per-lens findings, act-in-place.
@@ -33,12 +33,19 @@ the 6 PART-2 multipliers shipped through the full gate + a 3-agent review:
 - **#4 Auto-steer** — rate-limit auto-resume (#178) + policy auto-answer (#185) +
   error-loop escalation (#187). All three halves.
 - **#5 Verification harness** (#186) — per-worktree typecheck/test/build evidence
-  attached to the review card; gates auto-merge. (#5/#4/#3 each used a judge-panel
-  design workflow + an adversarial-verify review workflow.)
+  attached to the review card; gates auto-merge.
+- **#6 Fleet memory** (#190) — the repo remembers every blocking critic finding and
+  injects the recent ones into new workers' prompts; the loop now LEARNS.
 
-**Left for the empire:** PART-2 **#6 Fleet memory** (the lessons ledger) and
-PART-1 **#9 task-list → full auto** (builds on #8's `session_ceremonies`). Tests
-845 → 983.
+(#5/#4/#3 each used a judge-panel design workflow + an adversarial-verify review
+workflow — which empirically caught a Windows-fatal `.cmd` bug and course-corrected
+#4 away from a terminal-injection misfire.)
+
+**The product thesis is realized:** the human only defines work and renders verdicts;
+partitioning, dispatch, steering, conflicts, rebases, landing, verification, and now
+learning are the machine's problem. **PART-1 #9** (task-list → full auto) is
+effectively delivered by #3 (spec → N tasks → the identical ceremony); a thin
+"paste-a-ready-list" shortcut is the only follow-up. Tests 845 → 988.
 
 ---
 
