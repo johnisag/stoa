@@ -209,7 +209,19 @@ export function createSchema(db: Database.Database): void {
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     );
 
+    -- Fleet memory: per-repo ledger of blocking critic findings. Injected (recent
+    -- N) into every new worker's prompt so the fleet stops repeating mistakes.
+    CREATE TABLE IF NOT EXISTS repo_lessons (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL,
+      lens TEXT,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE
+    );
+
     -- Indexes for common queries
+    CREATE INDEX IF NOT EXISTS idx_repo_lessons_repo ON repo_lessons(repo_id);
     CREATE INDEX IF NOT EXISTS idx_session_events_key ON session_events(session_key);
     CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_created ON session_events(created_at);

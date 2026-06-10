@@ -16,6 +16,7 @@ import { randomUUID } from "crypto";
 import { getDb, queries } from "../db";
 import { createWorktree, deleteWorktree } from "../worktrees";
 import { setupWorktree } from "../env-setup";
+import { getLessonsBlock } from "./lessons";
 import { resolveModelForAgent } from "../model-catalog";
 import { getProvider, buildAgentArgs, shellQuoteArg } from "../providers";
 import { sessionKey } from "../providers/registry";
@@ -31,7 +32,10 @@ export function buildIssuePrompt(
   issueNumber: number,
   issueTitle: string,
   worktreePath: string,
-  branchName: string
+  branchName: string,
+  // Fleet memory: recent critic findings for this repo, pre-rendered (empty when
+  // none). Pure here so it stays testable — the caller reads the ledger.
+  lessonsBlock = ""
 ): string {
   return (
     `[Stoa] You are working inside a git worktree at ${worktreePath} on branch ` +
@@ -44,7 +48,8 @@ export function buildIssuePrompt(
     `3. Open a pull request:\n` +
     `   gh pr create --base ${repo.base_branch} --head ${branchName} ` +
     `--title "<concise title>" --body "Closes #${issueNumber}. <what changed>"\n\n` +
-    `Keep the change scoped to this one issue.`
+    `Keep the change scoped to this one issue.` +
+    lessonsBlock
   );
 }
 
@@ -128,13 +133,15 @@ export async function dispatchOne(
       .setDispatchSession(db)
       .run(sessionId, branchName, worktreePath, candidate.id);
 
-    // 4. Spawn the agent with the issue as its initial prompt.
+    // 4. Spawn the agent with the issue as its initial prompt (+ fleet-memory
+    // pitfalls: recent critic findings for this repo, so it avoids known mistakes).
     const prompt = buildIssuePrompt(
       repo,
       issueNumber,
       issueTitle,
       worktreePath,
-      branchName
+      branchName,
+      getLessonsBlock(repo.id)
     );
     const { binary, args } = buildAgentArgs(repo.agent_type, {
       model,

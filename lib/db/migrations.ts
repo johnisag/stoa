@@ -503,6 +503,29 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 27,
+    name: "add_repo_lessons",
+    up: (db) => {
+      // Fleet memory (the lessons ledger): persist each blocking critic finding per
+      // repo, then inject the recent ones into every new worker's prompt so the
+      // fleet stops re-making the same mistakes. CREATE TABLE IF NOT EXISTS is
+      // already idempotent (no guard needed, unlike an ALTER).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS repo_lessons (
+          id TEXT PRIMARY KEY,
+          repo_id TEXT NOT NULL,
+          lens TEXT,
+          text TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_repo_lessons_repo ON repo_lessons(repo_id)`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

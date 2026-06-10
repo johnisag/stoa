@@ -20,6 +20,7 @@ import { dispatchOne } from "./dispatcher";
 import { autoMergePass } from "./auto-merge";
 import { ciFixPass } from "./ci-fix";
 import { parseClaims, claimsConflict } from "./claims";
+import { captureLessons } from "./lessons";
 import { mergeTrainPass } from "./merge-train";
 import { verifyPass } from "./verify";
 import { sessionCeremonyPass } from "./session-ceremony";
@@ -342,8 +343,12 @@ export async function reviewGatePass(): Promise<void> {
     });
 
     if (action === "spawn_critic") await spawnReviewPanel(repo, d);
-    else if (action === "spawn_fixer") await spawnFixer(repo, d);
-    else if (action === "rereview") queries.resetForReReview(db).run(d.id);
+    else if (action === "spawn_fixer") {
+      // Fleet memory: record the BLOCKING findings (once per fix round) before the
+      // fixer runs, so future workers in this repo see them as known pitfalls.
+      await captureLessons(repo, d);
+      await spawnFixer(repo, d);
+    } else if (action === "rereview") queries.resetForReReview(db).run(d.id);
     // wait / approved / stuck / idle → nothing to do this tick
   }
 }

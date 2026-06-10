@@ -117,7 +117,10 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           Turn on <span className="text-foreground font-medium">critic</span>{" "}
           for a repo and a second agent checks each agent&apos;s work. If it
           asks for changes, a fixer makes them (up to a couple of rounds); if it
-          still can&apos;t, the work surfaces for you to decide.
+          still can&apos;t, the work surfaces for you to decide. The repo also{" "}
+          <span className="text-foreground">remembers</span> what the critic
+          flagged, so the next agent on that repo is told the known pitfalls up
+          front and stops repeating them.
         </p>
       </section>
 
