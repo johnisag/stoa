@@ -188,8 +188,7 @@ interface RawComment {
 export async function aggregatePanelVerdict(
   cwd: string,
   prNumber: number,
-  round: number,
-  sinceMs?: number
+  round: number
 ): Promise<PanelVerdict> {
   const incomplete: PanelVerdict = {
     byLens: {},
@@ -205,17 +204,7 @@ export async function aggregatePanelVerdict(
       { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
     );
     const parsed = JSON.parse(stdout) as { comments?: RawComment[] };
-    let comments = Array.isArray(parsed.comments) ? parsed.comments : [];
-    // `sinceMs` (epoch ms) scopes the verdict to comments posted AFTER a baseline —
-    // a session ceremony passes its created_at so a re-enrolment ignores a prior
-    // enrolment's still-present round-0 markers (which would otherwise auto-approve
-    // unreviewed commits). Dispatch passes nothing → no filter (unchanged).
-    if (sinceMs != null) {
-      comments = comments.filter((c) => {
-        const t = Date.parse(String(c?.createdAt ?? ""));
-        return Number.isFinite(t) && t >= sinceMs;
-      });
-    }
+    const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
     // Sort oldest→newest so parsePanelComments' "latest wins per lens" is correct
     // regardless of the order gh happens to return them in.
     comments.sort((a, b) =>

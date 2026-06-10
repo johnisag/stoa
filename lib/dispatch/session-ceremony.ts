@@ -184,6 +184,23 @@ export async function sessionCeremonyPass(): Promise<void> {
     const fixerAlive = isAlive(c.fixer_session_id);
     let decision = c.review_decision;
 
+    // If the head moved while a panel is still out (no decision yet), the panel is
+    // reviewing stale commits and its markers (stamped with the new head) will
+    // never match the old pin → it would wedge at 'reviewing' forever. Reset and
+    // re-pin to the new head.
+    if (
+      c.reviewer_session_id &&
+      !decision &&
+      !c.fixer_session_id &&
+      c.review_sha &&
+      readiness.headRefOid &&
+      c.review_sha !== readiness.headRefOid
+    ) {
+      queries.resetCeremonyForReReview(db).run(c.id);
+      setStep(c.id, "reviewing");
+      continue;
+    }
+
     // Aggregate only while a panel is out with no fixer and no decision yet. The
     // verdict is keyed on review_sha (the exact commit the panel was pinned to at
     // spawn): a panelist's marker counts ONLY if it stamped that same SHA, so a

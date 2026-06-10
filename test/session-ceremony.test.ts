@@ -263,6 +263,17 @@ describe("sessionCeremonyPass", () => {
     expect(state.steps["cer-1"]).toBe("reviewing");
   });
 
+  it("re-reviews (no wedge) when the head moves while a panel is still out", async () => {
+    state.ceremonies = [
+      ceremony({ reviewer_session_id: "rev", review_sha: "old-sha" }), // decision null
+    ];
+    state.readiness = { ...state.readiness, headRefOid: "new-sha" };
+    await sessionCeremonyPass();
+    expect(state.rereviews).toEqual(["cer-1"]);
+    expect(state.steps["cer-1"]).toBe("reviewing");
+    expect(state.merges).toHaveLength(0);
+  });
+
   it("AUTO-MERGES (opt-in) when approved + green + mergeable, pinned to the reviewed SHA", async () => {
     state.ceremonies = [approved({ auto_merge: 1 })];
     await sessionCeremonyPass();
