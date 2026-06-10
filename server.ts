@@ -36,6 +36,15 @@ import {
   autoAnswerEnabled,
   promptSignature,
 } from "./lib/auto-steer";
+import {
+  nextErrorLoopAction,
+  errorLoopEnabled,
+  buildLoopPushBody,
+  normalizeErrorSig,
+  ERROR_LOOP_THRESHOLD,
+  ERROR_LOOP_WINDOW_MS,
+  type LoopTrack,
+} from "./lib/error-loop";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import {
@@ -247,6 +256,17 @@ app.prepare().then(() => {
       "> Auto-answer on (STOA_AUTO_ANSWER=1): Enter accepts a routine prompt ONLY when it takes the highlighted single-shot Yes (or an explicit Press-Enter / [Y/n] default); blanket-permission, default-No, and destructive-looking prompts are left for you (and still pushed)."
     );
   }
+  // Auto-steer: error-loop escalation (opt-in via STOA_ERROR_LOOP=1). Tracks each
+  // session's persisting error signature so we PAGE ONCE per distinct error when it
+  // sticks for >= the threshold ticks AND >= the elapsed window — the terminal is
+  // never written to, so a false positive costs only one extra notification.
+  const ERROR_LOOP_ENABLED = errorLoopEnabled();
+  const errorLoops = new Map<string, LoopTrack>();
+  if (ERROR_LOOP_ENABLED) {
+    console.log(
+      `> Error-loop escalation on (STOA_ERROR_LOOP=1): a session stuck on the SAME error for ~${Math.round(ERROR_LOOP_WINDOW_MS / 1000)}s gets ONE "stuck in a loop" push, then it's left for you. The terminal is never written to.`
+    );
+  }
   if (SNAPSHOTS_ENABLED) {
     console.log(
       "> Per-turn snapshots on (STOA_SNAPSHOTS=1): the status ticker runs continuously and writes refs/stoa/snap/* at each turn boundary."
@@ -322,7 +342,8 @@ app.prepare().then(() => {
       !SNAPSHOTS_ENABLED &&
       !queuesPending &&
       !AUTO_RESUME_ENABLED &&
-      !AUTO_ANSWER_ENABLED
+      !AUTO_ANSWER_ENABLED &&
+      !ERROR_LOOP_ENABLED
     ) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
       if (lastPushStatusById.size) lastPushStatusById = new Map();
@@ -330,6 +351,7 @@ app.prepare().then(() => {
       if (queueDispatched.size) queueDispatched.clear();
       if (rateLimitResumed.size) rateLimitResumed.clear();
       if (autoAnswered.size) autoAnswered.clear();
+      if (errorLoops.size) errorLoops.clear();
       return;
     }
     if (statusTickBusy) return; // don't stack ticks if a capture runs slow
@@ -534,6 +556,51 @@ app.prepare().then(() => {
         }
         for (const id of [...autoAnswered.keys()])
           if (!liveIds.has(id)) autoAnswered.delete(id);
+      }
+
+      // Auto-steer: error-loop escalation (opt-in). A session whose turn ENDS on an
+      // error (status "error" — the status detector's narrow provider-failure
+      // envelopes, not normal output) with the SAME normalized error for the
+      // threshold ticks AND the elapsed window is stuck; we PAGE ONCE (a distinct
+      // "stuck in a loop" push), then leave it for the human. The terminal is NEVER
+      // written to — a false positive costs one extra notification, never a derailed
+      // agent. Conservative: a changing error / a flip to "running" / a rate-limited
+      // session all reset the track, so a productively-iterating agent never pages.
+      // The pure nextErrorLoopAction owns the decision + the next track state.
+      if (ERROR_LOOP_ENABLED) {
+        const nowMs = Date.now();
+        for (const s of curr) {
+          const signature =
+            s.status === "error" ? normalizeErrorSig(s.lastLine) : "";
+          const { action, next } = nextErrorLoopAction({
+            isError: s.status === "error",
+            rateLimited: !!s.rateLimit,
+            signature,
+            nowMs,
+            prev: errorLoops.get(s.id),
+            threshold: ERROR_LOOP_THRESHOLD,
+            minWindowMs: ERROR_LOOP_WINDOW_MS,
+          });
+          if (next) errorLoops.set(s.id, next);
+          else errorLoops.delete(s.id);
+          if (action !== "escalate" || !next) continue; // track / idle → no page
+          // `next.escalated` is already true (set before the send), so a subsequent
+          // tick on the same error → "track", never a second page for this loop.
+          const name = sanitizeNotificationText(s.name, { fallback: s.id });
+          console.log(
+            `error-loop: escalating ${s.name} (stuck ${next.count}× on: ${s.lastLine})`
+          );
+          void sendPushToAll({
+            title: "Stoa",
+            body: buildLoopPushBody(name, next),
+            tag: `${s.id}-loop`,
+            url: "/",
+            sessionId: s.id,
+            actions: actionsForKind("error"),
+          }).catch((err) => console.error("error-loop push failed:", err));
+        }
+        for (const id of [...errorLoops.keys()])
+          if (!liveIds.has(id)) errorLoops.delete(id);
       }
     } catch (err) {
       console.error("status events tick failed:", err);
