@@ -581,6 +581,28 @@ export const queries = {
        WHERE repo_id = ? AND status IN ('dispatched', 'pr_open') AND file_claims IS NOT NULL`
     ),
 
+  // Fleet memory: record a blocking critic finding for a repo, de-duped on the exact
+  // text (so re-capturing the same finding across fix rounds is a no-op, bounding
+  // growth to DISTINCT lessons). Args: (id, repo_id, lens, text, repo_id, text).
+  insertLessonIfNew: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO repo_lessons (id, repo_id, lens, text)
+       SELECT ?, ?, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM repo_lessons WHERE repo_id = ? AND text = ?
+       )`
+    ),
+
+  // Fleet memory: the most recent distinct lessons for a repo (newest first), to
+  // inject into a new worker's prompt. Args: (repo_id, limit).
+  listRecentLessons: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT lens, text FROM repo_lessons
+       WHERE repo_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`
+    ),
+
   listDispatchesForRepo: (db: Database.Database) =>
     getStmt(
       db,
