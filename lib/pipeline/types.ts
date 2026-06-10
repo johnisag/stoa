@@ -37,6 +37,14 @@ export interface PipelineStep {
    * pipeline-level workingDirectory.
    */
   workingDirectory?: string;
+  /**
+   * File (relative to this step's worktree) whose contents become this step's
+   * OUTPUT once it succeeds. A downstream step references it via a
+   * `{{steps.<id>.output}}` placeholder in its `task`. Omit to use the default
+   * (`STOA_DEFAULT_OUTPUT_FILE`). Reading is best-effort: a missing/unreadable
+   * file yields an empty-string output (never an error).
+   */
+  outputFile?: string;
 }
 
 /** A full declarative pipeline spec (the YAML/JSON the user authors). */
