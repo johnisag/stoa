@@ -78,13 +78,14 @@ three symptoms — delete, attach, reclaim — resolve at once):
    verdict reader, and `mergePR`. Critic panel → fix loop → CI auto-fix → **ready**.
    The final merge is **opt-in**: default stops at `awaiting_merge` for a one-tap
    human merge (you render the verdict); flip on auto-merge to land it unattended.
-   Hardened (Fable-5 security review × 3): an idle-guard so ceremony agents never
-   collide with the still-working session; the panel is pinned to the SHA it
-   reviewed (round seeded above existing markers) and the merge uses
-   `gh --match-head-commit`, so a push-after-approval is re-reviewed, never merged
-   unreviewed. The **gate is GitHub CI + the panel** (no local runner — reused
-   as-is). `AutoModeDialog` carries its own in-app help. _Follow-up: a session-card
-   "auto · step" badge; open-the-PR-automatically at enrol._
+   Hardened over **4 Fable-5 security reviews**: an idle-guard so ceremony agents
+   never collide with the still-working session; the verdict is **bound to the
+   exact reviewed SHA** (each panelist stamps the head it read; only markers
+   matching the spawn-pinned `review_sha` count — fail-closed) and the merge is
+   `gh --match-head-commit`-pinned, so a push-after-approval is re-reviewed, never
+   merged unreviewed. The **gate is GitHub CI + the panel** (no local runner —
+   reused as-is). `AutoModeDialog` carries its own in-app help. _Follow-up: a
+   session-card "auto · step" badge; open-the-PR-automatically at enrol._
 9. **Task list → full auto — always ceremony. ← NEXT.** Run a whole task list
    autonomously, each item through the same ceremony. Builds directly on #8's
    `session_ceremonies` + pass.
