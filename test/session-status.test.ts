@@ -16,7 +16,13 @@ const wt = (
   id: string,
   status: ManagedStatus["status"],
   lastLine = ""
-): ManagedStatus => ({ id, name: `claude-${id}`, status, lastLine });
+): ManagedStatus => ({
+  id,
+  name: `claude-${id}`,
+  status,
+  lastLine,
+  rateLimit: null,
+});
 
 describe("diffStatuses", () => {
   it("emits everything against an empty snapshot (first tick)", () => {

@@ -99,7 +99,7 @@ describe("getStatusDetail — status + last line from a single capture", () => {
 
   it("reports a non-existent session as dead with an empty last line", async () => {
     const detail = await statusDetector.getStatusDetail("detail-missing");
-    expect(detail).toEqual({ status: "dead", lastLine: "" });
+    expect(detail).toEqual({ status: "dead", lastLine: "", rateLimit: null });
   });
 });
 

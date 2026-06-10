@@ -1,5 +1,6 @@
 import { getSessionBackend } from "./session-backend";
 import { statusDetector, type SessionStatus } from "./status-detector";
+import type { RateLimitState } from "./rate-limit";
 import {
   getManagedSessionPattern,
   getSessionIdFromName,
@@ -12,6 +13,8 @@ export interface ManagedStatus {
   name: string;
   status: SessionStatus;
   lastLine: string;
+  /** Rate-limit state read off the same capture, or null if not limited. */
+  rateLimit: RateLimitState | null;
 }
 
 const MANAGED = getManagedSessionPattern();
@@ -35,8 +38,15 @@ export async function computeManagedStatuses(): Promise<ManagedStatus[]> {
   await Promise.all(
     names.map(async (name) => {
       try {
-        const { status, lastLine } = await statusDetector.getStatusDetail(name);
-        out.push({ id: getSessionIdFromName(name), name, status, lastLine });
+        const { status, lastLine, rateLimit } =
+          await statusDetector.getStatusDetail(name);
+        out.push({
+          id: getSessionIdFromName(name),
+          name,
+          status,
+          lastLine,
+          rateLimit,
+        });
       } catch {
         // Session vanished / capture failed — skip; the client poll backstops.
       }
