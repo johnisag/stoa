@@ -93,6 +93,7 @@ vi.mock("@/lib/status-detector", () => ({
       status: state.ownerStatus,
       lastLine: "",
       rateLimit: null,
+      prompt: null,
     }),
   },
 }));

@@ -31,6 +31,11 @@ import { sanitizeNotificationText } from "./lib/notification-text";
 import { captureSnapshot } from "./lib/snapshots";
 import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
 import { nextRateLimitAction, autoResumeEnabled } from "./lib/rate-limit";
+import {
+  nextAutoAnswerAction,
+  autoAnswerEnabled,
+  promptSignature,
+} from "./lib/auto-steer";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import {
@@ -231,6 +236,17 @@ app.prepare().then(() => {
       "> Rate-limit auto-resume on (STOA_AUTO_RESUME=1): a session that hit a provider limit is nudged (queued prompt or Enter) once its reset time passes."
     );
   }
+  // Auto-steer: policy auto-answer (opt-in via STOA_AUTO_ANSWER=1; detection is
+  // always on). Maps a session → the prompt line we last answered, so we press
+  // Enter once per distinct prompt — not every 2.5s tick — and re-arm when a NEW
+  // prompt appears or the prompt clears.
+  const AUTO_ANSWER_ENABLED = autoAnswerEnabled();
+  const autoAnswered = new Map<string, string>();
+  if (AUTO_ANSWER_ENABLED) {
+    console.log(
+      "> Auto-answer on (STOA_AUTO_ANSWER=1): Enter accepts a routine prompt ONLY when it takes the highlighted single-shot Yes (or an explicit Press-Enter / [Y/n] default); blanket-permission, default-No, and destructive-looking prompts are left for you (and still pushed)."
+    );
+  }
   if (SNAPSHOTS_ENABLED) {
     console.log(
       "> Per-turn snapshots on (STOA_SNAPSHOTS=1): the status ticker runs continuously and writes refs/stoa/snap/* at each turn boundary."
@@ -305,13 +321,15 @@ app.prepare().then(() => {
       !pushEnabled &&
       !SNAPSHOTS_ENABLED &&
       !queuesPending &&
-      !AUTO_RESUME_ENABLED
+      !AUTO_RESUME_ENABLED &&
+      !AUTO_ANSWER_ENABLED
     ) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
       if (lastPushStatusById.size) lastPushStatusById = new Map();
       if (lastSnapStatusById.size) lastSnapStatusById = new Map();
       if (queueDispatched.size) queueDispatched.clear();
       if (rateLimitResumed.size) rateLimitResumed.clear();
+      if (autoAnswered.size) autoAnswered.clear();
       return;
     }
     if (statusTickBusy) return; // don't stack ticks if a capture runs slow
@@ -341,6 +359,18 @@ app.prepare().then(() => {
         // "don't double-notify" decision is made PER-DEVICE in the service
         // worker (suppress when any Stoa window is open on that device).
         for (const ev of events) {
+          // Auto-steer silences the routine prompts → don't fire a "needs your
+          // input" push for one we're about to auto-answer this tick; the escalated
+          // prompts (blanket/destructive/freeform) still push — they DO need you.
+          if (ev.kind === "waiting" && AUTO_ANSWER_ENABLED) {
+            const s = curr.find((c) => c.id === ev.id);
+            if (
+              s?.prompt &&
+              nextAutoAnswerAction({ prompt: s.prompt, status: s.status }) ===
+                "answer"
+            )
+              continue;
+          }
           if (shouldPush(ev))
             void pushFor(ev).catch((err) =>
               console.error("web push failed:", err)
@@ -464,6 +494,46 @@ app.prepare().then(() => {
             rateLimitResumed.delete(s.id); // let the next tick retry
             console.error("rate-limit resume failed:", err);
           });
+      }
+
+      // Auto-steer: policy auto-answer (opt-in). Detection (s.prompt) rides on the
+      // same capture and is always surfaced; the unattended Enter is gated by
+      // STOA_AUTO_ANSWER=1 — pressing a key into a session is the risky part, so
+      // it's off by default. The pure nextAutoAnswerAction decides answer/escalate/
+      // idle; we ONLY send Enter on "answer" (a routine prompt whose default is the
+      // safe affirmative) and ONLY once per distinct prompt line, so a slow agent
+      // can't get the same Enter spammed every 2.5s. A rate-limited session is
+      // handled by the loop above, never here (its prompt, if any, isn't routine).
+      if (AUTO_ANSWER_ENABLED) {
+        for (const s of curr) {
+          // Re-arm when the prompt clears, the session leaves "waiting", or it
+          // becomes rate-limited (the resume loop above owns that case).
+          if (!s.prompt || s.rateLimit || s.status !== "waiting") {
+            autoAnswered.delete(s.id);
+            continue;
+          }
+          const action = nextAutoAnswerAction({
+            prompt: s.prompt,
+            status: s.status,
+          });
+          if (action !== "answer") continue; // escalate / idle → leave it waiting
+          // Once per DISTINCT prompt (stable signature: a countdown can't re-trigger).
+          const sig = promptSignature(s.prompt);
+          if (autoAnswered.get(s.id) === sig) continue;
+          // Guard BEFORE the async send so a slow send can't double-fire.
+          autoAnswered.set(s.id, sig);
+          console.log(
+            `auto-answer: accepted ${s.prompt.kind} prompt in ${s.name} (${s.prompt.line})`
+          );
+          void getSessionBackend()
+            .sendEnter(s.name)
+            .catch((err) => {
+              autoAnswered.delete(s.id); // let the next tick retry
+              console.error("auto-answer failed:", err);
+            });
+        }
+        for (const id of [...autoAnswered.keys()])
+          if (!liveIds.has(id)) autoAnswered.delete(id);
       }
     } catch (err) {
       console.error("status events tick failed:", err);

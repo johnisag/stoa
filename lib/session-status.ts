@@ -1,6 +1,7 @@
 import { getSessionBackend } from "./session-backend";
 import { statusDetector, type SessionStatus } from "./status-detector";
 import type { RateLimitState } from "./rate-limit";
+import type { PromptState } from "./auto-steer";
 import {
   getManagedSessionPattern,
   getSessionIdFromName,
@@ -15,6 +16,8 @@ export interface ManagedStatus {
   lastLine: string;
   /** Rate-limit state read off the same capture, or null if not limited. */
   rateLimit: RateLimitState | null;
+  /** Detected interactive prompt read off the same capture (auto-steer), or null. */
+  prompt: PromptState | null;
 }
 
 const MANAGED = getManagedSessionPattern();
@@ -38,7 +41,7 @@ export async function computeManagedStatuses(): Promise<ManagedStatus[]> {
   await Promise.all(
     names.map(async (name) => {
       try {
-        const { status, lastLine, rateLimit } =
+        const { status, lastLine, rateLimit, prompt } =
           await statusDetector.getStatusDetail(name);
         out.push({
           id: getSessionIdFromName(name),
@@ -46,6 +49,7 @@ export async function computeManagedStatuses(): Promise<ManagedStatus[]> {
           status,
           lastLine,
           rateLimit,
+          prompt,
         });
       } catch {
         // Session vanished / capture failed — skip; the client poll backstops.

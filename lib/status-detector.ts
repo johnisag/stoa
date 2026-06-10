@@ -18,6 +18,7 @@
 
 import { getSessionBackend } from "./session-backend";
 import { detectRateLimit, type RateLimitState } from "./rate-limit";
+import { detectPrompt, type PromptState } from "./auto-steer";
 
 // Resolve the backend lazily (per use). Capturing it at module load would lock
 // in the wrong choice before server.ts finalizes the pty-host fallback decision.
@@ -367,14 +368,17 @@ class SessionStatusDetector {
     status: SessionStatus;
     lastLine: string;
     rateLimit: RateLimitState | null;
+    prompt: PromptState | null;
   }> {
     const { status, content } = await this.evaluate(sessionName);
-    // Rate-limit detection rides on the SAME rendered capture (no extra round-
-    // trip). Surfaced always-on; the auto-resume decision/action lives upstream.
+    // Rate-limit AND prompt detection both ride on the SAME rendered capture (no
+    // extra round-trip). Surfaced always-on; the auto-resume / auto-answer
+    // decisions + actions live upstream (server.ts status tick).
     return {
       status,
       lastLine: lastNonEmptyLine(content),
       rateLimit: detectRateLimit(content),
+      prompt: detectPrompt(content),
     };
   }
 

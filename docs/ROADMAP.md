@@ -258,18 +258,19 @@ gate advisory-with-override first, enforcing later.
 
 ### Orchestration endgame (builds on conductor→worker)
 
-- [ ] **Independent reviewer-agent gate** ⭐ _(D:high · E:M)_ — a fresh critic
-  session sees only spec + diff, returns PASS / structured violations; blocks merge,
-  FAIL → actionable push. "Self-review is compromised" is consensus. Cheapest big
-  win: a reviewer is just another spawned worker role.
-- [ ] **Agent merge queue — safe landing** ⭐ _(D:high · E:L)_ — serialize each
-  worker's branch onto `main`, run the combined test suite, auto-rebase-and-retry,
-  merge only if green. The endgame for a conductor that fans out N branches (today
-  the human lands them by hand).
-- [ ] **Issue-tracker ingestion (GitHub Issues first)** ⭐ _(D:high · E:M)_ — pull a
-  ticket → spawn a worker with its context → PR/status back. The feature Emdash
-  wins deals on; cheap via `gh` (already the sanctioned CLI); "triage your backlog
-  and dispatch the fleet from your phone."
+- [x] ✅ **Independent reviewer-agent gate — SHIPPED.** The 3-critic panel (#174,
+  one critic per lens) sees the PR diff and posts per-lens verdicts; the human side
+  shipped as the **Verdict Inbox (#183)** — a fleet-wide review queue with the
+  per-lens findings read live + act-in-place. CHANGES_REQUESTED → fixer round (#175).
+- [x] ✅ **Agent merge queue — safe landing — SHIPPED.** Per-issue auto-merge (#173,
+  merges only when approved + green + mergeable) + the **Merge Train (#184)**:
+  opt-in auto-rebase-and-**repair** — a ready-but-CONFLICTING PR's author rebases
+  onto the base, resolves, and force-pushes-with-lease so it self-heals to mergeable
+  (gated repos re-review the rewritten head first). _Deferred: running the combined
+  suite in-worktree before landing = the verification harness (PART-2 #5)._
+- [x] ✅ **Issue-tracker ingestion (GitHub Issues first) — SHIPPED.** The dispatch
+  engine (`lib/dispatch/`): GitHub issue → worktree → worker → PR, with quotas, a
+  60s reconciler, and the full review/CI-fix/merge ceremony — driven from the phone.
 
 ### Mobile inputs
 
