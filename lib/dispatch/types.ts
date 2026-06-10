@@ -99,9 +99,26 @@ export interface IssueDispatch {
   verify_sha: string | null;
   /** When verification last ran (datetime('now')). */
   verify_ran_at: string | null;
+  /** Conflict-aware decomposition: JSON array of repo-relative path prefixes this
+   * task exclusively owns. null/absent = no claims (co-scheduling unaffected). */
+  file_claims: string | null;
   created_at: string;
   updated_at: string;
 }
+
+/** One task in a planner-proposed partition: a title + body (→ a GitHub issue) and
+ * the path prefixes it will exclusively own (so tasks run in parallel conflict-free). */
+export interface PlanTask {
+  title: string;
+  body: string;
+  claims: string[];
+}
+
+/** Result of parsing a planner's PLAN.md. Fail-closed (ok:false) on any malformed
+ * output — never spawn workers off a plan we couldn't validate. */
+export type PlanParseResult =
+  | { ok: true; tasks: PlanTask[] }
+  | { ok: false; error: string };
 
 /**
  * Coarse lifecycle marker for a session ceremony (drives the cockpit badge). The
