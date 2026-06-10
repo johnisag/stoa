@@ -84,6 +84,54 @@ export interface IssueDispatch {
   updated_at: string;
 }
 
+/**
+ * Coarse lifecycle marker for a session ceremony (drives the cockpit badge). The
+ * reconciler derives each tick's ACTION from the fields (like a dispatch), and
+ * writes the matching step for display. 'merged'/'stuck' are terminal.
+ */
+export type SessionCeremonyStep =
+  | "queued" // enrolled; waiting for the owner session to settle before reviewing
+  | "reviewing"
+  | "fixing"
+  | "ci_fixing"
+  | "ready" // approved; waiting on CI / mergeability
+  | "awaiting_merge" // approved + green + mergeable; auto_merge off → human merges
+  | "merging"
+  | "merged"
+  | "stuck";
+
+/**
+ * Session "go to auto" — one row per session enrolled in the dispatch ceremony.
+ * The SESSION row owns the worktree / branch / PR; this carries only the
+ * review + CI progress, so the reconciler drives it with the SAME pure decision
+ * functions as an IssueDispatch (nextReviewAction / nextCiFixAction /
+ * nextAutoMergeAction). One ceremony per session (UNIQUE session_id).
+ */
+export interface SessionCeremony {
+  id: string;
+  session_id: string;
+  step: SessionCeremonyStep;
+  /** Optional one-shot instruction sent to the session as it goes autonomous. */
+  seed_prompt: string | null;
+  pr_number: number | null;
+  pr_url: string | null;
+  /** First review panelist's session id (spawn-once guard for the panel). */
+  reviewer_session_id: string | null;
+  /** Aggregated panel verdict (APPROVED / CHANGES_REQUESTED), null while reviewing. */
+  review_decision: string | null;
+  /** PR head SHA the current panel is reviewing (pinned at spawn) — markers must
+   * stamp it and the merge is --match-head-commit-pinned to it. */
+  review_sha: string | null;
+  /** 0/1 — opt-in: auto-merge when ready (default 0 = stop at 'ready', human merges). */
+  auto_merge: number;
+  fix_rounds: number;
+  fixer_session_id: string | null;
+  ci_fix_rounds: number;
+  ci_fixer_session_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** A normalized open issue pulled from `gh issue list --json`. */
 export interface EligibleIssue {
   number: number;

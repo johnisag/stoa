@@ -16,25 +16,36 @@ const gh = resolveBinary("gh") || "gh";
 
 export type MergeMethod = "squash" | "merge" | "rebase";
 
-/** Pure argv builder (testable). Note: no `--auto` — see file header. */
+/** Pure argv builder (testable). Note: no `--auto` — see file header. When
+ * `matchHeadCommit` is set, gh REFUSES the merge if the PR head moved off that SHA
+ * (the atomicity the session ceremony's auto-merge needs — never merge commits a
+ * push slipped in after review). */
 export function buildMergeArgs(
   prNumber: number,
-  method: MergeMethod = "squash"
+  method: MergeMethod = "squash",
+  matchHeadCommit?: string | null
 ): string[] {
-  return ["pr", "merge", String(prNumber), `--${method}`];
+  const args = ["pr", "merge", String(prNumber), `--${method}`];
+  if (matchHeadCommit) args.push("--match-head-commit", matchHeadCommit);
+  return args;
 }
 
-/** Merge a PR by number from a checkout. Throws on failure (not mergeable, gh
- * missing/unauth, etc.) so the route surfaces the reason. */
+/** Merge a PR by number from a checkout. Throws on failure (not mergeable, head
+ * moved off matchHeadCommit, gh missing/unauth, etc.) so the caller surfaces it. */
 export async function mergePR(opts: {
   cwd: string;
   prNumber: number;
   method?: MergeMethod;
+  matchHeadCommit?: string | null;
 }): Promise<void> {
-  await execFileAsync(gh, buildMergeArgs(opts.prNumber, opts.method), {
-    cwd: opts.cwd,
-    encoding: "utf-8",
-    timeout: 60000,
-    windowsHide: true,
-  });
+  await execFileAsync(
+    gh,
+    buildMergeArgs(opts.prNumber, opts.method, opts.matchHeadCommit),
+    {
+      cwd: opts.cwd,
+      encoding: "utf-8",
+      timeout: 60000,
+      windowsHide: true,
+    }
+  );
 }

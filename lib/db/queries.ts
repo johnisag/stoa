@@ -551,6 +551,78 @@ export const queries = {
       `UPDATE issue_dispatches SET status = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // ── Session ceremonies ("go to auto") — mirror the dispatch review/CI fields so
+  // the reconciler drives them with the same pure decision functions. ──
+  createSessionCeremony: (db: Database.Database) =>
+    getStmt(
+      db,
+      // OR IGNORE: re-tapping "go to auto" on an already-enrolled session is a no-op
+      // (session_id is UNIQUE) rather than an error. auto_merge is opt-in (0/1).
+      `INSERT OR IGNORE INTO session_ceremonies (id, session_id, seed_prompt, auto_merge) VALUES (?, ?, ?, ?)`
+    ),
+
+  getSessionCeremony: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM session_ceremonies WHERE session_id = ?`),
+
+  // Active ceremonies the reconciler drives ('merged'/'stuck' are terminal).
+  listActiveCeremonies: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM session_ceremonies WHERE step NOT IN ('merged', 'stuck')`
+    ),
+
+  setCeremonyReviewDecision: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE session_ceremonies SET review_decision = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Pin the panel to the reviewer session + the SHA it's reviewing, set at panel
+  // SPAWN (run together). Panelists stamp this SHA in their markers; the merge is
+  // --match-head-commit-pinned to it; a moved head → re-review.
+  setCeremonyReview: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE session_ceremonies SET reviewer_session_id = ?, review_sha = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  startCeremonyFixRound: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE session_ceremonies SET fixer_session_id = ?, fix_rounds = fix_rounds + 1, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  startCeremonyCiFixRound: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE session_ceremonies SET ci_fixer_session_id = ?, ci_fix_rounds = ci_fix_rounds + 1, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // A fixer finished → clear reviewer + decision + fixer so the next tick spawns a
+  // fresh critic against the updated PR (re-review). Mirrors resetForReReview.
+  resetCeremonyForReReview: (db: Database.Database) =>
+    getStmt(
+      db,
+      // Clears review_sha too so a fresh panel must re-review the new commits (its
+      // round is re-seeded above existing markers at the next spawn).
+      `UPDATE session_ceremonies SET reviewer_session_id = NULL, review_decision = NULL, review_sha = NULL, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  updateCeremonyPR: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE session_ceremonies SET pr_url = ?, pr_number = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  setCeremonyStep: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE session_ceremonies SET step = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  deleteSessionCeremony: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM session_ceremonies WHERE session_id = ?`),
+
   // Audit / event ledger (append-only)
   appendSessionEvent: (db: Database.Database) =>
     getStmt(

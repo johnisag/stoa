@@ -111,11 +111,16 @@ export function nextAutoMergeAction(input: {
 export interface PrReadiness {
   mergeable: string | null;
   checks: CheckSummary;
+  /** PR head commit SHA (for approval-pinning), null on failure. */
+  headRefOid: string | null;
+  /** PR state — "OPEN" | "MERGED" | "CLOSED", null on failure. */
+  state: string | null;
 }
 
-/** Read a PR's merge readiness via gh (conflicts + checks; the review verdict is
- * Stoa's own cached panel decision, not GitHub's). On any failure, returns a
- * never-ready shape (mergeable null + checks "pending") so the caller waits. */
+/** Read a PR's merge readiness via gh (conflicts + checks + head SHA + state; the
+ * review verdict is Stoa's own cached panel decision, not GitHub's). On any
+ * failure, returns a never-ready shape (mergeable null + checks "pending") so the
+ * caller waits. headRefOid/state are additive (the dispatch passes ignore them). */
 export async function getPrReadiness(
   cwd: string,
   prNumber: number
@@ -123,19 +128,35 @@ export async function getPrReadiness(
   try {
     const { stdout } = await execFileAsync(
       gh,
-      ["pr", "view", String(prNumber), "--json", "mergeable,statusCheckRollup"],
+      [
+        "pr",
+        "view",
+        String(prNumber),
+        "--json",
+        "mergeable,statusCheckRollup,headRefOid,state",
+      ],
       { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
     );
     const parsed = JSON.parse(stdout) as {
       mergeable?: unknown;
       statusCheckRollup?: unknown;
+      headRefOid?: unknown;
+      state?: unknown;
     };
     return {
       mergeable: typeof parsed.mergeable === "string" ? parsed.mergeable : null,
       checks: summarizePrChecks(parsed.statusCheckRollup),
+      headRefOid:
+        typeof parsed.headRefOid === "string" ? parsed.headRefOid : null,
+      state: typeof parsed.state === "string" ? parsed.state : null,
     };
   } catch {
-    return { mergeable: null, checks: "pending" };
+    return {
+      mergeable: null,
+      checks: "pending",
+      headRefOid: null,
+      state: null,
+    };
   }
 }
 

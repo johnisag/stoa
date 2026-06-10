@@ -23,6 +23,7 @@ import {
   GitCompare,
   History,
   ListPlus,
+  Zap,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -50,6 +51,7 @@ import { SessionQuickActions } from "./SessionQuickActions";
 import { SessionDiffModal } from "./SessionDiffModal";
 import { SnapshotTimeline } from "./SnapshotTimeline";
 import { PromptQueueModal } from "./PromptQueueModal";
+import { AutoModeDialog } from "./AutoModeDialog";
 import { cardActionsForStatus } from "@/lib/notification-actions";
 import type { Session, Group } from "@/lib/db";
 import type { ProjectWithDevServers } from "@/lib/projects";
@@ -181,6 +183,7 @@ function SessionCardComponent({
   const [showDiff, setShowDiff] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  const [showAuto, setShowAuto] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const justStartedEditingRef = useRef(false);
 
@@ -353,6 +356,14 @@ function SessionCardComponent({
           >
             <GitPullRequest className="mr-2 h-3 w-3" />
             {session.pr_url ? "Open PR" : "Create PR"}
+          </MenuItem>
+        )}
+        {/* Hand the session off to the autonomous ceremony (panel → fix → CI-fix
+            → auto-merge). The dialog gates on having an open PR. */}
+        {session.branch_name && (
+          <MenuItem onClick={() => setShowAuto(true)}>
+            <Zap className="mr-2 h-3 w-3" />
+            Auto mode
           </MenuItem>
         )}
         {onMoveToProject && projects.length > 0 && (
@@ -625,6 +636,13 @@ function SessionCardComponent({
           sessionId={session.id}
           name={session.name}
           onClose={() => setShowQueue(false)}
+        />
+      )}
+      {showAuto && (
+        <AutoModeDialog
+          session={session}
+          open={showAuto}
+          onClose={() => setShowAuto(false)}
         />
       )}
     </>

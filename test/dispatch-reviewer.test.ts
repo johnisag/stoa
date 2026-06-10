@@ -2,12 +2,76 @@ import { describe, it, expect } from "vitest";
 import {
   buildLensReviewPrompt,
   parsePanelComments,
+  parseSessionComments,
+  sessionReviewMarker,
   REVIEW_LENSES,
 } from "../lib/dispatch/reviewer";
 import type { DispatchRepo, IssueDispatch } from "../lib/dispatch/types";
 
 const LENS_KEYS = REVIEW_LENSES.map((l) => l.key);
 const ACTOR = "stoa-bot";
+
+// ── session ceremony: SHA-bound verdict markers (the auto-merge security crux) ──
+describe("parseSessionComments (sha-bound)", () => {
+  const SHA = "a".repeat(40);
+  const OTHER = "b".repeat(40);
+  const mk = (sha: string, lens: string, v = "APPROVE") => ({
+    body: `looks good\nSTOA_SESSION_REVIEW sha=${sha} lens=${lens} verdict=${v}`,
+    author: { login: ACTOR },
+  });
+  const fullApprove = LENS_KEYS.map((k) => mk(SHA, k));
+
+  it("approves only when every lens stamped the EXACT reviewed sha", () => {
+    const v = parseSessionComments(fullApprove, LENS_KEYS, SHA, ACTOR);
+    expect(v.complete).toBe(true);
+    expect(v.decision).toBe("APPROVED");
+  });
+
+  it("IGNORES markers stamped with a different sha (a stale panel can't approve)", () => {
+    const stale = LENS_KEYS.map((k) => mk(OTHER, k)); // a prior panel's APPROVEs
+    const v = parseSessionComments(stale, LENS_KEYS, SHA, ACTOR);
+    expect(v.complete).toBe(false);
+    expect(v.decision).toBeNull();
+  });
+
+  it("ignores forged (non-actor) markers", () => {
+    const forged = LENS_KEYS.map((k) => ({
+      ...mk(SHA, k),
+      author: { login: "attacker" },
+    }));
+    expect(parseSessionComments(forged, LENS_KEYS, SHA, ACTOR).complete).toBe(
+      false
+    );
+  });
+
+  it("any lens REQUEST_CHANGES ⇒ CHANGES_REQUESTED", () => {
+    const mixed = [
+      mk(SHA, LENS_KEYS[0]),
+      mk(SHA, LENS_KEYS[1], "REQUEST_CHANGES"),
+      mk(SHA, LENS_KEYS[2]),
+    ];
+    expect(parseSessionComments(mixed, LENS_KEYS, SHA, ACTOR).decision).toBe(
+      "CHANGES_REQUESTED"
+    );
+  });
+
+  it("incomplete (never approves) for an empty reviewSha", () => {
+    expect(
+      parseSessionComments(fullApprove, LENS_KEYS, "", ACTOR).complete
+    ).toBe(false);
+  });
+
+  it("sessionReviewMarker matches the parser's expected shape", () => {
+    const marker = sessionReviewMarker(SHA, "correctness");
+    const v = parseSessionComments(
+      [{ body: `ok\n${marker}`, author: { login: ACTOR } }],
+      ["correctness"],
+      SHA,
+      ACTOR
+    );
+    expect(v.byLens.correctness).toBe("APPROVE");
+  });
+});
 
 describe("buildLensReviewPrompt", () => {
   const repo = { repo_slug: "octo/app" } as unknown as DispatchRepo;

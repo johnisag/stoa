@@ -19,6 +19,7 @@ import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
 import { autoMergePass } from "./auto-merge";
 import { ciFixPass } from "./ci-fix";
+import { sessionCeremonyPass } from "./session-ceremony";
 import {
   nextReviewAction,
   spawnReviewPanel,
@@ -148,6 +149,11 @@ export async function reconcileTick(): Promise<void> {
     // 7. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
     // After the reviewer + CI passes so a just-approved, just-green PR can merge.
     await autoMergePass();
+
+    // 8. Session "go to auto": drive any session a user handed off through the
+    // SAME ceremony (panel → fix → CI-fix → auto-merge). A no-op when none are
+    // enrolled. Last, mirroring the issue passes it reuses.
+    await sessionCeremonyPass();
   } catch (err) {
     console.error("dispatch reconcile tick failed:", err);
   } finally {

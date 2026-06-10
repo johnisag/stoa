@@ -59,19 +59,36 @@ three symptoms — delete, attach, reclaim — resolve at once):
    that polls each step's status/agent/deps/elapsed). Thin `data/pipelines/` hooks
    over the existing `/api/pipelines` backend; no engine changes. Renders the #177
    `PIPELINE_TEMPLATES`. _Follow-up: tap a step to attach to its worker session._
-6. **In-app workflow examples + documentation. ← NEXT.** Ship runnable example
-   `PipelineSpec`s with docs in the app (the 16-example catalog).
+6. ✅ **SHIPPED (#181) — In-app workflow examples + docs.** An **Examples** tab in
+   the Workflows view: the 16-pattern catalog (`lib/pipeline/examples.ts`) split
+   into Runnable (links to its template) and Reference, locked by an integrity test
+   (no dangling link; every template discoverable). _Workflows track complete:
+   #4✅ #5✅(#179) #6✅(#181) #7✅(#177) + the data-channel gap closed (#180)._
 7. ✅ **SHIPPED (#177) — Workflow templates.** `lib/pipeline/templates.ts`
    (`PIPELINE_TEMPLATES` — 9 parameterizable specs incl. a read-only `docs-audit`,
    `mutates:false`) + `buildSpec(params)`, locked by `test/pipeline-templates.test.ts`.
 
 ### Autonomy — always behind the ceremony gate
-8. **Session "go to auto" button (with or without a prompt) — always ceremony.**
-   One tap to send a session autonomous; optional seed prompt. "Ceremony" = the
-   verification gate (tsc/test/build) + 3-agent review, baked in.
-9. **Task list → full auto — always ceremony.** Run a whole task list
-   autonomously, each item through the same gate + 3-agent review. The dispatch
-   loop already shipped IS a ceremony engine — wire sessions/task-lists into it.
+8. ✅ **SHIPPED — Session "go to auto".** An "Auto mode" control on a session
+   (with an optional seed prompt) enrols its PR into the **existing dispatch
+   ceremony** — a `session_ceremonies` table (migration 23) + a `sessionCeremonyPass`
+   in the reconciler tick that REUSES the dispatch pure decisions
+   (`nextReviewAction`/`nextCiFixAction`/`nextAutoMergeAction`), the spawn recipe
+   (`spawnInWorktree` refactored into a shared `spawnWorktreeWorker`), the panel
+   verdict reader, and `mergePR`. Critic panel → fix loop → CI auto-fix → **ready**.
+   The final merge is **opt-in**: default stops at `awaiting_merge` for a one-tap
+   human merge (you render the verdict); flip on auto-merge to land it unattended.
+   Hardened over **4 Fable-5 security reviews**: an idle-guard so ceremony agents
+   never collide with the still-working session; the verdict is **bound to the
+   exact reviewed SHA** (each panelist stamps the head it read; only markers
+   matching the spawn-pinned `review_sha` count — fail-closed) and the merge is
+   `gh --match-head-commit`-pinned, so a push-after-approval is re-reviewed, never
+   merged unreviewed. The **gate is GitHub CI + the panel** (no local runner —
+   reused as-is). `AutoModeDialog` carries its own in-app help. _Follow-up: a
+   session-card "auto · step" badge; open-the-PR-automatically at enrol._
+9. **Task list → full auto — always ceremony. ← NEXT.** Run a whole task list
+   autonomously, each item through the same ceremony. Builds directly on #8's
+   `session_ceremonies` + pass.
 
 ---
 

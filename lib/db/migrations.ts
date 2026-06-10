@@ -362,6 +362,51 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 23,
+    name: "create_session_ceremonies",
+    up: (db) => {
+      // Session "go to auto" — enrol a running session's PR into the SAME
+      // ceremony the dispatch engine runs (critic panel → fix loop → CI auto-fix
+      // → auto-merge), reusing its pure decision functions. One ceremony per
+      // session (UNIQUE session_id). The PR/worktree/branch live on the session
+      // row; this table mirrors only the review/CI progress fields of
+      // issue_dispatches. `step` is a coarse lifecycle marker for the UI badge;
+      // the reconciler derives each tick's action from the fields, like dispatch.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_ceremonies (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL UNIQUE,
+          step TEXT NOT NULL DEFAULT 'queued',
+          seed_prompt TEXT,
+          pr_number INTEGER,
+          pr_url TEXT,
+          reviewer_session_id TEXT,
+          review_decision TEXT,
+          -- The PR head SHA the CURRENT panel is reviewing (set, fail-closed, at
+          -- panel SPAWN). Panelists stamp the SHA they reviewed in their verdict
+          -- marker; only markers matching this count, and the merge is pinned to it
+          -- (gh --match-head-commit). A push after approval is re-reviewed, never
+          -- merged unreviewed — immune to round/time/cancel races.
+          review_sha TEXT,
+          -- Opt-in: 1 = auto-merge when ready; 0 (default) = stop at 'ready' and
+          -- let the human do the final merge (the safe default — the human renders
+          -- the verdict on the reviewed, green PR).
+          auto_merge INTEGER NOT NULL DEFAULT 0,
+          fix_rounds INTEGER NOT NULL DEFAULT 0,
+          fixer_session_id TEXT,
+          ci_fix_rounds INTEGER NOT NULL DEFAULT 0,
+          ci_fixer_session_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_session_ceremonies_step ON session_ceremonies(step)`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
