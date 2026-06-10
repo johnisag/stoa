@@ -1,6 +1,13 @@
 "use client";
 
-import { Rocket, Clock, CheckCircle, Bot, AlertCircle } from "lucide-react";
+import {
+  Rocket,
+  Clock,
+  CheckCircle,
+  Bot,
+  AlertCircle,
+  GitMerge,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -94,6 +101,23 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           for a repo and a second agent checks each agent&apos;s work. If it
           asks for changes, a fixer makes them (up to a couple of rounds); if it
           still can&apos;t, the work surfaces for you to decide.
+        </p>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <GitMerge className="h-4 w-4" aria-hidden="true" /> Auto-rebase
+          (optional)
+        </h3>
+        <p className="text-muted-foreground">
+          Turn on <span className="text-foreground font-medium">rebase</span>{" "}
+          for a repo and, once a PR is approved and its checks are green but it
+          conflicts with the base (something else landed first), its author
+          rebases, resolves the conflicts, and re-pushes — so it stays ready to
+          merge without you untangling it by hand. It tries a couple of times;
+          if it still can&apos;t, the PR is left for you to rebase. It only
+          keeps PRs landable — accepting the merge is still your tap (or
+          auto-merge, if you armed it).
         </p>
       </section>
 

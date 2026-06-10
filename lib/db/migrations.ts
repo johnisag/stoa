@@ -416,17 +416,32 @@ const migrations: Migration[] = [
       // moved under it), it spawns the author to rebase onto the base, resolve the
       // conflicts preserving both intents, and force-push-with-lease — so a ready
       // PR self-heals back to mergeable instead of paging a human to rebase.
-      db.exec(
-        `ALTER TABLE dispatch_repos ADD COLUMN merge_train INTEGER NOT NULL DEFAULT 0`
-      );
-      // rebase_rounds caps the rebase attempts; rebase_fixer_session_id tracks the
-      // in-flight rebase fixer (separate from the review/CI fixers so they don't clash).
-      db.exec(
-        `ALTER TABLE issue_dispatches ADD COLUMN rebase_rounds INTEGER NOT NULL DEFAULT 0`
-      );
-      db.exec(
-        `ALTER TABLE issue_dispatches ADD COLUMN rebase_fixer_session_id TEXT`
-      );
+      //
+      // Each ALTER is guarded INDEPENDENTLY (not relying on the outer
+      // "duplicate column → mark applied" recovery): a crash after the first ALTER
+      // would otherwise record the migration as applied on retry and silently skip
+      // the remaining columns. rebase_rounds caps the rebase attempts;
+      // rebase_fixer_session_id tracks the in-flight rebase fixer (separate from the
+      // review/CI fixers so they don't clash).
+      const hasColumn = (table: string, column: string): boolean =>
+        (
+          db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        ).some((c) => c.name === column);
+      if (!hasColumn("dispatch_repos", "merge_train")) {
+        db.exec(
+          `ALTER TABLE dispatch_repos ADD COLUMN merge_train INTEGER NOT NULL DEFAULT 0`
+        );
+      }
+      if (!hasColumn("issue_dispatches", "rebase_rounds")) {
+        db.exec(
+          `ALTER TABLE issue_dispatches ADD COLUMN rebase_rounds INTEGER NOT NULL DEFAULT 0`
+        );
+      }
+      if (!hasColumn("issue_dispatches", "rebase_fixer_session_id")) {
+        db.exec(
+          `ALTER TABLE issue_dispatches ADD COLUMN rebase_fixer_session_id TEXT`
+        );
+      }
     },
   },
 ];

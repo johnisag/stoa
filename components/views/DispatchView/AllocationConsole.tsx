@@ -262,21 +262,21 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
           ci-fix
         </label>
 
-        {/* Merge train (opt-in): auto-rebase-and-repair a ready-but-conflicting PR */}
+        {/* Auto-rebase (opt-in): rebase-and-repair a ready-but-conflicting PR */}
         <label
           className="text-muted-foreground flex items-center gap-1 text-xs"
-          title="Keep each worker's PR landable: when the base moves and the PR conflicts, the author rebases, resolves it, and force-pushes — so you never babysit a rebase"
+          title="Auto-rebase: once a PR is approved and green but conflicts with the base, its author rebases, resolves the conflicts, and force-pushes — a couple of tries, then it's flagged for you. (Not a merge queue — it keeps PRs landable; merging is still your tap or auto-merge.)"
         >
           <Switch
             checked={repo.merge_train === 1}
             onCheckedChange={(v) => patch({ mergeTrain: v })}
             aria-label={
               repo.merge_train === 1
-                ? "Disable merge train"
-                : "Enable merge train"
+                ? "Disable auto-rebase"
+                : "Enable auto-rebase"
             }
           />
-          train
+          rebase
         </label>
 
         {/* browse open issues for one-tap triage */}

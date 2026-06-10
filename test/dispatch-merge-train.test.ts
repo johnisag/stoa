@@ -16,8 +16,11 @@ const { state } = vi.hoisted(() => ({
     live: [] as string[],
     sessions: {} as Record<string, { tmux_name: string }>,
     spawns: [] as string[],
+    dbCalls: [] as string[],
   },
 }));
+
+const track = (name: string) => ({ run: () => state.dbCalls.push(name) });
 
 vi.mock("@/lib/db", () => ({
   getDb: () => ({}),
@@ -25,7 +28,10 @@ vi.mock("@/lib/db", () => ({
     listPrOpen: () => ({ all: () => state.rows }),
     getDispatchRepo: () => ({ get: () => state.repo }),
     getSession: () => ({ get: (id: string) => state.sessions[id] }),
-    startRebaseRound: () => ({ run: () => {} }),
+    startRebaseRound: () => track("startRebaseRound"),
+    clearRebaseFixer: () => track("clearRebaseFixer"),
+    resetReviewAfterRebase: () => track("resetReviewAfterRebase"),
+    resetRebaseRounds: () => track("resetRebaseRounds"),
   },
 }));
 vi.mock("@/lib/session-backend", () => ({
@@ -38,8 +44,15 @@ vi.mock("@/lib/dispatch/auto-merge", () => ({
   }),
 }));
 vi.mock("@/lib/dispatch/reviewer", () => ({
-  spawnInWorktree: async (_repo: unknown, _d: unknown, label: string) => {
+  spawnInWorktree: async (
+    _repo: unknown,
+    _d: unknown,
+    label: string,
+    _prompt: string,
+    onSpawn: (sid: string) => void
+  ) => {
     state.spawns.push(label);
+    onSpawn("sid-new"); // records the round (startRebaseRound), as the real recipe does
     return "sid-new";
   },
 }));
@@ -200,11 +213,13 @@ describe("mergeTrainPass", () => {
     state.live = [];
     state.sessions = {};
     state.spawns = [];
+    state.dbCalls = [];
   });
 
   it("spawns a rebase fixer for an armed repo's conflicting, green PR", async () => {
     await mergeTrainPass();
     expect(state.spawns).toEqual(["rebase #7"]);
+    expect(state.dbCalls).toEqual(["startRebaseRound"]);
   });
 
   it("does nothing when the repo didn't arm merge_train", async () => {
@@ -252,6 +267,42 @@ describe("mergeTrainPass", () => {
     state.sessions = { ci: { tmux_name: "tmux-ci" } };
     state.live = ["tmux-ci"];
     await mergeTrainPass();
+    expect(state.spawns).toHaveLength(0);
+  });
+
+  it("clears the rebase fixer when it finishes on an ungated repo (no re-review)", async () => {
+    // fixer id set, but its session is no longer live → finished.
+    state.rows = [row({ rebase_fixer_session_id: "rb" })];
+    state.sessions = {};
+    state.live = [];
+    await mergeTrainPass();
+    expect(state.dbCalls).toEqual(["clearRebaseFixer"]);
+    expect(state.spawns).toHaveLength(0);
+  });
+
+  it("re-reviews the rebased head when a rebase finishes on a GATED repo", async () => {
+    state.repo = {
+      merge_train: 1,
+      review_gate: 1,
+      repo_slug: "o/r",
+      base_branch: "main",
+    };
+    state.rows = [
+      row({ rebase_fixer_session_id: "rb", review_decision: "APPROVED" }),
+    ];
+    state.sessions = {};
+    state.live = [];
+    await mergeTrainPass();
+    // Wipes the stale approval so a fresh panel re-reviews the rewritten head.
+    expect(state.dbCalls).toEqual(["resetReviewAfterRebase"]);
+    expect(state.spawns).toHaveLength(0);
+  });
+
+  it("resets the round counter once the PR is mergeable again (consecutive cap)", async () => {
+    state.rows = [row({ rebase_rounds: 2 })];
+    state.mergeable = "MERGEABLE";
+    await mergeTrainPass();
+    expect(state.dbCalls).toEqual(["resetRebaseRounds"]);
     expect(state.spawns).toHaveLength(0);
   });
 });

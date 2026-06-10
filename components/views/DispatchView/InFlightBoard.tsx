@@ -173,11 +173,12 @@ function Card({
         </span>
       )}
 
-      {/* Merge train (advisory) — the author is rebasing this ready-but-conflicting
-          PR back to mergeable on a merge_train repo. Shows the round count. */}
+      {/* Auto-rebase (advisory) — the author is rebasing this ready-but-conflicting
+          PR back to mergeable. The fixer id is cleared when it finishes, so this
+          only shows during an active rebase (not a stuck one). */}
       {repo?.merge_train === 1 && isPrOpen && d.rebase_fixer_session_id && (
         <span className="inline-flex w-fit items-center rounded bg-orange-500/15 px-1.5 py-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400">
-          train: rebasing…
+          rebasing…
           {d.rebase_rounds > 0 && ` (round ${d.rebase_rounds})`}
         </span>
       )}

@@ -124,8 +124,16 @@ export async function ciFixPass(): Promise<void> {
       | undefined;
     if (!repo || repo.ci_autofix !== 1) continue;
 
-    // A fixer (CI or review) already working → skip the gh call entirely.
-    if (isAlive(d.ci_fixer_session_id) || isAlive(d.fixer_session_id)) continue;
+    // A fixer (CI / review / rebase) already working this worktree → skip entirely.
+    // The rebase fixer force-pushes with lease, so a CI fixer spawned alongside it
+    // would race the same git index and get its commit discarded by the next rebase.
+    if (
+      isAlive(d.ci_fixer_session_id) ||
+      isAlive(d.fixer_session_id) ||
+      isAlive(d.rebase_fixer_session_id)
+    ) {
+      continue;
+    }
 
     const { checks } = await getPrReadiness(
       expandHome(d.worktree_path),

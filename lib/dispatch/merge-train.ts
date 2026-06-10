@@ -10,9 +10,13 @@
  * landing never costs human time. Nobody else closes this loop: `gh stack` /
  * Graphite auto-rebase but can't *repair* a conflicted one.
  *
- * Capped by `rebase_rounds`; held off while any fixer (rebase / CI / review) is
- * already on the PR. The train only keeps PRs LANDABLE — the actual merge is still
- * auto-merge (if armed) or a human (from the Verdict Inbox / board). Pure helpers
+ * Capped by `rebase_rounds` (bounding CONSECUTIVE failures — reset once the PR is
+ * mergeable again); held off while any fixer (rebase / CI / review) is already on
+ * the PR. On a GATED repo, a finished rebase re-reviews the rewritten head before
+ * it can merge — a rebase resolution must never auto-merge under the pre-rebase
+ * approval (the same rule the session ceremony pins by SHA). The train only keeps
+ * PRs LANDABLE — the actual merge is still auto-merge (if armed) or a human (from
+ * the Verdict Inbox / board). Pure helpers
  * (nextMergeTrainAction / buildRebaseFixPrompt) are unit-tested; the gh read,
  * spawn, and session lookups are I/O. Reuses getPrReadiness from ./auto-merge and
  * spawnInWorktree (the one spawn recipe) from ./reviewer.
@@ -153,6 +157,19 @@ export async function mergeTrainPass(): Promise<void> {
       | undefined;
     if (!repo || repo.merge_train !== 1) continue;
 
+    // A rebase fixer that has FINISHED (id set, session gone): clear it so the
+    // board stops showing "rebasing…", and on a gated repo re-review the REBASED
+    // head — the resolution rewrote the diff, so it must never auto-merge under the
+    // pre-rebase approval. Settle this tick; re-evaluate (re-panel / merge) next.
+    if (d.rebase_fixer_session_id && !isAlive(d.rebase_fixer_session_id)) {
+      if (repo.review_gate === 1) {
+        queries.resetReviewAfterRebase(db).run(d.id);
+      } else {
+        queries.clearRebaseFixer(db).run(d.id);
+      }
+      continue;
+    }
+
     // Any fixer (rebase / CI / review) already working → skip the gh call entirely.
     if (
       isAlive(d.rebase_fixer_session_id) ||
@@ -166,6 +183,16 @@ export async function mergeTrainPass(): Promise<void> {
       expandHome(d.worktree_path),
       d.pr_number
     );
+
+    // The PR is mergeable again (base caught up / a prior rebase landed it): zero
+    // the rebase counter so the cap bounds CONSECUTIVE failed repairs, not a busy
+    // PR's lifetime of individually-fixed conflicts. nextMergeTrainAction returns
+    // idle for a MERGEABLE PR anyway, so reset-and-continue loses nothing.
+    if (mergeable === "MERGEABLE" && d.rebase_rounds > 0) {
+      queries.resetRebaseRounds(db).run(d.id);
+      continue;
+    }
+
     const action = nextMergeTrainAction({
       mergeTrain: true,
       status: d.status,
