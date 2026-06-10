@@ -1,5 +1,5 @@
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Keyboard, Rocket, BarChart3, Workflow } from "lucide-react";
+import { Keyboard, Rocket, BarChart3, Workflow, Inbox } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -16,6 +16,8 @@ interface SidebarFooterProps {
   onShowAnalytics?: () => void;
   /** Opens the Workflows view (run an agent pipeline from a template). */
   onShowWorkflows?: () => void;
+  /** Opens the Verdict Inbox (the fleet review queue). */
+  onShowVerdictInbox?: () => void;
 }
 
 export function SidebarFooter({
@@ -23,6 +25,7 @@ export function SidebarFooter({
   onShowDispatch,
   onShowAnalytics,
   onShowWorkflows,
+  onShowVerdictInbox,
 }: SidebarFooterProps = {}) {
   return (
     <div className="mt-auto px-3 pt-2 pb-3">
@@ -77,6 +80,23 @@ export function SidebarFooter({
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p>Workflows</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {onShowVerdictInbox && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={onShowVerdictInbox}
+                  aria-label="Verdict Inbox"
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
+                >
+                  <Inbox className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Verdict Inbox</p>
               </TooltipContent>
             </Tooltip>
           )}

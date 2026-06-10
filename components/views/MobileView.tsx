@@ -27,6 +27,7 @@ export function MobileView({
   setShowDispatch,
   setShowAnalytics,
   setShowWorkflows,
+  setShowVerdictInbox,
   onShowShortcuts,
   attachToSession,
   openSessionInNewTab,
@@ -97,6 +98,10 @@ export function MobileView({
             }}
             onShowWorkflows={() => {
               setShowWorkflows(true);
+              setSidebarOpen(false);
+            }}
+            onShowVerdictInbox={() => {
+              setShowVerdictInbox(true);
               setSidebarOpen(false);
             }}
           />
