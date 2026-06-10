@@ -74,10 +74,10 @@ describe("interpolateTask", () => {
   });
 
   it("substitutes multiple distinct references", () => {
-    const out = interpolateTask(
-      "A={{steps.a.output}} B={{steps.b.output}}",
-      { a: "alpha", b: "beta" }
-    );
+    const out = interpolateTask("A={{steps.a.output}} B={{steps.b.output}}", {
+      a: "alpha",
+      b: "beta",
+    });
     expect(out).toBe("A=alpha B=beta");
   });
 
@@ -201,18 +201,15 @@ describe("validateSpec — output references", () => {
       spec([step({ id: "a", task: "loop {{steps.a.output}}" })])
     );
     expect(r.valid).toBe(false);
-    expect(r.errors.some((e) => /references its own output/.test(e.message))).toBe(
-      true
-    );
+    expect(
+      r.errors.some((e) => /references its own output/.test(e.message))
+    ).toBe(true);
   });
 
   it("rejects a reference to a NON-dependency (known but not upstream)", () => {
     // b exists, but a does not depend on it → referencing it is invalid.
     const r = validateSpec(
-      spec([
-        step({ id: "a", task: "x {{steps.b.output}}" }),
-        step({ id: "b" }),
-      ])
+      spec([step({ id: "a", task: "x {{steps.b.output}}" }), step({ id: "b" })])
     );
     expect(r.valid).toBe(false);
     expect(
@@ -263,6 +260,8 @@ describe("isSafeOutputFile", () => {
     expect(isSafeOutputFile("\\windows\\system32")).toBe(false);
     expect(isSafeOutputFile("C:\\secrets.txt")).toBe(false);
     expect(isSafeOutputFile("C:/secrets.txt")).toBe(false);
+    // Windows drive-relative (no separator after the colon) — also rejected.
+    expect(isSafeOutputFile("C:secrets.txt")).toBe(false);
     expect(isSafeOutputFile("../../etc/passwd")).toBe(false);
     expect(isSafeOutputFile("ok/../../escape")).toBe(false);
   });
@@ -270,7 +269,9 @@ describe("isSafeOutputFile", () => {
 
 describe("validateSpec — outputFile", () => {
   it("accepts a relative outputFile override", () => {
-    const r = validateSpec(spec([step({ id: "a", outputFile: "result.json" })]));
+    const r = validateSpec(
+      spec([step({ id: "a", outputFile: "result.json" })])
+    );
     expect(r.valid).toBe(true);
   });
 

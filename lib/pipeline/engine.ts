@@ -55,20 +55,10 @@ const OUTPUT_REF = /\{\{\s*steps\.([A-Za-z0-9._-]+)\.output\s*\}\}/g;
  * closure) and shares its matcher with interpolateTask.
  */
 export function extractOutputRefs(task: string): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  // Fresh matcher each call — OUTPUT_REF is global, so reusing it would carry
-  // lastIndex across calls and skip matches.
-  const re = new RegExp(OUTPUT_REF.source, "g");
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(task)) !== null) {
-    const id = m[1];
-    if (!seen.has(id)) {
-      seen.add(id);
-      ids.push(id);
-    }
-  }
-  return ids;
+  // matchAll operates on a copy of the global regex (it doesn't carry lastIndex),
+  // so OUTPUT_REF is safe to share; Set preserves first-seen order.
+  const ids = [...task.matchAll(OUTPUT_REF)].map((m) => m[1]);
+  return [...new Set(ids)];
 }
 
 /**
@@ -83,9 +73,7 @@ export function interpolateTask(
   task: string,
   outputsById: Record<string, string>
 ): string {
-  return task.replace(OUTPUT_REF, (_full, id: string) =>
-    Object.prototype.hasOwnProperty.call(outputsById, id) ? outputsById[id] : ""
-  );
+  return task.replace(OUTPUT_REF, (_full, id: string) => outputsById[id] ?? "");
 }
 
 /**
@@ -134,17 +122,18 @@ export function hasShellMetachars(s: string): boolean {
 
 /**
  * True if `outputFile` is a safe worktree-relative path: non-empty, not
- * absolute (POSIX `/...` or Windows `C:\...` / `\...`), and with no `..`
- * traversal segment. The executor joins it onto the worktree root and reads it,
- * so an untrusted spec must not be able to escape the worktree (e.g.
- * `../../etc/passwd`). Forward and back slashes are both treated as separators
- * so the check holds on every OS.
+ * absolute or drive-qualified (POSIX `/...`, Windows `C:\...` / `C:/...`, or the
+ * drive-relative `C:foo`), and with no `..` traversal segment. The executor
+ * joins it onto the worktree root and reads it, so an untrusted spec must not be
+ * able to escape the worktree (e.g. `../../etc/passwd`). Forward and back slashes
+ * are both treated as separators so the check holds on every OS.
  */
 export function isSafeOutputFile(file: string): boolean {
   if (!file || !file.trim()) return false;
-  // Absolute: POSIX leading slash, a Windows drive (C:\ / C:/), or a leading
-  // separator (\ or /).
-  if (/^([A-Za-z]:[\\/]|[\\/])/.test(file)) return false;
+  // Reject anything starting with a Windows drive prefix (`C:` — incl. the
+  // drive-relative `C:foo`) or a leading separator (`\` or `/`). A drive letter
+  // is never legitimate in a worktree-relative file.
+  if (/^([A-Za-z]:|[\\/])/.test(file)) return false;
   // No `..` segment in either separator style.
   const segments = file.split(/[\\/]/);
   return !segments.includes("..");
@@ -262,7 +251,11 @@ export function validateSpec(spec: PipelineSpec): PipelineValidationResult {
   const depsById = new Map<string, string[]>();
   for (const step of spec.steps) {
     const id = step?.id?.trim();
-    if (id) depsById.set(id, (step.dependsOn ?? []).map((d) => d.trim()));
+    if (id)
+      depsById.set(
+        id,
+        (step.dependsOn ?? []).map((d) => d.trim())
+      );
   }
   for (const step of spec.steps) {
     const id = step?.id?.trim();
@@ -272,7 +265,10 @@ export function validateSpec(spec: PipelineSpec): PipelineValidationResult {
     const closure = upstreamClosure(id, depsById);
     for (const ref of refs) {
       if (ref === id) {
-        err(id, `step "${id}" references its own output {{steps.${id}.output}}`);
+        err(
+          id,
+          `step "${id}" references its own output {{steps.${id}.output}}`
+        );
       } else if (!ids.has(ref)) {
         err(
           id,

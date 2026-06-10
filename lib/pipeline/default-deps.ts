@@ -54,10 +54,7 @@ export function defaultExecutorDeps(conductorSessionId: string): ExecutorDeps {
       return { sessionId: session.id, worktreePath: session.worktree_path };
     },
 
-    async readOutput(
-      result: SpawnResult,
-      step: PipelineStep
-    ): Promise<string> {
+    async readOutput(result: SpawnResult, step: PipelineStep): Promise<string> {
       // The step's output is the contents of its output file inside the kept
       // worktree. No worktree (worktree creation fell back to the source dir, or
       // none requested) → no output. path.join keeps this cross-platform; the
@@ -66,10 +63,7 @@ export function defaultExecutorDeps(conductorSessionId: string): ExecutorDeps {
       if (!result.worktreePath) return "";
       const fileName = step.outputFile?.trim() || STOA_DEFAULT_OUTPUT_FILE;
       try {
-        return await readFile(
-          path.join(result.worktreePath, fileName),
-          "utf8"
-        );
+        return await readFile(path.join(result.worktreePath, fileName), "utf8");
       } catch {
         return "";
       }
