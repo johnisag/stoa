@@ -21,6 +21,27 @@ under "🔭 Next horizons."
 
 ---
 
+## ✅ 2026-06-10 — PART 1 complete + PART 2 (the 2–3× multipliers) 5 of 6 SHIPPED
+
+The day's mandate landed: PART 1 (Workflows #4–7, Autonomy #8) all merged, and 5 of
+the 6 PART-2 multipliers shipped through the full gate + a 3-agent review:
+
+- **#1 Merge Train** (#184) — auto-rebase-and-repair a ready-but-conflicting PR.
+- **#2 Verdict Inbox** (#183) — fleet-wide review queue, per-lens findings, act-in-place.
+- **#3 Conflict-aware decomposition** (#188) — a planner partitions a spec into
+  file-claimed tasks; `pickSchedulable` refuses to co-schedule overlapping claims.
+- **#4 Auto-steer** — rate-limit auto-resume (#178) + policy auto-answer (#185) +
+  error-loop escalation (#187). All three halves.
+- **#5 Verification harness** (#186) — per-worktree typecheck/test/build evidence
+  attached to the review card; gates auto-merge. (#5/#4/#3 each used a judge-panel
+  design workflow + an adversarial-verify review workflow.)
+
+**Left for the empire:** PART-2 **#6 Fleet memory** (the lessons ledger) and
+PART-1 **#9 task-list → full auto** (builds on #8's `session_ceremonies`). Tests
+845 → 983.
+
+---
+
 ## 🌅 Next session — committed queue (added 2026-06-09, for 2026-06-10)
 
 Ordered for tomorrow. **Worktree lifecycle (1–3) first** — they're correctness
