@@ -12,7 +12,6 @@
  */
 
 import { getDb, queries, type Session } from "./db";
-import { expandHome } from "./platform";
 import type {
   IssueDispatch,
   DispatchRepo,
@@ -38,8 +37,9 @@ export interface InboxItem {
   reviewDecision: string | null;
   /** Coarse lifecycle for the badge: dispatch.status or ceremony.step. */
   state: string;
-  /** Worktree path (expanded) for reading the PR's findings via gh, or null. */
-  cwd: string | null;
+  /** Whether a critic panel gates this item — false → no verdict will ever come
+   * (ungated repo), so the UI badges it "no review" and allows a human merge. */
+  reviewGate: boolean;
   fixRounds: number;
   autoMerge: boolean;
   updatedAt: string;
@@ -74,16 +74,16 @@ export function listInboxItems(): InboxItem[] {
       branch: d.branch_name,
       reviewDecision: d.review_decision,
       state: d.status,
-      cwd: d.worktree_path ? expandHome(d.worktree_path) : null,
+      reviewGate: repo?.review_gate === 1,
       fixRounds: d.fix_rounds,
       autoMerge: d.auto_merge === 1,
       updatedAt: d.updated_at,
     });
   }
 
-  // Session "go to auto" ceremonies still in flight.
+  // Session "go to auto" ceremonies awaiting attention (incl. 'stuck').
   const ceremonies = queries
-    .listActiveCeremonies(db)
+    .listCeremoniesForReview(db)
     .all() as SessionCeremony[];
   for (const c of ceremonies) {
     const session = queries.getSession(db).get(c.session_id) as
@@ -101,7 +101,8 @@ export function listInboxItems(): InboxItem[] {
       branch: session.branch_name,
       reviewDecision: c.review_decision,
       state: c.step,
-      cwd: session.worktree_path ? expandHome(session.worktree_path) : null,
+      // A ceremony always runs the critic panel — it's gated by definition.
+      reviewGate: true,
       fixRounds: c.fix_rounds,
       autoMerge: c.auto_merge === 1,
       updatedAt: c.updated_at,

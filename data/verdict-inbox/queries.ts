@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 // Type-only imports are erased at build (no server modules in the client bundle).
 import type { InboxItem } from "@/lib/verdict-inbox";
 import type { ReviewerFinding } from "@/lib/dispatch/reviewer";
+import { dispatchKeys } from "@/data/dispatch/keys";
+import { sessionKeys } from "@/data/sessions/keys";
 import { inboxKeys } from "./keys";
 
 export type { InboxItem, ReviewerFinding };
@@ -62,7 +64,18 @@ async function act(url: string, method: string, body?: unknown) {
  */
 export function useInboxActions() {
   const qc = useQueryClient();
-  const invalidate = () => qc.invalidateQueries({ queryKey: inboxKeys.list() });
+  // Acting from the inbox must also refresh the sibling surfaces that show the
+  // same row — the Dispatch board / backlog (dispatch items) and the session's
+  // auto-mode pill (ceremony items) — not just the inbox list itself.
+  const settle = (item: InboxItem) => {
+    qc.invalidateQueries({ queryKey: inboxKeys.list() });
+    if (item.type === "dispatch") {
+      qc.invalidateQueries({ queryKey: dispatchKeys.board() });
+      qc.invalidateQueries({ queryKey: dispatchKeys.pending() });
+    } else if (item.sessionId) {
+      qc.invalidateQueries({ queryKey: sessionKeys.ceremony(item.sessionId) });
+    }
+  };
 
   const merge = useMutation({
     retry: 0,
@@ -70,7 +83,7 @@ export function useInboxActions() {
       item.type === "dispatch"
         ? act(`/api/dispatch/dispatches/${item.id}/merge`, "POST")
         : act(`/api/sessions/${item.sessionId}/ceremony`, "PUT"),
-    onSuccess: invalidate,
+    onSuccess: (_d, item) => settle(item),
   });
   const dismiss = useMutation({
     mutationFn: (item: InboxItem) =>
@@ -79,12 +92,12 @@ export function useInboxActions() {
             action: "dismiss",
           })
         : act(`/api/sessions/${item.sessionId}/ceremony`, "DELETE"),
-    onSuccess: invalidate,
+    onSuccess: (_d, item) => settle(item),
   });
   const retry = useMutation({
     mutationFn: (item: InboxItem) =>
       act(`/api/dispatch/dispatches/${item.id}`, "POST", { action: "retry" }),
-    onSuccess: invalidate,
+    onSuccess: (_d, item) => settle(item),
   });
   return { merge, dismiss, retry };
 }

@@ -17,14 +17,28 @@ import { VerdictInboxHelp } from "./VerdictInboxHelp";
 
 type Filter = "all" | "needs-me" | "in-review" | "approved";
 
-/** A row needs the human now: changes requested, failed, stuck, or approved+green
- * and waiting on a (non-auto) merge. */
+/** A row a fixer is actively working (ceremony steps) — not on the human yet. */
+function beingFixed(i: InboxItem): boolean {
+  return (
+    i.type === "ceremony" &&
+    (i.state === "fixing" || i.state === "ci_fixing" || i.state === "merging")
+  );
+}
+
+/** A row needs the human now: changes requested, failed, stuck, or approved and
+ * waiting on a human merge (ceremony awaiting_merge, or an approved non-auto
+ * dispatch) — plus ungated dispatch PRs, which get no verdict and need a merge. */
 function needsMe(i: InboxItem): boolean {
+  if (beingFixed(i)) return false;
   return (
     i.reviewDecision === "CHANGES_REQUESTED" ||
     i.state === "failed" ||
     i.state === "stuck" ||
-    i.state === "awaiting_merge"
+    i.state === "awaiting_merge" ||
+    (i.type === "dispatch" &&
+      i.reviewDecision === "APPROVED" &&
+      !i.autoMerge) ||
+    (i.type === "dispatch" && !i.reviewGate && i.state === "pr_open")
   );
 }
 
@@ -44,19 +58,33 @@ export function VerdictInboxView({
   const [showHelp, setShowHelp] = useState(false);
   const { data: items = [], isLoading, isError } = useInbox(open);
 
-  const filtered = items.filter((i) => {
-    if (filter === "needs-me") return needsMe(i);
-    if (filter === "in-review")
-      return !i.reviewDecision && i.state !== "failed";
-    if (filter === "approved") return i.reviewDecision === "APPROVED";
-    return true;
-  });
+  const inReview = (i: InboxItem) =>
+    i.reviewGate && !i.reviewDecision && i.state !== "failed";
+  const approved = (i: InboxItem) => i.reviewDecision === "APPROVED";
 
-  const tabs: { key: Filter; label: string; count?: number }[] = [
+  const match = (i: InboxItem) =>
+    filter === "needs-me"
+      ? needsMe(i)
+      : filter === "in-review"
+        ? inReview(i)
+        : filter === "approved"
+          ? approved(i)
+          : true;
+  const filtered = items.filter(match);
+
+  const tabs: { key: Filter; label: string; count: number }[] = [
     { key: "all", label: "All", count: items.length },
     { key: "needs-me", label: "Needs me", count: items.filter(needsMe).length },
-    { key: "in-review", label: "In review" },
-    { key: "approved", label: "Approved" },
+    {
+      key: "in-review",
+      label: "In review",
+      count: items.filter(inReview).length,
+    },
+    {
+      key: "approved",
+      label: "Approved",
+      count: items.filter(approved).length,
+    },
   ];
 
   return (
@@ -126,7 +154,13 @@ export function VerdictInboxView({
             </div>
           ) : filtered.length === 0 ? (
             <div className="text-muted-foreground py-10 text-center text-sm">
-              Nothing here — no PRs awaiting review.
+              {filter === "needs-me"
+                ? "Nothing needs you right now."
+                : filter === "in-review"
+                  ? "Nothing in review."
+                  : filter === "approved"
+                    ? "Nothing approved yet."
+                    : "Nothing here — no PRs awaiting review."}
             </div>
           ) : (
             <div className="flex flex-col gap-2">

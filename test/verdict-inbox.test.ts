@@ -19,11 +19,10 @@ vi.mock("@/lib/db", () => ({
   queries: {
     listDispatchesForBoard: () => ({ all: () => state.dispatches }),
     getDispatchRepo: () => ({ get: (id: string) => state.repos[id] }),
-    listActiveCeremonies: () => ({ all: () => state.ceremonies }),
+    listCeremoniesForReview: () => ({ all: () => state.ceremonies }),
     getSession: () => ({ get: (id: string) => state.sessions[id] }),
   },
 }));
-vi.mock("@/lib/platform", () => ({ expandHome: (p: string) => p }));
 
 import { listInboxItems } from "../lib/verdict-inbox";
 
@@ -60,7 +59,7 @@ const ceremony = (over: Record<string, unknown> = {}) => ({
 describe("listInboxItems", () => {
   beforeEach(() => {
     state.dispatches = [dispatch()];
-    state.repos = { r1: { repo_slug: "octo/app" } };
+    state.repos = { r1: { repo_slug: "octo/app", review_gate: 1 } };
     state.ceremonies = [ceremony()];
     state.sessions = {
       s1: {
@@ -85,7 +84,7 @@ describe("listInboxItems", () => {
       branch: "feature/auth",
       reviewDecision: "CHANGES_REQUESTED",
       state: "pr_open",
-      cwd: "/wt/d1",
+      reviewGate: true,
       fixRounds: 1,
       autoMerge: false,
     });
@@ -97,9 +96,23 @@ describe("listInboxItems", () => {
       title: "feat/x", // the session's branch
       subtitle: "auth work",
       state: "reviewing",
-      cwd: "/wt/s1",
+      reviewGate: true, // a ceremony always runs the panel
       autoMerge: true,
     });
+  });
+
+  it("marks an ungated dispatch repo reviewGate:false", () => {
+    state.repos = { r1: { repo_slug: "octo/app", review_gate: 0 } };
+    state.ceremonies = [];
+    const d = listInboxItems().find((i) => i.type === "dispatch")!;
+    expect(d.reviewGate).toBe(false);
+  });
+
+  it("keeps a stuck ceremony in the queue (it needs a human)", () => {
+    state.dispatches = [];
+    state.ceremonies = [ceremony({ id: "stuck1", step: "stuck" })];
+    const items = listInboxItems();
+    expect(items.map((i) => i.state)).toEqual(["stuck"]);
   });
 
   it("includes only pr_open / failed dispatches (drops dispatched / merged)", () => {
@@ -132,6 +145,6 @@ describe("listInboxItems", () => {
     };
     const c = listInboxItems()[0];
     expect(c.title).toBe("my session");
-    expect(c.cwd).toBeNull();
+    expect(c.branch).toBeNull();
   });
 });

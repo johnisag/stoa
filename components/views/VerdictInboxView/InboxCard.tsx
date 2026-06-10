@@ -13,12 +13,16 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { STATUS_META } from "@/components/views/DispatchView/shared";
+import type { DispatchStatus } from "@/lib/dispatch/types";
 import {
   useFindings,
   useInboxActions,
   type InboxItem,
 } from "@/data/verdict-inbox/queries";
 
+// Verdict badge palette — matches the Dispatch board (InFlightBoard) so the same
+// verdict reads identically across surfaces: approved=emerald, changes=amber.
 const VERDICT: Record<string, { label: string; badge: string }> = {
   APPROVED: {
     label: "approved",
@@ -26,19 +30,38 @@ const VERDICT: Record<string, { label: string; badge: string }> = {
   },
   CHANGES_REQUESTED: {
     label: "changes requested",
-    badge: "bg-red-500/15 text-red-600 dark:text-red-400",
+    badge: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
   },
 };
 const IN_REVIEW = {
   label: "in review",
-  badge: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+  badge: "bg-muted text-muted-foreground",
 };
+const NO_GATE = { label: "no review", badge: "bg-muted text-muted-foreground" };
 
 const LENS_BADGE: Record<string, string> = {
   correctness: "bg-red-500/15 text-red-600 dark:text-red-400",
   conventions: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
   simplicity: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
 };
+
+// Friendly labels for ceremony steps (dispatch statuses reuse STATUS_META).
+const CEREMONY_LABEL: Record<string, string> = {
+  queued: "Queued",
+  reviewing: "Reviewing",
+  fixing: "Fixing",
+  ci_fixing: "Fixing CI",
+  ready: "Ready",
+  awaiting_merge: "Awaiting merge",
+  merging: "Merging",
+  stuck: "Stuck",
+};
+
+function stateLabel(item: InboxItem): string {
+  return item.type === "dispatch"
+    ? (STATUS_META[item.state as DispatchStatus]?.label ?? item.state)
+    : (CEREMONY_LABEL[item.state] ?? item.state);
+}
 
 /** One review item — issue/session, verdict badge, expand for the critic's
  * per-lens findings (loaded live on expand), and merge / dismiss / retry. */
@@ -52,11 +75,24 @@ export function InboxCard({ item }: { item: InboxItem }) {
 
   const verdict = item.reviewDecision
     ? (VERDICT[item.reviewDecision] ?? IN_REVIEW)
-    : IN_REVIEW;
+    : item.reviewGate
+      ? IN_REVIEW
+      : NO_GATE;
   const busy = merge.isPending || dismiss.isPending || retry.isPending;
   const failed = item.type === "dispatch" && item.state === "failed";
+  // Only offer Merge where the endpoint will actually accept it — otherwise a
+  // one-tap merge from a *review* queue lands an unreviewed PR (dispatch /merge
+  // has no review gate) or just error-toasts (ceremony PUT requires ready+sha).
+  // Dispatch: APPROVED, or ungated (no verdict will ever come → human merges).
+  // Ceremony: APPROVED and past review (the PUT enforces ready/awaiting_merge).
   const canMerge =
-    item.prNumber != null && item.reviewDecision !== "CHANGES_REQUESTED";
+    item.prNumber != null &&
+    (item.type === "dispatch"
+      ? item.reviewDecision === "APPROVED" || !item.reviewGate
+      : item.reviewDecision === "APPROVED" &&
+        (item.state === "ready" || item.state === "awaiting_merge"));
+  // Dispatch dismiss is server-gated to failed; ceremony cancel (DELETE) is always valid.
+  const canDismiss = item.type === "ceremony" || item.state === "failed";
 
   const run = (m: typeof merge, label: string) => async () => {
     try {
@@ -100,7 +136,8 @@ export function InboxCard({ item }: { item: InboxItem }) {
 
       <div className="text-muted-foreground flex flex-wrap items-center gap-2 pl-5 text-[11px]">
         <span className="bg-muted rounded px-1.5 py-0.5">
-          {item.type === "ceremony" ? "session" : "dispatch"} · {item.state}
+          {item.type === "ceremony" ? "session" : "dispatch"} ·{" "}
+          {stateLabel(item)}
         </span>
         {item.fixRounds > 0 && <span>fix round {item.fixRounds}</span>}
         {item.autoMerge && <span>auto-merge</span>}
@@ -124,7 +161,9 @@ export function InboxCard({ item }: { item: InboxItem }) {
             </span>
           ) : findings.length === 0 ? (
             <span className="text-muted-foreground text-xs">
-              No critic findings yet (the panel may still be reviewing).
+              {item.prNumber == null
+                ? "No PR yet — nothing to review."
+                : "No critic findings yet (the panel may still be reviewing)."}
             </span>
           ) : (
             findings.map((f) => (
@@ -186,23 +225,25 @@ export function InboxCard({ item }: { item: InboxItem }) {
             <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Retry
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={run(
-            dismiss,
-            item.type === "ceremony" ? "Cancelled" : "Dismissed"
-          )}
-          className="text-muted-foreground"
-        >
-          {dismiss.isPending ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <X className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          {item.type === "ceremony" ? "Cancel" : "Dismiss"}
-        </Button>
+        {canDismiss && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={run(
+              dismiss,
+              item.type === "ceremony" ? "Auto mode stopped" : "Dismissed"
+            )}
+            className="text-muted-foreground"
+          >
+            {dismiss.isPending ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <X className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {item.type === "ceremony" ? "Stop auto" : "Dismiss"}
+          </Button>
+        )}
       </div>
     </div>
   );

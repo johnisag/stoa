@@ -46,15 +46,20 @@ export function VerdictInboxHelp({ onClose }: { onClose: () => void }) {
         </li>
         <li>
           <span className="text-foreground font-medium">Act in place</span> —
-          Merge an approved PR, Retry a failed one, or Dismiss/Cancel — without
-          leaving Stoa. The same gates apply (a PR that isn’t mergeable is
-          refused and tells you why).
+          Merge shows only when the PR is actually mergeable (approved, or an
+          ungated repo); Retry a failed worker; Dismiss a failed item or Stop
+          auto on a session. To overrule a{" "}
+          <span className="text-foreground">changes requested</span> verdict,
+          Stop auto (or open the PR) and merge it yourself.
         </li>
       </ol>
 
       <p className="text-muted-foreground text-xs leading-relaxed">
-        Coming next: risk-ranking (auth/db/payments paths and big deltas float
-        to the top) and a “needs me” push when a review stalls.
+        The <span className="text-foreground">Dispatch</span> board runs the
+        fleet; this inbox is just what’s waiting on{" "}
+        <span className="text-foreground">you</span>. Coming next: risk-ranking
+        (auth/db/payments paths and big deltas float to the top), a “needs me”
+        push when a review stalls, and the diff inline.
       </p>
     </div>
   );

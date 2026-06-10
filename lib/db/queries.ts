@@ -571,6 +571,11 @@ export const queries = {
       `SELECT * FROM session_ceremonies WHERE step NOT IN ('merged', 'stuck')`
     ),
 
+  // Ceremonies for the Verdict Inbox: everything not yet merged — INCLUDING
+  // 'stuck', the row that most needs a human (the reconciler gave up on it).
+  listCeremoniesForReview: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM session_ceremonies WHERE step != 'merged'`),
+
   setCeremonyReviewDecision: (db: Database.Database) =>
     getStmt(
       db,
