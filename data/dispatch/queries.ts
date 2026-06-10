@@ -184,6 +184,8 @@ export interface CreateRepoInput {
   reviewGate: boolean;
   ciAutofix: boolean;
   mergeTrain: boolean;
+  verifyGate: boolean;
+  verifyCommand: string;
 }
 
 export function useCreateRepo() {
@@ -253,6 +255,8 @@ export type UpdateRepoPatch = Partial<{
   reviewGate: boolean;
   ciAutofix: boolean;
   mergeTrain: boolean;
+  verifyGate: boolean;
+  verifyCommand: string | null;
 }>;
 
 export function useUpdateRepo() {
@@ -310,6 +314,12 @@ export function useUpdateRepo() {
                   : {}),
                 ...(patch.mergeTrain !== undefined
                   ? { merge_train: patch.mergeTrain ? 1 : 0 }
+                  : {}),
+                ...(patch.verifyGate !== undefined
+                  ? { verify_gate: patch.verifyGate ? 1 : 0 }
+                  : {}),
+                ...(patch.verifyCommand !== undefined
+                  ? { verify_command: patch.verifyCommand }
                   : {}),
               }
             : r

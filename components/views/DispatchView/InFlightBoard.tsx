@@ -183,6 +183,50 @@ function Card({
         </span>
       )}
 
+      {/* Verify harness (advisory) — Stoa ran the repo's verify command in the
+          worktree. Evidence on the card; gates auto-merge when armed. Output tail
+          (fail/error only) is one tap away. */}
+      {repo?.verify_gate === 1 && isPrOpen && d.verify_status && (
+        <div className="flex flex-col gap-0.5">
+          <span
+            title={
+              d.verify_ran_at
+                ? `verified ${timeAgo(d.verify_ran_at)}`
+                : undefined
+            }
+            className={cn(
+              "inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[11px] font-medium",
+              d.verify_status === "pass"
+                ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                : d.verify_status === "fail"
+                  ? "bg-red-500/15 text-red-600 dark:text-red-400"
+                  : d.verify_status === "error"
+                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                    : "bg-muted text-muted-foreground"
+            )}
+          >
+            {d.verify_status === "pass"
+              ? "verified"
+              : d.verify_status === "fail"
+                ? "verify failed"
+                : d.verify_status === "error"
+                  ? "verify error"
+                  : "verifying…"}
+          </span>
+          {(d.verify_status === "fail" || d.verify_status === "error") &&
+            d.verify_output && (
+              <details className="text-xs">
+                <summary className="text-muted-foreground cursor-pointer">
+                  output
+                </summary>
+                <pre className="text-muted-foreground mt-1 max-h-48 overflow-auto rounded bg-black/20 p-2 text-[10px] leading-relaxed whitespace-pre-wrap">
+                  {d.verify_output}
+                </pre>
+              </details>
+            )}
+        </div>
+      )}
+
       {/* Armed to auto-merge: the reconciler will merge this PR once it's ready
           (no conflicts, checks green, critic-approved if the repo is gated). */}
       {d.auto_merge === 1 && isPrOpen && (

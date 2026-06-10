@@ -2,7 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getDb, queries } from "@/lib/db";
 import { isValidAgentType } from "@/lib/providers";
+import { parseVerifySteps } from "@/lib/dispatch/verify";
 import type { DispatchRepo } from "@/lib/dispatch/types";
+
+/** Trim a verify command to null/string and validate it at SAVE time (same pure
+ * parser the runner uses) so a bad command fails loudly here, not minutes later as
+ * a 'verify error' on a PR card. Returns the trimmed command or an error string. */
+function normalizeVerifyCommand(
+  raw: unknown
+): { command: string | null } | { error: string } {
+  if (typeof raw !== "string" || !raw.trim()) return { command: null };
+  const command = raw.trim();
+  const parsed = parseVerifySteps(command);
+  if (!("steps" in parsed)) return { error: `verify command: ${parsed.error}` };
+  return { command };
+}
 
 // GET /api/dispatch/repos — list every tracked repo (the allocation console).
 export async function GET() {
@@ -34,6 +48,10 @@ export async function POST(request: NextRequest) {
       ? body.agentType
       : "claude";
     const mode = body?.mode === "auto" ? "auto" : "review";
+    const verify = normalizeVerifyCommand(body?.verifyCommand);
+    if ("error" in verify) {
+      return NextResponse.json({ error: verify.error }, { status: 400 });
+    }
     const id = randomUUID();
     queries
       .createDispatchRepo(getDb())
@@ -57,6 +75,8 @@ export async function POST(request: NextRequest) {
         body?.reviewGate ? 1 : 0,
         body?.ciAutofix ? 1 : 0,
         body?.mergeTrain ? 1 : 0,
+        body?.verifyGate ? 1 : 0,
+        verify.command,
         typeof body?.projectId === "string" ? body.projectId : null
       );
     const repo = queries.getDispatchRepo(getDb()).get(id) as DispatchRepo;

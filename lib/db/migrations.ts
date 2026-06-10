@@ -444,6 +444,45 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 25,
+    name: "add_verify_columns",
+    up: (db) => {
+      // Opt-in per-repo verification harness (default off). When armed with a
+      // verify_command, the reconciler runs it in each worker's PR worktree
+      // (typecheck/test/build) and attaches the result to the review card, so
+      // approvals are made from EVIDENCE, not by reading code — and (when armed)
+      // gates auto-merge on a local pass. Especially fills the gap for repos with
+      // NO GitHub CI (where summarizePrChecks → "none" → today merges with zero
+      // test evidence). Each ALTER guarded independently (migration-24 pattern).
+      const hasColumn = (table: string, column: string): boolean =>
+        (
+          db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        ).some((c) => c.name === column);
+      if (!hasColumn("dispatch_repos", "verify_gate")) {
+        db.exec(
+          `ALTER TABLE dispatch_repos ADD COLUMN verify_gate INTEGER NOT NULL DEFAULT 0`
+        );
+      }
+      if (!hasColumn("dispatch_repos", "verify_command")) {
+        db.exec(`ALTER TABLE dispatch_repos ADD COLUMN verify_command TEXT`);
+      }
+      // verify_status: NULL | running | pass | fail | error. verify_sha pins the
+      // PR head the result is for (once-guard key + stale-verdict gating pin).
+      if (!hasColumn("issue_dispatches", "verify_status")) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN verify_status TEXT`);
+      }
+      if (!hasColumn("issue_dispatches", "verify_output")) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN verify_output TEXT`);
+      }
+      if (!hasColumn("issue_dispatches", "verify_sha")) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN verify_sha TEXT`);
+      }
+      if (!hasColumn("issue_dispatches", "verify_ran_at")) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN verify_ran_at TEXT`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

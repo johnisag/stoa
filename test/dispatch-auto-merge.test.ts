@@ -142,11 +142,25 @@ describe("nextAutoMergeAction", () => {
     reviewDecision: null,
     mergeable: "MERGEABLE",
     checks: "passing" as const,
+    verifyGate: false,
+    verifyStatus: null as string | null,
   };
 
   it("merges when ready (mergeable + checks pass, not gated)", () => {
     expect(nextAutoMergeAction(ready)).toBe("merge");
     expect(nextAutoMergeAction({ ...ready, checks: "none" })).toBe("merge");
+  });
+
+  it("requires a local verify PASS when the repo is verify-gated", () => {
+    const v = { ...ready, verifyGate: true };
+    expect(nextAutoMergeAction({ ...v, verifyStatus: "pass" })).toBe("merge");
+    for (const s of [null, "running", "fail", "error"]) {
+      expect(nextAutoMergeAction({ ...v, verifyStatus: s })).toBe("wait");
+    }
+    // Inert when the repo didn't arm verify (zero behavior change).
+    expect(nextAutoMergeAction({ ...ready, verifyStatus: "fail" })).toBe(
+      "merge"
+    );
   });
 
   it("skips when not an auto-merge candidate", () => {

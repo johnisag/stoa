@@ -62,6 +62,8 @@ function addRepo(over: Partial<Record<string, unknown>> = {}): string {
       (over.review_gate as number) ?? 0,
       (over.ci_autofix as number) ?? 0,
       (over.merge_train as number) ?? 0,
+      (over.verify_gate as number) ?? 0,
+      (over.verify_command as string | null) ?? null,
       null
     );
   return id;

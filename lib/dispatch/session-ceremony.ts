@@ -336,6 +336,10 @@ export async function sessionCeremonyPass(): Promise<void> {
         reviewDecision: decision,
         mergeable: readiness.mergeable,
         checks: readiness.checks,
+        // The verify harness is dispatch-only (a ceremony has no per-repo
+        // verify_command); inert here — never adds a gate.
+        verifyGate: false,
+        verifyStatus: null,
       }) === "merge";
 
     if (!ready) {

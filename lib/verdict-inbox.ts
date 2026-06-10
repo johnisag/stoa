@@ -40,6 +40,13 @@ export interface InboxItem {
   /** Whether a critic panel gates this item — false → no verdict will ever come
    * (ungated repo), so the UI badges it "no review" and allows a human merge. */
   reviewGate: boolean;
+  /** Local verification verdict (dispatch verify harness): pass | fail | error |
+   * running | null. null when the repo didn't arm verify (or for ceremonies). */
+  verifyStatus: string | null;
+  /** Bounded tail of the failing verify step's output (fail/error), else null. */
+  verifyOutput: string | null;
+  /** Whether the verify harness gates this item (armed dispatch repo). */
+  verifyGate: boolean;
   fixRounds: number;
   autoMerge: boolean;
   updatedAt: string;
@@ -75,6 +82,11 @@ export function listInboxItems(): InboxItem[] {
       reviewDecision: d.review_decision,
       state: d.status,
       reviewGate: repo?.review_gate === 1,
+      verifyStatus: d.verify_status,
+      verifyOutput: d.verify_output,
+      // Armed == gate on AND a command set (matches verifyPass / autoMergePass), so
+      // a gate-on-but-no-command repo doesn't hide the Merge button forever.
+      verifyGate: repo?.verify_gate === 1 && !!repo?.verify_command,
       fixRounds: d.fix_rounds,
       autoMerge: d.auto_merge === 1,
       updatedAt: d.updated_at,
@@ -103,6 +115,11 @@ export function listInboxItems(): InboxItem[] {
       state: c.step,
       // A ceremony always runs the critic panel — it's gated by definition.
       reviewGate: true,
+      // The verify harness is dispatch-only in v1 (a ceremony has no per-repo
+      // verify_command); ceremonies carry no verify evidence.
+      verifyStatus: null,
+      verifyOutput: null,
+      verifyGate: false,
       fixRounds: c.fix_rounds,
       autoMerge: c.auto_merge === 1,
       updatedAt: c.updated_at,
