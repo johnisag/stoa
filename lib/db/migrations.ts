@@ -483,6 +483,26 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 26,
+    name: "add_file_claims_to_issue_dispatches",
+    up: (db) => {
+      // Conflict-aware decomposition: a planner partitions a spec into tasks, each
+      // owning a DISJOINT set of files (file_claims = a JSON array of repo-relative
+      // path prefixes). The reconciler refuses to co-schedule two pending tasks
+      // whose claims overlap a live (dispatched/pr_open) claim — so they serialize
+      // instead of opening two PRs that collide at merge. NULL/absent = no claims =
+      // exactly today's behavior (every legacy/non-planned row). Guarded ALTER
+      // (migration-24/25 pattern).
+      const hasColumn = (table: string, column: string): boolean =>
+        (
+          db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        ).some((c) => c.name === column);
+      if (!hasColumn("issue_dispatches", "file_claims")) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN file_claims TEXT`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

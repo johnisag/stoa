@@ -19,6 +19,7 @@ import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
 import { autoMergePass } from "./auto-merge";
 import { ciFixPass } from "./ci-fix";
+import { parseClaims, claimsConflict } from "./claims";
 import { mergeTrainPass } from "./merge-train";
 import { verifyPass } from "./verify";
 import { sessionCeremonyPass } from "./session-ceremony";
@@ -47,6 +48,38 @@ export function pickCandidates(
   slots: number
 ): IssueDispatch[] {
   return slots <= 0 ? [] : pending.slice(0, slots);
+}
+
+/**
+ * Conflict-aware scheduling: from FIFO-ordered `pending`, pick up to `slots` rows to
+ * dispatch this tick, SKIPPING any whose file_claims conflict with a claim already
+ * live (seeded from `liveClaims`) or already chosen this tick. A no-claims row is
+ * always schedulable (exactly today's behavior — pickCandidates). A skip is NOT a
+ * hard stop: a later, disjoint row is still picked, and a skipped row stays pending
+ * (FIFO-first) for a later tick — so overlapping tasks SERIALIZE rather than open
+ * two PRs that collide at merge. Only ever a SUBSET of what computeSlots permitted,
+ * so the quota + concurrency caps are wholly preserved. Pure → unit-tested.
+ */
+export function pickSchedulable(
+  pending: IssueDispatch[],
+  liveClaims: string[][],
+  slots: number
+): IssueDispatch[] {
+  if (slots <= 0) return [];
+  const taken: string[][] = [...liveClaims];
+  const chosen: IssueDispatch[] = [];
+  for (const candidate of pending) {
+    if (chosen.length >= slots) break;
+    const claims = parseClaims(candidate.file_claims);
+    if (claims.length === 0) {
+      chosen.push(candidate); // legacy / unclaimed row — unaffected
+      continue;
+    }
+    if (taken.some((t) => claimsConflict(claims, t))) continue; // serialize
+    taken.push(claims);
+    chosen.push(candidate);
+  }
+  return chosen;
 }
 
 /**
@@ -126,7 +159,15 @@ export async function reconcileTick(): Promise<void> {
       const pending = queries
         .listPendingForRepo(db)
         .all(repo.id) as IssueDispatch[];
-      for (const candidate of pickCandidates(pending, slots)) {
+      // Conflict-aware: skip pending rows whose claims overlap a LIVE claim
+      // (dispatched/pr_open — file custody held until merge) or another row chosen
+      // this tick. No-op for unclaimed rows. Replaces the bare pickCandidates.
+      const liveClaims = (
+        queries.listLiveClaims(db).all(repo.id) as {
+          file_claims: string | null;
+        }[]
+      ).map((r) => parseClaims(r.file_claims));
+      for (const candidate of pickSchedulable(pending, liveClaims, slots)) {
         await dispatchOne(repo, candidate);
       }
     }

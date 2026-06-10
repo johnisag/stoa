@@ -165,6 +165,7 @@ export function createSchema(db: Database.Database): void {
       verify_output TEXT,
       verify_sha TEXT,
       verify_ran_at TEXT,
+      file_claims TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE,

@@ -10,4 +10,5 @@ export const dispatchKeys = {
   scheduled: () => [...dispatchKeys.all, "scheduled"] as const, // future-dated rows
   openIssues: (repoId: string) =>
     [...dispatchKeys.all, "open-issues", repoId] as const, // on-demand gh issue browse (triage)
+  plan: (planId: string) => [...dispatchKeys.all, "plan", planId] as const, // a planner run's poll
 };

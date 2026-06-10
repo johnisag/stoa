@@ -562,6 +562,25 @@ export const queries = {
        ORDER BY issue_created_at ASC`
     ),
 
+  // Conflict-aware decomposition: set a row's file-ownership claims (JSON).
+  setDispatchClaims: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET file_claims = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Claims held by LIVE work in a repo. INTENTIONALLY broader than countLiveInFlight
+  // (which counts only 'dispatched' — agent slots free at pr_open): a worker's
+  // worktree holds its claimed files until MERGE, so 'pr_open' rows (incl. mid-fix /
+  // mid-rebase) still hold their claims. Conflating these two windows would let two
+  // overlapping PRs open and collide at merge — keep them separate.
+  listLiveClaims: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT file_claims FROM issue_dispatches
+       WHERE repo_id = ? AND status IN ('dispatched', 'pr_open') AND file_claims IS NOT NULL`
+    ),
+
   listDispatchesForRepo: (db: Database.Database) =>
     getStmt(
       db,

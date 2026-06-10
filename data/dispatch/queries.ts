@@ -6,6 +6,7 @@ import type {
   DispatchRepo,
   DispatchMode,
   IssueDispatch,
+  PlanTask,
 } from "@/lib/dispatch/types";
 import type { AgentType } from "@/lib/providers";
 import type { DiscoveredRepo } from "@/lib/dispatch/discover";
@@ -457,6 +458,87 @@ export function useMergeDispatch() {
         (old ?? []).map((r) => (r.id === id ? { ...r, status: "merged" } : r))
       );
       qc.invalidateQueries({ queryKey: dispatchKeys.board() });
+    },
+  });
+}
+
+// ── Conflict-aware decomposition: the planner ────────────────────────────────
+
+export type { PlanTask };
+
+export type PlanRunStatus =
+  | { status: "running" }
+  | { status: "ready"; tasks: PlanTask[] }
+  | { status: "failed"; error: string };
+
+/** Start a planner run for a repo + spec; resolves to the planId the UI polls. */
+export function useStartPlan() {
+  return useMutation({
+    mutationFn: async (input: {
+      repoId: string;
+      spec: string;
+      taskCap?: number;
+    }): Promise<string> => {
+      const res = await fetch("/api/dispatch/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to start the planner");
+      return data.planId as string;
+    },
+  });
+}
+
+/** Poll a planner run while it's running (stops once ready/failed, or no planId). */
+export function usePlanPoll(planId: string | null) {
+  return useQuery({
+    queryKey: planId ? dispatchKeys.plan(planId) : dispatchKeys.plan("none"),
+    enabled: !!planId,
+    queryFn: async (): Promise<PlanRunStatus> => {
+      const res = await fetch(`/api/dispatch/plan/${planId}`);
+      if (!res.ok) throw new Error("Failed to poll the planner");
+      return res.json();
+    },
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 3000 : false,
+  });
+}
+
+/** File the reviewed tasks as issues + claimed dispatch rows; reclaims the worktree. */
+export function useApprovePlan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      planId: string;
+      tasks: PlanTask[];
+      autoMerge?: boolean;
+    }) => {
+      const res = await fetch(`/api/dispatch/plan/${input.planId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tasks: input.tasks,
+          autoMerge: input.autoMerge,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to file the tasks");
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: dispatchKeys.pending() });
+      qc.invalidateQueries({ queryKey: dispatchKeys.board() });
+    },
+  });
+}
+
+/** Cancel a planner run (reclaim its worktree + kill the planner). */
+export function useCancelPlan() {
+  return useMutation({
+    mutationFn: async (planId: string) => {
+      await fetch(`/api/dispatch/plan/${planId}`, { method: "DELETE" });
     },
   });
 }
