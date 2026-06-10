@@ -18,6 +18,7 @@ import { promisify } from "util";
 import { getDb, queries } from "../db";
 import { resolveModelForAgent } from "../model-catalog";
 import { getProvider, buildAgentArgs, shellQuoteArg } from "../providers";
+import type { AgentType } from "../providers";
 import { sessionKey } from "../providers/registry";
 import { wrapWithBanner } from "../banner";
 import { getSessionBackend } from "../session-backend";
@@ -57,6 +58,16 @@ export const REVIEW_LENSES = [
 const LENS_KEYS: readonly string[] = REVIEW_LENSES.map((l) => l.key);
 
 /**
+ * The canonical verdict marker a panelist's PR comment must END with, parsed by
+ * parsePanelComments. Exported + shared so the dispatch and session review prompts
+ * can't drift on this load-bearing line (a mismatch silently breaks aggregation).
+ * The reviewer swaps APPROVE → REQUEST_CHANGES when a lens finds a blocker.
+ */
+export function reviewVerdictMarker(lensKey: string, round: number): string {
+  return `STOA_REVIEW lens=${lensKey} round=${round} verdict=APPROVE`;
+}
+
+/**
  * One panelist's brief: read-only review through a SINGLE lens, ending in a PR
  * comment whose final line is a machine-parseable verdict marker that embeds the
  * lens + the current fix round (so a re-review's stale comments are ignored).
@@ -81,7 +92,7 @@ export function buildLensReviewPrompt(
     `3. Post ONE PR comment on #${d.pr_number} (gh pr comment ${d.pr_number}) — a ` +
     `few lines of findings, then the LAST line EXACTLY this marker, verbatim, ` +
     `nothing after it:\n` +
-    `   STOA_REVIEW lens=${lens.key} round=${round} verdict=APPROVE\n` +
+    `   ${reviewVerdictMarker(lens.key, round)}\n` +
     `Use verdict=REQUEST_CHANGES instead of APPROVE if your lens finds a blocking ` +
     `problem. If a multi-line --body is awkward in your shell, write the body to ` +
     `a file and use \`gh pr comment ${d.pr_number} --body-file <file>\`. Do NOT ` +
@@ -177,7 +188,8 @@ interface RawComment {
 export async function aggregatePanelVerdict(
   cwd: string,
   prNumber: number,
-  round: number
+  round: number,
+  sinceMs?: number
 ): Promise<PanelVerdict> {
   const incomplete: PanelVerdict = {
     byLens: {},
@@ -193,7 +205,17 @@ export async function aggregatePanelVerdict(
       { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
     );
     const parsed = JSON.parse(stdout) as { comments?: RawComment[] };
-    const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
+    let comments = Array.isArray(parsed.comments) ? parsed.comments : [];
+    // `sinceMs` (epoch ms) scopes the verdict to comments posted AFTER a baseline —
+    // a session ceremony passes its created_at so a re-enrolment ignores a prior
+    // enrolment's still-present round-0 markers (which would otherwise auto-approve
+    // unreviewed commits). Dispatch passes nothing → no filter (unchanged).
+    if (sinceMs != null) {
+      comments = comments.filter((c) => {
+        const t = Date.parse(String(c?.createdAt ?? ""));
+        return Number.isFinite(t) && t >= sinceMs;
+      });
+    }
     // Sort oldest→newest so parsePanelComments' "latest wins per lens" is correct
     // regardless of the order gh happens to return them in.
     comments.sort((a, b) =>
@@ -276,26 +298,40 @@ export function buildFixPrompt(repo: DispatchRepo, d: IssueDispatch): string {
 }
 
 /**
- * Spawn an agent in the worker's existing worktree (no new worktree). Records
- * the session id on the dispatch row via `onSpawn` BEFORE the backend create, so
- * the spawn-once guard holds even if create throws. Returns the session id or
- * null on failure. autoApprove so the agent runs gh/git unattended (prompt-
- * bounded; the inherent opt-in risk). Exported so the CI-fix loop reuses the
- * exact same spawn recipe (worktree session + spawn-once via onSpawn).
+ * The minimal target for a worktree spawn — the fields the recipe actually needs,
+ * decoupled from `DispatchRepo`/`IssueDispatch` so a SESSION ceremony reuses the
+ * exact same spawn (its worktree/branch live on the session row, not a dispatch).
  */
-export async function spawnInWorktree(
-  repo: DispatchRepo,
-  d: IssueDispatch,
+export interface WorktreeSpawnTarget {
+  agentType: AgentType;
+  projectId: string | null;
+  baseBranch: string | null;
+  worktreePath: string | null;
+  branchName: string | null;
+  /** Identifier for error logs (e.g. "owner/repo#12" or "session abc123"). */
+  label: string;
+}
+
+/**
+ * Spawn an agent in an existing worktree (no new worktree). Records the session
+ * id via `onSpawn` BEFORE the backend create, so the spawn-once guard holds even
+ * if create throws. Returns the session id or null on failure. autoApprove so the
+ * agent runs gh/git unattended (prompt-bounded; the inherent opt-in risk). The
+ * core recipe — both dispatch (`spawnInWorktree`) and the session ceremony spawn
+ * through this, so there's one worktree-session spawn in the codebase.
+ */
+export async function spawnWorktreeWorker(
+  target: WorktreeSpawnTarget,
   sessionName: string,
   prompt: string,
   onSpawn: (sessionId: string) => void
 ): Promise<string | null> {
-  if (!d.worktree_path) return null;
+  if (!target.worktreePath) return null;
   try {
     const db = getDb();
-    const provider = getProvider(repo.agent_type);
-    const model = resolveModelForAgent(repo.agent_type, undefined);
-    const cwd = expandHome(d.worktree_path);
+    const provider = getProvider(target.agentType);
+    const model = resolveModelForAgent(target.agentType, undefined);
+    const cwd = expandHome(target.worktreePath);
     const sessionId = randomUUID();
     const tmuxName = sessionKey({
       kind: "agent",
@@ -313,17 +349,17 @@ export async function spawnInWorktree(
         model,
         null,
         "sessions",
-        repo.agent_type,
+        target.agentType,
         1,
-        repo.project_id ?? "uncategorized"
+        target.projectId ?? "uncategorized"
       );
     // Persist worktree/branch on the session row (consistency with dispatcher)
     // so reviewer/fixer sessions are complete for diff/branch lookups.
     queries
       .updateSessionWorktree(db)
-      .run(cwd, d.branch_name, repo.base_branch, null, sessionId);
+      .run(cwd, target.branchName, target.baseBranch, null, sessionId);
     onSpawn(sessionId); // record id BEFORE create (spawn-once)
-    const { binary, args } = buildAgentArgs(repo.agent_type, {
+    const { binary, args } = buildAgentArgs(target.agentType, {
       model,
       autoApprove: true,
       initialPrompt: prompt,
@@ -340,12 +376,36 @@ export async function spawnInWorktree(
     });
     return sessionId;
   } catch (err) {
-    console.error(
-      `spawn (${sessionName}) failed for ${repo.repo_slug}#${d.issue_number}:`,
-      err
-    );
+    console.error(`spawn (${sessionName}) failed for ${target.label}:`, err);
     return null;
   }
+}
+
+/**
+ * Spawn an agent in a dispatch worker's worktree — a thin adapter over
+ * `spawnWorktreeWorker` (behavior identical to before the extraction). Exported
+ * so the CI-fix loop reuses the exact same recipe.
+ */
+export async function spawnInWorktree(
+  repo: DispatchRepo,
+  d: IssueDispatch,
+  sessionName: string,
+  prompt: string,
+  onSpawn: (sessionId: string) => void
+): Promise<string | null> {
+  return spawnWorktreeWorker(
+    {
+      agentType: repo.agent_type,
+      projectId: repo.project_id,
+      baseBranch: repo.base_branch,
+      worktreePath: d.worktree_path,
+      branchName: d.branch_name,
+      label: `${repo.repo_slug}#${d.issue_number}`,
+    },
+    sessionName,
+    prompt,
+    onSpawn
+  );
 }
 
 /**

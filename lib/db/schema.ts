@@ -175,6 +175,29 @@ export function createSchema(db: Database.Database): void {
       created_at INTEGER NOT NULL
     );
 
+    -- Session "go to auto": enrol a running session's PR into the dispatch
+    -- ceremony (critic panel → fix loop → CI auto-fix → auto-merge). One per
+    -- session (UNIQUE). The PR/worktree/branch live on the session row; this
+    -- mirrors only the review/CI progress fields of issue_dispatches.
+    CREATE TABLE IF NOT EXISTS session_ceremonies (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL UNIQUE,
+      step TEXT NOT NULL DEFAULT 'queued',
+      seed_prompt TEXT,
+      pr_number INTEGER,
+      pr_url TEXT,
+      reviewer_session_id TEXT,
+      review_decision TEXT,
+      approved_sha TEXT,
+      fix_rounds INTEGER NOT NULL DEFAULT 0,
+      fixer_session_id TEXT,
+      ci_fix_rounds INTEGER NOT NULL DEFAULT 0,
+      ci_fixer_session_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    );
+
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_session_events_key ON session_events(session_key);
     CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type);
@@ -182,6 +205,7 @@ export function createSchema(db: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_repo_issue ON issue_dispatches(repo_id, issue_number);
     CREATE INDEX IF NOT EXISTS idx_dispatch_status ON issue_dispatches(status);
     CREATE INDEX IF NOT EXISTS idx_dispatch_repo ON issue_dispatches(repo_id);
+    CREATE INDEX IF NOT EXISTS idx_session_ceremonies_step ON session_ceremonies(step);
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
     CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id);
     CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id);
