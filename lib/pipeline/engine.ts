@@ -30,6 +30,73 @@ import type {
 /** Agents that can run a pipeline step (a worker session). `shell` is not one. */
 const SPAWNABLE_AGENTS = PROVIDER_IDS.filter((id) => id !== "shell");
 
+/**
+ * Default file a step writes to expose its OUTPUT to downstream steps (relative
+ * to the step's worktree). A step overrides it via `step.outputFile`. After the
+ * step succeeds the executor reads this file from the kept worktree and stores
+ * its contents keyed by step id; a downstream step pulls it in via a
+ * `{{steps.<id>.output}}` placeholder (see interpolateTask).
+ */
+export const STOA_DEFAULT_OUTPUT_FILE = "STOA_OUTPUT.md";
+
+/**
+ * Matches an output placeholder `{{steps.<id>.output}}` in a step's task.
+ * Whitespace inside the braces is tolerated (`{{ steps.foo.output }}`). The id
+ * is captured; it shares the id space of step ids / dependsOn — letters,
+ * digits, and the separators an id may contain (`._-`). Global so a task can
+ * reference several upstream outputs (and the same one repeatedly).
+ */
+const OUTPUT_REF = /\{\{\s*steps\.([A-Za-z0-9._-]+)\.output\s*\}\}/g;
+
+/**
+ * Extract the set of upstream step ids referenced by `{{steps.<id>.output}}`
+ * placeholders in a task string. Pure; order-preserving with duplicates
+ * removed. Used by validateSpec (to reject references outside the dependency
+ * closure) and shares its matcher with interpolateTask.
+ */
+export function extractOutputRefs(task: string): string[] {
+  // matchAll operates on a copy of the global regex (it doesn't carry lastIndex),
+  // so OUTPUT_REF is safe to share; Set preserves first-seen order.
+  const ids = [...task.matchAll(OUTPUT_REF)].map((m) => m[1]);
+  return [...new Set(ids)];
+}
+
+/**
+ * Resolve `{{steps.<id>.output}}` placeholders in `task` against a map of
+ * upstream outputs. PURE — no I/O; the file read that produces `outputsById`
+ * lives in the executor. A referenced id present in the map is replaced with
+ * its (possibly empty) output; an id ABSENT from the map is replaced with the
+ * empty string (an upstream step that produced no output reads as ""). A task
+ * with no placeholders is returned unchanged.
+ */
+export function interpolateTask(
+  task: string,
+  outputsById: Record<string, string>
+): string {
+  return task.replace(OUTPUT_REF, (_full, id: string) => outputsById[id] ?? "");
+}
+
+/**
+ * The set of step ids transitively reachable through `start`'s dependsOn edges
+ * (its upstream closure), excluding `start` itself. These are the ONLY steps
+ * whose output `start` may reference. Pure graph walk over the spec's edges;
+ * unknown deps are ignored here (reported separately by validateSpec).
+ */
+function upstreamClosure(
+  start: string,
+  depsById: Map<string, string[]>
+): Set<string> {
+  const reachable = new Set<string>();
+  const stack = [...(depsById.get(start) ?? [])];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (reachable.has(id)) continue;
+    reachable.add(id);
+    for (const dep of depsById.get(id) ?? []) stack.push(dep);
+  }
+  return reachable;
+}
+
 /** Terminal step statuses — a step that will never change again. */
 const TERMINAL_STEP: ReadonlySet<StepStatus> = new Set<StepStatus>([
   "succeeded",
@@ -51,6 +118,25 @@ const SHELL_METACHARS = /[;&|`$(){}<>\n\r"']/;
 /** True if a string contains a character unsafe to interpolate into a shell. */
 export function hasShellMetachars(s: string): boolean {
   return SHELL_METACHARS.test(s);
+}
+
+/**
+ * True if `outputFile` is a safe worktree-relative path: non-empty, not
+ * absolute or drive-qualified (POSIX `/...`, Windows `C:\...` / `C:/...`, or the
+ * drive-relative `C:foo`), and with no `..` traversal segment. The executor
+ * joins it onto the worktree root and reads it, so an untrusted spec must not be
+ * able to escape the worktree (e.g. `../../etc/passwd`). Forward and back slashes
+ * are both treated as separators so the check holds on every OS.
+ */
+export function isSafeOutputFile(file: string): boolean {
+  if (!file || !file.trim()) return false;
+  // Reject anything starting with a Windows drive prefix (`C:` — incl. the
+  // drive-relative `C:foo`) or a leading separator (`\` or `/`). A drive letter
+  // is never legitimate in a worktree-relative file.
+  if (/^([A-Za-z]:|[\\/])/.test(file)) return false;
+  // No `..` segment in either separator style.
+  const segments = file.split(/[\\/]/);
+  return !segments.includes("..");
 }
 
 /** A model id is safe if it's only letters, digits, and . _ - / : (provider/model). */
@@ -139,11 +225,60 @@ export function validateSpec(spec: PipelineSpec): PipelineValidationResult {
         `step "${id}" workingDirectory contains illegal shell characters`
       );
     }
+    // outputFile is joined onto the worktree root and READ by the executor, so
+    // an untrusted spec must not be able to escape the worktree. Reject absolute
+    // paths and `..` traversal here (the read itself is also best-effort).
+    if (step.outputFile != null && !isSafeOutputFile(step.outputFile)) {
+      err(
+        id,
+        `step "${id}" has an invalid outputFile "${step.outputFile}" (must be a worktree-relative path with no ".." or absolute prefix)`
+      );
+    }
     for (const dep of step.dependsOn ?? []) {
       if (dep === id) {
         err(id, `step "${id}" depends on itself`);
       } else if (!ids.has(dep)) {
         err(id, `step "${id}" depends on unknown step "${dep}"`);
+      }
+    }
+  }
+
+  // Output-reference checks: a `{{steps.<id>.output}}` placeholder in a step's
+  // task may ONLY reference a step in that step's transitive dependency closure.
+  // Referencing an unknown step, the step itself, or a non-dependency is a hard
+  // error so a bad template fails at validation, not mid-run. The closure walk
+  // is cycle-safe (visited set), so this is safe even before cycle detection.
+  const depsById = new Map<string, string[]>();
+  for (const step of spec.steps) {
+    const id = step?.id?.trim();
+    if (id)
+      depsById.set(
+        id,
+        (step.dependsOn ?? []).map((d) => d.trim())
+      );
+  }
+  for (const step of spec.steps) {
+    const id = step?.id?.trim();
+    if (!id || !step.task) continue;
+    const refs = extractOutputRefs(step.task);
+    if (refs.length === 0) continue;
+    const closure = upstreamClosure(id, depsById);
+    for (const ref of refs) {
+      if (ref === id) {
+        err(
+          id,
+          `step "${id}" references its own output {{steps.${id}.output}}`
+        );
+      } else if (!ids.has(ref)) {
+        err(
+          id,
+          `step "${id}" references output of unknown step "${ref}" ({{steps.${ref}.output}})`
+        );
+      } else if (!closure.has(ref)) {
+        err(
+          id,
+          `step "${id}" references output of "${ref}" but does not depend on it (add "${ref}" to dependsOn, directly or transitively)`
+        );
       }
     }
   }

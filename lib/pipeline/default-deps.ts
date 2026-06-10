@@ -17,11 +17,14 @@
  * see docs/ROADMAP.md.
  */
 
+import path from "path";
+import { readFile } from "fs/promises";
 import { spawnWorker, killWorker } from "../orchestration";
 import { statusDetector } from "../status-detector";
 import { getProvider } from "../providers";
 import { sessionKey } from "../providers/registry";
 import { db, queries, type Session } from "../db";
+import { STOA_DEFAULT_OUTPUT_FILE } from "./engine";
 import type { PipelineStep, PipelineSpec } from "./types";
 import type { ExecutorDeps, StepOutcome, SpawnResult } from "./executor";
 
@@ -45,7 +48,25 @@ export function defaultExecutorDeps(conductorSessionId: string): ExecutorDeps {
         model: step.model,
         useWorktree: true,
       });
-      return { sessionId: session.id };
+      // Carry the worktree path so readOutput can read the step's output file
+      // from it after the step succeeds. (DB row uses snake_case worktree_path;
+      // it's null when the worktree fell back to the source dir.)
+      return { sessionId: session.id, worktreePath: session.worktree_path };
+    },
+
+    async readOutput(result: SpawnResult, step: PipelineStep): Promise<string> {
+      // The step's output is the contents of its output file inside the kept
+      // worktree. No worktree (worktree creation fell back to the source dir, or
+      // none requested) → no output. path.join keeps this cross-platform; the
+      // file name is relative to the worktree root. Best-effort: any read error
+      // (absent/unreadable file) yields "".
+      if (!result.worktreePath) return "";
+      const fileName = step.outputFile?.trim() || STOA_DEFAULT_OUTPUT_FILE;
+      try {
+        return await readFile(path.join(result.worktreePath, fileName), "utf8");
+      } catch {
+        return "";
+      }
     },
 
     async checkOutcome(

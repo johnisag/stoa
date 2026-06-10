@@ -23,6 +23,7 @@ import {
   applyStepFailedToStart,
   isRunComplete,
   validateSpec,
+  interpolateTask,
 } from "./engine";
 
 /** A terminal/poll result for a launched step. */
@@ -30,6 +31,12 @@ export type StepOutcome = "running" | "succeeded" | "failed";
 
 export interface SpawnResult {
   sessionId: string;
+  /**
+   * Absolute path to the step's git worktree (where its output file lives).
+   * Null/undefined when the step ran without a worktree; then no output is read
+   * for it and downstream references resolve to "". Populated by the real deps.
+   */
+  worktreePath?: string | null;
 }
 
 /** Injected side effects — real impls in defaultExecutorDeps, fakes in tests. */
@@ -44,6 +51,17 @@ export interface ExecutorDeps {
   sleep: (ms: number) => Promise<void>;
   /** Optional: called with a fresh run snapshot after every state change. */
   onUpdate?: (run: PipelineRun) => void;
+  /**
+   * Optional: read a SUCCEEDED step's output file from its worktree so the
+   * contents can be fed to downstream steps via `{{steps.<id>.output}}`. Called
+   * once, right after the step's outcome resolves to `succeeded`. Must be
+   * tolerant: a missing/unreadable file resolves to "" (never throws). Omitted
+   * in pure-loop tests (then every output is "" and placeholders strip out).
+   */
+  readOutput?: (
+    result: SpawnResult,
+    step: PipelineStep
+  ) => Promise<string> | string;
   /**
    * Optional: tear down a step's worker once the run is terminal. The pty +
    * agent process are pure leak after the run ends, so this is always called for
@@ -108,6 +126,13 @@ export async function runPipeline(
   emit();
 
   const stepById = new Map(spec.steps.map((s) => [s.id, s]));
+  // Step id → its spawn result (carries the worktree path needed to read the
+  // output file once the step succeeds).
+  const spawnResultById = new Map<string, SpawnResult>();
+  // Step id → the contents of its output file, captured on success. A
+  // downstream step's `{{steps.<id>.output}}` placeholders resolve against this
+  // (a step with no entry / empty file contributes "").
+  const outputsById: Record<string, string> = {};
   let cycles = 0;
 
   try {
@@ -122,12 +147,29 @@ export async function runPipeline(
       if (ready.length > 0) {
         const launches = await Promise.all(
           ready.map(async (step) => {
+            // Resolve `{{steps.<id>.output}}` placeholders against upstream
+            // outputs captured so far, RIGHT before spawning. Pure substitution;
+            // the resolved task takes the same direct-spawn path as any other
+            // task (no shell), so an interpolated upstream output is not a
+            // shell-injection vector. Validation already guarantees every ref is
+            // an upstream dependency, so its output is present in outputsById.
+            const resolvedTask = interpolateTask(step.task, outputsById);
+            const launchStep =
+              resolvedTask === step.task
+                ? step
+                : { ...step, task: resolvedTask };
             try {
-              const { sessionId } = await deps.spawn(step, spec);
-              return { step, sessionId, error: null as string | null };
+              const result = await deps.spawn(launchStep, spec);
+              return {
+                step,
+                result,
+                sessionId: result.sessionId,
+                error: null as string | null,
+              };
             } catch (e) {
               return {
                 step,
+                result: null as SpawnResult | null,
                 sessionId: null as string | null,
                 error: e instanceof Error ? e.message : "spawn failed",
               };
@@ -136,6 +178,7 @@ export async function runPipeline(
         );
         for (const l of launches) {
           if (l.sessionId) {
+            if (l.result) spawnResultById.set(l.step.id, l.result);
             run = applyStepStarted(run, l.step.id, l.sessionId, deps.now());
           } else {
             // Spawn failed: fail the still-pending step directly (no fake
@@ -187,6 +230,17 @@ export async function runPipeline(
       let progressed = false;
       for (const o of outcomes) {
         if (o.outcome === "succeeded" || o.outcome === "failed") {
+          if (o.outcome === "succeeded") {
+            // Capture this step's output (its kept worktree's output file) so
+            // downstream `{{steps.<id>.output}}` placeholders can resolve to it
+            // on the next launch pass. Best-effort: readOutput never throws (a
+            // missing/unreadable file → ""); if it's not wired or the worktree
+            // is unknown, the output stays "".
+            outputsById[o.id] = await readStepOutput(o.id, deps, {
+              spawnResultById,
+              stepById,
+            });
+          }
           run = applyStepOutcome(run, o.id, o.outcome, deps.now());
           progressed = true;
         }
@@ -223,6 +277,33 @@ export async function runPipeline(
   // now; worktrees kept only for succeeded steps). Best-effort, never throws.
   await reapWorkers(run, deps);
   return run;
+}
+
+/**
+ * Read a succeeded step's output via the injected readOutput dep, fully
+ * isolated: a missing dep, an unknown spawn result, or any throw resolves to ""
+ * so a flaky read can never break the run (the contract is "output is best
+ * effort; absence reads as empty"). The downstream interpolation treats "" as a
+ * normal value.
+ */
+async function readStepOutput(
+  stepId: string,
+  deps: ExecutorDeps,
+  state: {
+    spawnResultById: Map<string, SpawnResult>;
+    stepById: Map<string, PipelineStep>;
+  }
+): Promise<string> {
+  if (!deps.readOutput) return "";
+  const result = state.spawnResultById.get(stepId);
+  const step = state.stepById.get(stepId);
+  if (!result || !step) return "";
+  try {
+    return (await deps.readOutput(result, step)) ?? "";
+  } catch {
+    // Swallow: a read fault must not fail the step or the run.
+    return "";
+  }
 }
 
 /**
