@@ -346,8 +346,8 @@ export const queries = {
   createDispatchRepo: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, review_gate, ci_autofix, project_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, review_gate, ci_autofix, merge_train, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
 
   getDispatchRepo: (db: Database.Database) =>
@@ -365,7 +365,7 @@ export const queries = {
   updateDispatchRepo: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, review_gate = ?, ci_autofix = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, review_gate = ?, ci_autofix = ?, merge_train = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
   deleteDispatchRepo: (db: Database.Database) =>
@@ -401,6 +401,40 @@ export const queries = {
       `UPDATE issue_dispatches SET ci_fixer_session_id = ?, ci_fix_rounds = ci_fix_rounds + 1, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // Merge train: start a rebase-repair round (record the rebase fixer, bump counter).
+  startRebaseRound: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET rebase_fixer_session_id = ?, rebase_rounds = rebase_rounds + 1, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Merge train: a rebase fixer finished on an UNGATED repo — clear it so the board
+  // stops showing "rebasing…" (it's set on spawn and otherwise never cleared).
+  clearRebaseFixer: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET rebase_fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Merge train: a rebase fixer finished on a GATED repo — clear the fixer AND wipe
+  // the cached panel verdict so a fresh critic re-reviews the REBASED head. A rebase
+  // resolution rewrites the diff; it must never auto-merge under the pre-rebase
+  // APPROVED (the same "never merge unreviewed code" rule the session ceremony pins).
+  resetReviewAfterRebase: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET reviewer_session_id = NULL, review_decision = NULL, rebase_fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Merge train: the PR is MERGEABLE again — zero the rebase counter so the cap
+  // bounds CONSECUTIVE failed repairs, not a busy PR's lifetime of (each fixed)
+  // conflicts. Also clears any lingering fixer id defensively.
+  resetRebaseRounds: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET rebase_rounds = 0, rebase_fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
+    ),
+
   // Fix loop: a fixer finished — clear reviewer + decision + fixer so the next
   // tick spawns a fresh critic against the updated PR (re-review).
   resetForReReview: (db: Database.Database) =>
@@ -416,7 +450,7 @@ export const queries = {
       db,
       // WHERE status='failed' so a double-tap retry only resets once (the second
       // is a no-op; dispatchOne's claimDispatch is still the spawn-once gate).
-      `UPDATE issue_dispatches SET status = 'pending', session_id = NULL, branch_name = NULL, worktree_path = NULL, pr_url = NULL, pr_number = NULL, pr_status = NULL, dispatched_at = NULL, reviewer_session_id = NULL, review_decision = NULL, fix_rounds = 0, fixer_session_id = NULL, ci_fix_rounds = 0, ci_fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'failed'`
+      `UPDATE issue_dispatches SET status = 'pending', session_id = NULL, branch_name = NULL, worktree_path = NULL, pr_url = NULL, pr_number = NULL, pr_status = NULL, dispatched_at = NULL, reviewer_session_id = NULL, review_decision = NULL, fix_rounds = 0, fixer_session_id = NULL, ci_fix_rounds = 0, ci_fixer_session_id = NULL, rebase_rounds = 0, rebase_fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'failed'`
     ),
 
   // Dispatch — issue pipeline rows

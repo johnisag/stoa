@@ -183,6 +183,7 @@ export interface CreateRepoInput {
   enabled: boolean;
   reviewGate: boolean;
   ciAutofix: boolean;
+  mergeTrain: boolean;
 }
 
 export function useCreateRepo() {
@@ -251,6 +252,7 @@ export type UpdateRepoPatch = Partial<{
   enabled: boolean;
   reviewGate: boolean;
   ciAutofix: boolean;
+  mergeTrain: boolean;
 }>;
 
 export function useUpdateRepo() {
@@ -305,6 +307,9 @@ export function useUpdateRepo() {
                   : {}),
                 ...(patch.ciAutofix !== undefined
                   ? { ci_autofix: patch.ciAutofix ? 1 : 0 }
+                  : {}),
+                ...(patch.mergeTrain !== undefined
+                  ? { merge_train: patch.mergeTrain ? 1 : 0 }
                   : {}),
               }
             : r

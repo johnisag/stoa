@@ -166,4 +166,12 @@ describe("ciFixPass", () => {
     await ciFixPass();
     expect(state.spawns).toHaveLength(0);
   });
+
+  it("skips while a rebase fixer is live (don't race the merge train's worktree)", async () => {
+    state.rows = [row({ rebase_fixer_session_id: "rb" })];
+    state.sessions = { rb: { tmux_name: "tmux-rb" } };
+    state.live = ["tmux-rb"];
+    await ciFixPass();
+    expect(state.spawns).toHaveLength(0);
+  });
 });

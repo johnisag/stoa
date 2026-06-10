@@ -173,6 +173,16 @@ function Card({
         </span>
       )}
 
+      {/* Auto-rebase (advisory) — the author is rebasing this ready-but-conflicting
+          PR back to mergeable. The fixer id is cleared when it finishes, so this
+          only shows during an active rebase (not a stuck one). */}
+      {repo?.merge_train === 1 && isPrOpen && d.rebase_fixer_session_id && (
+        <span className="inline-flex w-fit items-center rounded bg-orange-500/15 px-1.5 py-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400">
+          rebasing…
+          {d.rebase_rounds > 0 && ` (round ${d.rebase_rounds})`}
+        </span>
+      )}
+
       {/* Armed to auto-merge: the reconciler will merge this PR once it's ready
           (no conflicts, checks green, critic-approved if the repo is gated). */}
       {d.auto_merge === 1 && isPrOpen && (
