@@ -15,17 +15,19 @@ import { useListRuns } from "@/data/pipelines/queries";
 import type { Session } from "@/lib/db";
 import { TemplatePicker } from "./TemplatePicker";
 import { ParamForm } from "./ParamForm";
+import { ExamplesTab } from "./ExamplesTab";
 import { RunsList } from "./RunsList";
 import { RunDetail } from "./RunDetail";
 import { WorkflowsHelp } from "./WorkflowsHelp";
 
-type Tab = "templates" | "runs";
+type Tab = "templates" | "examples" | "runs";
 
 /**
  * Workflows control plane — a self-contained dialog (opened from the Desktop/
- * Mobile nav via setShowWorkflows). Two tabs: pick a template → fill params →
- * start a run; and watch recent runs' live step states. Renders the catalog
- * shipped in lib/pipeline/templates.ts over the existing /api/pipelines backend.
+ * Mobile nav via setShowWorkflows). Three tabs: Templates (pick → fill params →
+ * start a run), Examples (browse the pattern catalog), and Runs (recent runs'
+ * live step states). Renders the templates/examples from lib/pipeline over the
+ * existing /api/pipelines backend.
  */
 export function WorkflowsView({
   open,
@@ -51,6 +53,7 @@ export function WorkflowsView({
 
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: "templates", label: "Templates" },
+    { key: "examples", label: "Examples" },
     { key: "runs", label: "Runs", count: active },
   ];
 
@@ -60,6 +63,14 @@ export function WorkflowsView({
     setPickedTemplate(null);
     setShowHelp(false);
     setTab("runs");
+  }
+
+  // "Run this" on an example pattern jumps to the Templates tab with that
+  // template picked, ready to fill its slots.
+  function runFromExample(templateId: string) {
+    setPickedTemplate(templateId);
+    setShowHelp(false);
+    setTab("templates");
   }
 
   // Reset the drill-down on close so reopening lands on a clean Templates tab —
@@ -145,6 +156,8 @@ export function WorkflowsView({
             ) : (
               <TemplatePicker onPick={setPickedTemplate} />
             )
+          ) : tab === "examples" ? (
+            <ExamplesTab onRunTemplate={runFromExample} />
           ) : openRunId ? (
             <RunDetail
               runId={openRunId}

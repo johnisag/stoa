@@ -49,10 +49,11 @@ three symptoms — delete, attach, reclaim — resolve at once):
    reducer (`engine.ts` validateSpec/initRun) + executor over `spawnWorker` is
    sound — fan-in/out, failure→skip cascade, `maxParallelism` cap, and run
    persistence all present. It's **wired-but-headless**: `app/api/pipelines/`
-   routes exist with **no UI consumer**. The one real gap: **no data channel
-   between steps** (a step's worker gets only its `task`; no `outputs`), so
-   composition is convention-by-prompt for now. Clears #5–7.
-5. ✅ **SHIPPED — Workflows UI.** A `WorkflowsView` dialog (Desktop header +
+   routes exist with **no UI consumer** (fixed by #5/#179). The one real gap was
+   **no data channel between steps** — ✅ **now CLOSED by #180**: a
+   `{{steps.<id>.output}}` channel (a step writes `STOA_OUTPUT.md`; a dependent
+   interpolates it), path-traversal-guarded. Clears #5–7.
+5. ✅ **SHIPPED (#179) — Workflows UI.** A `WorkflowsView` dialog (Desktop header +
    Mobile footer nav): a **Templates** tab (catalog → param form → pick a
    conductor session → start) and a **Runs** tab (recent runs → a live step board
    that polls each step's status/agent/deps/elapsed). Thin `data/pipelines/` hooks
