@@ -15,9 +15,10 @@ import { useBoardQuery, usePendingQuery } from "@/data/dispatch/queries";
 import { AllocationConsole } from "./AllocationConsole";
 import { Backlog } from "./Backlog";
 import { InFlightBoard } from "./InFlightBoard";
+import { PlanConsole } from "./PlanConsole";
 import { DispatchHelp } from "./DispatchHelp";
 
-type Tab = "allocation" | "backlog" | "board";
+type Tab = "allocation" | "plan" | "backlog" | "board";
 
 export function DispatchView({
   open,
@@ -37,6 +38,7 @@ export function DispatchView({
 
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: "allocation", label: "Allocation" },
+    { key: "plan", label: "Plan" },
     { key: "backlog", label: "Backlog", count: pending.length },
     { key: "board", label: "In flight", count: inFlight },
   ];
@@ -102,6 +104,7 @@ export function DispatchView({
           ) : (
             <>
               {tab === "allocation" && <AllocationConsole open={open} />}
+              {tab === "plan" && <PlanConsole open={open} />}
               {tab === "backlog" && <Backlog open={open} />}
               {tab === "board" && <InFlightBoard open={open} />}
             </>

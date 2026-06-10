@@ -8,6 +8,7 @@ import {
   AlertCircle,
   GitMerge,
   ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -91,6 +92,21 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
             — creates it and starts it at a time you choose.
           </li>
         </ul>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <Sparkles className="h-4 w-4" aria-hidden="true" /> Plan (optional)
+        </h3>
+        <p className="text-muted-foreground">
+          On the <span className="text-foreground font-medium">Plan</span> tab,
+          paste a spec and Stoa proposes a set of tasks that each own a
+          different part of the codebase, so several agents can work at once
+          without stepping on each other. You review the split (overlaps are
+          flagged in red), then approve — it files the issues for you. Two tasks
+          that touch the same files never run at the same time; the second waits
+          for the first to merge.
+        </p>
       </section>
 
       <section className="space-y-1.5">
