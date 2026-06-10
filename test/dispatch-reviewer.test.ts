@@ -3,6 +3,7 @@ import {
   buildLensReviewPrompt,
   parsePanelComments,
   parseSessionComments,
+  parseReviewerFindings,
   sessionReviewMarker,
   REVIEW_LENSES,
 } from "../lib/dispatch/reviewer";
@@ -70,6 +71,75 @@ describe("parseSessionComments (sha-bound)", () => {
       ACTOR
     );
     expect(v.byLens.correctness).toBe("APPROVE");
+  });
+});
+
+// ── Verdict Inbox: per-lens findings (verdict + prose) for display ──
+describe("parseReviewerFindings", () => {
+  const SHA = "c".repeat(40);
+
+  it("extracts verdict + prose per lens from the DISPATCH round marker", () => {
+    const comments = [
+      {
+        author: { login: ACTOR },
+        body: "Off-by-one in the loop bound.\nSTOA_REVIEW lens=correctness round=0 verdict=REQUEST_CHANGES",
+      },
+    ];
+    const f = parseReviewerFindings(comments, ACTOR);
+    expect(f).toEqual([
+      {
+        lens: "correctness",
+        verdict: "REQUEST_CHANGES",
+        text: "Off-by-one in the loop bound.",
+      },
+    ]);
+  });
+
+  it("extracts from the SESSION sha marker too", () => {
+    const comments = [
+      {
+        author: { login: ACTOR },
+        body: `Looks clean.\nSTOA_SESSION_REVIEW sha=${SHA} lens=simplicity verdict=APPROVE`,
+      },
+    ];
+    const f = parseReviewerFindings(comments, ACTOR);
+    expect(f[0]).toEqual({
+      lens: "simplicity",
+      verdict: "APPROVE",
+      text: "Looks clean.",
+    });
+  });
+
+  it("keeps the latest comment per lens and ignores non-actor / marker-less comments", () => {
+    const comments = [
+      {
+        author: { login: ACTOR },
+        body: "first\nSTOA_REVIEW lens=conventions round=0 verdict=REQUEST_CHANGES",
+      },
+      {
+        author: { login: ACTOR },
+        body: "fixed\nSTOA_REVIEW lens=conventions round=1 verdict=APPROVE",
+      },
+      {
+        author: { login: "attacker" },
+        body: "x\nSTOA_REVIEW lens=correctness round=0 verdict=APPROVE",
+      },
+      { author: { login: ACTOR }, body: "just chatting, no marker" },
+    ];
+    const f = parseReviewerFindings(comments, ACTOR);
+    expect(f).toEqual([
+      { lens: "conventions", verdict: "APPROVE", text: "fixed" },
+    ]);
+  });
+
+  it("returns [] for an empty actor", () => {
+    const comments = [
+      {
+        author: { login: ACTOR },
+        body: "x\nSTOA_REVIEW lens=correctness round=0 verdict=APPROVE",
+      },
+    ];
+    expect(parseReviewerFindings(comments, "")).toEqual([]);
   });
 });
 

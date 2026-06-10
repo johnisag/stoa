@@ -18,6 +18,7 @@ import {
   Rocket,
   BarChart3,
   Workflow,
+  Inbox,
 } from "lucide-react";
 import { PaneLayout } from "@/components/PaneLayout";
 import {
@@ -49,6 +50,7 @@ export function DesktopView({
   setShowDispatch,
   setShowAnalytics,
   setShowWorkflows,
+  setShowVerdictInbox,
   onShowShortcuts,
   notificationSettings,
   permissionGranted,
@@ -253,6 +255,21 @@ export function DesktopView({
               </TooltipTrigger>
               <TooltipContent>
                 <p>Workflows</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Verdict Inbox (the fleet review queue)"
+                  onClick={() => setShowVerdictInbox(true)}
+                >
+                  <Inbox className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Verdict Inbox</p>
               </TooltipContent>
             </Tooltip>
             <Tooltip>

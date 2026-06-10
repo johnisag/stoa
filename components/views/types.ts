@@ -38,6 +38,8 @@ export interface ViewProps {
   setShowAnalytics: (show: boolean) => void;
   showWorkflows: boolean;
   setShowWorkflows: (show: boolean) => void;
+  showVerdictInbox: boolean;
+  setShowVerdictInbox: (show: boolean) => void;
   onShowShortcuts: () => void;
 
   // Notification settings

@@ -47,6 +47,7 @@ import { MobileView } from "@/components/views/MobileView";
 import { DispatchView } from "@/components/views/DispatchView";
 import { AnalyticsView } from "@/components/views/AnalyticsView";
 import { WorkflowsView } from "@/components/views/WorkflowsView";
+import { VerdictInboxView } from "@/components/views/VerdictInboxView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
@@ -139,6 +140,7 @@ function HomeContent() {
   const [showDispatch, setShowDispatch] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showWorkflows, setShowWorkflows] = useState(false);
+  const [showVerdictInbox, setShowVerdictInbox] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [copiedSessionId, setCopiedSessionId] = useState(false);
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
@@ -709,6 +711,8 @@ function HomeContent() {
     setShowAnalytics,
     showWorkflows,
     setShowWorkflows,
+    showVerdictInbox,
+    setShowVerdictInbox,
     onShowShortcuts: () => setShowHelp(true),
     notificationSettings,
     permissionGranted,
@@ -761,6 +765,12 @@ function HomeContent() {
         onOpenChange={setShowWorkflows}
         sessions={sessions}
         activeSessionId={focusedActiveTab?.sessionId ?? undefined}
+      />
+      {/* Verdict Inbox — the fleet-wide review queue (dispatch + auto-mode
+          sessions). Self-contained; opened via setShowVerdictInbox. */}
+      <VerdictInboxView
+        open={showVerdictInbox}
+        onOpenChange={setShowVerdictInbox}
       />
     </>
   );
