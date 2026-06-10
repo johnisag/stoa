@@ -24,9 +24,10 @@ type Tab = "templates" | "examples" | "runs";
 
 /**
  * Workflows control plane — a self-contained dialog (opened from the Desktop/
- * Mobile nav via setShowWorkflows). Two tabs: pick a template → fill params →
- * start a run; and watch recent runs' live step states. Renders the catalog
- * shipped in lib/pipeline/templates.ts over the existing /api/pipelines backend.
+ * Mobile nav via setShowWorkflows). Three tabs: Templates (pick → fill params →
+ * start a run), Examples (browse the pattern catalog), and Runs (recent runs'
+ * live step states). Renders the templates/examples from lib/pipeline over the
+ * existing /api/pipelines backend.
  */
 export function WorkflowsView({
   open,

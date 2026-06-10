@@ -4,7 +4,7 @@ import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /** A short in-dialog primer on what a Workflow run is and how the steps execute.
- * The full example catalog + authoring docs are a separate, larger surface. */
+ * The full pattern catalog lives in the Examples tab. */
 export function WorkflowsHelp({ onClose }: { onClose: () => void }) {
   return (
     <div

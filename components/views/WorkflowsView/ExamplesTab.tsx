@@ -16,18 +16,7 @@ function ExampleCard({
 }) {
   return (
     <div className="bg-card flex flex-col gap-2 rounded-md border p-3 text-sm">
-      <div className="flex items-start justify-between gap-2">
-        <span className="font-medium">{ex.title}</span>
-        {ex.templateId ? (
-          <span className="flex-shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400">
-            runnable
-          </span>
-        ) : (
-          <span className="text-muted-foreground bg-muted flex-shrink-0 rounded px-1.5 py-0.5 text-[11px]">
-            reference
-          </span>
-        )}
-      </div>
+      <span className="font-medium">{ex.title}</span>
       <pre className="text-muted-foreground bg-muted/50 overflow-x-auto rounded px-2 py-1.5 text-[11px] leading-relaxed">
         {ex.diagram}
       </pre>
@@ -52,7 +41,8 @@ function ExampleCard({
  * The Examples tab — the 16-pattern authoring catalog as read-only docs. Split
  * into Runnable (ships as a template → "Run this" jumps to the Templates tab with
  * it picked) and Reference (authoring patterns), so a user who wants to *do*
- * something isn't scrolling past docs-only cards to find it.
+ * something isn't scrolling past docs-only cards to find it. The section heading
+ * carries the runnable/reference distinction, so cards need no per-card badge.
  */
 export function ExamplesTab({
   onRunTemplate,
@@ -66,13 +56,13 @@ export function ExamplesTab({
     <div className="flex flex-col gap-4">
       <p className="text-muted-foreground text-xs leading-relaxed">
         Patterns you can run or build on. Steps in ⟨…⟩ run in parallel; an arrow
-        means “waits for”. The runnable ones ship as a template — tap Run to
+        means “then”. The runnable ones ship as a template — tap Run this to
         fill its slots; the rest are authoring references for designing your
         own.
       </p>
 
       <section className="flex flex-col gap-2">
-        <h3 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+        <h3 className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">
           Runnable
         </h3>
         {runnable.map((ex) => (
@@ -81,7 +71,7 @@ export function ExamplesTab({
       </section>
 
       <section className="flex flex-col gap-2">
-        <h3 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+        <h3 className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">
           Reference patterns
         </h3>
         {reference.map((ex) => (

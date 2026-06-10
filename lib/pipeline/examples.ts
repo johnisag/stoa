@@ -10,11 +10,14 @@
  * Pure data (strings) — safe to import into a client component. Locked by
  * `test/pipeline-examples.test.ts` so a `templateId` can never dangle.
  *
- * Note: for a pattern that also ships as a template, the `description` here is
- * written in a TEACHING voice (what the pattern is, when to reach for it) and is
- * intentionally NOT a mirror of that template's runtime `description` — don't
- * "DRY" the two together; they serve different surfaces (browse-and-learn vs
- * fill-and-run). The integrity test guards the id link, not the prose.
+ * Note: a runnable pattern's `description` here may read close to its template's
+ * (both summarize the same idea) — that overlap is fine. The catalog's own value
+ * is the `diagram` (the step shape at a glance) plus the reference-only patterns
+ * that have no template. The two prose copies stay independently editable
+ * (different surfaces: browse-and-learn vs fill-and-run); the integrity test
+ * guards the id link, not the prose. For a runnable entry the `diagram` MUST
+ * mirror the template's actual steps (a card that lies about what runs is worse
+ * than none) — `test/pipeline-examples.test.ts` can't catch a wrong diagram.
  */
 
 export interface WorkflowExample {
@@ -38,8 +41,9 @@ export const WORKFLOW_EXAMPLES: readonly WorkflowExample[] = [
     diagram: "implement (claude) → review (codex) → apply-fixes (claude)",
     description:
       "The simplest cross-provider chain: one agent implements, a different " +
-      "provider reviews its diff, a third applies the fixes — review catches what " +
-      "self-review misses. The 3-agent gate below generalizes it to three lenses.",
+      "provider reviews its diff, then the original applies the fixes — review " +
+      "catches what self-review misses. The 3-agent review gate generalizes it " +
+      "to three lenses.",
   },
   {
     id: "2",
@@ -111,7 +115,7 @@ export const WORKFLOW_EXAMPLES: readonly WorkflowExample[] = [
   {
     id: "9",
     title: "Issue → PR",
-    diagram: "triage → plan → implement → test & verify",
+    diagram: "triage → implement → test & verify",
     description:
       "Triage a GitHub issue, plan it, implement it, verify it — the highest-" +
       "leverage pattern for a repo with an issue tracker. The natural bridge to " +
@@ -121,8 +125,7 @@ export const WORKFLOW_EXAMPLES: readonly WorkflowExample[] = [
   {
     id: "10",
     title: "Cross-platform regression hunt",
-    diagram:
-      "scope-diff → ⟨posix-lens · windows-lens · backend-seam⟩ → fix & verify",
+    diagram: "⟨posix · windows · backend-seam⟩ → fix & verify",
     description:
       "Three reviewers read the same change through one lens each — POSIX-isms, " +
       "Windows-isms, and the backend-seam rules — then one step fixes the " +
