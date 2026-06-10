@@ -22,6 +22,7 @@ const wt = (
   status,
   lastLine,
   rateLimit: null,
+  prompt: null,
 });
 
 describe("diffStatuses", () => {
