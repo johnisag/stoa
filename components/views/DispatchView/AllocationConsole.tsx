@@ -45,6 +45,7 @@ const EMPTY: CreateRepoInput = {
   enabled: false,
   reviewGate: false,
   ciAutofix: false,
+  mergeTrain: false,
 };
 
 /** A small single-select segmented control (radiogroup). Shared by the mode
@@ -259,6 +260,23 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
             }
           />
           ci-fix
+        </label>
+
+        {/* Merge train (opt-in): auto-rebase-and-repair a ready-but-conflicting PR */}
+        <label
+          className="text-muted-foreground flex items-center gap-1 text-xs"
+          title="Keep each worker's PR landable: when the base moves and the PR conflicts, the author rebases, resolves it, and force-pushes — so you never babysit a rebase"
+        >
+          <Switch
+            checked={repo.merge_train === 1}
+            onCheckedChange={(v) => patch({ mergeTrain: v })}
+            aria-label={
+              repo.merge_train === 1
+                ? "Disable merge train"
+                : "Enable merge train"
+            }
+          />
+          train
         </label>
 
         {/* browse open issues for one-tap triage */}

@@ -173,6 +173,15 @@ function Card({
         </span>
       )}
 
+      {/* Merge train (advisory) — the author is rebasing this ready-but-conflicting
+          PR back to mergeable on a merge_train repo. Shows the round count. */}
+      {repo?.merge_train === 1 && isPrOpen && d.rebase_fixer_session_id && (
+        <span className="inline-flex w-fit items-center rounded bg-orange-500/15 px-1.5 py-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400">
+          train: rebasing…
+          {d.rebase_rounds > 0 && ` (round ${d.rebase_rounds})`}
+        </span>
+      )}
+
       {/* Armed to auto-merge: the reconciler will merge this PR once it's ready
           (no conflicts, checks green, critic-approved if the repo is gated). */}
       {d.auto_merge === 1 && isPrOpen && (

@@ -54,6 +54,12 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
           ? 1
           : 0
         : repo.ci_autofix;
+    const mergeTrain =
+      body?.mergeTrain !== undefined
+        ? body.mergeTrain
+          ? 1
+          : 0
+        : repo.merge_train;
 
     queries
       .updateDispatchRepo(db)
@@ -67,6 +73,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         enabled,
         reviewGate,
         ciAutofix,
+        mergeTrain,
         id
       );
     return NextResponse.json({

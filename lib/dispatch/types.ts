@@ -33,6 +33,8 @@ export interface DispatchRepo {
   review_gate: number;
   /** 0/1 — opt-in CI auto-fix: spawn a fixer on a worker's PR with RED checks. */
   ci_autofix: number;
+  /** 0/1 — opt-in merge train: auto-rebase-and-repair a ready-but-CONFLICTING PR. */
+  merge_train: number;
   project_id: string | null;
   created_at: string;
   updated_at: string;
@@ -80,6 +82,10 @@ export interface IssueDispatch {
   ci_fix_rounds: number;
   /** Session id of the in-flight CI fixer (null when none running). */
   ci_fixer_session_id: string | null;
+  /** How many rebase-repair rounds the merge train has run on this PR (capped). */
+  rebase_rounds: number;
+  /** Session id of the in-flight rebase fixer (null when none running). */
+  rebase_fixer_session_id: string | null;
   created_at: string;
   updated_at: string;
 }

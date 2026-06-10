@@ -407,6 +407,28 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 24,
+    name: "add_merge_train_columns",
+    up: (db) => {
+      // Opt-in per-repo merge train (default off). When on, the reconciler keeps a
+      // worker's PR LANDABLE: once it's approved + green but CONFLICTING (the base
+      // moved under it), it spawns the author to rebase onto the base, resolve the
+      // conflicts preserving both intents, and force-push-with-lease — so a ready
+      // PR self-heals back to mergeable instead of paging a human to rebase.
+      db.exec(
+        `ALTER TABLE dispatch_repos ADD COLUMN merge_train INTEGER NOT NULL DEFAULT 0`
+      );
+      // rebase_rounds caps the rebase attempts; rebase_fixer_session_id tracks the
+      // in-flight rebase fixer (separate from the review/CI fixers so they don't clash).
+      db.exec(
+        `ALTER TABLE issue_dispatches ADD COLUMN rebase_rounds INTEGER NOT NULL DEFAULT 0`
+      );
+      db.exec(
+        `ALTER TABLE issue_dispatches ADD COLUMN rebase_fixer_session_id TEXT`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

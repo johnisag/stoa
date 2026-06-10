@@ -19,6 +19,7 @@ import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
 import { autoMergePass } from "./auto-merge";
 import { ciFixPass } from "./ci-fix";
+import { mergeTrainPass } from "./merge-train";
 import { sessionCeremonyPass } from "./session-ceremony";
 import {
   nextReviewAction,
@@ -146,11 +147,16 @@ export async function reconcileTick(): Promise<void> {
     // a failure is seen. Non-armed repos are skipped.
     await ciFixPass();
 
-    // 7. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
+    // 7. Merge train (opt-in per repo): rebase-repair any ready-but-CONFLICTING PR
+    // (the base moved under it) so it stays landable. After CI-fix (green first),
+    // before auto-merge so a freshly-rebased PR can land next tick. No-op unarmed.
+    await mergeTrainPass();
+
+    // 8. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
     // After the reviewer + CI passes so a just-approved, just-green PR can merge.
     await autoMergePass();
 
-    // 8. Session "go to auto": drive any session a user handed off through the
+    // 9. Session "go to auto": drive any session a user handed off through the
     // SAME ceremony (panel → fix → CI-fix → auto-merge). A no-op when none are
     // enrolled. Last, mirroring the issue passes it reuses.
     await sessionCeremonyPass();
