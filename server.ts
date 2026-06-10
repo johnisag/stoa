@@ -36,6 +36,14 @@ import {
   autoAnswerEnabled,
   promptSignature,
 } from "./lib/auto-steer";
+import {
+  nextErrorLoopAction,
+  autoNudgeEnabled,
+  buildNudgeMessage,
+  normalizeErrorSig,
+  NUDGE_THRESHOLD,
+  type LoopTrack,
+} from "./lib/error-loop";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import {
@@ -247,6 +255,16 @@ app.prepare().then(() => {
       "> Auto-answer on (STOA_AUTO_ANSWER=1): Enter accepts a routine prompt ONLY when it takes the highlighted single-shot Yes (or an explicit Press-Enter / [Y/n] default); blanket-permission, default-No, and destructive-looking prompts are left for you (and still pushed)."
     );
   }
+  // Auto-steer: error-loop nudge (opt-in via STOA_AUTO_NUDGE=1). Tracks each
+  // session's persisting error signature so we nudge ONCE per distinct error when
+  // it sticks for NUDGE_THRESHOLD ticks — then leave it for the human.
+  const AUTO_NUDGE_ENABLED = autoNudgeEnabled();
+  const errorLoops = new Map<string, LoopTrack>();
+  if (AUTO_NUDGE_ENABLED) {
+    console.log(
+      `> Error-loop nudge on (STOA_AUTO_NUDGE=1): a session stuck on the SAME error for ${NUDGE_THRESHOLD} ticks gets one advisory nudge to try a different approach, then it's left for you.`
+    );
+  }
   if (SNAPSHOTS_ENABLED) {
     console.log(
       "> Per-turn snapshots on (STOA_SNAPSHOTS=1): the status ticker runs continuously and writes refs/stoa/snap/* at each turn boundary."
@@ -322,7 +340,8 @@ app.prepare().then(() => {
       !SNAPSHOTS_ENABLED &&
       !queuesPending &&
       !AUTO_RESUME_ENABLED &&
-      !AUTO_ANSWER_ENABLED
+      !AUTO_ANSWER_ENABLED &&
+      !AUTO_NUDGE_ENABLED
     ) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
       if (lastPushStatusById.size) lastPushStatusById = new Map();
@@ -330,6 +349,7 @@ app.prepare().then(() => {
       if (queueDispatched.size) queueDispatched.clear();
       if (rateLimitResumed.size) rateLimitResumed.clear();
       if (autoAnswered.size) autoAnswered.clear();
+      if (errorLoops.size) errorLoops.clear();
       return;
     }
     if (statusTickBusy) return; // don't stack ticks if a capture runs slow
@@ -534,6 +554,47 @@ app.prepare().then(() => {
         }
         for (const id of [...autoAnswered.keys()])
           if (!liveIds.has(id)) autoAnswered.delete(id);
+      }
+
+      // Auto-steer: error-loop nudge (opt-in). A session whose turn ENDS on an
+      // error (status "error" — the status detector's narrow provider-failure
+      // envelopes, not normal output) with the SAME normalized error for
+      // NUDGE_THRESHOLD ticks is stuck; we paste ONE advisory nudge to try a
+      // different approach, then leave it for the human. Conservative by design: a
+      // changing error / a flip to "running" / a rate-limited session all reset the
+      // count, so a productively-iterating agent is never nudged. The pure
+      // nextErrorLoopAction owns the decision + the next track state.
+      if (AUTO_NUDGE_ENABLED) {
+        for (const s of curr) {
+          const signature =
+            s.status === "error" ? normalizeErrorSig(s.lastLine) : "";
+          const { action, next } = nextErrorLoopAction({
+            isError: s.status === "error",
+            rateLimited: !!s.rateLimit,
+            signature,
+            prev: errorLoops.get(s.id),
+            threshold: NUDGE_THRESHOLD,
+            nudgeArmed: true,
+          });
+          if (next) errorLoops.set(s.id, next);
+          else errorLoops.delete(s.id);
+          if (action !== "nudge") continue; // track / escalate / idle → no send
+          // `next.nudged` is already true (guarded BEFORE the async send so a slow
+          // paste can't double-nudge); the next tick sees nudged → escalate.
+          console.log(
+            `error-loop: nudging ${s.name} (stuck ${next?.count}× on: ${s.lastLine})`
+          );
+          void getSessionBackend()
+            .pasteText(s.name, buildNudgeMessage(), { enter: true })
+            .catch((err) => {
+              // Roll back the nudged flag so the next tick retries the nudge.
+              const t = errorLoops.get(s.id);
+              if (t) errorLoops.set(s.id, { ...t, nudged: false });
+              console.error("error-loop nudge failed:", err);
+            });
+        }
+        for (const id of [...errorLoops.keys()])
+          if (!liveIds.has(id)) errorLoops.delete(id);
       }
     } catch (err) {
       console.error("status events tick failed:", err);
