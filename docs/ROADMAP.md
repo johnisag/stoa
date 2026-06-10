@@ -21,6 +21,54 @@ under "🔭 Next horizons."
 
 ---
 
+## 🌅 Next session — committed queue (added 2026-06-09, for 2026-06-10)
+
+Ordered for tomorrow. **Worktree lifecycle (1–3) first** — they're correctness
+bugs hit by hand THIS session (orphaned worktrees cleaned manually; an
+`EBUSY: rmdir …model-chats-nice-valley` in the prod log; "prunable" registrations
+left behind). Then the **workflows / pipeline track (4–7)**. Then the **autonomy
+buttons (8–9)**, which should REUSE the dispatch ceremony primitives just shipped
+(3-critic panel #174 + CI auto-fix #175 + auto-merge #173), not reinvent them.
+
+### Worktree lifecycle — correctness ✅ SHIPPED (fix/worktree-lifecycle)
+Root cause was shared, as predicted: `deleteWorktree`'s manual-rm fallback
+re-threw `EBUSY` uncaught on a Windows-locked dir, and `listWorktrees` never
+filtered git's stale registrations. Fixed in the two shared helpers (so all
+three symptoms — delete, attach, reclaim — resolve at once):
+1. ✅ **Delete/reclaim reliably removes the worktree.** `deleteWorktree` retries
+   removal on transient locks (backoff), ALWAYS `git worktree prune`s, and throws
+   a clear "still locked after N attempts" error instead of a bare EBUSY; the
+   reclaim route surfaces it. Session DELETE now also cleans a broken worktree
+   (unresolved repo → parent-dir fallback).
+2. ✅ **Attach picker no longer shows stale worktrees.** `listWorktrees` drops
+   `prunable` registrations and any whose directory is already gone.
+3. ✅ **Reclaim** — same root cause as #1; fixed by the shared hardening.
+
+### Workflows — the agent-pipeline DAG (`lib/pipeline/`)
+4. **Analyze / evaluate / optimize the workflows backend engine.** Pure DAG
+   reducer (`lib/pipeline/engine.ts`) + thin executor (`executor.ts`) over
+   `spawnWorker`. FIRST establish whether it's load-bearing or dormant (reachable
+   from any route/UI today?). Decide build-vs-prune before investing in 5–7.
+   Check: fan-in/out, failure→skip propagation, concurrency cap, retry, run
+   persistence.
+5. **Workflows UI — none today (NA).** Design + build the control surface
+   (author/visualize/run a DAG, live step states). Biggest single item; gated on
+   #4's verdict.
+6. **In-app workflow examples + documentation.** Ship runnable example
+   `PipelineSpec`s with docs in the app.
+7. **Workflow templates.** Pre-built, parameterizable specs (e.g.
+   "fix-issue → review → fix → merge", mirroring the dispatch loop).
+
+### Autonomy — always behind the ceremony gate
+8. **Session "go to auto" button (with or without a prompt) — always ceremony.**
+   One tap to send a session autonomous; optional seed prompt. "Ceremony" = the
+   verification gate (tsc/test/build) + 3-agent review, baked in.
+9. **Task list → full auto — always ceremony.** Run a whole task list
+   autonomously, each item through the same gate + 3-agent review. The dispatch
+   loop already shipped IS a ceremony engine — wire sessions/task-lists into it.
+
+---
+
 ## 🔧 Top follow-up (committed)
 
 - **Consolidate the git-status spawn fan-out.** Each git-status refresh

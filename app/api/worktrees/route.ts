@@ -155,8 +155,13 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error reclaiming worktree:", error);
+    // Surface the specific reason (e.g. "still locked after N attempts: …") so
+    // the user knows a locked worktree may clear if they retry in a moment.
     return NextResponse.json(
-      { error: "Failed to reclaim worktree" },
+      {
+        error:
+          error instanceof Error ? error.message : "Failed to reclaim worktree",
+      },
       { status: 500 }
     );
   }
