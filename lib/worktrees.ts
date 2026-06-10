@@ -4,7 +4,6 @@
 
 import * as path from "path";
 import * as fs from "fs";
-import * as os from "os";
 import {
   isGitRepo,
   branchExists,
@@ -13,9 +12,10 @@ import {
   generateBranchName,
   runGit,
 } from "./git";
+import { homeDir, expandHome } from "./platform";
 
 // Base directory for all worktrees
-const WORKTREES_DIR = path.join(os.homedir(), ".stoa", "worktrees");
+const WORKTREES_DIR = path.join(homeDir(), ".stoa", "worktrees");
 
 export interface WorktreeInfo {
   worktreePath: string;
@@ -39,10 +39,11 @@ async function ensureWorktreesDir(): Promise<void> {
 }
 
 /**
- * Resolve a path, expanding ~ to home directory
+ * Resolve a path, expanding a leading ~ to the home directory. Delegates to the
+ * cross-platform helper so `~\x` (Windows) is handled, not just `~/x`.
  */
 function resolvePath(p: string): string {
-  return p.replace(/^~/, os.homedir());
+  return expandHome(p);
 }
 
 /**
@@ -129,8 +130,51 @@ export async function createWorktree(
   };
 }
 
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// `git worktree remove` (then a manual rm) can fail with EBUSY on Windows when a
+// just-killed agent/pty hasn't released its handle on the dir yet. Retry a few
+// times with backoff so the OS has a moment to let go (~2s total covers the
+// typical handle-release lag without stalling a background cleanup for long).
+// Delays sit BEFORE attempts 2 and 3 — the common (already-free) case removes on
+// the first try, no wait.
+const REMOVE_RETRY_BACKOFF_MS = [500, 1500];
+const REMOVE_ATTEMPTS = REMOVE_RETRY_BACKOFF_MS.length + 1;
+
+/** One removal attempt: `git worktree remove --force`, then a manual rm fallback.
+ * Returns true once the directory is gone. Never throws (the caller retries). */
+async function tryRemoveWorktreeOnce(
+  repoPath: string,
+  worktreePath: string
+): Promise<boolean> {
+  try {
+    await runGit(
+      repoPath,
+      ["worktree", "remove", worktreePath, "--force"],
+      30000
+    );
+    return true;
+  } catch {
+    // git refused (locked / not a registered worktree / not a repo) — fall back
+    // to removing the directory ourselves.
+  }
+  try {
+    if (fs.existsSync(worktreePath)) {
+      await fs.promises.rm(worktreePath, { recursive: true, force: true });
+    }
+    return !fs.existsSync(worktreePath);
+  } catch {
+    return false; // most likely EBUSY (Windows lock) — the caller retries
+  }
+}
+
 /**
- * Delete a worktree and optionally its branch
+ * Delete a worktree (and optionally its branch), robustly. Retries the removal on
+ * transient Windows locks, ALWAYS prunes stale registrations afterward (so the
+ * attach picker never offers a dead worktree), and throws a clear error only if
+ * the directory genuinely can't be removed — instead of letting a bare EBUSY
+ * escape. Callers that clean up in the background swallow the throw; the reclaim
+ * route surfaces it to the user.
  */
 export async function deleteWorktree(
   worktreePath: string,
@@ -155,27 +199,23 @@ export async function deleteWorktree(
     }
   }
 
-  // Remove the worktree
-  try {
-    await runGit(
+  // Remove the worktree, retrying on transient locks.
+  let removed = false;
+  for (let attempt = 0; attempt < REMOVE_ATTEMPTS; attempt++) {
+    if (attempt > 0) await delay(REMOVE_RETRY_BACKOFF_MS[attempt - 1]);
+    removed = await tryRemoveWorktreeOnce(
       resolvedProjectPath,
-      ["worktree", "remove", resolvedWorktreePath, "--force"],
-      30000
+      resolvedWorktreePath
     );
+    if (removed) break;
+  }
+
+  // Always prune stale registrations — cheap, and it clears any worktree whose
+  // directory was removed out-of-band so `git worktree list` stays honest.
+  try {
+    await runGit(resolvedProjectPath, ["worktree", "prune"], 10000);
   } catch {
-    // If git worktree remove fails, try manual cleanup
-    if (fs.existsSync(resolvedWorktreePath)) {
-      await fs.promises.rm(resolvedWorktreePath, {
-        recursive: true,
-        force: true,
-      });
-    }
-    // Prune worktree references
-    try {
-      await runGit(resolvedProjectPath, ["worktree", "prune"], 10000);
-    } catch {
-      // Ignore prune errors
-    }
+    // Ignore prune errors (e.g. projectPath isn't a repo for a broken worktree).
   }
 
   // Optionally delete the branch — but ONLY a branch Stoa created. `branch -D`
@@ -188,6 +228,14 @@ export async function deleteWorktree(
     } catch {
       // Ignore branch deletion errors (might be merged or checked out elsewhere)
     }
+  }
+
+  // Surface a clear failure only if the directory is genuinely still there after
+  // every retry (a process is holding it) — never a raw EBUSY.
+  if (!removed && fs.existsSync(resolvedWorktreePath)) {
+    throw new Error(
+      `Could not remove worktree (still locked after ${REMOVE_ATTEMPTS} attempts): ${resolvedWorktreePath}`
+    );
   }
 }
 
@@ -244,6 +292,7 @@ export async function listWorktrees(projectPath: string): Promise<
       let worktreePath = "";
       let branch = "";
       let head = "";
+      let prunable = false;
 
       for (const line of lines) {
         if (line.startsWith("worktree ")) {
@@ -252,10 +301,17 @@ export async function listWorktrees(projectPath: string): Promise<
           branch = line.slice(7).replace("refs/heads/", "");
         } else if (line.startsWith("HEAD ")) {
           head = line.slice(5);
+        } else if (line.startsWith("prunable")) {
+          // git flags a registration whose directory is gone as `prunable …`.
+          prunable = true;
         }
       }
 
-      if (worktreePath) {
+      // Skip stale registrations: offering a worktree whose dir no longer exists
+      // to the attach picker is the "attach sees stale worktrees" bug. Drop both
+      // git-flagged `prunable` entries AND any whose directory is already gone
+      // (git only flags prunable lazily, so a just-removed dir can slip through).
+      if (worktreePath && !prunable && fs.existsSync(worktreePath)) {
         worktrees.push({ path: worktreePath, branch, head });
       }
     }

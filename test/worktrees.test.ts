@@ -10,8 +10,18 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const { calls, state } = vi.hoisted(() => ({
   calls: [] as Array<{ cmd: string; args: string[] }>,
   // The branch `rev-parse --abbrev-ref HEAD` reports — varied per test so we can
-  // exercise the branch-deletion safety gate.
-  state: { headBranch: "feature/feat" },
+  // exercise the branch-deletion safety gate. `removeFails` forces `git worktree
+  // remove` to error (exercises the rm fallback); `includePrunable` adds a stale
+  // registration to the porcelain list (exercises the attach-picker filter).
+  state: {
+    headBranch: "feature/feat",
+    removeFails: false,
+    includePrunable: false,
+    // fs is mocked too (below): `pathsExist` is what fs.existsSync returns;
+    // `rmThrows` makes fs.promises.rm reject with EBUSY (the stuck-lock case).
+    pathsExist: false,
+    rmThrows: false,
+  },
 }));
 
 vi.mock("child_process", () => ({
@@ -21,6 +31,13 @@ vi.mock("child_process", () => ({
       result: { stdout: string; stderr: string }
     ) => void;
     calls.push({ cmd, args });
+    if (state.removeFails && args[0] === "worktree" && args[1] === "remove") {
+      callback(new Error("EBUSY: resource busy or locked"), {
+        stdout: "",
+        stderr: "",
+      });
+      return;
+    }
     let stdout = "";
     if (args.includes("--git-common-dir")) {
       stdout = "/Users/me/proj/.git\n";
@@ -28,12 +45,35 @@ vi.mock("child_process", () => ({
       stdout =
         "worktree /Users/me/proj\nHEAD aaa\nbranch refs/heads/main\n\n" +
         "worktree /Users/me/.stoa/worktrees/proj-feat\nHEAD bbb\nbranch refs/heads/feature/feat\n\n";
+      if (state.includePrunable) {
+        stdout +=
+          "worktree /Users/me/.stoa/worktrees/proj-gone\nHEAD ccc\n" +
+          "branch refs/heads/feature/gone\n" +
+          "prunable gitdir file points to non-existent location\n\n";
+      }
     } else if (args.includes("--abbrev-ref")) {
       stdout = `${state.headBranch}\n`;
     }
     callback(null, { stdout, stderr: "" });
   },
 }));
+
+// fs is mocked so the worktree existence/rm branches are deterministic on every
+// OS (the test paths are fake). Real fs passes through except existsSync (driven
+// by `pathsExist`) and promises.rm (rejects with EBUSY when `rmThrows`).
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return {
+    ...actual,
+    existsSync: () => state.pathsExist,
+    promises: {
+      ...actual.promises,
+      rm: async () => {
+        if (state.rmThrows) throw new Error("EBUSY: resource busy or locked");
+      },
+    },
+  };
+});
 
 import path from "path";
 import {
@@ -51,6 +91,10 @@ const argvOf = (pred: (a: string[]) => boolean) =>
 beforeEach(() => {
   calls.length = 0;
   state.headBranch = "feature/feat";
+  state.removeFails = false;
+  state.includePrunable = false;
+  state.pathsExist = false;
+  state.rmThrows = false;
 });
 
 describe("worktree git invocations — shell-free execFile argv", () => {
@@ -66,6 +110,7 @@ describe("worktree git invocations — shell-free execFile argv", () => {
   });
 
   it("listWorktrees uses `worktree list --porcelain` and parses entries", async () => {
+    state.pathsExist = true; // fake paths "exist" on disk
     const wts = await listWorktrees("/Users/me/proj");
     expect(argvOf((a) => a[0] === "worktree" && a[1] === "list")).toEqual([
       "worktree",
@@ -77,6 +122,18 @@ describe("worktree git invocations — shell-free execFile argv", () => {
       path: "/Users/me/.stoa/worktrees/proj-feat",
       branch: "feature/feat",
     });
+  });
+
+  it("listWorktrees drops `prunable` (stale) registrations — attach-picker fix", async () => {
+    // The two live entries "exist"; the prunable one is filtered by its flag.
+    state.pathsExist = true;
+    state.includePrunable = true;
+    const wts = await listWorktrees("/Users/me/proj");
+    // main + proj-feat survive; the prunable proj-gone is filtered out.
+    expect(wts.map((w) => w.path)).toEqual([
+      "/Users/me/proj",
+      "/Users/me/.stoa/worktrees/proj-feat",
+    ]);
   });
 
   it("getMainRepoPath strips the .git segment cross-platform (Windows fix)", async () => {
@@ -116,6 +173,40 @@ describe("worktree git invocations — shell-free execFile argv", () => {
     state.headBranch = "trunk";
     await deleteWorktree("/Users/me/wt", "/Users/me/proj", true);
     expect(argvOf((a) => a[0] === "branch")).toBeUndefined();
+  });
+
+  it("always prunes stale registrations after removal", async () => {
+    await deleteWorktree("/Users/me/wt", "/Users/me/proj", false);
+    expect(argvOf((a) => a[0] === "worktree" && a[1] === "prune")).toEqual([
+      "worktree",
+      "prune",
+    ]);
+  });
+
+  it("falls back to a manual rm + prune when `git worktree remove` fails (EBUSY)", async () => {
+    // The fake path doesn't exist, so the rm fallback resolves and the worktree
+    // is considered gone — deleteWorktree must NOT let the EBUSY escape.
+    state.removeFails = true;
+    await expect(
+      deleteWorktree("/Users/me/wt", "/Users/me/proj", false)
+    ).resolves.toBeUndefined();
+    expect(
+      argvOf((a) => a[0] === "worktree" && a[1] === "remove")
+    ).toBeDefined();
+    expect(
+      argvOf((a) => a[0] === "worktree" && a[1] === "prune")
+    ).toBeDefined();
+  });
+
+  it("throws a clear error (not bare EBUSY) when the dir stays locked", async () => {
+    // git remove fails, the manual rm keeps throwing EBUSY, and the dir is still
+    // there after every retry → a clear, actionable error rather than a raw EBUSY.
+    state.removeFails = true;
+    state.pathsExist = true;
+    state.rmThrows = true;
+    await expect(
+      deleteWorktree("/Users/me/wt", "/Users/me/proj", false)
+    ).rejects.toThrow(/still locked after \d+ attempts/);
   });
 });
 

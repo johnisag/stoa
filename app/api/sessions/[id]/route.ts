@@ -1,3 +1,4 @@
+import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getProject } from "@/lib/projects";
@@ -214,14 +215,18 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     queries.deleteSession(db).run(id);
     clearQueue(id);
 
-    // Clean up worktree in background (non-blocking)
+    // Clean up worktree in background (non-blocking). Fall back to the worktree's
+    // parent dir when the owning repo can't be resolved (a broken worktree) so a
+    // dead worktree is still removed rather than silently skipped.
     if (existing.worktree_path && isStoaWorktree(existing.worktree_path)) {
       const worktreePath = existing.worktree_path; // Capture for closure
       runInBackground(async () => {
         const mainRepoPath = await getMainRepoPath(worktreePath);
-        if (mainRepoPath) {
-          await deleteWorktree(worktreePath, mainRepoPath, false);
-        }
+        await deleteWorktree(
+          worktreePath,
+          mainRepoPath ?? path.dirname(worktreePath),
+          false
+        );
       }, `cleanup-worktree-${id}`);
     }
 
@@ -233,9 +238,11 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
           const workerId = worker.id; // Capture ID for task name
           runInBackground(async () => {
             const mainRepoPath = await getMainRepoPath(worktreePath);
-            if (mainRepoPath) {
-              await deleteWorktree(worktreePath, mainRepoPath, false);
-            }
+            await deleteWorktree(
+              worktreePath,
+              mainRepoPath ?? path.dirname(worktreePath),
+              false
+            );
           }, `cleanup-worker-worktree-${workerId}`);
         }
       }
