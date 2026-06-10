@@ -20,6 +20,7 @@ import { dispatchOne } from "./dispatcher";
 import { autoMergePass } from "./auto-merge";
 import { ciFixPass } from "./ci-fix";
 import { mergeTrainPass } from "./merge-train";
+import { verifyPass } from "./verify";
 import { sessionCeremonyPass } from "./session-ceremony";
 import {
   nextReviewAction,
@@ -152,11 +153,19 @@ export async function reconcileTick(): Promise<void> {
     // before auto-merge so a freshly-rebased PR can land next tick. No-op unarmed.
     await mergeTrainPass();
 
-    // 8. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
-    // After the reviewer + CI passes so a just-approved, just-green PR can merge.
+    // 8. Verify harness (opt-in per repo): run the repo's verify_command in each
+    // worker's worktree and attach the result to the review card; the slow build
+    // runs FIRE-AND-FORGET (never holds the tick). After the merge train so the
+    // just-pushed head is what's verified, before auto-merge so a 'pass' gates the
+    // landing. No-op for non-armed repos.
+    await verifyPass();
+
+    // 9. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
+    // After the reviewer + CI + verify passes so a just-approved, just-green,
+    // just-verified PR can merge.
     await autoMergePass();
 
-    // 9. Session "go to auto": drive any session a user handed off through the
+    // 10. Session "go to auto": drive any session a user handed off through the
     // SAME ceremony (panel → fix → CI-fix → auto-merge). A no-op when none are
     // enrolled. Last, mirroring the issue passes it reuses.
     await sessionCeremonyPass();

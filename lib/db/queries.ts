@@ -346,8 +346,8 @@ export const queries = {
   createDispatchRepo: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, review_gate, ci_autofix, merge_train, project_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO dispatch_repos (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency, label_filter, base_branch, mode, enabled, review_gate, ci_autofix, merge_train, verify_gate, verify_command, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
 
   getDispatchRepo: (db: Database.Database) =>
@@ -365,7 +365,7 @@ export const queries = {
   updateDispatchRepo: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, review_gate = ?, ci_autofix = ?, merge_train = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, review_gate = ?, ci_autofix = ?, merge_train = ?, verify_gate = ?, verify_command = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
   deleteDispatchRepo: (db: Database.Database) =>
@@ -435,6 +435,23 @@ export const queries = {
       `UPDATE issue_dispatches SET rebase_rounds = 0, rebase_fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // Verify harness: a verification run is STARTING for this head — record
+  // running + pin the SHA up-front (so the UI shows "verifying…" and the per-SHA
+  // once-guard holds even across a restart), clearing any prior output.
+  setVerifyRunning: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET verify_status = 'running', verify_sha = ?, verify_output = NULL, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Verify harness: a verification run FINISHED — record the verdict, the bounded
+  // output tail, and the head SHA it's for (the gating + staleness pin).
+  setVerifyResult: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET verify_status = ?, verify_output = ?, verify_sha = ?, verify_ran_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+    ),
+
   // Fix loop: a fixer finished — clear reviewer + decision + fixer so the next
   // tick spawns a fresh critic against the updated PR (re-review).
   resetForReReview: (db: Database.Database) =>
@@ -450,7 +467,7 @@ export const queries = {
       db,
       // WHERE status='failed' so a double-tap retry only resets once (the second
       // is a no-op; dispatchOne's claimDispatch is still the spawn-once gate).
-      `UPDATE issue_dispatches SET status = 'pending', session_id = NULL, branch_name = NULL, worktree_path = NULL, pr_url = NULL, pr_number = NULL, pr_status = NULL, dispatched_at = NULL, reviewer_session_id = NULL, review_decision = NULL, fix_rounds = 0, fixer_session_id = NULL, ci_fix_rounds = 0, ci_fixer_session_id = NULL, rebase_rounds = 0, rebase_fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'failed'`
+      `UPDATE issue_dispatches SET status = 'pending', session_id = NULL, branch_name = NULL, worktree_path = NULL, pr_url = NULL, pr_number = NULL, pr_status = NULL, dispatched_at = NULL, reviewer_session_id = NULL, review_decision = NULL, fix_rounds = 0, fixer_session_id = NULL, ci_fix_rounds = 0, ci_fixer_session_id = NULL, rebase_rounds = 0, rebase_fixer_session_id = NULL, verify_status = NULL, verify_output = NULL, verify_sha = NULL, verify_ran_at = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'failed'`
     ),
 
   // Dispatch — issue pipeline rows

@@ -7,6 +7,7 @@ import {
   Bot,
   AlertCircle,
   GitMerge,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -118,6 +119,27 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           if it still can&apos;t, the PR is left for you to rebase. It only
           keeps PRs landable — accepting the merge is still your tap (or
           auto-merge, if you armed it).
+        </p>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <ShieldCheck className="h-4 w-4" aria-hidden="true" /> Verify
+          (optional)
+        </h3>
+        <p className="text-muted-foreground">
+          Turn on <span className="text-foreground font-medium">verify</span>{" "}
+          and give the repo a command (e.g.{" "}
+          <span className="text-foreground">npm run verify</span>, or chain
+          steps with <span className="text-foreground">&amp;&amp;</span>). Stoa
+          runs it in each worker&apos;s PR checkout (typecheck/test/build) and
+          shows the result on the card —{" "}
+          <span className="text-foreground">verified</span>,{" "}
+          <span className="text-foreground">build failed</span> (output one tap
+          away), or <span className="text-foreground">verify error</span>. So
+          you approve from evidence, not by reading code — and auto-merge waits
+          for a local pass. Especially useful for repos with no GitHub CI. If
+          the checkout needs dependencies installed, include that as a step.
         </p>
       </section>
 

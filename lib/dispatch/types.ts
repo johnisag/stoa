@@ -35,6 +35,11 @@ export interface DispatchRepo {
   ci_autofix: number;
   /** 0/1 — opt-in merge train: auto-rebase-and-repair a ready-but-CONFLICTING PR. */
   merge_train: number;
+  /** 0/1 — opt-in verification harness: run verify_command in the worktree per PR. */
+  verify_gate: number;
+  /** The command to run for verification (typecheck/test/build); steps chained with
+   * `&&` (Stoa's own delimiter — never a shell). null = nothing armed. */
+  verify_command: string | null;
   project_id: string | null;
   created_at: string;
   updated_at: string;
@@ -86,6 +91,14 @@ export interface IssueDispatch {
   rebase_rounds: number;
   /** Session id of the in-flight rebase fixer (null when none running). */
   rebase_fixer_session_id: string | null;
+  /** Latest verification verdict: null | running | pass | fail | error. */
+  verify_status: string | null;
+  /** Bounded tail of the failing step's output (empty/short on pass). */
+  verify_output: string | null;
+  /** The PR head SHA this verify_status is for (stale-verdict guard + gating pin). */
+  verify_sha: string | null;
+  /** When verification last ran (datetime('now')). */
+  verify_ran_at: string | null;
   created_at: string;
   updated_at: string;
 }

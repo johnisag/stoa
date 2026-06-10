@@ -46,6 +46,8 @@ const EMPTY: CreateRepoInput = {
   reviewGate: false,
   ciAutofix: false,
   mergeTrain: false,
+  verifyGate: false,
+  verifyCommand: "",
 };
 
 /** A small single-select segmented control (radiogroup). Shared by the mode
@@ -118,6 +120,7 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
   const [quota, setQuota] = useState(String(repo.daily_quota));
   const [conc, setConc] = useState(String(repo.max_concurrency));
   const [label, setLabel] = useState(repo.label_filter ?? "");
+  const [verifyCmd, setVerifyCmd] = useState(repo.verify_command ?? "");
   const [browsing, setBrowsing] = useState(false);
 
   const patch = (p: UpdateRepoPatch) =>
@@ -279,6 +282,23 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
           rebase
         </label>
 
+        {/* Verify harness (opt-in): run the repo's verify command in each worktree */}
+        <label
+          className="text-muted-foreground flex items-center gap-1 text-xs"
+          title="Run this repo's verify command (typecheck/test/build) in each worker's PR worktree and attach the result to the review card; gates auto-merge on a local pass. Chain steps with && (your install step too, if the worktree needs deps)."
+        >
+          <Switch
+            checked={repo.verify_gate === 1}
+            onCheckedChange={(v) => patch({ verifyGate: v })}
+            aria-label={
+              repo.verify_gate === 1
+                ? "Disable verify harness"
+                : "Enable verify harness"
+            }
+          />
+          verify
+        </label>
+
         {/* browse open issues for one-tap triage */}
         <Button
           variant="ghost"
@@ -313,6 +333,21 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
           <Trash2 className="text-muted-foreground hover:text-destructive h-4 w-4" />
         </Button>
       </div>
+      {repo.verify_gate === 1 && (
+        <div className="flex items-center gap-2 px-3 pb-1">
+          <span className="text-muted-foreground text-xs">verify cmd</span>
+          <Input
+            placeholder="npm run verify   (or: npx tsc --noEmit && npm test && npm run build)"
+            value={verifyCmd}
+            onChange={(e) => setVerifyCmd(e.target.value)}
+            onBlur={() => {
+              const next = verifyCmd.trim() || null;
+              if (next !== repo.verify_command) patch({ verifyCommand: next });
+            }}
+            className="h-8 flex-1 font-mono text-xs"
+          />
+        </div>
+      )}
       {browsing && <OpenIssuesBrowser repo={repo} />}
     </div>
   );

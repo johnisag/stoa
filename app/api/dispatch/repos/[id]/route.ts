@@ -60,6 +60,18 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
           ? 1
           : 0
         : repo.merge_train;
+    const verifyGate =
+      body?.verifyGate !== undefined
+        ? body.verifyGate
+          ? 1
+          : 0
+        : repo.verify_gate;
+    const verifyCommand =
+      body?.verifyCommand !== undefined
+        ? typeof body.verifyCommand === "string" && body.verifyCommand.trim()
+          ? body.verifyCommand.trim()
+          : null
+        : repo.verify_command;
 
     queries
       .updateDispatchRepo(db)
@@ -74,6 +86,8 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         reviewGate,
         ciAutofix,
         mergeTrain,
+        verifyGate,
+        verifyCommand,
         id
       );
     return NextResponse.json({

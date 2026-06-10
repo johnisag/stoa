@@ -92,6 +92,11 @@ export function nextAutoMergeAction(input: {
   reviewDecision: string | null;
   mergeable: string | null;
   checks: CheckSummary;
+  /** Verify harness armed for this repo. */
+  verifyGate: boolean;
+  /** Stoa's local verify verdict for the CURRENT head (null when not armed, not
+   * yet run, or the cached verdict is for an older SHA — the caller SHA-pins it). */
+  verifyStatus: string | null;
 }): AutoMergeAction {
   if (
     !input.autoMerge ||
@@ -105,7 +110,12 @@ export function nextAutoMergeAction(input: {
   // CONFLICTING (needs rebase) or UNKNOWN (GitHub still computing) → not now.
   if (input.mergeable !== "MERGEABLE") return "wait";
   if (input.checks === "failing" || input.checks === "pending") return "wait";
-  return "merge"; // checks passing or none
+  // Verify gate armed → require a local PASS for THIS head. Placed LAST and
+  // ADDITIVE: it can only add a wait (never loosens an existing gate), and resolves
+  // when the verify pass records 'pass'. A misconfig yields 'error' → it sits
+  // visibly in the inbox with the output tail, never a silent merge.
+  if (input.verifyGate && input.verifyStatus !== "pass") return "wait";
+  return "merge"; // approved, mergeable, checks green/none, verified (if armed)
 }
 
 export interface PrReadiness {
@@ -192,6 +202,13 @@ export async function autoMergePass(): Promise<void> {
       reviewDecision: d.review_decision,
       mergeable: readiness.mergeable,
       checks: readiness.checks,
+      verifyGate: repo.verify_gate === 1,
+      // SHA-PIN: a verify pass only counts for the EXACT head it ran on. A stale
+      // pass (head moved after) must never greenlight the newer, unverified push.
+      verifyStatus:
+        readiness.headRefOid && d.verify_sha === readiness.headRefOid
+          ? d.verify_status
+          : null,
     });
     if (action !== "merge") continue;
 

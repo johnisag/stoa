@@ -45,6 +45,23 @@ const LENS_BADGE: Record<string, string> = {
   simplicity: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
 };
 
+// The local verify harness verdict (typecheck/test/build run in the worktree).
+const VERIFY: Record<string, { label: string; badge: string }> = {
+  pass: {
+    label: "verified",
+    badge: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  },
+  fail: {
+    label: "build failed",
+    badge: "bg-red-500/15 text-red-600 dark:text-red-400",
+  },
+  error: {
+    label: "verify error",
+    badge: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  },
+  running: { label: "verifying…", badge: "bg-muted text-muted-foreground" },
+};
+
 // Friendly labels for ceremony steps (dispatch statuses reuse STATUS_META).
 const CEREMONY_LABEL: Record<string, string> = {
   queued: "Queued",
@@ -90,7 +107,10 @@ export function InboxCard({ item }: { item: InboxItem }) {
     (item.type === "dispatch"
       ? item.reviewDecision === "APPROVED" || !item.reviewGate
       : item.reviewDecision === "APPROVED" &&
-        (item.state === "ready" || item.state === "awaiting_merge"));
+        (item.state === "ready" || item.state === "awaiting_merge")) &&
+    // If the verify harness is armed, don't offer a one-tap Merge on a non-passing
+    // build — the server's auto-merge gate would refuse it anyway (matches it).
+    (!item.verifyGate || item.verifyStatus === "pass");
   // Dispatch dismiss is server-gated to failed; ceremony cancel (DELETE) is always valid.
   const canDismiss = item.type === "ceremony" || item.state === "failed";
 
@@ -124,14 +144,25 @@ export function InboxCard({ item }: { item: InboxItem }) {
             </span>
           </span>
         </button>
-        <span
-          className={cn(
-            "flex-shrink-0 rounded px-1.5 py-0.5 text-[11px]",
-            verdict.badge
-          )}
-        >
-          {verdict.label}
-        </span>
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {item.verifyGate &&
+            item.verifyStatus &&
+            VERIFY[item.verifyStatus] && (
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[11px]",
+                  VERIFY[item.verifyStatus].badge
+                )}
+              >
+                {VERIFY[item.verifyStatus].label}
+              </span>
+            )}
+          <span
+            className={cn("rounded px-1.5 py-0.5 text-[11px]", verdict.badge)}
+          >
+            {verdict.label}
+          </span>
+        </div>
       </div>
 
       <div className="text-muted-foreground flex flex-wrap items-center gap-2 pl-5 text-[11px]">
@@ -196,6 +227,20 @@ export function InboxCard({ item }: { item: InboxItem }) {
               </div>
             ))
           )}
+          {/* Verification evidence — the build/test output tail, beside the critic
+              findings, so the operator approves from proof (fail/error only). */}
+          {item.verifyGate &&
+            (item.verifyStatus === "fail" || item.verifyStatus === "error") &&
+            item.verifyOutput && (
+              <div className="flex flex-col gap-0.5">
+                <span className="text-foreground text-[11px] font-medium">
+                  Verification output
+                </span>
+                <pre className="text-muted-foreground max-h-48 overflow-auto rounded bg-black/20 p-2 text-[10px] leading-relaxed whitespace-pre-wrap">
+                  {item.verifyOutput}
+                </pre>
+              </div>
+            )}
         </div>
       )}
 
