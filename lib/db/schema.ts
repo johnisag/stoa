@@ -189,7 +189,6 @@ export function createSchema(db: Database.Database): void {
       reviewer_session_id TEXT,
       review_decision TEXT,
       review_sha TEXT,
-      review_round INTEGER NOT NULL DEFAULT 0,
       auto_merge INTEGER NOT NULL DEFAULT 0,
       fix_rounds INTEGER NOT NULL DEFAULT 0,
       fixer_session_id TEXT,

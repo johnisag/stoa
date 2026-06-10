@@ -383,15 +383,12 @@ const migrations: Migration[] = [
           pr_url TEXT,
           reviewer_session_id TEXT,
           review_decision TEXT,
-          -- The PR head SHA the CURRENT panel is reviewing (set at panel SPAWN).
-          -- The merge is pinned to it (gh --match-head-commit) and re-reviews if
-          -- the live head moved — an interactive owner can push after approval.
+          -- The PR head SHA the CURRENT panel is reviewing (set, fail-closed, at
+          -- panel SPAWN). Panelists stamp the SHA they reviewed in their verdict
+          -- marker; only markers matching this count, and the merge is pinned to it
+          -- (gh --match-head-commit). A push after approval is re-reviewed, never
+          -- merged unreviewed — immune to round/time/cancel races.
           review_sha TEXT,
-          -- Monotonic review generation, seeded ABOVE any existing PR marker at
-          -- each panel spawn, so a re-review can never self-approve from a prior
-          -- panel's stale round markers (the spawn-time pin + this close the
-          -- push-after-approval hole).
-          review_round INTEGER NOT NULL DEFAULT 0,
           -- Opt-in: 1 = auto-merge when ready; 0 (default) = stop at 'ready' and
           -- let the human do the final merge (the safe default — the human renders
           -- the verdict on the reviewed, green PR).

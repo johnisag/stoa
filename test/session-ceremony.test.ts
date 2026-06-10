@@ -17,7 +17,6 @@ const { state } = vi.hoisted(() => ({
     ownerStatus: "idle" as string,
     live: [] as string[],
     listThrows: false,
-    maxRound: -1,
     verdict: { complete: false, decision: null, byLens: {} } as {
       complete: boolean;
       decision: string | null;
@@ -39,7 +38,7 @@ const { state } = vi.hoisted(() => ({
     mergePins: [] as Array<string | null | undefined>,
     steps: {} as Record<string, string>,
     decisions: [] as string[],
-    reviews: [] as Array<{ sha: unknown; round: unknown }>,
+    reviews: [] as Array<{ sha: unknown }>,
     rereviews: [] as string[],
     sessionPrUpdates: [] as Array<[string, number]>,
   },
@@ -56,8 +55,8 @@ vi.mock("@/lib/db", () => ({
       },
     }),
     setCeremonyReview: () => ({
-      run: (_reviewerId: string, sha: unknown, round: unknown) => {
-        state.reviews.push({ sha, round });
+      run: (_reviewerId: string, sha: unknown) => {
+        state.reviews.push({ sha });
       },
     }),
     setCeremonyReviewDecision: () => ({
@@ -112,8 +111,7 @@ vi.mock("@/lib/dispatch/reviewer", async (importOriginal) => {
       if (typeof onSpawn === "function") onSpawn("sid-new");
       return "sid-new";
     },
-    aggregatePanelVerdict: async () => state.verdict,
-    maxStoaReviewRound: async () => state.maxRound,
+    aggregateSessionVerdict: async () => state.verdict,
   };
 });
 vi.mock("@/lib/dispatch/auto-merge", async (importOriginal) => {
@@ -159,7 +157,6 @@ const ceremony = (over: Record<string, unknown> = {}) => ({
   reviewer_session_id: null,
   review_decision: null,
   review_sha: null,
-  review_round: 0,
   auto_merge: 0,
   fix_rounds: 0,
   fixer_session_id: null,
@@ -185,7 +182,6 @@ describe("sessionCeremonyPass", () => {
     state.ownerStatus = "idle";
     state.live = [];
     state.listThrows = false;
-    state.maxRound = -1;
     state.verdict = { complete: false, decision: null, byLens: {} };
     state.readiness = {
       mergeable: "MERGEABLE",
@@ -203,8 +199,7 @@ describe("sessionCeremonyPass", () => {
     state.sessionPrUpdates = [];
   });
 
-  it("spawns the 3-critic panel and pins the reviewed SHA + seeded round", async () => {
-    state.maxRound = 2; // existing markers up to round 2
+  it("spawns the 3-critic panel and pins the reviewed SHA", async () => {
     await sessionCeremonyPass();
     expect(state.spawns).toEqual([
       "review #7 · correctness",
@@ -212,8 +207,14 @@ describe("sessionCeremonyPass", () => {
       "review #7 · simplicity",
     ]);
     expect(state.steps["cer-1"]).toBe("reviewing");
-    // round seeded ABOVE the max existing marker; sha = current head.
-    expect(state.reviews).toEqual([{ sha: "sha-1", round: 3 }]);
+    expect(state.reviews).toEqual([{ sha: "sha-1" }]); // pinned to the live head
+  });
+
+  it("FAIL-CLOSED: does not spawn a panel when the head SHA can't be read", async () => {
+    state.readiness = { ...state.readiness, headRefOid: null };
+    await sessionCeremonyPass();
+    expect(state.spawns).toHaveLength(0); // no pin → no panel; retry next tick
+    expect(state.reviews).toHaveLength(0);
   });
 
   it("WAITS while the owner session is still running/waiting", async () => {

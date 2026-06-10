@@ -577,13 +577,13 @@ export const queries = {
       `UPDATE session_ceremonies SET review_decision = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
-  // Pin the panel to the SHA it's reviewing + its generation round, set at panel
-  // SPAWN (run together). The merge re-reviews if the live head moved off review_sha;
-  // review_round is seeded above any existing marker so stale markers never count.
+  // Pin the panel to the reviewer session + the SHA it's reviewing, set at panel
+  // SPAWN (run together). Panelists stamp this SHA in their markers; the merge is
+  // --match-head-commit-pinned to it; a moved head → re-review.
   setCeremonyReview: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE session_ceremonies SET reviewer_session_id = ?, review_sha = ?, review_round = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE session_ceremonies SET reviewer_session_id = ?, review_sha = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
   startCeremonyFixRound: (db: Database.Database) =>

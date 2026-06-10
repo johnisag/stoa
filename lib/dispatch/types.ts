@@ -119,10 +119,9 @@ export interface SessionCeremony {
   reviewer_session_id: string | null;
   /** Aggregated panel verdict (APPROVED / CHANGES_REQUESTED), null while reviewing. */
   review_decision: string | null;
-  /** PR head SHA the current panel is reviewing (set at spawn) — the merge pins to it. */
+  /** PR head SHA the current panel is reviewing (pinned at spawn) — markers must
+   * stamp it and the merge is --match-head-commit-pinned to it. */
   review_sha: string | null;
-  /** Monotonic review generation (seeded above existing markers per panel spawn). */
-  review_round: number;
   /** 0/1 — opt-in: auto-merge when ready (default 0 = stop at 'ready', human merges). */
   auto_merge: number;
   fix_rounds: number;

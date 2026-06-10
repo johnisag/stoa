@@ -2,22 +2,24 @@
  * Session "go to auto" — drive enrolled sessions through the SAME ceremony the
  * dispatch engine runs on an issue's PR: a 3-critic panel reviews the session's
  * PR, a fixer addresses requested changes, a CI fixer heals red checks, then —
- * if the user opted in — the PR auto-merges (otherwise it stops at 'awaiting_merge'
- * and the human does the one-tap merge). We REUSE the dispatch ceremony wholesale —
- * its pure decisions (nextReviewAction / nextCiFixAction / nextAutoMergeAction),
- * readers (getPrReadiness / aggregatePanelVerdict / maxStoaReviewRound), the spawn
- * recipe (spawnWorktreeWorker), the canonical verdict marker, and mergePR.
+ * if the user opted in — the PR auto-merges (otherwise it stops at
+ * 'awaiting_merge' and the human does the one-tap merge). We REUSE the dispatch
+ * ceremony's pure decisions (nextReviewAction / nextCiFixAction /
+ * nextAutoMergeAction), readers (getPrReadiness), the spawn recipe
+ * (spawnWorktreeWorker), and mergePR; the review verdict uses a SHA-bound marker
+ * (aggregateSessionVerdict) rather than the dispatch round marker.
  *
  * Runs once per reconcile tick (after autoMergePass); a no-op when no session is
  * enrolled. Enrolment is the user's explicit opt-in; this is the autonomous WORK.
  *
  * Safety, given the owner is an INTERACTIVE session (it can push at any time):
  *  - collision guard: skip while the owner is running/waiting;
- *  - generation isolation: each panel's round is seeded ABOVE any existing PR
- *    marker, so a re-review can never self-approve from a prior panel's markers;
- *  - approval pinning: the SHA the panel reviewed is captured at SPAWN, and the
- *    merge is `gh --match-head-commit` pinned to it — a push after approval is
- *    re-reviewed, never merged unreviewed;
+ *  - SHA-bound review: the panel is pinned to the head SHA at SPAWN (fail-closed —
+ *    no SHA, no panel), each panelist stamps the SHA it reviewed, and only markers
+ *    matching the pinned SHA count — so a stale panel (re-enrol / cancel race / a
+ *    push) can never approve commits it didn't see, no round/time bookkeeping;
+ *  - the merge is `gh --match-head-commit`-pinned to that SHA, and a moved head is
+ *    re-reviewed — never merged unreviewed;
  *  - auto-merge is OPT-IN; the default stops at 'awaiting_merge' for the human.
  */
 
@@ -28,9 +30,8 @@ import { expandHome } from "../platform";
 import {
   REVIEW_LENSES,
   nextReviewAction,
-  aggregatePanelVerdict,
-  maxStoaReviewRound,
-  reviewVerdictMarker,
+  aggregateSessionVerdict,
+  sessionReviewMarker,
   spawnWorktreeWorker,
   MAX_FIX_ROUNDS,
   type WorktreeSpawnTarget,
@@ -44,22 +45,25 @@ import type { SessionCeremony, SessionCeremonyStep } from "./types";
 
 function buildSessionLensReviewPrompt(
   prNumber: number,
-  round: number,
   lens: (typeof REVIEW_LENSES)[number]
 ): string {
   return (
     `[Stoa] You are ONE of three INDEPENDENT reviewers for pull request #${prNumber}.\n\n` +
     `YOUR LENS: ${lens.title}. Judge ONLY through this lens — ${lens.focus}.\n\n` +
     `Review ONLY — do NOT modify code, commit, or push anything.\n\n` +
-    `1. Read the change:\n   gh pr diff ${prNumber}\n` +
+    `1. Get the EXACT commit you are reviewing, then read the diff:\n` +
+    `   gh pr view ${prNumber} --json headRefOid   (note the full headRefOid SHA)\n` +
+    `   gh pr diff ${prNumber}\n` +
     `2. Assess it through your lens. Be concrete and terse.\n` +
     `3. Post ONE PR comment on #${prNumber} (gh pr comment ${prNumber}) — a few ` +
-    `lines of findings, then the LAST line EXACTLY this marker, verbatim, nothing ` +
-    `after it:\n   ${reviewVerdictMarker(lens.key, round)}\n` +
+    `lines of findings, then the LAST line EXACTLY this marker with <HEAD_SHA> ` +
+    `replaced by the full headRefOid SHA from step 1, verbatim, nothing after it:\n` +
+    `   ${sessionReviewMarker("<HEAD_SHA>", lens.key)}\n` +
     `Use verdict=REQUEST_CHANGES instead of APPROVE if your lens finds a blocking ` +
-    `problem. If a multi-line --body is awkward in your shell, write it to a file ` +
-    `and use \`gh pr comment ${prNumber} --body-file <file>\`. Do NOT post a GitHub ` +
-    `review or open a new PR — only the one comment.`
+    `problem. The SHA MUST be the one you actually reviewed (this binds your ` +
+    `verdict to that exact commit). If a multi-line --body is awkward, write it to ` +
+    `a file and use \`gh pr comment ${prNumber} --body-file <file>\`. Do NOT post a ` +
+    `GitHub review or open a new PR — only the one comment.`
   );
 }
 
@@ -100,13 +104,6 @@ function sessionTarget(session: Session): WorktreeSpawnTarget {
     branchName: session.branch_name,
     label: `session ${session.id.slice(0, 8)}`,
   };
-}
-
-/** SQLite `datetime('now')` ("YYYY-MM-DD HH:MM:SS", UTC) → epoch ms (NaN-safe). */
-function sqliteTimeToMs(t: string | null | undefined): number | undefined {
-  if (!t) return undefined;
-  const ms = Date.parse(t.replace(" ", "T") + "Z");
-  return Number.isFinite(ms) ? ms : undefined;
 }
 
 /**
@@ -187,16 +184,20 @@ export async function sessionCeremonyPass(): Promise<void> {
     const fixerAlive = isAlive(c.fixer_session_id);
     let decision = c.review_decision;
 
-    // Aggregate only while a panel is out with no fixer and no decision yet. Scope
-    // to this panel's generation (review_round, seeded above any prior marker at
-    // spawn) AND to comments posted after this ceremony began (sinceMs) — together
-    // a re-review can't inherit a prior panel's APPROVE markers.
-    if (c.reviewer_session_id && !c.fixer_session_id && !decision) {
-      const verdict = await aggregatePanelVerdict(
+    // Aggregate only while a panel is out with no fixer and no decision yet. The
+    // verdict is keyed on review_sha (the exact commit the panel was pinned to at
+    // spawn): a panelist's marker counts ONLY if it stamped that same SHA, so a
+    // stale panel (re-enrol / cancel race / a push) can never approve other code.
+    if (
+      c.reviewer_session_id &&
+      c.review_sha &&
+      !c.fixer_session_id &&
+      !decision
+    ) {
+      const verdict = await aggregateSessionVerdict(
         cwd,
         prNumber,
-        c.review_round,
-        sqliteTimeToMs(c.created_at)
+        c.review_sha
       );
       if (verdict.complete && verdict.decision) {
         queries.setCeremonyReviewDecision(db).run(verdict.decision, c.id);
@@ -217,21 +218,22 @@ export async function sessionCeremonyPass(): Promise<void> {
     });
 
     if (reviewAction === "spawn_critic") {
-      // Seed this generation's round above any existing marker, and pin the SHA
-      // the panel is about to review — both recorded on the FIRST panelist.
-      const round = (await maxStoaReviewRound(cwd, prNumber)) + 1;
+      // FAIL-CLOSED: never spawn a panel whose reviewed SHA we can't pin (a gh
+      // read failure leaves headRefOid null) — retry next tick. The pinned SHA is
+      // what the panel's markers must match AND what the merge requires
+      // (gh --match-head-commit), so it must be known before we start.
+      if (!readiness.headRefOid) continue;
+      const reviewSha = readiness.headRefOid;
       setStep(c.id, "reviewing");
       let guardSet = false;
       for (const lens of REVIEW_LENSES) {
         await spawnWorktreeWorker(
           sessionTarget(session),
           `review #${prNumber} · ${lens.key}`,
-          buildSessionLensReviewPrompt(prNumber, round, lens),
+          buildSessionLensReviewPrompt(prNumber, lens),
           (id) => {
             if (!guardSet) {
-              queries
-                .setCeremonyReview(db)
-                .run(id, readiness.headRefOid, round, c.id);
+              queries.setCeremonyReview(db).run(id, reviewSha, c.id);
               guardSet = true;
             }
           }
@@ -321,6 +323,13 @@ export async function sessionCeremonyPass(): Promise<void> {
 
     if (!ready) {
       setStep(c.id, "ready"); // approved, waiting on CI / mergeability
+      continue;
+    }
+    // FAIL-CLOSED: 'ready' requires the pinned reviewed SHA (spawn guarantees it;
+    // defend against any path that lost it — never merge without a pin).
+    if (!c.review_sha) {
+      queries.resetCeremonyForReReview(db).run(c.id);
+      setStep(c.id, "reviewing");
       continue;
     }
     if (c.auto_merge !== 1) {

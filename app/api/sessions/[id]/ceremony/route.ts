@@ -134,6 +134,18 @@ export async function PUT(
       { status: 400 }
     );
   }
+  // Only an actually-approved, pinned ceremony may merge — the UI's
+  // awaiting_merge-only button is UX, not a security boundary.
+  if (
+    ceremony.review_decision !== "APPROVED" ||
+    !ceremony.review_sha ||
+    (ceremony.step !== "awaiting_merge" && ceremony.step !== "ready")
+  ) {
+    return NextResponse.json(
+      { error: "PR isn't reviewed-and-ready to merge yet." },
+      { status: 400 }
+    );
+  }
   try {
     await mergePR({
       cwd: expandHome(session.worktree_path),

@@ -228,37 +228,84 @@ export async function aggregatePanelVerdict(
 }
 
 /**
- * The highest `round` across ALL STOA_REVIEW markers on a PR (any author), or -1
- * if none. The session ceremony seeds its next panel's round to max+1 so a fresh
- * generation's markers are always strictly above any stale ones (a re-enrol or a
- * cancel-mid-review race can never let an old panel's APPROVE count for new code).
- * Returns -1 on any gh failure (the caller then starts at round 0; the time-based
- * sinceMs filter still scopes by enrolment).
+ * The session ceremony's verdict marker — binds the verdict to the EXACT commit
+ * the panelist reviewed (the panelist reads `gh pr view --json headRefOid` and
+ * stamps it). Unlike the dispatch round marker, the SHA is the identity: the
+ * aggregator counts only markers whose sha equals the pinned review_sha, so a
+ * stale panel (a re-enrol / cancel-mid-review race, or a push between review and
+ * merge) can never approve commits it didn't see — immune to round/time games.
  */
-export async function maxStoaReviewRound(
+export function sessionReviewMarker(
+  reviewSha: string,
+  lensKey: string
+): string {
+  return `STOA_SESSION_REVIEW sha=${reviewSha} lens=${lensKey} verdict=APPROVE`;
+}
+
+/**
+ * Pure: aggregate STOA_SESSION_REVIEW markers for an EXACT reviewSha. Only `actor`
+ * comments count (anti-forgery); latest wins per lens; complete once every lens
+ * weighed in for that sha. Unit-tested. (Mirrors parsePanelComments but keyed on
+ * sha, not round.)
+ */
+export function parseSessionComments(
+  comments: PanelComment[],
+  lensKeys: readonly string[],
+  reviewSha: string,
+  actor: string
+): PanelVerdict {
+  const byLens: Record<string, "APPROVE" | "REQUEST_CHANGES"> = {};
+  if (!reviewSha) return { byLens, complete: false, decision: null };
+  for (const c of comments) {
+    const login =
+      c?.author && typeof c.author.login === "string" ? c.author.login : "";
+    if (!actor || login !== actor) continue; // not Stoa's comment → ignore
+    const body = typeof c.body === "string" ? c.body : "";
+    const marker =
+      /STOA_SESSION_REVIEW\s+sha=([0-9a-fA-F]+)\s+lens=(\w+)\s+verdict=(APPROVE|REQUEST_CHANGES)/g;
+    for (const m of body.matchAll(marker)) {
+      const [, sha, lens, verdict] = m;
+      if (sha !== reviewSha || !lensKeys.includes(lens)) continue;
+      byLens[lens] = verdict as "APPROVE" | "REQUEST_CHANGES";
+    }
+  }
+  const complete = lensKeys.every((k) => k in byLens);
+  const decision = !complete
+    ? null
+    : lensKeys.some((k) => byLens[k] === "REQUEST_CHANGES")
+      ? "CHANGES_REQUESTED"
+      : "APPROVED";
+  return { byLens, complete, decision };
+}
+
+/** Read the session panel's verdict for an EXACT reviewSha from the PR comments.
+ * Incomplete on any gh failure / unresolvable actor (the caller keeps polling). */
+export async function aggregateSessionVerdict(
   cwd: string,
-  prNumber: number
-): Promise<number> {
+  prNumber: number,
+  reviewSha: string
+): Promise<PanelVerdict> {
+  const incomplete: PanelVerdict = {
+    byLens: {},
+    complete: false,
+    decision: null,
+  };
   try {
+    const actor = await getGhActor(cwd);
+    if (!actor) return incomplete;
     const { stdout } = await execFileAsync(
       gh,
       ["pr", "view", String(prNumber), "--json", "comments"],
       { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
     );
-    const parsed = JSON.parse(stdout) as { comments?: { body?: unknown }[] };
+    const parsed = JSON.parse(stdout) as { comments?: RawComment[] };
     const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
-    let max = -1;
-    for (const c of comments) {
-      const body = typeof c?.body === "string" ? c.body : "";
-      const re = /STOA_REVIEW\s+lens=\w+\s+round=(\d+)\s+verdict=/g;
-      for (const m of body.matchAll(re)) {
-        const r = Number(m[1]);
-        if (Number.isFinite(r) && r > max) max = r;
-      }
-    }
-    return max;
+    comments.sort((a, b) =>
+      String(a?.createdAt ?? "").localeCompare(String(b?.createdAt ?? ""))
+    );
+    return parseSessionComments(comments, LENS_KEYS, reviewSha, actor);
   } catch {
-    return -1;
+    return incomplete;
   }
 }
 
