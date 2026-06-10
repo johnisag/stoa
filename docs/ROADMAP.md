@@ -75,11 +75,16 @@ three symptoms — delete, attach, reclaim — resolve at once):
    in the reconciler tick that REUSES the dispatch pure decisions
    (`nextReviewAction`/`nextCiFixAction`/`nextAutoMergeAction`), the spawn recipe
    (`spawnInWorktree` refactored into a shared `spawnWorktreeWorker`), the panel
-   verdict reader, and `mergePR`. Critic panel → fix loop → CI auto-fix →
-   auto-merge, with an idle-guard so ceremony agents never collide with the still-
-   working session. The **gate is GitHub CI + the panel** (the engine has no local
-   tsc/test/build runner — reused as-is). `AutoModeDialog` carries its own in-app
-   help. _Follow-up: a session-card "auto · step" badge; open-the-PR-automatically._
+   verdict reader, and `mergePR`. Critic panel → fix loop → CI auto-fix → **ready**.
+   The final merge is **opt-in**: default stops at `awaiting_merge` for a one-tap
+   human merge (you render the verdict); flip on auto-merge to land it unattended.
+   Hardened (Fable-5 security review × 3): an idle-guard so ceremony agents never
+   collide with the still-working session; the panel is pinned to the SHA it
+   reviewed (round seeded above existing markers) and the merge uses
+   `gh --match-head-commit`, so a push-after-approval is re-reviewed, never merged
+   unreviewed. The **gate is GitHub CI + the panel** (no local runner — reused
+   as-is). `AutoModeDialog` carries its own in-app help. _Follow-up: a session-card
+   "auto · step" badge; open-the-PR-automatically at enrol._
 9. **Task list → full auto — always ceremony. ← NEXT.** Run a whole task list
    autonomously, each item through the same ceremony. Builds directly on #8's
    `session_ceremonies` + pass.

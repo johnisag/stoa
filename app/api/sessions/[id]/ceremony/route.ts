@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
 import { getPRForBranchAnyState } from "@/lib/dispatch/issues";
+import { mergePR } from "@/lib/dispatch/merge";
 import { expandHome } from "@/lib/platform";
 import type { SessionCeremony } from "@/lib/dispatch/types";
 
@@ -29,14 +30,17 @@ export async function POST(
   try {
     const { id } = await params;
     let seedPrompt: string | undefined;
+    let autoMerge = 0;
     try {
       const body = await request.json();
       seedPrompt =
         typeof body?.seedPrompt === "string"
           ? body.seedPrompt.trim()
           : undefined;
+      // Opt-in unattended merge; default off (the human does the final merge).
+      autoMerge = body?.autoMerge === true ? 1 : 0;
     } catch {
-      // No body / invalid JSON is fine — auto mode with no seed prompt.
+      // No body / invalid JSON is fine — auto mode with no seed prompt, no merge.
     }
 
     const db = getDb();
@@ -79,7 +83,7 @@ export async function POST(
     if (!existing) {
       const r = queries
         .createSessionCeremony(db)
-        .run(ceremonyId, id, seedPrompt || null);
+        .run(ceremonyId, id, seedPrompt || null, autoMerge);
       firstEnrol = r.changes === 1;
     }
     queries.updateCeremonyPR(db).run(pr.url, pr.number, ceremonyId);
@@ -105,6 +109,50 @@ export async function POST(
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+/** PUT — the human's one-tap "Merge now" for a ceremony at 'awaiting_merge'
+ * (auto_merge off). Pinned to the reviewed SHA: gh refuses if the head moved off
+ * what the panel approved, so even the human merge never lands unreviewed pushes. */
+export async function PUT(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const db = getDb();
+  const session = requireSession(id);
+  if (!session) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+  const ceremony = queries.getSessionCeremony(db).get(id) as
+    | SessionCeremony
+    | undefined;
+  if (!ceremony || ceremony.pr_number == null || !session.worktree_path) {
+    return NextResponse.json(
+      { error: "No auto-mode PR to merge." },
+      { status: 400 }
+    );
+  }
+  try {
+    await mergePR({
+      cwd: expandHome(session.worktree_path),
+      prNumber: ceremony.pr_number,
+      matchHeadCommit: ceremony.review_sha,
+    });
+    queries.setCeremonyStep(db).run("merged", ceremony.id);
+    queries
+      .updateSessionPR(db)
+      .run(
+        session.pr_url ?? ceremony.pr_url,
+        ceremony.pr_number,
+        "merged",
+        session.id
+      );
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: msg }, { status: 400 });
   }
 }
 

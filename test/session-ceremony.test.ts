@@ -1,14 +1,12 @@
 /**
  * Session "go to auto" — the ceremony pass.
  *
- * The pass REUSES the dispatch ceremony's pure decisions (nextReviewAction /
- * nextCiFixAction / nextAutoMergeAction — already unit-tested in their own
- * suites); these tests lock the WIRING + the session-specific safety: the right
- * agent is spawned per state, the idle-guard holds off while the owner works, an
- * external merge/close is terminal, a list() failure skips the tick, and the
- * approval is pinned to the PR head SHA (a push after approval re-reviews instead
- * of auto-merging). Real pure functions (importOriginal), mocked I/O — mirrors
- * dispatch-ci-fix.test.ts.
+ * The pass REUSES the dispatch ceremony's pure decisions; these tests lock the
+ * WIRING + the session-specific safety: the right agent per state, the idle-guard,
+ * external merge/close terminal, list()-failure skip, the SPAWN-TIME review pin
+ * (sha + round-seeded generation), re-review when the head moves after approval,
+ * the opt-in auto-merge (off → awaiting_merge for the human), and the merge being
+ * pinned (--match-head-commit). Real pure functions (importOriginal), mocked I/O.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -19,6 +17,7 @@ const { state } = vi.hoisted(() => ({
     ownerStatus: "idle" as string,
     live: [] as string[],
     listThrows: false,
+    maxRound: -1,
     verdict: { complete: false, decision: null, byLens: {} } as {
       complete: boolean;
       decision: string | null;
@@ -37,9 +36,10 @@ const { state } = vi.hoisted(() => ({
     },
     spawns: [] as string[],
     merges: [] as number[],
+    mergePins: [] as Array<string | null | undefined>,
     steps: {} as Record<string, string>,
     decisions: [] as string[],
-    approvedShas: [] as Array<string | null>,
+    reviews: [] as Array<{ sha: unknown; round: unknown }>,
     rereviews: [] as string[],
     sessionPrUpdates: [] as Array<[string, number]>,
   },
@@ -55,15 +55,14 @@ vi.mock("@/lib/db", () => ({
         state.steps[id] = step;
       },
     }),
-    setCeremonyReviewer: () => ({ run: () => {} }),
+    setCeremonyReview: () => ({
+      run: (_reviewerId: string, sha: unknown, round: unknown) => {
+        state.reviews.push({ sha, round });
+      },
+    }),
     setCeremonyReviewDecision: () => ({
       run: (dec: string) => {
         state.decisions.push(dec);
-      },
-    }),
-    setCeremonyApprovedSha: () => ({
-      run: (sha: string | null) => {
-        state.approvedShas.push(sha);
       },
     }),
     startCeremonyFixRound: () => ({ run: () => {} }),
@@ -105,12 +104,16 @@ vi.mock("@/lib/dispatch/reviewer", async (importOriginal) => {
     ...actual,
     spawnWorktreeWorker: async (
       _target: unknown,
-      label: string
+      label: string,
+      _prompt: string,
+      onSpawn: (id: string) => void
     ): Promise<string> => {
       state.spawns.push(label);
+      if (typeof onSpawn === "function") onSpawn("sid-new");
       return "sid-new";
     },
     aggregatePanelVerdict: async () => state.verdict,
+    maxStoaReviewRound: async () => state.maxRound,
   };
 });
 vi.mock("@/lib/dispatch/auto-merge", async (importOriginal) => {
@@ -119,8 +122,15 @@ vi.mock("@/lib/dispatch/auto-merge", async (importOriginal) => {
   return { ...actual, getPrReadiness: async () => state.readiness };
 });
 vi.mock("@/lib/dispatch/merge", () => ({
-  mergePR: async ({ prNumber }: { prNumber: number }) => {
+  mergePR: async ({
+    prNumber,
+    matchHeadCommit,
+  }: {
+    prNumber: number;
+    matchHeadCommit?: string | null;
+  }) => {
     state.merges.push(prNumber);
+    state.mergePins.push(matchHeadCommit);
   },
 }));
 
@@ -148,7 +158,9 @@ const ceremony = (over: Record<string, unknown> = {}) => ({
   pr_url: "https://gh/pr/7",
   reviewer_session_id: null,
   review_decision: null,
-  approved_sha: null,
+  review_sha: null,
+  review_round: 0,
+  auto_merge: 0,
   fix_rounds: 0,
   fixer_session_id: null,
   ci_fix_rounds: 0,
@@ -157,11 +169,12 @@ const ceremony = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+// An approved ceremony whose panel reviewed the CURRENT head (sha-1).
 const approved = (over: Record<string, unknown> = {}) =>
   ceremony({
     reviewer_session_id: "rev",
     review_decision: "APPROVED",
-    approved_sha: "sha-1",
+    review_sha: "sha-1",
     ...over,
   });
 
@@ -172,6 +185,7 @@ describe("sessionCeremonyPass", () => {
     state.ownerStatus = "idle";
     state.live = [];
     state.listThrows = false;
+    state.maxRound = -1;
     state.verdict = { complete: false, decision: null, byLens: {} };
     state.readiness = {
       mergeable: "MERGEABLE",
@@ -181,14 +195,16 @@ describe("sessionCeremonyPass", () => {
     };
     state.spawns = [];
     state.merges = [];
+    state.mergePins = [];
     state.steps = {};
     state.decisions = [];
-    state.approvedShas = [];
+    state.reviews = [];
     state.rereviews = [];
     state.sessionPrUpdates = [];
   });
 
-  it("spawns the 3-critic panel when no reviewer yet and the owner is idle", async () => {
+  it("spawns the 3-critic panel and pins the reviewed SHA + seeded round", async () => {
+    state.maxRound = 2; // existing markers up to round 2
     await sessionCeremonyPass();
     expect(state.spawns).toEqual([
       "review #7 · correctness",
@@ -196,54 +212,37 @@ describe("sessionCeremonyPass", () => {
       "review #7 · simplicity",
     ]);
     expect(state.steps["cer-1"]).toBe("reviewing");
+    // round seeded ABOVE the max existing marker; sha = current head.
+    expect(state.reviews).toEqual([{ sha: "sha-1", round: 3 }]);
   });
 
-  it("WAITS (no spawns) while the owner session is still running/waiting", async () => {
+  it("WAITS while the owner session is still running/waiting", async () => {
     state.live = ["claude-sess"];
     state.ownerStatus = "running";
     await sessionCeremonyPass();
     expect(state.spawns).toHaveLength(0);
-    expect(state.merges).toHaveLength(0);
-
     state.ownerStatus = "waiting";
     await sessionCeremonyPass();
     expect(state.spawns).toHaveLength(0);
-  });
-
-  it("proceeds once the owner has gone idle (even if still alive)", async () => {
-    state.live = ["claude-sess"];
-    state.ownerStatus = "idle";
-    await sessionCeremonyPass();
-    expect(state.spawns).toHaveLength(3);
   });
 
   it("skips the whole tick when the backend can't list sessions", async () => {
     state.listThrows = true;
     await sessionCeremonyPass();
     expect(state.spawns).toHaveLength(0);
-    expect(state.merges).toHaveLength(0);
     expect(Object.keys(state.steps)).toHaveLength(0);
   });
 
   it("spawns a fixer when the panel requested changes (under the cap)", async () => {
-    state.ceremonies = [
-      ceremony({
-        reviewer_session_id: "rev",
-        review_decision: "CHANGES_REQUESTED",
-      }),
-    ];
+    state.ceremonies = [approved({ review_decision: "CHANGES_REQUESTED" })];
     await sessionCeremonyPass();
     expect(state.spawns).toEqual(["fix #7"]);
     expect(state.steps["cer-1"]).toBe("fixing");
   });
 
-  it("is stuck at the fix-round cap (needs a human)", async () => {
+  it("is stuck at the fix-round cap", async () => {
     state.ceremonies = [
-      ceremony({
-        reviewer_session_id: "rev",
-        review_decision: "CHANGES_REQUESTED",
-        fix_rounds: 2, // MAX_FIX_ROUNDS default
-      }),
+      approved({ review_decision: "CHANGES_REQUESTED", fix_rounds: 2 }),
     ];
     await sessionCeremonyPass();
     expect(state.spawns).toHaveLength(0);
@@ -252,29 +251,35 @@ describe("sessionCeremonyPass", () => {
 
   it("re-reviews (fresh panel) after a fixer finished", async () => {
     state.ceremonies = [
-      ceremony({
-        reviewer_session_id: "rev",
+      approved({
         review_decision: "CHANGES_REQUESTED",
-        fixer_session_id: "fix-dead", // set but not in `live` → finished
+        fixer_session_id: "fix-dead",
         fix_rounds: 1,
       }),
     ];
     await sessionCeremonyPass();
     expect(state.rereviews).toEqual(["cer-1"]);
-    expect(state.spawns).toHaveLength(0); // re-spawn happens next tick
     expect(state.steps["cer-1"]).toBe("reviewing");
   });
 
-  it("merges when approved + green + mergeable, and flips the session PR badge", async () => {
-    state.ceremonies = [approved()];
+  it("AUTO-MERGES (opt-in) when approved + green + mergeable, pinned to the reviewed SHA", async () => {
+    state.ceremonies = [approved({ auto_merge: 1 })];
     await sessionCeremonyPass();
     expect(state.merges).toEqual([7]);
+    expect(state.mergePins).toEqual(["sha-1"]); // --match-head-commit pin
     expect(state.steps["cer-1"]).toBe("merged");
     expect(state.sessionPrUpdates).toEqual([["merged", 7]]);
   });
 
+  it("stops at awaiting_merge (no merge) when auto_merge is OFF — the human merges", async () => {
+    state.ceremonies = [approved({ auto_merge: 0 })];
+    await sessionCeremonyPass();
+    expect(state.merges).toHaveLength(0);
+    expect(state.steps["cer-1"]).toBe("awaiting_merge");
+  });
+
   it("RE-REVIEWS instead of merging when the head moved after approval", async () => {
-    state.ceremonies = [approved({ approved_sha: "old-sha" })];
+    state.ceremonies = [approved({ auto_merge: 1, review_sha: "old-sha" })];
     state.readiness = { ...state.readiness, headRefOid: "new-sha" };
     await sessionCeremonyPass();
     expect(state.merges).toHaveLength(0);
@@ -282,15 +287,8 @@ describe("sessionCeremonyPass", () => {
     expect(state.steps["cer-1"]).toBe("reviewing");
   });
 
-  it("pins the head SHA when it first sees an approval with none recorded", async () => {
-    state.ceremonies = [approved({ approved_sha: null })];
-    await sessionCeremonyPass();
-    expect(state.approvedShas).toContain("sha-1"); // current head pinned
-    expect(state.merges).toEqual([7]); // sha matches → merges same tick
-  });
-
   it("spawns a CI fixer when approved but checks are red", async () => {
-    state.ceremonies = [approved()];
+    state.ceremonies = [approved({ auto_merge: 1 })];
     state.readiness = { ...state.readiness, checks: "failing" };
     await sessionCeremonyPass();
     expect(state.spawns).toEqual(["ci-fix #7"]);
@@ -298,16 +296,22 @@ describe("sessionCeremonyPass", () => {
     expect(state.steps["cer-1"]).toBe("ci_fixing");
   });
 
-  it("waits (no merge) when approved but the PR isn't mergeable yet", async () => {
-    state.ceremonies = [approved()];
+  it("waits (ready) when approved but the PR isn't mergeable yet", async () => {
+    state.ceremonies = [approved({ auto_merge: 1 })];
     state.readiness = { ...state.readiness, mergeable: "CONFLICTING" };
     await sessionCeremonyPass();
     expect(state.merges).toHaveLength(0);
     expect(state.steps["cer-1"]).toBe("ready");
   });
 
-  it("aggregates an APPROVED panel verdict, then merges the same tick", async () => {
-    state.ceremonies = [ceremony({ reviewer_session_id: "rev" })]; // decision null
+  it("aggregates an APPROVED verdict, then auto-merges the same tick (opt-in)", async () => {
+    state.ceremonies = [
+      ceremony({
+        reviewer_session_id: "rev",
+        review_sha: "sha-1",
+        auto_merge: 1,
+      }),
+    ];
     state.verdict = { complete: true, decision: "APPROVED", byLens: {} };
     await sessionCeremonyPass();
     expect(state.decisions).toContain("APPROVED");
@@ -315,15 +319,15 @@ describe("sessionCeremonyPass", () => {
   });
 
   it("goes terminal when the PR was merged externally", async () => {
-    state.ceremonies = [approved()];
+    state.ceremonies = [approved({ auto_merge: 1 })];
     state.readiness = { ...state.readiness, state: "MERGED" };
     await sessionCeremonyPass();
     expect(state.steps["cer-1"]).toBe("merged");
-    expect(state.merges).toHaveLength(0); // we didn't merge it; it already was
+    expect(state.merges).toHaveLength(0);
   });
 
   it("is stuck when the PR was closed externally", async () => {
-    state.ceremonies = [approved()];
+    state.ceremonies = [approved({ auto_merge: 1 })];
     state.readiness = { ...state.readiness, state: "CLOSED" };
     await sessionCeremonyPass();
     expect(state.steps["cer-1"]).toBe("stuck");

@@ -22,21 +22,48 @@ export function useCeremony(sessionId: string, enabled = true) {
   });
 }
 
-/** Enrol the session in auto mode (optional seed prompt). */
+export interface StartCeremonyInput {
+  seedPrompt?: string;
+  /** Opt in to unattended auto-merge (default: stop at 'awaiting_merge', human merges). */
+  autoMerge?: boolean;
+}
+
+/** Enrol the session in auto mode (optional seed prompt + auto-merge opt-in). */
 export function useStartCeremony(sessionId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (seedPrompt?: string): Promise<SessionCeremony> => {
+    mutationFn: async (
+      input: StartCeremonyInput = {}
+    ): Promise<SessionCeremony> => {
       const res = await fetch(`/api/sessions/${sessionId}/ceremony`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ seedPrompt: seedPrompt || undefined }),
+        body: JSON.stringify({
+          seedPrompt: input.seedPrompt || undefined,
+          autoMerge: !!input.autoMerge,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to start auto mode");
       return data.ceremony as SessionCeremony;
     },
     onSuccess: (c) => qc.setQueryData(sessionKeys.ceremony(sessionId), c),
+  });
+}
+
+/** Human "Merge now" for a ceremony at 'awaiting_merge' (auto_merge off). */
+export function useMergeCeremony(sessionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/sessions/${sessionId}/ceremony`, {
+        method: "PUT",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to merge");
+    },
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: sessionKeys.ceremony(sessionId) }),
   });
 }
 

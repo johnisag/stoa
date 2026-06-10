@@ -1,25 +1,24 @@
 /**
  * Session "go to auto" — drive enrolled sessions through the SAME ceremony the
  * dispatch engine runs on an issue's PR: a 3-critic panel reviews the session's
- * PR, a fixer addresses requested changes, a CI fixer heals red checks, then the
- * PR auto-merges. We REUSE the dispatch ceremony wholesale — its pure decisions
- * (nextReviewAction / nextCiFixAction / nextAutoMergeAction), its readers
- * (getPrReadiness / aggregatePanelVerdict), the spawn recipe (spawnWorktreeWorker),
- * the canonical verdict marker (reviewVerdictMarker), and mergePR — only the
- * prompt prose differs (a session has no GitHub issue).
+ * PR, a fixer addresses requested changes, a CI fixer heals red checks, then —
+ * if the user opted in — the PR auto-merges (otherwise it stops at 'awaiting_merge'
+ * and the human does the one-tap merge). We REUSE the dispatch ceremony wholesale —
+ * its pure decisions (nextReviewAction / nextCiFixAction / nextAutoMergeAction),
+ * readers (getPrReadiness / aggregatePanelVerdict / maxStoaReviewRound), the spawn
+ * recipe (spawnWorktreeWorker), the canonical verdict marker, and mergePR.
  *
  * Runs once per reconcile tick (after autoMergePass); a no-op when no session is
- * enrolled (the common case). Detection/enrolment is the user's explicit opt-in
- * ("go to auto"); this pass is the autonomous WORK behind that tap.
+ * enrolled. Enrolment is the user's explicit opt-in; this is the autonomous WORK.
  *
- * Safety, given the owner is an INTERACTIVE session (unlike a finished dispatch
- * worker):
- *  - collision guard: skip while the owner is running/waiting, so a fixer never
- *    writes the worktree under the owner's feet;
- *  - re-enrol scoping: the panel verdict is scoped to comments posted after this
- *    ceremony began (a re-enrol can't inherit a prior enrolment's stale APPROVE);
- *  - approval pinning: the approval is pinned to the PR head SHA, so an owner who
- *    pushes after approval gets re-reviewed instead of auto-merged unreviewed.
+ * Safety, given the owner is an INTERACTIVE session (it can push at any time):
+ *  - collision guard: skip while the owner is running/waiting;
+ *  - generation isolation: each panel's round is seeded ABOVE any existing PR
+ *    marker, so a re-review can never self-approve from a prior panel's markers;
+ *  - approval pinning: the SHA the panel reviewed is captured at SPAWN, and the
+ *    merge is `gh --match-head-commit` pinned to it — a push after approval is
+ *    re-reviewed, never merged unreviewed;
+ *  - auto-merge is OPT-IN; the default stops at 'awaiting_merge' for the human.
  */
 
 import { getDb, queries, type Session } from "../db";
@@ -30,6 +29,7 @@ import {
   REVIEW_LENSES,
   nextReviewAction,
   aggregatePanelVerdict,
+  maxStoaReviewRound,
   reviewVerdictMarker,
   spawnWorktreeWorker,
   MAX_FIX_ROUNDS,
@@ -126,8 +126,8 @@ export async function sessionCeremonyPass(): Promise<void> {
     liveNames = new Set(await getSessionBackend().list());
   } catch {
     // Can't enumerate sessions → skip this tick rather than mis-read liveness
-    // (a false "dead" fixer would clear an approval mid-fix, and an empty set
-    // would bypass the collision guard). Mirrors the reconciler's worker sweep.
+    // (a false "dead" fixer would clear a review mid-fix, and an empty set would
+    // bypass the collision guard). Mirrors the reconciler's worker sweep.
     return;
   }
   const isAlive = (sessionId: string | null): boolean => {
@@ -187,15 +187,15 @@ export async function sessionCeremonyPass(): Promise<void> {
     const fixerAlive = isAlive(c.fixer_session_id);
     let decision = c.review_decision;
 
-    // Aggregate only while a panel is out with no fixer and no decision yet (a
-    // finished fixer routes to "rereview" below, re-spawning a fresh panel). Scope
-    // to comments posted after THIS ceremony began so a re-enrol can't inherit a
-    // prior enrolment's APPROVE markers.
+    // Aggregate only while a panel is out with no fixer and no decision yet. Scope
+    // to this panel's generation (review_round, seeded above any prior marker at
+    // spawn) AND to comments posted after this ceremony began (sinceMs) — together
+    // a re-review can't inherit a prior panel's APPROVE markers.
     if (c.reviewer_session_id && !c.fixer_session_id && !decision) {
       const verdict = await aggregatePanelVerdict(
         cwd,
         prNumber,
-        c.fix_rounds,
+        c.review_round,
         sqliteTimeToMs(c.created_at)
       );
       if (verdict.complete && verdict.decision) {
@@ -217,16 +217,21 @@ export async function sessionCeremonyPass(): Promise<void> {
     });
 
     if (reviewAction === "spawn_critic") {
+      // Seed this generation's round above any existing marker, and pin the SHA
+      // the panel is about to review — both recorded on the FIRST panelist.
+      const round = (await maxStoaReviewRound(cwd, prNumber)) + 1;
       setStep(c.id, "reviewing");
       let guardSet = false;
       for (const lens of REVIEW_LENSES) {
         await spawnWorktreeWorker(
           sessionTarget(session),
           `review #${prNumber} · ${lens.key}`,
-          buildSessionLensReviewPrompt(prNumber, c.fix_rounds, lens),
+          buildSessionLensReviewPrompt(prNumber, round, lens),
           (id) => {
             if (!guardSet) {
-              queries.setCeremonyReviewer(db).run(id, c.id);
+              queries
+                .setCeremonyReview(db)
+                .run(id, readiness.headRefOid, round, c.id);
               guardSet = true;
             }
           }
@@ -259,18 +264,13 @@ export async function sessionCeremonyPass(): Promise<void> {
       continue;
     }
 
-    // ── 2. Approval pinning: pin to the head SHA at approval; re-review if moved ──
-    let approvedSha = c.approved_sha;
-    if (approvedSha == null && readiness.headRefOid) {
-      approvedSha = readiness.headRefOid;
-      queries.setCeremonyApprovedSha(db).run(approvedSha, c.id);
-    }
+    // ── 2. Approval pinning: the panel approved review_sha; if the live head
+    //       moved off it (owner pushed after approval) → re-review the new commits.
     if (
-      approvedSha &&
+      c.review_sha &&
       readiness.headRefOid &&
-      approvedSha !== readiness.headRefOid
+      c.review_sha !== readiness.headRefOid
     ) {
-      // The owner pushed new commits after the panel approved — re-review them.
       queries.resetCeremonyForReReview(db).run(c.id);
       setStep(c.id, "reviewing");
       continue;
@@ -306,37 +306,43 @@ export async function sessionCeremonyPass(): Promise<void> {
       continue;
     }
 
-    // ── 4. Auto-merge (approved + mergeable + green) ──
-    const mergeAction = nextAutoMergeAction({
-      autoMerge: true,
-      status: "pr_open",
-      prNumber,
-      reviewGate: true,
-      reviewDecision: decision,
-      mergeable: readiness.mergeable,
-      checks: readiness.checks,
-    });
-    if (mergeAction === "merge") {
-      setStep(c.id, "merging");
-      try {
-        await mergePR({ cwd, prNumber });
-        setStep(c.id, "merged");
-        // Flip the session's own PR badge to 'merged' so a hands-off completion
-        // shows on the card (not just inside the dialog). Don't reclaim the
-        // worktree — the session owns it; the session-delete path does that.
-        queries
-          .updateSessionPR(db)
-          .run(session.pr_url ?? c.pr_url, prNumber, "merged", session.id);
-        console.log(`session ceremony: auto-merged PR #${prNumber}`);
-      } catch (err) {
-        console.error(
-          `session ceremony: auto-merge of PR #${prNumber} deferred:`,
-          err instanceof Error ? err.message : err
-        );
-      }
-    } else {
-      // Approved, but not mergeable/green yet → waiting on CI or a rebase.
-      setStep(c.id, "ready");
+    // ── 4. Ready: approved + green + mergeable? Auto-merge (opt-in) or hand to the
+    //       human. The merge is pinned to the reviewed SHA (gh --match-head-commit).
+    const ready =
+      nextAutoMergeAction({
+        autoMerge: true,
+        status: "pr_open",
+        prNumber,
+        reviewGate: true,
+        reviewDecision: decision,
+        mergeable: readiness.mergeable,
+        checks: readiness.checks,
+      }) === "merge";
+
+    if (!ready) {
+      setStep(c.id, "ready"); // approved, waiting on CI / mergeability
+      continue;
+    }
+    if (c.auto_merge !== 1) {
+      setStep(c.id, "awaiting_merge"); // the human does the final merge
+      continue;
+    }
+    // Opt-in auto-merge, pinned to the reviewed SHA (gh refuses if the head moved).
+    setStep(c.id, "merging");
+    try {
+      await mergePR({ cwd, prNumber, matchHeadCommit: c.review_sha });
+      setStep(c.id, "merged");
+      queries
+        .updateSessionPR(db)
+        .run(session.pr_url ?? c.pr_url, prNumber, "merged", session.id);
+      console.log(`session ceremony: auto-merged PR #${prNumber}`);
+    } catch (err) {
+      // Not mergeable yet / head moved off the pin — leave it; the next tick
+      // re-checks (the head-moved guard above re-reviews if the owner pushed).
+      console.error(
+        `session ceremony: auto-merge of PR #${prNumber} deferred:`,
+        err instanceof Error ? err.message : err
+      );
     }
   }
 }

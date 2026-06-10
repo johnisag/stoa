@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Zap, Loader2, X } from "lucide-react";
+import { Zap, Loader2, X, GitMerge } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -12,11 +12,13 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
   useCeremony,
   useStartCeremony,
   useCancelCeremony,
+  useMergeCeremony,
 } from "@/data/sessions/ceremony";
 import type { Session } from "@/lib/db";
 import type { SessionCeremonyStep } from "@/lib/dispatch/types";
@@ -44,6 +46,10 @@ const STEP_LABEL: Record<
   ready: {
     label: "Approved — waiting on CI / mergeability",
     badge: "bg-yellow-500/15 text-yellow-600 dark:text-yellow-400",
+  },
+  awaiting_merge: {
+    label: "Approved & green — ready to merge",
+    badge: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
   },
   merging: {
     label: "Merging…",
@@ -75,21 +81,35 @@ export function AutoModeDialog({
   onClose: () => void;
 }) {
   const [seed, setSeed] = useState("");
+  const [autoMerge, setAutoMerge] = useState(false);
   const { data: ceremony, isLoading } = useCeremony(session.id, open);
   const start = useStartCeremony(session.id);
   const cancel = useCancelCeremony(session.id);
+  const merge = useMergeCeremony(session.id);
 
   const hasBranch = !!session.branch_name && !!session.worktree_path;
   const enrolled = !!ceremony;
   const step = ceremony ? STEP_LABEL[ceremony.step] : null;
+  const awaitingMerge = ceremony?.step === "awaiting_merge";
 
   async function handleStart() {
     try {
-      await start.mutateAsync(seed.trim() || undefined);
+      await start.mutateAsync({
+        seedPrompt: seed.trim() || undefined,
+        autoMerge,
+      });
       toast.success("Sent to auto — the ceremony takes it from here");
       setSeed("");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to start auto mode");
+    }
+  }
+  async function handleMerge() {
+    try {
+      await merge.mutateAsync();
+      toast.success("Merged");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to merge");
     }
   }
   async function handleCancel() {
@@ -136,7 +156,8 @@ export function AutoModeDialog({
             </li>
             <li>
               <span className="text-foreground font-medium">4.</span> Once
-              approved + green + mergeable, the PR auto-merges. If it gets
+              approved + green + mergeable, it’s ready — you merge with one tap,
+              or flip on auto-merge below to land it unattended. If it gets
               stuck, it waits for you.
             </li>
           </ol>
@@ -176,19 +197,35 @@ export function AutoModeDialog({
                   . The reviewers and fixers run in this session’s worktree.
                 </p>
               )}
-              <Button
-                variant="outline"
-                onClick={handleCancel}
-                disabled={cancel.isPending}
-                className="w-full sm:w-auto sm:self-start"
-              >
-                {cancel.isPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <X className="mr-1.5 h-4 w-4" />
+              <div className="flex flex-wrap gap-2">
+                {awaitingMerge && (
+                  <Button
+                    onClick={handleMerge}
+                    disabled={merge.isPending}
+                    className="w-full sm:w-auto"
+                  >
+                    {merge.isPending ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <GitMerge className="mr-1.5 h-4 w-4" />
+                    )}
+                    Merge now
+                  </Button>
                 )}
-                Cancel auto mode
-              </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleCancel}
+                  disabled={cancel.isPending}
+                  className="w-full sm:w-auto"
+                >
+                  {cancel.isPending ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <X className="mr-1.5 h-4 w-4" />
+                  )}
+                  Cancel auto mode
+                </Button>
+              </div>
             </div>
           ) : !hasBranch ? (
             <p className="text-muted-foreground rounded-md border border-dashed px-3 py-3 text-xs leading-relaxed">
@@ -207,11 +244,27 @@ export function AutoModeDialog({
                   placeholder="A final instruction before it goes autonomous — e.g. 'tighten the error handling, then you're done'. Leave blank to hand off as-is."
                 />
               </label>
+              <label className="flex items-start justify-between gap-3 rounded-md border p-3 text-sm">
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-medium">Auto-merge when ready</span>
+                  <span className="text-muted-foreground text-xs leading-relaxed">
+                    Off (default): it reviews + CI-fixes the PR to green, then
+                    you merge with one tap. On: it merges unattended once
+                    approved + green (pinned to the reviewed commit).
+                  </span>
+                </span>
+                <Switch
+                  checked={autoMerge}
+                  onCheckedChange={setAutoMerge}
+                  className="mt-0.5"
+                  aria-label="Auto-merge when ready"
+                />
+              </label>
               <p className="text-muted-foreground rounded-md bg-amber-500/10 px-3 py-2 text-xs leading-relaxed">
                 Needs an <span className="text-foreground">open PR</span> for
-                this branch — auto mode reviews and merges it. It runs gh/git
-                unattended in this session’s worktree, and waits for the session
-                to be idle before it starts reviewing.
+                this branch. It runs gh/git unattended in this session’s
+                worktree, and waits for the session to be idle before it starts
+                reviewing.
               </p>
               <Button
                 onClick={handleStart}

@@ -557,8 +557,8 @@ export const queries = {
     getStmt(
       db,
       // OR IGNORE: re-tapping "go to auto" on an already-enrolled session is a no-op
-      // (session_id is UNIQUE) rather than an error.
-      `INSERT OR IGNORE INTO session_ceremonies (id, session_id, seed_prompt) VALUES (?, ?, ?)`
+      // (session_id is UNIQUE) rather than an error. auto_merge is opt-in (0/1).
+      `INSERT OR IGNORE INTO session_ceremonies (id, session_id, seed_prompt, auto_merge) VALUES (?, ?, ?, ?)`
     ),
 
   getSessionCeremony: (db: Database.Database) =>
@@ -571,24 +571,19 @@ export const queries = {
       `SELECT * FROM session_ceremonies WHERE step NOT IN ('merged', 'stuck')`
     ),
 
-  setCeremonyReviewer: (db: Database.Database) =>
-    getStmt(
-      db,
-      `UPDATE session_ceremonies SET reviewer_session_id = ?, updated_at = datetime('now') WHERE id = ?`
-    ),
-
   setCeremonyReviewDecision: (db: Database.Database) =>
     getStmt(
       db,
       `UPDATE session_ceremonies SET review_decision = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
-  // Pin the approval to the PR head SHA at approval time (the merge re-reviews if
-  // the head later moved — an interactive owner can push after the panel approved).
-  setCeremonyApprovedSha: (db: Database.Database) =>
+  // Pin the panel to the SHA it's reviewing + its generation round, set at panel
+  // SPAWN (run together). The merge re-reviews if the live head moved off review_sha;
+  // review_round is seeded above any existing marker so stale markers never count.
+  setCeremonyReview: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE session_ceremonies SET approved_sha = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE session_ceremonies SET reviewer_session_id = ?, review_sha = ?, review_round = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
   startCeremonyFixRound: (db: Database.Database) =>
@@ -608,8 +603,9 @@ export const queries = {
   resetCeremonyForReReview: (db: Database.Database) =>
     getStmt(
       db,
-      // Also clears approved_sha so a fresh panel must re-approve the new commits.
-      `UPDATE session_ceremonies SET reviewer_session_id = NULL, review_decision = NULL, approved_sha = NULL, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
+      // Clears review_sha too so a fresh panel must re-review the new commits (its
+      // round is re-seeded above existing markers at the next spawn).
+      `UPDATE session_ceremonies SET reviewer_session_id = NULL, review_decision = NULL, review_sha = NULL, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
     ),
 
   updateCeremonyPR: (db: Database.Database) =>

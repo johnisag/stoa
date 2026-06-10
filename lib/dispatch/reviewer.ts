@@ -227,6 +227,41 @@ export async function aggregatePanelVerdict(
   }
 }
 
+/**
+ * The highest `round` across ALL STOA_REVIEW markers on a PR (any author), or -1
+ * if none. The session ceremony seeds its next panel's round to max+1 so a fresh
+ * generation's markers are always strictly above any stale ones (a re-enrol or a
+ * cancel-mid-review race can never let an old panel's APPROVE count for new code).
+ * Returns -1 on any gh failure (the caller then starts at round 0; the time-based
+ * sinceMs filter still scopes by enrolment).
+ */
+export async function maxStoaReviewRound(
+  cwd: string,
+  prNumber: number
+): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync(
+      gh,
+      ["pr", "view", String(prNumber), "--json", "comments"],
+      { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
+    );
+    const parsed = JSON.parse(stdout) as { comments?: { body?: unknown }[] };
+    const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
+    let max = -1;
+    for (const c of comments) {
+      const body = typeof c?.body === "string" ? c.body : "";
+      const re = /STOA_REVIEW\s+lens=\w+\s+round=(\d+)\s+verdict=/g;
+      for (const m of body.matchAll(re)) {
+        const r = Number(m[1]);
+        if (Number.isFinite(r) && r > max) max = r;
+      }
+    }
+    return max;
+  } catch {
+    return -1;
+  }
+}
+
 /** Max worker fix rounds before a PR is left for a human (env-overridable;
  * `STOA_MAX_FIX_ROUNDS=0` validly disables the fixer, leaving critic-only). */
 export const MAX_FIX_ROUNDS = (() => {

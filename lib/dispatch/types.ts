@@ -94,7 +94,8 @@ export type SessionCeremonyStep =
   | "reviewing"
   | "fixing"
   | "ci_fixing"
-  | "ready"
+  | "ready" // approved; waiting on CI / mergeability
+  | "awaiting_merge" // approved + green + mergeable; auto_merge off → human merges
   | "merging"
   | "merged"
   | "stuck";
@@ -118,8 +119,12 @@ export interface SessionCeremony {
   reviewer_session_id: string | null;
   /** Aggregated panel verdict (APPROVED / CHANGES_REQUESTED), null while reviewing. */
   review_decision: string | null;
-  /** PR head SHA when the panel APPROVED — the merge re-reviews if the head moved. */
-  approved_sha: string | null;
+  /** PR head SHA the current panel is reviewing (set at spawn) — the merge pins to it. */
+  review_sha: string | null;
+  /** Monotonic review generation (seeded above existing markers per panel spawn). */
+  review_round: number;
+  /** 0/1 — opt-in: auto-merge when ready (default 0 = stop at 'ready', human merges). */
+  auto_merge: number;
   fix_rounds: number;
   fixer_session_id: string | null;
   ci_fix_rounds: number;
