@@ -47,6 +47,23 @@ learning are the machine's problem. **PART-1 #9** (task-list → full auto) is
 effectively delivered by #3 (spec → N tasks → the identical ceremony); a thin
 "paste-a-ready-list" shortcut is the only follow-up. Tests 845 → 988.
 
+### 🌅 Next campaign — the v2 deferrals (each noted in its PR)
+
+The multiplier system is whole; these polish + deepen it:
+
+- **Fleet memory v2** — a distill agent that summarizes the lessons ledger into
+  proposed `AGENTS.md` amendments; a lessons UI; a table-pruning sweep.
+- **Verdict Inbox v2** — risk-ranking (auth/db/payments paths + large deltas float
+  to the top); a "needs me" push when a review stalls; findings persistence.
+- **Verification harness v2** — a "re-run verify" affordance (flaky test / fixed
+  misconfig); verify for the session ceremony (not just dispatch).
+- **Decomposition v2** — an abandoned-plan worktree TTL; a live-claim pre-check on
+  the manual-dispatch bypass; "waiting on #N" claim chips on the board.
+- **Auto-steer v2** — the error-loop `progressKey` (non-error screen content) for
+  even-fewer false pages; the opt-in text-injection nudge as an upper tier.
+- **PART-1 #9 sliver** — a "paste a ready list → file them all" shortcut (skips the
+  planner; the rest of #9 is delivered by #3).
+
 ---
 
 ## 🌅 Next session — committed queue (added 2026-06-09, for 2026-06-10)
