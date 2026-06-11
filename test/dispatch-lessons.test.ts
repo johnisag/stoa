@@ -10,6 +10,7 @@ const { state } = vi.hoisted(() => ({
     findings: [] as Array<{ lens: string; verdict: string; text: string }>,
     inserted: [] as Array<{ repoId: string; lens: string; text: string }>,
     recent: [] as Array<{ lens: string | null; text: string }>,
+    repos: [] as Array<{ id: string; repo_path: string }>,
   },
 }));
 
@@ -21,9 +22,14 @@ vi.mock("@/lib/db", () => ({
         state.inserted.push({ repoId, lens, text }),
     }),
     listRecentLessons: () => ({ all: () => state.recent }),
+    getEnabledDispatchRepos: () => ({ all: () => state.repos }),
   },
 }));
-vi.mock("@/lib/platform", () => ({ expandHome: (p: string) => p }));
+vi.mock("@/lib/platform", () => ({
+  expandHome: (p: string) => p,
+  normalizePathForCompare: (p: string) =>
+    p.replace(/\\/g, "/").replace(/\/+$/, ""),
+}));
 vi.mock("@/lib/dispatch/reviewer", () => ({
   readReviewerFindings: async () => state.findings,
 }));
@@ -31,6 +37,7 @@ vi.mock("@/lib/dispatch/reviewer", () => ({
 import {
   buildLessonsBlock,
   getLessonsBlock,
+  getLessonsBlockForCwd,
   captureLessons,
 } from "../lib/dispatch/lessons";
 import type { DispatchRepo, IssueDispatch } from "../lib/dispatch/types";
@@ -48,6 +55,25 @@ describe("buildLessonsBlock", () => {
 
   it("is empty when there are no lessons (safe to always concatenate)", () => {
     expect(buildLessonsBlock([])).toBe("");
+  });
+});
+
+describe("getLessonsBlockForCwd (interactive-session injection)", () => {
+  beforeEach(() => {
+    state.recent = [{ lens: null, text: "a known pitfall" }];
+    state.repos = [{ id: "r1", repo_path: "/repos/app" }];
+  });
+
+  it("injects a tracked dispatch repo's pitfalls when the cwd matches its root", () => {
+    expect(getLessonsBlockForCwd("/repos/app")).toContain("a known pitfall");
+  });
+
+  it("is empty for a cwd that isn't a tracked dispatch repo", () => {
+    expect(getLessonsBlockForCwd("/somewhere/else")).toBe("");
+  });
+
+  it("tolerates a trailing-slash / separator difference in the cwd", () => {
+    expect(getLessonsBlockForCwd("/repos/app/")).toContain("a known pitfall");
   });
 });
 

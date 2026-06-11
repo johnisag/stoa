@@ -17,6 +17,7 @@ import {
   ensureHermesMcpRegistered,
 } from "@/lib/mcp-config";
 import { expandHome } from "@/lib/platform";
+import { getLessonsBlockForCwd } from "@/lib/dispatch/lessons";
 
 // GET /api/sessions - List all sessions and groups
 export async function GET() {
@@ -292,6 +293,15 @@ export async function POST(request: NextRequest) {
         `. Make ALL file edits inside this directory — do not edit the base ` +
         `checkout or any other branch.`;
       combinedPrompt = combinedPrompt ? `${note}\n\n${combinedPrompt}` : note;
+    }
+
+    // Fleet memory (#9): if this session is in a tracked dispatch repo, append its
+    // known pitfalls so interactive work benefits from the same memory as the
+    // dispatched fleet. Match the REPO ROOT the user chose (workingDirectory), not
+    // actualWorkingDirectory — a worktree session's actual cwd is the worktree, not
+    // the repo_path. Best-effort; only rides along with an existing prompt.
+    if (combinedPrompt) {
+      combinedPrompt += getLessonsBlockForCwd(workingDirectory);
     }
 
     // Include setup result and initial prompt in response

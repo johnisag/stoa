@@ -20,6 +20,7 @@ import {
   useInboxActions,
   type InboxItem,
 } from "@/data/verdict-inbox/queries";
+import { useAddLesson } from "@/data/dispatch/queries";
 
 // Verdict badge palette — matches the Dispatch board (InFlightBoard) so the same
 // verdict reads identically across surfaces: approved=emerald, changes=amber.
@@ -89,6 +90,21 @@ export function InboxCard({ item }: { item: InboxItem }) {
     open
   );
   const { merge, dismiss, retry } = useInboxActions();
+  const addLesson = useAddLesson();
+
+  // "Remember this": promote a finding into a permanent per-repo rule (fleet
+  // memory) so a future worker is warned up front. Dispatch items only (a repo).
+  const remember = (text: string, lens: string | null) => {
+    if (!item.repoId) return;
+    addLesson.mutate(
+      { repoId: item.repoId, text, lens },
+      {
+        onSuccess: () => toast.success("Added to the repo's memory"),
+        onError: (e) =>
+          toast.error(e instanceof Error ? e.message : "Couldn't remember"),
+      }
+    );
+  };
 
   const verdict = item.reviewDecision
     ? (VERDICT[item.reviewDecision] ?? IN_REVIEW)
@@ -223,6 +239,16 @@ export function InboxCard({ item }: { item: InboxItem }) {
                   <p className="text-muted-foreground text-xs leading-relaxed whitespace-pre-wrap">
                     {f.text}
                   </p>
+                )}
+                {f.text && item.repoId && (
+                  <button
+                    type="button"
+                    disabled={addLesson.isPending}
+                    onClick={() => remember(f.text, f.lens)}
+                    className="text-muted-foreground hover:text-foreground self-start text-[11px] disabled:opacity-50"
+                  >
+                    + Remember this
+                  </button>
                 )}
               </div>
             ))

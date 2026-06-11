@@ -579,6 +579,25 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 30,
+    name: "add_source_to_repo_lessons",
+    up: (db) => {
+      // Fleet memory #9: distinguish operator-curated MANUAL rules from
+      // auto-captured critic findings, so "forget findings" can clear the noise
+      // while keeping curated facts. Guarded ALTER; default 'auto' = exactly the
+      // existing (all-auto) behavior for legacy rows.
+      const hasColumn = (table: string, column: string): boolean =>
+        (
+          db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        ).some((c) => c.name === column);
+      if (!hasColumn("repo_lessons", "source")) {
+        db.exec(
+          `ALTER TABLE repo_lessons ADD COLUMN source TEXT NOT NULL DEFAULT 'auto'`
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

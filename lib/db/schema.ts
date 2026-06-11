@@ -224,6 +224,9 @@ export function createSchema(db: Database.Database): void {
       repo_id TEXT NOT NULL,
       lens TEXT,
       text TEXT NOT NULL,
+      -- 'auto' = captured from a blocking critic finding; 'manual' = an
+      -- operator-curated rule (survives "forget findings"). Both are injected.
+      source TEXT NOT NULL DEFAULT 'auto',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE
     );

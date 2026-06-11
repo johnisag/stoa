@@ -51,6 +51,16 @@ export function baseName(p: string): string {
 }
 
 /**
+ * Normalize a path for COMPARISON only (forward slashes, no trailing separator,
+ * case-folded on Windows). For matching two paths that may differ in separator,
+ * trailing slash, or case — NOT for display or filesystem use.
+ */
+export function normalizePathForCompare(p: string): string {
+  const n = p.replace(/\\/g, "/").replace(/\/+$/, "");
+  return isWindows ? n.toLowerCase() : n;
+}
+
+/**
  * Resolve the interactive shell for a user-facing terminal pane.
  * Windows: prefer PowerShell 7 (pwsh), then Windows PowerShell, then cmd.
  * POSIX: $SHELL, then a sensible default.
