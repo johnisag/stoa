@@ -7,6 +7,8 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { getSessionBackend } from "@/lib/session-backend";
+import { buildAgentArgs, claudeProvider } from "@/lib/providers";
+import { resolveModelForAgent } from "@/lib/model-catalog";
 import {
   claudeProjectDirName,
   findClaudeProjectDir,
@@ -256,17 +258,25 @@ export async function POST(
       newSession = queries.getSession(db).get(newId) as Session;
       const newTmuxSession = tmuxName;
 
-      // Start new tmux session with Claude directly
+      // Start the fresh session through the provider seam so it honors the
+      // session's stored model (this is a fresh launch, so --model is passed;
+      // resolveModelForAgent guards a non-Claude stored model). Hand-rolling the
+      // flags here is what made this path silently ignore the model picker.
+      const autoApprove = Boolean(session.auto_approve);
+      const spawnModel = resolveModelForAgent("claude", session.model);
       const isRoot = process.getuid?.() === 0;
-      const envPrefix = isRoot ? "IS_SANDBOX=1 " : "";
-      const claudeCmd = session.auto_approve
-        ? `${envPrefix}claude --dangerously-skip-permissions`
-        : "claude";
+      const envPrefix = autoApprove && isRoot ? "IS_SANDBOX=1 " : "";
+      const claudeFlags = claudeProvider.buildFlags({
+        autoApprove,
+        model: spawnModel,
+      });
+      const claudeCmd = `${envPrefix}claude ${claudeFlags.join(" ")}`.trim();
       // Structured argv for the pty backend (no IS_SANDBOX/env prefix — that's a
       // POSIX-root sandbox concern handled by the tmux command path).
-      const claudeArgs = session.auto_approve
-        ? ["--dangerously-skip-permissions"]
-        : [];
+      const { args: claudeArgs } = buildAgentArgs("claude", {
+        autoApprove,
+        model: spawnModel,
+      });
 
       console.log(
         `[summarize] Creating session: ${newTmuxSession} (${claudeCmd})`

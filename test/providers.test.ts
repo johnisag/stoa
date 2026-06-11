@@ -70,6 +70,61 @@ describe("Hermes provider wiring", () => {
   });
 });
 
+describe("Claude provider wiring", () => {
+  it("takes --model (alias or full id) so the picker drives the launch model", () => {
+    expect(getProviderDefinition("claude").modelFlag).toBe("--model");
+    const { args } = buildAgentArgs("claude", { model: "fable" });
+    expect(args).toEqual(["--model", "fable"]);
+  });
+
+  // The picker must work on BOTH backends. The pty path (buildAgentArgs) and the
+  // tmux path (provider.buildFlags) have to emit the model identically, or the
+  // feature silently becomes Windows-only (tmux is the default on macOS/Linux).
+  it("buildFlags (tmux path) emits the model on a fresh launch, like the pty path", () => {
+    expect(getProvider("claude").buildFlags({ model: "fable" })).toEqual([
+      "--model fable",
+    ]);
+  });
+
+  it("does NOT re-pass --model when resuming — Claude restores the session's own model", () => {
+    // Re-asserting would override the running session's model (notably an older
+    // row that stored the previously-inert default). Both spawn paths must agree.
+    expect(
+      buildAgentArgs("claude", {
+        model: "opus",
+        sessionId: "abc-123",
+        autoApprove: true,
+      }).args
+    ).toEqual(["--dangerously-skip-permissions", "--resume", "abc-123"]);
+    expect(
+      getProvider("claude").buildFlags({ model: "opus", sessionId: "abc-123" })
+    ).toEqual(["--resume abc-123"]);
+  });
+
+  it("does NOT re-pass --model when forking either (the fork inherits its model)", () => {
+    expect(
+      buildAgentArgs("claude", { model: "opus", parentSessionId: "p1" }).args
+    ).toEqual(["--resume", "p1", "--fork-session"]);
+    // tmux path agrees
+    expect(
+      getProvider("claude").buildFlags({ model: "opus", parentSessionId: "p1" })
+    ).toEqual(["--resume p1", "--fork-session"]);
+  });
+
+  // restoresModelOnResume is Claude-only. Hermes (which also resumes) must STILL
+  // re-assert -m on resume — locking the one non-Claude combination that now
+  // routes through shouldPassModel, so a wrong gate can't silently drop it.
+  it("Hermes still passes -m alongside --resume (restoresModelOnResume unset)", () => {
+    const id = "20260531_133925_98d9fc";
+    expect(
+      buildAgentArgs("hermes", { model: "anthropic/x", sessionId: id }).args
+    ).toEqual(["-m", "anthropic/x", "--resume", id]);
+    expect(
+      getProvider("hermes").buildFlags({ model: "anthropic/x", sessionId: id })
+    ).toEqual([`--resume ${id}`, "-m anthropic/x"]);
+  });
+});
+
 // Guards against half-wiring a provider (registry entry without a provider
 // object, a picker option for a non-existent id, etc.).
 describe("provider registry integrity", () => {

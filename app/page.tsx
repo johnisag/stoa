@@ -42,6 +42,7 @@ import {
   buildTmuxFlags,
 } from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
+import { resolveModelForAgent } from "@/lib/model-catalog";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { DispatchView } from "@/components/views/DispatchView";
@@ -321,7 +322,12 @@ function HomeContent() {
         sessionId: session.claude_session_id,
         parentSessionId,
         autoApprove: session.auto_approve,
-        model: session.model,
+        // Resolve so a legacy row holding a foreign/non-catalog model can't reach
+        // `--model <bogus>` on a fresh respawn (every other spawn site resolves).
+        model: resolveModelForAgent(
+          session.agent_type || "claude",
+          session.model
+        ),
         initialPrompt: initialPrompt || undefined,
         extraArgs,
       };

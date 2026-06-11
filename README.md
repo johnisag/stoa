@@ -82,11 +82,13 @@ On Windows the native pty backend is selected automatically (no tmux/WSL needed)
 | ----------- | ------ | ---- | -------------------------------------------- |
 | Claude Code | ✅     | ✅   | `--dangerously-skip-permissions`             |
 | Codex       | ❌     | ❌   | `--dangerously-bypass-approvals-and-sandbox` |
-| Hermes      | ❌     | ❌   | `--yolo`                                     |
+| Hermes      | ✅     | ❌   | `--yolo`                                     |
 
 _**Resume**/**Fork** reflect what Stoa manages per session, not the CLI's raw
 capability. **Auto-Approve** is the flag Stoa passes when you enable "skip
-permissions". Hermes resume is planned — see [docs/ROADMAP.md](docs/ROADMAP.md)._
+permissions". Hermes resume works by capturing its session id from the startup
+banner. Codex resume/fork (its CLI exposes `codex resume`/`codex fork`
+subcommands) is planned — see [docs/ROADMAP.md](docs/ROADMAP.md)._
 
 ## CLI Commands
 

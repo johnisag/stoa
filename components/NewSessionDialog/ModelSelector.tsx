@@ -40,18 +40,25 @@ export function ModelSelector({
           placeholder="e.g. anthropic/claude-sonnet-4.6 — blank for the agent default"
         />
       ) : (
-        <Select key={agentType} value={value} onValueChange={onChange}>
-          <SelectTrigger>
-            <SelectValue>{selectedLabel}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {options.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <>
+          <Select key={agentType} value={value} onValueChange={onChange}>
+            <SelectTrigger>
+              <SelectValue>{selectedLabel}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {options.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-muted-foreground text-xs">
+            Sets the model for a new session.
+            {agentType === "claude" &&
+              " Resumed sessions keep the model they started with."}
+          </p>
+        </>
       )}
     </div>
   );

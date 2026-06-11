@@ -9,6 +9,7 @@
  */
 
 import { getProvider, buildAgentArgs } from "@/lib/providers";
+import { resolveModelForAgent } from "@/lib/model-catalog";
 import type { Session } from "@/lib/db";
 
 let cached: "pty" | "tmux" | null = null;
@@ -50,7 +51,9 @@ export function buildSpawnForSession(
     sessionId: session.claude_session_id,
     parentSessionId: opts?.parentSessionId ?? null,
     autoApprove: session.auto_approve,
-    model: session.model,
+    // Resolve so a legacy row holding a foreign/non-catalog model can't reach
+    // `--model <bogus>` on a fresh respawn (every other spawn site resolves too).
+    model: resolveModelForAgent(session.agent_type || "claude", session.model),
     initialPrompt: opts?.initialPrompt,
   });
   return { binary, args, cwd };
