@@ -20,7 +20,12 @@ import { join } from "path";
 import { getDb, queries, type Session } from "../db";
 import { getSessionBackend } from "../session-backend";
 import { expandHome } from "../platform";
-import { createWorktree, deleteWorktree } from "../worktrees";
+import {
+  createWorktree,
+  deleteWorktree,
+  getMainRepoPath,
+  isStoaWorktree,
+} from "../worktrees";
 import { spawnWorktreeWorker } from "./reviewer";
 import { MAINTAINER_BODY_PREFIX } from "./task-label";
 import type { DispatchRepo, SurveyParseResult, SurveyTask } from "./types";
@@ -199,8 +204,8 @@ export function trackedSurveyIds(): string[] {
 /** Spawn a survey worker in a fresh base-branch worktree; returns the survey id.
  * The worktree is reclaimed once the tasks are filed (or on a failed read).
  * Runs are transient (in-memory, like planner.planRuns): a process restart mid-
- * survey orphans the session + worktree until a future manual cleanup — acceptable
- * for v1 (surveys are short and opt-in); a startup sweep is a v1.1 follow-up. */
+ * survey loses the run's in-memory tracking, but `sweepOrphanedSurveys` reclaims
+ * the orphaned session + worktree at the next startup. */
 export async function spawnSurvey(
   repo: DispatchRepo,
   goal: string,
@@ -330,5 +335,68 @@ export async function cleanupSurveyRun(surveyId: string): Promise<void> {
     await deleteWorktree(run.worktreePath, run.projectPath, true);
   } catch {
     // best effort — a leaked worktree is recoverable
+  }
+}
+
+/** The EXACT machine shape of a survey session name: `stoa-survey-` + the 8
+ * lowercase-hex chars of `surveyId.slice(0, 8)`. `sessions.name` is user-renamable
+ * and SQLite LIKE is case-insensitive, so this destructive sweep must allowlist the
+ * precise shape Stoa itself emits — never a user-spoofable prefix (fail-closed). */
+const SURVEY_SESSION_NAME = /^stoa-survey-[0-9a-f]{8}$/;
+
+/**
+ * Reclaim surveys orphaned by a restart. `surveyRuns` is in-memory only, so a
+ * process restart mid-survey leaves a live agent session + its worktree with
+ * nothing tracking them. Run at startup (from reconcileOrphans): each matched
+ * survey session is killed, its worktree reclaimed (the owning repo recovered from
+ * the worktree via `getMainRepoPath`), and its session row dropped. Two structural,
+ * fail-closed guards keep it from ever touching a user's session/worktree: it acts
+ * ONLY on sessions named in the exact machine shape Stoa emits AND not currently
+ * tracked, and removes ONLY worktrees inside Stoa's worktrees dir. Best-effort and
+ * idempotent: a failure on one survey never blocks the rest.
+ */
+export async function sweepOrphanedSurveys(): Promise<void> {
+  const db = getDb();
+  const rows = queries.listSurveySessions(db).all() as Session[];
+  if (rows.length === 0) return;
+  const backend = getSessionBackend();
+  // Skip any survey the in-memory map still tracks, so "every matched row is an
+  // orphan" holds structurally (not only at t=0): a slow startup that lets a fresh
+  // survey spawn before this runs can't reap a LIVE, tracked one.
+  const tracked = new Set(
+    [...surveyRuns.values()].map((r) => r.sessionId).filter(Boolean)
+  );
+  for (const s of rows) {
+    // Fail-closed: act only on a session Stoa itself named (exact shape, not a user
+    // rename) that isn't currently tracked.
+    if (!SURVEY_SESSION_NAME.test(s.name) || tracked.has(s.id)) continue;
+    try {
+      await backend.kill(s.tmux_name);
+    } catch {
+      // already gone / unreachable — fine
+    }
+    // Only reclaim a worktree under Stoa's worktrees dir — never an external path
+    // (mirrors the session DELETE route's isStoaWorktree guard).
+    if (s.worktree_path && isStoaWorktree(s.worktree_path)) {
+      try {
+        // Recover the MAIN repo that owns the worktree so the git-side removal +
+        // branch delete run from the right place; fall back to the worktree path
+        // itself (deleteWorktree's fs removal still reclaims the directory).
+        const repo =
+          (await getMainRepoPath(s.worktree_path)) ?? s.worktree_path;
+        await deleteWorktree(s.worktree_path, repo, true);
+      } catch (err) {
+        console.warn(
+          `maintainer: could not reclaim survey worktree ${s.worktree_path}:`,
+          err
+        );
+      }
+    }
+    try {
+      queries.deleteSession(db).run(s.id);
+    } catch {
+      // best effort
+    }
+    console.log(`maintainer: reclaimed orphaned survey session ${s.id}`);
   }
 }
