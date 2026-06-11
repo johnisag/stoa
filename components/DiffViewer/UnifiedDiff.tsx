@@ -1,15 +1,30 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Plus, Minus } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  Minus,
+  MessageSquarePlus,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ParsedDiff, DiffHunk, DiffLine } from "@/lib/diff-parser";
+
+/** Opt-in: comment on a diff line (file, line number, line content). When set,
+ * each line gets a comment affordance; omitted = a plain read-only diff. */
+export type OnCommentLine = (
+  file: string,
+  line: number | null,
+  content: string
+) => void;
 
 interface UnifiedDiffProps {
   diff: ParsedDiff;
   fileName: string;
   expanded?: boolean;
   onToggle?: () => void;
+  onCommentLine?: OnCommentLine;
 }
 
 export function UnifiedDiff({
@@ -17,6 +32,7 @@ export function UnifiedDiff({
   fileName,
   expanded = true,
   onToggle,
+  onCommentLine,
 }: UnifiedDiffProps) {
   const [localExpanded, setLocalExpanded] = useState(expanded);
   const isExpanded = onToggle ? expanded : localExpanded;
@@ -79,7 +95,29 @@ export function UnifiedDiff({
           ) : (
             <div className="font-mono text-xs">
               {diff.hunks.map((hunk, index) => (
-                <Hunk key={index} hunk={hunk} />
+                <Hunk
+                  key={index}
+                  hunk={hunk}
+                  onComment={
+                    onCommentLine
+                      ? (line) => {
+                          // Prefix the diff marker so a deletion reads "> - old"
+                          // (the agent shouldn't hunt the current file for it).
+                          const mark =
+                            line.type === "addition"
+                              ? "+ "
+                              : line.type === "deletion"
+                                ? "- "
+                                : "";
+                          onCommentLine(
+                            fileName,
+                            line.newLineNumber ?? line.oldLineNumber,
+                            mark + line.content
+                          );
+                        }
+                      : undefined
+                  }
+                />
               ))}
             </div>
           )}
@@ -91,9 +129,10 @@ export function UnifiedDiff({
 
 interface HunkProps {
   hunk: DiffHunk;
+  onComment?: (line: DiffLine) => void;
 }
 
-function Hunk({ hunk }: HunkProps) {
+function Hunk({ hunk, onComment }: HunkProps) {
   return (
     <div>
       {/* Hunk header */}
@@ -105,7 +144,7 @@ function Hunk({ hunk }: HunkProps) {
       <table className="w-full border-collapse">
         <tbody>
           {hunk.lines.map((line, index) => (
-            <DiffLineRow key={index} line={line} />
+            <DiffLineRow key={index} line={line} onComment={onComment} />
           ))}
         </tbody>
       </table>
@@ -115,9 +154,10 @@ function Hunk({ hunk }: HunkProps) {
 
 interface DiffLineRowProps {
   line: DiffLine;
+  onComment?: (line: DiffLine) => void;
 }
 
-function DiffLineRow({ line }: DiffLineRowProps) {
+function DiffLineRow({ line, onComment }: DiffLineRowProps) {
   const bgColor = getLineBgColor(line.type);
   const textColor = getLineTextColor(line.type);
 
@@ -127,7 +167,25 @@ function DiffLineRow({ line }: DiffLineRowProps) {
   }
 
   return (
-    <tr className={cn("hover:bg-muted/30", bgColor)}>
+    <tr className={cn("group hover:bg-muted/30", bgColor)}>
+      {/* Comment affordance (opt-in) — faint always (mobile has no hover),
+          brightens on hover/focus. Sends a review note to the agent. */}
+      {onComment && (
+        <td className="w-9 text-center align-middle select-none">
+          <button
+            type="button"
+            onClick={() => onComment(line)}
+            aria-label="Comment on this line"
+            title="Send the agent a note about this line"
+            // p-2 gives a ~30px touch target (mobile mandate) without growing the
+            // row; group-hover brightens it from anywhere on the row (desktop).
+            className="text-muted-foreground/40 group-hover:text-muted-foreground hover:text-foreground focus:text-foreground p-2 transition-colors"
+          >
+            <MessageSquarePlus className="h-3.5 w-3.5" />
+          </button>
+        </td>
+      )}
+
       {/* Old line number */}
       <td className="text-muted-foreground border-border/50 w-12 border-r px-2 py-0.5 text-right tabular-nums select-none">
         {line.oldLineNumber || ""}
