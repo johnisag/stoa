@@ -4,9 +4,9 @@
 
 Point it at a repo, pick an agent (Claude Code, Codex, or Hermes), and Stoa spawns a real terminal session you can watch stream live, steer, and reconnect to from anywhere on your network. It runs **natively on Windows, macOS, and Linux** — no WSL or tmux required on Windows — and your sessions keep running even after you close the tab.
 
-It's built for the way agents actually work: run several side by side, dictate prompts by voice, search the codebase, browse and attach files, review diffs and open PRs, manage dev servers, and coordinate conductor/worker agent fleets — all from a mobile-first UI.
+It's built for the way agents actually work: run several side by side from a mobile-first UI, and — when you're ready to scale past hands-on — let **Dispatch** turn GitHub issues into reviewed, merged PRs autonomously. The fleet reviews its own PRs (a 3-critic gate), lands them (a self-rebasing merge train), splits a spec into conflict-free parallel tasks, verifies its changes, and learns from every review.
 
-And when you're ready to scale past hands-on, **Dispatch** turns GitHub issues into finished, reviewed, merged PRs **autonomously** — with a fleet that reviews itself, lands its own work, steers around stalls, verifies its changes, and learns from every mistake. You define the work and render the verdicts; the machine does everything in between.
+For a plain-English tour of every feature, open the **Guide** (the compass icon in the sidebar) once Stoa is running.
 
 ## Installation
 
@@ -87,36 +87,6 @@ On Windows the native pty backend is selected automatically (no tmux/WSL needed)
 _**Resume**/**Fork** reflect what Stoa manages per session, not the CLI's raw
 capability. **Auto-Approve** is the flag Stoa passes when you enable "skip
 permissions". Hermes resume is planned — see [docs/ROADMAP.md](docs/ROADMAP.md)._
-
-## Features
-
-### The cockpit
-
-- **Mobile-first** - Full functionality from your phone, not a dumbed-down responsive view
-- **Multi-pane** - Run up to 4 agent sessions side-by-side
-- **Voice-to-text** - Dictate prompts to your sessions hands-free
-- **Code search** - Fast, syntax-highlighted codebase search (Cmd+K)
-- **File picker** - Browse and attach files, with direct upload from mobile
-- **Git built in** - Status, diffs, commits, PRs, and GitHub clone — from the UI
-- **Git worktrees** - Isolated branches with auto-setup
-- **Dev servers** - Start/stop Node.js and Docker servers per project
-- **Session orchestration** - Coordinate conductor/worker agent fleets via MCP
-- **Workflows** - Declarative agent-pipeline DAGs: fan out N agents (each in its own worktree, on its own model), fan in, and gate on the results — from a template catalog
-
-### The autonomous fleet — Dispatch
-
-Turn a GitHub issue into a finished, reviewed, merged PR — at fleet scale, from your phone. Each capability is **opt-in per repo**:
-
-- **Issue → PR, autonomously** - Dispatch ingests issues, spawns a worker in an isolated worktree, opens a PR, and drives it through the whole ceremony
-- **3-critic review gate** - Three independent agents review each PR on a distinct lens (correctness · conventions · simplicity); a fixer addresses what they flag
-- **Verdict Inbox** - One fleet-wide review queue across every worker and auto-mode session — per-lens findings read live, with merge / retry / dismiss in place, built for the phone
-- **Merge Train** - A ready-but-conflicting PR rebases, resolves, and re-pushes _itself_ back to landable instead of paging you
-- **Conflict-aware decomposition** - Paste a spec; a planner splits it into tasks that each own a disjoint part of the codebase, so several agents work in parallel without colliding (the scheduler refuses to co-schedule a collision)
-- **Verification harness** - Runs your repo's typecheck/test/build in each worker's worktree and gates the merge on real evidence — especially valuable for repos with no CI
-- **Auto-steer** - Resumes a rate-limited agent when its window resets, answers routine prompts, and pages you only when one is genuinely stuck in an error loop
-- **Fleet memory** - The repo remembers every blocking review finding and tells the next agent up front, so the fleet stops repeating mistakes
-
-Everything autonomous is **opt-in, fail-closed, and traced**, runs natively on Windows/macOS/Linux, and reuses the same ceremony — so a hand-driven session and a fully autonomous worker land through the identical gate.
 
 ## CLI Commands
 

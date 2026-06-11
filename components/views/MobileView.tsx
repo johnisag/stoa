@@ -29,6 +29,7 @@ export function MobileView({
   setShowWorkflows,
   setShowVerdictInbox,
   onShowShortcuts,
+  onShowGuide,
   attachToSession,
   openSessionInNewTab,
   handleNewSessionInProject,
@@ -88,6 +89,10 @@ export function MobileView({
 
           <SidebarFooter
             onShowShortcuts={onShowShortcuts}
+            onShowGuide={() => {
+              onShowGuide();
+              setSidebarOpen(false);
+            }}
             onShowAnalytics={() => {
               setShowAnalytics(true);
               setSidebarOpen(false);

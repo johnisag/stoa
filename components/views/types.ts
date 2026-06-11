@@ -41,6 +41,7 @@ export interface ViewProps {
   showVerdictInbox: boolean;
   setShowVerdictInbox: (show: boolean) => void;
   onShowShortcuts: () => void;
+  onShowGuide: () => void;
 
   // Notification settings
   notificationSettings: NotificationSettings;

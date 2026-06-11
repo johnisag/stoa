@@ -1,5 +1,12 @@
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Keyboard, Rocket, BarChart3, Workflow, Inbox } from "lucide-react";
+import {
+  Keyboard,
+  Rocket,
+  BarChart3,
+  Workflow,
+  Inbox,
+  Compass,
+} from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -8,6 +15,8 @@ import {
 import { WorktreesButton } from "@/components/Worktrees/WorktreesButton";
 
 interface SidebarFooterProps {
+  /** Opens the plain-English feature guide ("what can Stoa do?"). */
+  onShowGuide?: () => void;
   /** Opens the keyboard-shortcut cheatsheet (also bound to `?`). */
   onShowShortcuts?: () => void;
   /** Opens the Dispatch control plane (GitHub issues -> agent fleet). */
@@ -21,6 +30,7 @@ interface SidebarFooterProps {
 }
 
 export function SidebarFooter({
+  onShowGuide,
   onShowShortcuts,
   onShowDispatch,
   onShowAnalytics,
@@ -97,6 +107,23 @@ export function SidebarFooter({
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p>Verdict Inbox</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {onShowGuide && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={onShowGuide}
+                  aria-label="What Stoa can do — feature guide"
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
+                >
+                  <Compass className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>What Stoa can do</p>
               </TooltipContent>
             </Tooltip>
           )}
