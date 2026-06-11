@@ -56,4 +56,21 @@ export interface UseTerminalConnectionReturn {
   sessionEnded: boolean;
   /** Explicitly respawn an exited session (the only path that respawns it). */
   relaunch: () => void;
+  /**
+   * Pending auto-retry after the agent exited on a TRANSIENT failure (rate-limit
+   * or network hiccup): the attempt number and the epoch-ms the relaunch fires —
+   * or null when nothing is scheduled (non-transient exit, cancelled, or the cap
+   * was reached). Drives the "retrying in Ns · cancel" affordance.
+   */
+  autoRetry: AutoRetryState | null;
+  /** Cancel a pending auto-retry (the user override). No-op when none is armed. */
+  cancelAutoRetry: () => void;
+}
+
+/** A scheduled auto-retry of an exited session (see autoRetry above). */
+export interface AutoRetryState {
+  /** 1-based attempt number this scheduled relaunch will be. */
+  attempt: number;
+  /** Epoch-ms the relaunch fires (drives the countdown). */
+  retryAtMs: number;
 }

@@ -7,6 +7,7 @@ import {
   useCallback,
   useState,
   useMemo,
+  useEffect,
 } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
@@ -121,6 +122,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       reconnect,
       sessionEnded,
       relaunch,
+      autoRetry,
+      cancelAutoRetry,
     } = useTerminalConnection({
       terminalRef,
       onConnected,
@@ -277,6 +280,21 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
       return lines.join("\n");
     }, [selectMode, xtermRef]);
+
+    // Seconds left until a pending auto-retry fires — ticked once a second so the
+    // "retrying in Ns" affordance counts down live. Derived from the absolute
+    // retryAtMs so it stays correct even if a tick is dropped (e.g. backgrounded).
+    const [retrySecondsLeft, setRetrySecondsLeft] = useState(0);
+    useEffect(() => {
+      if (!autoRetry) return;
+      const tick = () =>
+        setRetrySecondsLeft(
+          Math.max(0, Math.ceil((autoRetry.retryAtMs - Date.now()) / 1000))
+        );
+      tick();
+      const id = setInterval(tick, 1000);
+      return () => clearInterval(id);
+    }, [autoRetry]);
 
     return (
       <div
@@ -488,17 +506,39 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
         {/* Session-ended bar — the agent process exited. A bottom bar (not a
             full overlay) keeps the final output readable; auto-reconnect won't
-            silently respawn, so relaunch is explicit. */}
+            silently respawn, so relaunch is explicit. When the exit was a
+            TRANSIENT failure (rate-limit / network), an auto-retry is armed: show
+            a live countdown + Cancel (the user override) in place of the plain
+            Relaunch — the backoff timer fires the relaunch on its own. */}
         {sessionEnded && (
           <div className="border-border bg-background/95 absolute inset-x-0 bottom-0 z-30 flex items-center justify-center gap-3 border-t px-3 py-2 backdrop-blur-sm">
-            <span className="text-muted-foreground text-sm">Session ended</span>
-            <button
-              onClick={relaunch}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Relaunch
-            </button>
+            {autoRetry ? (
+              <>
+                <span className="text-muted-foreground flex items-center gap-1.5 text-sm">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Retrying in {retrySecondsLeft}s
+                </span>
+                <button
+                  onClick={cancelAutoRetry}
+                  className="bg-secondary hover:bg-accent focus-visible:ring-ring rounded-full px-3 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="text-muted-foreground text-sm">
+                  Session ended
+                </span>
+                <button
+                  onClick={relaunch}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Relaunch
+                </button>
+              </>
+            )}
           </div>
         )}
 
