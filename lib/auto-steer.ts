@@ -52,6 +52,7 @@ const PROMPT_HINTS: RegExp[] = [
   /\(yes\/no\)/i,
   /Do you want to/i,
   /Enter to confirm/i,
+  /waiting for input/i, // also a WAITING_PATTERN — keep the two in sync
   /(?:❯|›|▶)\s*\d+\.\s/, // a highlighted numbered menu option
   /\b\d+\.\s*Yes\b/i,
 ];

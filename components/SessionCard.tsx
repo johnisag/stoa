@@ -63,6 +63,9 @@ interface SessionCardProps {
   isActive?: boolean;
   isSummarizing?: boolean;
   tmuxStatus?: TmuxStatus;
+  /** True when an actual prompt is on screen — gates the approve/reject buttons so
+   * they don't appear just because the agent finished its turn ("waiting"). */
+  hasPrompt?: boolean;
   /** Last rendered terminal line — a live one-line preview for running/waiting
    * agents. A primitive string so React.memo only repaints when it changes. */
   lastLine?: string;
@@ -144,6 +147,7 @@ function SessionCardComponent({
   isActive,
   isSummarizing,
   tmuxStatus,
+  hasPrompt,
   lastLine,
   rateLimited,
   rateLimitResetAt,
@@ -169,7 +173,7 @@ function SessionCardComponent({
   // Quick-action buttons take the row's right edge for actionable statuses; drop
   // the (lower-value) timestamp then so the row doesn't crowd on a phone.
   const hasQuickActions =
-    !isInSelectMode && cardActionsForStatus(status).length > 0;
+    !isInSelectMode && cardActionsForStatus(status, hasPrompt).length > 0;
   // Live one-line preview of what the agent is doing/saying — only while it's
   // active (running/waiting), so idle/dead cards stay a clean single line.
   const preview = lastLine?.trim();
@@ -583,6 +587,7 @@ function SessionCardComponent({
         <SessionQuickActions
           sessionId={session.id}
           status={status}
+          hasPrompt={hasPrompt}
           name={session.name}
         />
       )}

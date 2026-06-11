@@ -43,10 +43,12 @@ const META: Record<
 export function SessionQuickActions({
   sessionId,
   status,
+  hasPrompt,
   name,
 }: {
   sessionId: string;
   status: SessionStatus;
+  hasPrompt?: boolean;
   name: string;
 }) {
   const respond = useRespondToSession();
@@ -55,9 +57,13 @@ export function SessionQuickActions({
   // for your next message, not at a prompt). Reset when the status changes, so a
   // genuinely new actionable state surfaces fresh buttons.
   const [acted, setActed] = useState(false);
-  useEffect(() => setActed(false), [status]);
+  // Re-arm the buttons when the actionable state changes — a new status OR a prompt
+  // appearing/clearing (a prompt can arrive while status stays "waiting"). (A direct
+  // prompt→prompt swap with no gap doesn't re-arm here — threading the prompt line
+  // would; tracked as a follow-up — but the buttons return on the next status tick.)
+  useEffect(() => setActed(false), [status, hasPrompt]);
 
-  const actions = cardActionsForStatus(status);
+  const actions = cardActionsForStatus(status, hasPrompt);
   if (actions.length === 0 || acted) return null;
 
   return (

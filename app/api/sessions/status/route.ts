@@ -24,6 +24,8 @@ interface SessionStatusResponse {
   agentType?: AgentType;
   /** Rate-limit state off the rendered screen (null when not limited). */
   rateLimit?: RateLimitState | null;
+  /** True when an ACTUAL prompt is on screen (vs "waiting" = finished its turn). */
+  hasPrompt?: boolean;
 }
 
 async function getTmuxSessions(): Promise<string[]> {
@@ -170,8 +172,9 @@ export async function GET() {
     const sessionPromises = managedSessions.map(async (sessionName) => {
       const agentType = getAgentTypeFromSessionName(sessionName);
       const id = getSessionIdFromName(sessionName);
-      // One screen capture yields the status, the preview line, and rate-limit.
-      const { status, lastLine, rateLimit } =
+      // One screen capture yields the status, the preview line, rate-limit, and
+      // whether an actual prompt is on screen.
+      const { status, lastLine, rateLimit, prompt } =
         await statusDetector.getStatusDetail(sessionName);
       // Resolve the agent resume-id AFTER getStatusDetail: its capturePane()
       // populates the Hermes banner-id cache, so reading it here captures the id
@@ -191,6 +194,7 @@ export async function GET() {
         lastLine,
         agentType,
         rateLimit,
+        hasPrompt: prompt != null,
       };
     });
 
@@ -204,6 +208,7 @@ export async function GET() {
       lastLine,
       agentType,
       rateLimit,
+      hasPrompt,
     } of results) {
       // Track status changes - update DB when session becomes active
       const prevStatus = previousStatuses.get(id);
@@ -221,6 +226,7 @@ export async function GET() {
         claudeSessionId,
         agentType,
         rateLimit,
+        hasPrompt,
       };
     }
 

@@ -24,6 +24,9 @@ interface SessionState {
   id: string;
   name: string;
   status: SessionStatus;
+  /** True when an ACTUAL prompt is on screen — so "waiting" because the agent
+   * finished its turn doesn't fire a false "needs your input" alert. */
+  hasPrompt?: boolean;
 }
 
 interface UseNotificationsOptions {
@@ -178,7 +181,9 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         const prevStatus = previousStates.current.get(session.id);
         const currentStatus = session.status;
 
-        if (currentStatus === "waiting") newWaitingCount++;
+        // Only a real prompt counts toward the "needs you" tab badge — a session
+        // that merely finished its turn isn't waiting on YOU.
+        if (currentStatus === "waiting" && session.hasPrompt) newWaitingCount++;
 
         // Skip on initial load (no previous state).
         if (prevStatus === undefined) {
@@ -192,10 +197,19 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
           return;
         }
 
-        // Notify on the meaningful transitions.
+        // Notify on the meaningful transitions. A "waiting" session only "needs
+        // your input" if there's an ACTUAL prompt; otherwise it just finished its
+        // turn → "completed" (mirrors detectPushEvents, so in-app and lock-screen
+        // agree). This is the fix for the false "needs input" alarm at every turn end.
         if (currentStatus === "waiting") {
-          if (shouldNotify(`${session.id}-waiting`)) {
-            notify("waiting", session.id, session.name);
+          if (session.hasPrompt) {
+            if (shouldNotify(`${session.id}-waiting`)) {
+              notify("waiting", session.id, session.name);
+            }
+          } else if (prevStatus === "running" || prevStatus === "waiting") {
+            if (shouldNotify(`${session.id}-completed`)) {
+              notify("completed", session.id, session.name);
+            }
           }
         } else if (currentStatus === "error") {
           if (shouldNotify(`${session.id}-error`)) {

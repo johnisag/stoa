@@ -12,17 +12,20 @@ import {
   type ManagedStatus,
 } from "@/lib/session-status";
 
+const PROMPT: ManagedStatus["prompt"] = { kind: "continue", line: "[Y/n]" };
+
 const wt = (
   id: string,
   status: ManagedStatus["status"],
-  lastLine = ""
+  lastLine = "",
+  prompt: ManagedStatus["prompt"] = null
 ): ManagedStatus => ({
   id,
   name: `claude-${id}`,
   status,
   lastLine,
   rateLimit: null,
-  prompt: null,
+  prompt,
 });
 
 describe("diffStatuses", () => {
@@ -42,6 +45,7 @@ describe("diffStatuses", () => {
         status: "waiting",
         lastLine: "",
         rateLimit: null,
+        hasPrompt: false,
       },
     ]);
   });
@@ -56,6 +60,22 @@ describe("diffStatuses", () => {
         status: "running",
         lastLine: "step 2",
         rateLimit: null,
+        hasPrompt: false,
+      },
+    ]);
+  });
+
+  it("a prompt appearing (while status stays 'waiting') emits a delta with hasPrompt", () => {
+    const prev = snapshotStatuses([wt("a", "waiting", "done")]);
+    const deltas = diffStatuses(prev, [wt("a", "waiting", "done", PROMPT)]);
+    expect(deltas).toEqual([
+      {
+        id: "a",
+        name: "claude-a",
+        status: "waiting",
+        lastLine: "done",
+        rateLimit: null,
+        hasPrompt: true,
       },
     ]);
   });
@@ -75,6 +95,7 @@ describe("diffStatuses", () => {
         status: "idle",
         lastLine: "",
         rateLimit: null,
+        hasPrompt: false,
       },
     ]);
   });
@@ -85,10 +106,18 @@ describe("detectPushEvents", () => {
     expect(detectPushEvents(new Map(), [wt("a", "waiting")])).toEqual([]);
   });
 
-  it("pushes on running -> waiting (needs input)", () => {
+  it("running -> waiting AT A PROMPT pushes 'waiting' (needs input)", () => {
+    const prev = statusById([wt("a", "running")]);
+    expect(
+      detectPushEvents(prev, [wt("a", "waiting", "Allow?", PROMPT)])
+    ).toEqual([{ id: "a", name: "claude-a", kind: "waiting" }]);
+  });
+
+  it("running -> waiting with NO prompt (finished its turn) pushes 'done', not 'waiting'", () => {
+    // The flicker fix on the push side: a turn-end isn't an approval request.
     const prev = statusById([wt("a", "running")]);
     expect(detectPushEvents(prev, [wt("a", "waiting")])).toEqual([
-      { id: "a", name: "claude-a", kind: "waiting" },
+      { id: "a", name: "claude-a", kind: "done" },
     ]);
   });
 
