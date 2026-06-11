@@ -16,6 +16,7 @@ import {
   Paperclip,
   PenLine,
   MessageSquarePlus,
+  FileText,
 } from "lucide-react";
 import {
   Tooltip,
@@ -24,7 +25,8 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
-import type { ReactNode } from "react";
+import { SnippetsModal } from "@/components/Terminal/SnippetsModal";
+import { useState, type ReactNode } from "react";
 import type { Session } from "@/lib/db";
 
 type ViewMode = "terminal" | "files" | "git" | "workers";
@@ -70,6 +72,9 @@ interface DesktopTabBarProps {
   onTerminalAttach: () => void;
   /** Inject the current terminal selection into the agent's prompt as context. */
   onTerminalAttachSelection: () => void;
+  /** Insert a saved snippet's text into the active terminal (same store as the
+   * mobile toolbar). */
+  onSnippetInsert: (content: string) => void;
   /** Opens the full-screen prompt composer (sends straight to this terminal). */
   onCompose?: () => void;
 }
@@ -147,8 +152,11 @@ export function DesktopTabBar({
   onTerminalPaste,
   onTerminalAttach,
   onTerminalAttachSelection,
+  onSnippetInsert,
   onCompose,
 }: DesktopTabBarProps) {
+  const [showSnippets, setShowSnippets] = useState(false);
+
   const getTabName = (tab: Tab) => {
     if (tab.sessionId) {
       const s = sessions.find((sess) => sess.id === tab.sessionId);
@@ -159,217 +167,49 @@ export function DesktopTabBar({
   };
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-1 overflow-x-auto px-1 pt-1 transition-colors",
-        isFocused ? "bg-muted" : "bg-muted/50"
-      )}
-    >
-      {/* Tabs */}
-      <div className="flex min-w-0 flex-1 items-center gap-0.5">
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            onClick={(e) => {
-              e.stopPropagation();
-              onTabSwitch(tab.id);
-            }}
-            className={cn(
-              "group flex cursor-pointer items-center gap-1.5 rounded-t-md px-3 py-1.5 text-xs transition-colors",
-              tab.id === activeTabId
-                ? "bg-background text-foreground"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/50"
-            )}
-          >
-            <span className="max-w-[120px] truncate">{getTabName(tab)}</span>
-            {tabs.length > 1 && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onTabClose(tab.id);
-                }}
-                aria-label="Close tab"
-                className="hover:text-foreground focus-visible:ring-ring/60 ml-1 rounded opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-        ))}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
+    <>
+      <SnippetsModal
+        open={showSnippets}
+        onClose={() => setShowSnippets(false)}
+        onInsert={onSnippetInsert}
+      />
+      <div
+        className={cn(
+          "flex items-center gap-1 overflow-x-auto px-1 pt-1 transition-colors",
+          isFocused ? "bg-muted" : "bg-muted/50"
+        )}
+      >
+        {/* Tabs */}
+        <div className="flex min-w-0 flex-1 items-center gap-0.5">
+          {tabs.map((tab) => (
+            <div
+              key={tab.id}
               onClick={(e) => {
                 e.stopPropagation();
-                onTabAdd();
+                onTabSwitch(tab.id);
               }}
-              aria-label="New tab"
-              className="mx-1 h-6 w-6"
+              className={cn(
+                "group flex cursor-pointer items-center gap-1.5 rounded-t-md px-3 py-1.5 text-xs transition-colors",
+                tab.id === activeTabId
+                  ? "bg-background text-foreground"
+                  : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/50"
+              )}
             >
-              <Plus className="h-3 w-3" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>New tab</TooltipContent>
-        </Tooltip>
-      </div>
-
-      {/* Live context-window meter for this session (Claude-only; self-hides). */}
-      {session && <ContextMeter sessionId={session.id} />}
-
-      {/* View Toggle */}
-      {session?.working_directory && (
-        <div className="bg-accent/50 mx-2 flex items-center rounded-md p-0.5">
-          <ViewToggleButton
-            label="Terminal"
-            active={viewMode === "terminal"}
-            onClick={() => onViewModeChange("terminal")}
-          >
-            <Home className="h-3.5 w-3.5" />
-          </ViewToggleButton>
-          <ViewToggleButton
-            label="Files"
-            active={rightDrawer === "files"}
-            onClick={onFilesDrawerToggle}
-          >
-            <FolderOpen className="h-3.5 w-3.5" />
-          </ViewToggleButton>
-          <ViewToggleButton
-            label="Git"
-            active={rightDrawer === "git"}
-            onClick={onGitDrawerToggle}
-          >
-            <GitBranch className="h-3.5 w-3.5" />
-          </ViewToggleButton>
-          <ViewToggleButton
-            label="Shell"
-            active={shellDrawerOpen}
-            onClick={onShellDrawerToggle}
-            className="font-mono text-xs"
-          >
-            {">_"}
-          </ViewToggleButton>
-          {isConductor && (
-            <ViewToggleButton
-              label="Workers"
-              active={viewMode === "workers"}
-              onClick={() => onViewModeChange("workers")}
-              className="relative"
-            >
-              <Users className="h-3.5 w-3.5" />
-              <span className="bg-primary text-primary-foreground absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full text-[9px] font-medium">
-                {workerCount}
-              </span>
-            </ViewToggleButton>
-          )}
-        </div>
-      )}
-
-      {/* Pane Controls */}
-      <div className="ml-auto flex items-center gap-0.5 px-2">
-        {/* Terminal actions (copy / paste / attach), separated from the pane
-            controls. Only in terminal view — they act on the active terminal. */}
-        {showTerminalActions && (
-          <>
-            {onCompose && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCompose();
-                    }}
-                    aria-label="Compose prompt"
-                    className="h-6 w-6"
-                  >
-                    <PenLine className="h-3 w-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Compose prompt</TooltipContent>
-              </Tooltip>
-            )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
+              <span className="max-w-[120px] truncate">{getTabName(tab)}</span>
+              {tabs.length > 1 && (
+                <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onTerminalCopy();
+                    onTabClose(tab.id);
                   }}
-                  aria-label="Select text to copy"
-                  className="h-6 w-6"
+                  aria-label="Close tab"
+                  className="hover:text-foreground focus-visible:ring-ring/60 ml-1 rounded opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2"
                 >
-                  <Copy className="h-3 w-3" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Select text to copy</TooltipContent>
-            </Tooltip>
-            {showTerminalAttach && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    // preventDefault on mousedown so the click doesn't collapse
-                    // the text selection we're about to read.
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTerminalAttachSelection();
-                    }}
-                    aria-label="Add selected text to agent"
-                    className="h-6 w-6"
-                  >
-                    <MessageSquarePlus className="h-3 w-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Add selection to agent</TooltipContent>
-              </Tooltip>
-            )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onTerminalPaste();
-                  }}
-                  aria-label="Paste from clipboard"
-                  className="h-6 w-6"
-                >
-                  <ClipboardPaste className="h-3 w-3" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Paste from clipboard</TooltipContent>
-            </Tooltip>
-            {showTerminalAttach && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTerminalAttach();
-                    }}
-                    aria-label="Attach file"
-                    className="h-6 w-6"
-                  >
-                    <Paperclip className="h-3 w-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Attach file</TooltipContent>
-              </Tooltip>
-            )}
-            <div className="bg-border mx-1 h-4 w-px" aria-hidden />
-          </>
-        )}
-        {hasAttachedTmux && (
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          ))}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -377,72 +217,266 @@ export function DesktopTabBar({
                 size="icon-sm"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onDetach();
+                  onTabAdd();
                 }}
-                aria-label="Detach from tmux"
-                className="h-6 w-6"
+                aria-label="New tab"
+                className="mx-1 h-6 w-6"
               >
-                <Unplug className="h-3 w-3" />
+                <Plus className="h-3 w-3" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Detach from tmux</TooltipContent>
+            <TooltipContent>New tab</TooltipContent>
           </Tooltip>
+        </div>
+
+        {/* Live context-window meter for this session (Claude-only; self-hides). */}
+        {session && <ContextMeter sessionId={session.id} />}
+
+        {/* View Toggle */}
+        {session?.working_directory && (
+          <div className="bg-accent/50 mx-2 flex items-center rounded-md p-0.5">
+            <ViewToggleButton
+              label="Terminal"
+              active={viewMode === "terminal"}
+              onClick={() => onViewModeChange("terminal")}
+            >
+              <Home className="h-3.5 w-3.5" />
+            </ViewToggleButton>
+            <ViewToggleButton
+              label="Files"
+              active={rightDrawer === "files"}
+              onClick={onFilesDrawerToggle}
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+            </ViewToggleButton>
+            <ViewToggleButton
+              label="Git"
+              active={rightDrawer === "git"}
+              onClick={onGitDrawerToggle}
+            >
+              <GitBranch className="h-3.5 w-3.5" />
+            </ViewToggleButton>
+            <ViewToggleButton
+              label="Shell"
+              active={shellDrawerOpen}
+              onClick={onShellDrawerToggle}
+              className="font-mono text-xs"
+            >
+              {">_"}
+            </ViewToggleButton>
+            {isConductor && (
+              <ViewToggleButton
+                label="Workers"
+                active={viewMode === "workers"}
+                onClick={() => onViewModeChange("workers")}
+                className="relative"
+              >
+                <Users className="h-3.5 w-3.5" />
+                <span className="bg-primary text-primary-foreground absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full text-[9px] font-medium">
+                  {workerCount}
+                </span>
+              </ViewToggleButton>
+            )}
+          </div>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSplitHorizontal();
-              }}
-              disabled={!canSplit}
-              aria-label="Split pane horizontally"
-              className="h-6 w-6"
-            >
-              <SplitSquareHorizontal className="h-3 w-3" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Split horizontal</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSplitVertical();
-              }}
-              disabled={!canSplit}
-              aria-label="Split pane vertically"
-              className="h-6 w-6"
-            >
-              <SplitSquareVertical className="h-3 w-3" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Split vertical</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onClose();
-              }}
-              disabled={!canClose}
-              aria-label="Close pane"
-              className="h-6 w-6"
-            >
-              <X className="h-3 w-3" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Close pane</TooltipContent>
-        </Tooltip>
+
+        {/* Pane Controls */}
+        <div className="ml-auto flex items-center gap-0.5 px-2">
+          {/* Terminal actions (copy / paste / attach), separated from the pane
+            controls. Only in terminal view — they act on the active terminal. */}
+          {showTerminalActions && (
+            <>
+              {onCompose && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCompose();
+                      }}
+                      aria-label="Compose prompt"
+                      className="h-6 w-6"
+                    >
+                      <PenLine className="h-3 w-3" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Compose prompt</TooltipContent>
+                </Tooltip>
+              )}
+              {/* Snippets — same localStorage-backed store as the mobile toolbar;
+                selecting one inserts its text into the active terminal. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowSnippets(true);
+                    }}
+                    aria-label="Snippets"
+                    className="h-6 w-6"
+                  >
+                    <FileText className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Snippets</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTerminalCopy();
+                    }}
+                    aria-label="Select text to copy"
+                    className="h-6 w-6"
+                  >
+                    <Copy className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Select text to copy</TooltipContent>
+              </Tooltip>
+              {showTerminalAttach && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      // preventDefault on mousedown so the click doesn't collapse
+                      // the text selection we're about to read.
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTerminalAttachSelection();
+                      }}
+                      aria-label="Add selected text to agent"
+                      className="h-6 w-6"
+                    >
+                      <MessageSquarePlus className="h-3 w-3" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Add selection to agent</TooltipContent>
+                </Tooltip>
+              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTerminalPaste();
+                    }}
+                    aria-label="Paste from clipboard"
+                    className="h-6 w-6"
+                  >
+                    <ClipboardPaste className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Paste from clipboard</TooltipContent>
+              </Tooltip>
+              {showTerminalAttach && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTerminalAttach();
+                      }}
+                      aria-label="Attach file"
+                      className="h-6 w-6"
+                    >
+                      <Paperclip className="h-3 w-3" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Attach file</TooltipContent>
+                </Tooltip>
+              )}
+              <div className="bg-border mx-1 h-4 w-px" aria-hidden />
+            </>
+          )}
+          {hasAttachedTmux && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDetach();
+                  }}
+                  aria-label="Detach from tmux"
+                  className="h-6 w-6"
+                >
+                  <Unplug className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Detach from tmux</TooltipContent>
+            </Tooltip>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSplitHorizontal();
+                }}
+                disabled={!canSplit}
+                aria-label="Split pane horizontally"
+                className="h-6 w-6"
+              >
+                <SplitSquareHorizontal className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Split horizontal</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSplitVertical();
+                }}
+                disabled={!canSplit}
+                aria-label="Split pane vertically"
+                className="h-6 w-6"
+              >
+                <SplitSquareVertical className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Split vertical</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose();
+                }}
+                disabled={!canClose}
+                aria-label="Close pane"
+                className="h-6 w-6"
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Close pane</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

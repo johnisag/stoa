@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseClaudeTranscript,
+  lastAssistantText,
   buildSummaryPrompt,
   sanitizeDigest,
 } from "@/lib/summarize";
@@ -82,6 +83,107 @@ describe("parseClaudeTranscript", () => {
   it("returns an empty string for empty input", () => {
     expect(parseClaudeTranscript("")).toBe("");
     expect(parseClaudeTranscript("   \n  ")).toBe("");
+  });
+});
+
+describe("lastAssistantText", () => {
+  // Parse the same JSONL shape the route reads into entries.
+  function entries(...objs: unknown[]): unknown[] {
+    return objs;
+  }
+
+  it("returns the last assistant turn's joined text blocks", () => {
+    const e = entries(
+      { type: "user", message: { content: "do a thing" } },
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "first reply" }] },
+      },
+      { type: "user", message: { content: "and another" } },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "## Heading" },
+            { type: "text", text: "- a bullet" },
+          ],
+        },
+      }
+    );
+    expect(lastAssistantText(e)).toBe("## Heading\n- a bullet");
+  });
+
+  it("keeps only TEXT blocks (drops tool_use and thinking)", () => {
+    const e = entries({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "secret reasoning" },
+          { type: "text", text: "visible answer" },
+          { type: "tool_use", name: "Bash", input: { command: "ls" } },
+        ],
+      },
+    });
+    expect(lastAssistantText(e)).toBe("visible answer");
+  });
+
+  it("skips a trailing sidechain (Task sub-agent) turn for the main reply", () => {
+    const e = entries(
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "main reply" }] },
+      },
+      {
+        type: "assistant",
+        isSidechain: true,
+        message: { content: [{ type: "text", text: "sub-agent chatter" }] },
+      }
+    );
+    expect(lastAssistantText(e)).toBe("main reply");
+  });
+
+  it("skips a trailing tool-only assistant turn and keeps the last TEXT turn", () => {
+    const e = entries(
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "the answer" }] },
+      },
+      {
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name: "Bash", input: {} }] },
+      }
+    );
+    expect(lastAssistantText(e)).toBe("the answer");
+  });
+
+  it("ignores assistant entries whose content is not an array", () => {
+    const e = entries({
+      type: "assistant",
+      message: { content: "a bare string, not blocks" },
+    });
+    expect(lastAssistantText(e)).toBe("");
+  });
+
+  it("returns '' when there is no assistant turn at all", () => {
+    const e = entries(
+      { type: "user", message: { content: "hello" } },
+      { type: "system", message: { content: "noise" } }
+    );
+    expect(lastAssistantText(e)).toBe("");
+    expect(lastAssistantText([])).toBe("");
+  });
+
+  it("tolerates malformed / null entries without throwing", () => {
+    const e = entries(
+      null,
+      "not an object",
+      { type: "assistant" }, // no message
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "ok" }] },
+      }
+    );
+    expect(lastAssistantText(e)).toBe("ok");
   });
 });
 

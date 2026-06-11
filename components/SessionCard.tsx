@@ -1,7 +1,9 @@
 "use client";
 
 import { memo, useState, useRef, useEffect } from "react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import { useTick30s } from "@/hooks/useSharedTicker";
 import {
   GitFork,
@@ -14,6 +16,7 @@ import {
   FolderInput,
   Trash2,
   Copy,
+  ClipboardCopy,
   Pencil,
   Sparkles,
   ScrollText,
@@ -237,6 +240,28 @@ function SessionCardComponent({
     a.remove();
   };
 
+  // Copy the agent's LAST reply as its own markdown (from the transcript JSONL),
+  // not the mouse-selected, hard-wrapped terminal text. Claude-only — the route
+  // returns a clear error for other agents, which we surface as a toast.
+  const [copyingReply, setCopyingReply] = useState(false);
+  const copyLastReply = async () => {
+    setCopyingReply(true);
+    try {
+      const res = await fetch(`/api/sessions/${session.id}/last-reply`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't read the reply");
+      // copyText falls back to execCommand for non-HTTPS LAN access (a phone
+      // over http), where navigator.clipboard is undefined.
+      const ok = await copyText(data.reply ?? "");
+      if (!ok) throw new Error("Couldn't copy to the clipboard");
+      toast.success("Copied");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setCopyingReply(false);
+    }
+  };
+
   // Handle card click - coordinates selection with navigation
   const handleCardClick = (e: React.MouseEvent) => {
     if (isEditing) return;
@@ -343,6 +368,18 @@ function SessionCardComponent({
           <ListPlus className="mr-2 h-3 w-3" />
           Queue tasks
         </MenuItem>
+        {/* Copy the agent's last reply as clean markdown (transcript JSONL), not
+            the hard-wrapped terminal selection. Claude-only. */}
+        {session.agent_type === "claude" && (
+          <MenuItem onClick={copyLastReply} disabled={copyingReply}>
+            {copyingReply ? (
+              <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+            ) : (
+              <ClipboardCopy className="mr-2 h-3 w-3" />
+            )}
+            Copy last reply
+          </MenuItem>
+        )}
         <MenuSub>
           <MenuSubTrigger>
             <Download className="mr-2 h-3 w-3" />

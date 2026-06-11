@@ -13,12 +13,17 @@ import {
   Upload,
   Clipboard,
   Search,
+  Link2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { uploadFileToTemp, partitionUploads } from "@/lib/file-upload";
+import {
+  uploadFileToTemp,
+  partitionUploads,
+  fetchUrlToTemp,
+} from "@/lib/file-upload";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { useViewport } from "@/hooks/useViewport";
 import { useDirectoryBrowser } from "@/hooks/useDirectoryBrowser";
@@ -76,6 +81,8 @@ export function FilePicker({
   } = useDirectoryBrowser({ initialPath });
 
   const [uploading, setUploading] = useState(false);
+  const [url, setUrl] = useState("");
+  const [fetchingUrl, setFetchingUrl] = useState(false);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { isMobile } = useViewport();
@@ -117,6 +124,26 @@ export function FilePicker({
     },
     [onSelect, onSelectMany]
   );
+
+  // Attach a URL as context: fetch the page server-side, reduce it to readable
+  // text written to a temp file, and inject that path like an uploaded file.
+  const handleAttachUrl = useCallback(async () => {
+    const trimmed = url.trim();
+    if (!trimmed || fetchingUrl) return;
+    setFetchingUrl(true);
+    try {
+      const path = await fetchUrlToTemp(trimmed);
+      onSelect(path);
+      setUrl("");
+    } catch (err) {
+      // Surface the route's specific reason (timeout / blocked host / 404 / …).
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't fetch that URL"
+      );
+    } finally {
+      setFetchingUrl(false);
+    }
+  }, [url, fetchingUrl, onSelect]);
 
   // Drag and drop (desktop only)
   const { isDragging, dragHandlers } = useFileDrop(dropZoneRef, handleFiles, {
@@ -286,6 +313,44 @@ export function FilePicker({
           )}
         </div>
       )}
+
+      {/* Attach a URL as context */}
+      <div className="px-3 pt-3">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Link2 className="text-muted-foreground absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2" />
+            <Input
+              type="url"
+              inputMode="url"
+              placeholder="Paste a URL to attach as context..."
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleAttachUrl();
+                }
+              }}
+              disabled={fetchingUrl}
+              className="h-9 pl-9"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleAttachUrl}
+            disabled={fetchingUrl || url.trim() === ""}
+            className="gap-2"
+          >
+            {fetchingUrl ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Link2 className="h-4 w-4" />
+            )}
+            {fetchingUrl ? "Fetching..." : "Attach"}
+          </Button>
+        </div>
+      </div>
 
       {/* Search */}
       <div className="px-3 py-2">
