@@ -28,6 +28,7 @@ export function MobileView({
   setShowAnalytics,
   setShowWorkflows,
   setShowVerdictInbox,
+  setShowFleetBoard,
   onShowShortcuts,
   onShowGuide,
   attachToSession,
@@ -107,6 +108,10 @@ export function MobileView({
             }}
             onShowVerdictInbox={() => {
               setShowVerdictInbox(true);
+              setSidebarOpen(false);
+            }}
+            onShowFleetBoard={() => {
+              setShowFleetBoard(true);
               setSidebarOpen(false);
             }}
           />
