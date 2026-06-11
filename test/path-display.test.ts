@@ -4,6 +4,7 @@ import {
   dirName,
   relativePath,
   formatPathsForAgent,
+  formatTerminalTextForAgent,
 } from "@/lib/path-display";
 
 describe("baseName", () => {
@@ -105,5 +106,44 @@ describe("formatPathsForAgent", () => {
     expect(formatPathsForAgent(`/a/x${esc}${del}y.ts`)).toBe("/a/xy.ts ");
     // Strips before the whitespace check, so a path that's only control chars drops.
     expect(formatPathsForAgent(nl + esc)).toBe("");
+  });
+});
+
+describe("formatTerminalTextForAgent", () => {
+  // Build control chars via fromCharCode so there are no literal control bytes
+  // in this source (mirrors the formatPathsForAgent guard test above).
+  const nl = String.fromCharCode(10); // \n
+  const cr = String.fromCharCode(13); // \r
+  const tab = String.fromCharCode(9); // \t
+  const esc = String.fromCharCode(27); // ESC
+  const bel = String.fromCharCode(7); // BEL
+  const del = String.fromCharCode(127); // DEL
+
+  it("trims surrounding whitespace but keeps internal newlines", () => {
+    expect(formatTerminalTextForAgent(`  line1${nl}line2  `)).toBe(
+      `line1${nl}line2`
+    );
+  });
+
+  it("normalizes CRLF and a lone CR to LF", () => {
+    expect(formatTerminalTextForAgent(`a${cr}${nl}b${cr}c`)).toBe(
+      `a${nl}b${nl}c`
+    );
+  });
+
+  it("keeps tabs (legitimate captured layout)", () => {
+    expect(formatTerminalTextForAgent(`col1${tab}col2`)).toBe(`col1${tab}col2`);
+  });
+
+  it("strips C0 controls and DEL (keystroke-injection guard)", () => {
+    // ESC, BEL and DEL are removed; the rest of an ANSI sequence is plain text.
+    expect(formatTerminalTextForAgent(`x${esc}[31my${bel}${del}`)).toBe(
+      "x[31my"
+    );
+  });
+
+  it("returns an empty string for empty or control-only input", () => {
+    expect(formatTerminalTextForAgent("")).toBe("");
+    expect(formatTerminalTextForAgent(esc + bel + nl)).toBe("");
   });
 });

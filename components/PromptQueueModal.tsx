@@ -9,11 +9,14 @@ import {
   Plus,
   Send,
   PenLine,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   useSessionQueue,
   useEnqueuePrompt,
+  useQueueItemAction,
   useClearQueue,
 } from "@/hooks/useSessionQueue";
 import { isSendable, normalizeForSend } from "@/lib/prompt-compose";
@@ -49,6 +52,7 @@ export function PromptQueueModal({
   // The queue list only matters when queueing; skip the poll in compose mode.
   const { data: queue, isLoading } = useSessionQueue(sessionId, !compose);
   const enqueue = useEnqueuePrompt(sessionId);
+  const itemAction = useQueueItemAction(sessionId);
   const clear = useClearQueue(sessionId);
   const [text, setText] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -167,14 +171,67 @@ export function PromptQueueModal({
               {items.map((item, i) => (
                 <li
                   key={`${i}-${item.slice(0, 24)}`}
-                  className="bg-muted/40 flex items-start gap-3 rounded-md px-3 py-2"
+                  className="bg-muted/40 flex items-start gap-2 rounded-md px-2 py-2 sm:gap-3 sm:px-3"
                 >
-                  <span className="text-muted-foreground w-5 flex-shrink-0 text-xs tabular-nums">
+                  <span className="text-muted-foreground mt-1 w-5 flex-shrink-0 text-xs tabular-nums">
                     {i + 1}
                   </span>
-                  <span className="min-w-0 flex-1 text-sm break-words whitespace-pre-wrap">
+                  <span className="min-w-0 flex-1 self-center text-sm break-words whitespace-pre-wrap">
                     {item}
                   </span>
+                  {/* Per-item reorder + remove. Bounds-disabled (first can't go up,
+                      last can't go down); a single mutation in flight disables all
+                      to avoid racing concurrent reorders against the shared queue. */}
+                  <div className="flex flex-shrink-0 items-center gap-0.5">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() =>
+                        itemAction.mutate({
+                          action: "up",
+                          index: i,
+                          text: item,
+                        })
+                      }
+                      disabled={i === 0 || itemAction.isPending}
+                      className="h-9 w-9"
+                      aria-label="Move up"
+                    >
+                      <ChevronUp className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() =>
+                        itemAction.mutate({
+                          action: "down",
+                          index: i,
+                          text: item,
+                        })
+                      }
+                      disabled={i === items.length - 1 || itemAction.isPending}
+                      className="h-9 w-9"
+                      aria-label="Move down"
+                    >
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() =>
+                        itemAction.mutate({
+                          action: "remove",
+                          index: i,
+                          text: item,
+                        })
+                      }
+                      disabled={itemAction.isPending}
+                      className="text-muted-foreground hover:text-destructive h-9 w-9"
+                      aria-label="Remove from queue"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </li>
               ))}
             </ol>

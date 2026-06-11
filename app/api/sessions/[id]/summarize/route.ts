@@ -10,6 +10,11 @@ import { getSessionBackend } from "@/lib/session-backend";
 import { buildAgentArgs, claudeProvider } from "@/lib/providers";
 import { resolveModelForAgent } from "@/lib/model-catalog";
 import {
+  parseClaudeTranscript,
+  buildSummaryPrompt,
+  sanitizeDigest,
+} from "@/lib/summarize";
+import {
   claudeProjectDirName,
   findClaudeProjectDir,
   expandHome,
@@ -47,39 +52,10 @@ function readClaudeSessionHistory(
   }
 
   try {
+    // Parsing (JSONL -> "User:/Assistant:" transcript) is a pure helper so it is
+    // unit-tested and shared with the read-only GET digest.
     const content = readFileSync(jsonlPath, "utf-8");
-    const lines = content.trim().split("\n");
-    const messages: string[] = [];
-
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-
-        // Extract user messages
-        if (entry.type === "user" && entry.message?.content) {
-          const content =
-            typeof entry.message.content === "string"
-              ? entry.message.content
-              : JSON.stringify(entry.message.content);
-          messages.push(`User: ${content}`);
-        }
-
-        // Extract assistant text responses (skip tool calls and thinking)
-        if (entry.type === "assistant" && entry.message?.content) {
-          const textBlocks = entry.message.content
-            .filter((block: { type: string }) => block.type === "text")
-            .map((block: { text: string }) => block.text)
-            .join("\n");
-          if (textBlocks) {
-            messages.push(`Assistant: ${textBlocks}`);
-          }
-        }
-      } catch {
-        // Skip malformed lines
-      }
-    }
-
-    return messages.join("\n\n");
+    return parseClaudeTranscript(content);
   } catch (error) {
     console.error(`[summarize] Error reading JSONL:`, error);
     return null;
@@ -98,7 +74,7 @@ async function getTmuxCwd(sessionName: string): Promise<string | null> {
 
 // Generate summary using Claude CLI with stdin
 async function generateSummary(conversation: string): Promise<string> {
-  const prompt = `Summarize this Claude Code conversation in under 300 words. Focus on: what was built, key files changed, current state, and any pending work. Be specific.`;
+  const prompt = buildSummaryPrompt();
 
   return new Promise((resolve, reject) => {
     const claude = spawn(resolveBinary("claude") || "claude", ["-p", prompt], {
@@ -120,7 +96,9 @@ async function generateSummary(conversation: string): Promise<string> {
 
     claude.on("close", (code) => {
       if (code === 0) {
-        resolve(stdout.trim());
+        // sanitizeDigest strips control chars (keeping newlines) so the text is
+        // safe to render and, later, to re-inject into a prompt.
+        resolve(sanitizeDigest(stdout));
       } else {
         console.error("Claude CLI failed:", stderr);
         reject(new Error(`Claude CLI exited with code ${code}`));
@@ -166,6 +144,87 @@ async function sendToTmux(
   await backend.pasteText(sessionName, text, { enter: pressEnter });
 }
 
+// Read the session's conversation: Claude's JSONL when available, else the
+// terminal scrollback. Shared by the POST (fork) and GET (read-only) handlers.
+async function readConversation(
+  session: Session,
+  tmuxSessionName: string,
+  cwdExpanded: string
+): Promise<string | null> {
+  // Try to get full conversation from Claude's JSONL (only for Claude sessions)
+  let conversation: string | null = null;
+  if (session.agent_type === "claude") {
+    const claudeSessionId = await getClaudeSessionId(tmuxSessionName);
+    if (claudeSessionId && cwdExpanded) {
+      console.log(`[summarize] Found Claude session ID: ${claudeSessionId}`);
+      conversation = readClaudeSessionHistory(cwdExpanded, claudeSessionId);
+      if (conversation) {
+        console.log(`[summarize] Read ${conversation.length} chars from JSONL`);
+      }
+    }
+  }
+
+  // Fallback to terminal scrollback for non-Claude or if JSONL not available
+  if (!conversation) {
+    console.log(
+      `[summarize] Using terminal scrollback for ${session.agent_type}`
+    );
+    conversation = await captureScrollback(tmuxSessionName);
+  }
+
+  return conversation;
+}
+
+// GET /api/sessions/[id]/summarize - Read-only digest of what the agent did.
+// Returns the generated summary WITHOUT forking or touching the session, so you
+// can catch up on a long autonomous run without scrolling the whole transcript.
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+
+    const db = getDb();
+    const session = queries.getSession(db).get(id) as Session | undefined;
+
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+
+    const tmuxSessionName = sessionKey({
+      kind: "agent",
+      provider: session.agent_type,
+      id,
+    });
+
+    const cwd =
+      (await getTmuxCwd(tmuxSessionName)) || session.working_directory;
+    const cwdExpanded = cwd ? expandHome(cwd) : homeDir();
+
+    const conversation = await readConversation(
+      session,
+      tmuxSessionName,
+      cwdExpanded
+    );
+
+    if (!conversation || conversation.trim().length < 100) {
+      return NextResponse.json(
+        { error: "No conversation found to summarize" },
+        { status: 400 }
+      );
+    }
+
+    const summary = await generateSummary(conversation);
+
+    return NextResponse.json({ summary });
+  } catch (error) {
+    console.error("Error generating digest:", error);
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
 // POST /api/sessions/[id]/summarize - Summarize and create fresh session
 export async function POST(
   request: NextRequest,
@@ -195,28 +254,12 @@ export async function POST(
       (await getTmuxCwd(tmuxSessionName)) || session.working_directory;
     const cwdExpanded = cwd ? expandHome(cwd) : homeDir();
 
-    // Try to get full conversation from Claude's JSONL (only for Claude sessions)
-    let conversation: string | null = null;
-    if (session.agent_type === "claude") {
-      const claudeSessionId = await getClaudeSessionId(tmuxSessionName);
-      if (claudeSessionId && cwdExpanded) {
-        console.log(`[summarize] Found Claude session ID: ${claudeSessionId}`);
-        conversation = readClaudeSessionHistory(cwdExpanded, claudeSessionId);
-        if (conversation) {
-          console.log(
-            `[summarize] Read ${conversation.length} chars from JSONL`
-          );
-        }
-      }
-    }
-
-    // Fallback to terminal scrollback for non-Claude or if JSONL not available
-    if (!conversation) {
-      console.log(
-        `[summarize] Using terminal scrollback for ${session.agent_type}`
-      );
-      conversation = await captureScrollback(tmuxSessionName);
-    }
+    // Read the conversation (Claude JSONL, else terminal scrollback).
+    const conversation = await readConversation(
+      session,
+      tmuxSessionName,
+      cwdExpanded
+    );
 
     if (!conversation || conversation.trim().length < 100) {
       return NextResponse.json(

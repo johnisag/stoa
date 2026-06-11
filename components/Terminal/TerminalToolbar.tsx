@@ -13,6 +13,7 @@ import {
   Trash2,
   MousePointer2,
   Copy,
+  MessageSquarePlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
@@ -35,6 +36,7 @@ interface TerminalToolbarProps {
   onKeyPress: (key: string) => void;
   onFilePicker?: () => void;
   onCopy?: () => boolean; // Returns true if selection was copied
+  onAttachSelection?: () => boolean; // Inject the selection into the agent's prompt
   selectMode?: boolean;
   onSelectModeChange?: (enabled: boolean) => void;
   visible?: boolean;
@@ -307,6 +309,7 @@ export function TerminalToolbar({
   onKeyPress,
   onFilePicker,
   onCopy,
+  onAttachSelection,
   selectMode = false,
   onSelectModeChange,
   visible = true,
@@ -458,6 +461,23 @@ export function TerminalToolbar({
             )}
           >
             <Copy className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* Attach-to-agent button - shown when in select mode. Injects the
+            selected text into the active agent's prompt (toast comes from the
+            handler in the parent Terminal). */}
+        {selectMode && onAttachSelection && (
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAttachSelection();
+            }}
+            className="bg-secondary text-secondary-foreground active:bg-primary active:text-primary-foreground flex-shrink-0 rounded-md px-2.5 py-1.5 text-xs font-medium"
+          >
+            <MessageSquarePlus className="h-4 w-4" />
           </button>
         )}
 

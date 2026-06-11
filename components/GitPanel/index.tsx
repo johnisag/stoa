@@ -36,6 +36,13 @@ import {
 import type { GitStatus, GitFile } from "@/lib/git-status";
 import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
 import type { ProjectRepository } from "@/lib/db";
+import { cn } from "@/lib/utils";
+import {
+  prBadgeTone,
+  PR_TONE_STYLES,
+  type ReviewDecision,
+  type CheckSummary,
+} from "@/lib/pr-badge";
 
 interface GitPanelProps {
   workingDirectory: string;
@@ -536,6 +543,9 @@ interface MobileGitPanelProps {
     url: string;
     state: string;
     title: string;
+    reviewDecision?: ReviewDecision;
+    isDraft?: boolean;
+    checks?: CheckSummary;
   } | null;
   creatingPR: boolean;
   onTabChange: (tab: GitTab) => void;
@@ -755,6 +765,9 @@ interface HeaderProps {
     number: number;
     url: string;
     title: string;
+    reviewDecision?: ReviewDecision;
+    isDraft?: boolean;
+    checks?: CheckSummary;
   } | null;
 }
 
@@ -774,17 +787,34 @@ function Header({
           <p className="truncate text-sm font-medium">
             {branch || "Git Status"}
           </p>
-          {existingPR && (
-            <button
-              onClick={() => window.open(existingPR.url, "_blank")}
-              className="bg-muted hover:bg-accent inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors"
-              title={`${existingPR.title} (#${existingPR.number})`}
-            >
-              <GitPullRequest className="h-3 w-3" />
-              PR
-              <ExternalLink className="h-2.5 w-2.5" />
-            </button>
-          )}
+          {existingPR &&
+            (() => {
+              // Tint the pill by the PR's review status — same map as the desktop
+              // git drawer (shared from lib/pr-badge), so the badge matches on both.
+              const tone =
+                PR_TONE_STYLES[
+                  prBadgeTone({
+                    reviewDecision: existingPR.reviewDecision ?? "",
+                    isDraft: existingPR.isDraft ?? false,
+                    checks: existingPR.checks ?? "none",
+                  })
+                ];
+              return (
+                <button
+                  onClick={() => window.open(existingPR.url, "_blank")}
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors",
+                    tone.className
+                  )}
+                  title={`${existingPR.title} (#${existingPR.number}) — ${tone.label}`}
+                  aria-label={`View PR #${existingPR.number}, ${tone.label}`}
+                >
+                  <GitPullRequest className="h-3 w-3" />
+                  PR
+                  <ExternalLink className="h-2.5 w-2.5" />
+                </button>
+              );
+            })()}
         </div>
         {(ahead > 0 || behind > 0) && (
           <div className="text-muted-foreground flex items-center gap-2 text-xs">

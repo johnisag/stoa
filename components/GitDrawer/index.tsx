@@ -28,6 +28,7 @@ import { CommitForm } from "@/components/GitPanel/CommitForm";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import { baseName } from "@/lib/path-display";
+import { prBadgeTone, PR_TONE_STYLES } from "@/lib/pr-badge";
 import { useDrawerAnimation } from "@/hooks/useDrawerAnimation";
 import {
   useGitStatus,
@@ -140,6 +141,17 @@ export function GitDrawer({
 
   const { data: prData } = usePRStatus(primaryRepoPath);
   const existingPR = prData?.existingPR ?? null;
+  // Tint the "View PR" pill by the PR's review status (refreshes on the existing
+  // usePRStatus cadence). Pre-badge PRs (older cache) lack the fields → "pending".
+  const prTone = existingPR
+    ? PR_TONE_STYLES[
+        prBadgeTone({
+          reviewDecision: existingPR.reviewDecision ?? "",
+          isDraft: existingPR.isDraft ?? false,
+          checks: existingPR.checks ?? "none",
+        })
+      ]
+    : null;
 
   const createPRMutation = useCreatePR(primaryRepoPath);
   const stageMutation = useStageFiles(primaryRepoPath);
@@ -285,11 +297,14 @@ export function GitDrawer({
                   {status.branch}
                 </span>
               )}
-              {existingPR && (
+              {existingPR && prTone && (
                 <button
                   onClick={() => window.open(existingPR.url, "_blank")}
-                  className="bg-muted hover:bg-accent inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors"
-                  title={`${existingPR.title} (#${existingPR.number})`}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors",
+                    prTone.className
+                  )}
+                  title={`${existingPR.title} (#${existingPR.number}) — ${prTone.label}`}
                 >
                   <GitPullRequest className="h-3 w-3" />
                   View PR

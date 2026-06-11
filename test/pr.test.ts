@@ -2,10 +2,16 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // Mock execFileSync so we can assert the exact argv (no shell string) each
 // helper builds, and control its stdout/throw per test. resolveBinary is stubbed
-// to "gh" so the test is OS-independent (no real `where`/`which gh`).
+// to "gh" so the test is OS-independent (no real `where`/`which gh`). lib/pr.ts
+// now imports summarizePrChecks from the pure lib/pr-badge — no db/worktree chain.
 const { execFileSyncMock } = vi.hoisted(() => ({ execFileSyncMock: vi.fn() }));
-vi.mock("child_process", () => ({ execFileSync: execFileSyncMock }));
-vi.mock("@/lib/platform", () => ({ resolveBinary: () => "gh" }));
+vi.mock("child_process", () => ({
+  execFileSync: execFileSyncMock,
+}));
+vi.mock("@/lib/platform", () => ({
+  resolveBinary: () => "gh",
+  expandHome: (p: string) => p,
+}));
 
 import {
   checkGhCli,
@@ -71,7 +77,17 @@ describe("pr.ts — execFile argv (no shell strings)", () => {
 
   it("getPRForBranch: branch name is ONE argv token (spaces safe), JSON parsed", () => {
     execFileSyncMock.mockReturnValue(
-      JSON.stringify([{ number: 7, url: "u", state: "open", title: "t" }])
+      JSON.stringify([
+        {
+          number: 7,
+          url: "u",
+          state: "open",
+          title: "t",
+          reviewDecision: "APPROVED",
+          isDraft: false,
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+        },
+      ])
     );
     const pr = getPRForBranch(CWD, "feat/my branch");
     expect(execFileSyncMock).toHaveBeenCalledWith(
@@ -82,13 +98,47 @@ describe("pr.ts — execFile argv (no shell strings)", () => {
         "--head",
         "feat/my branch",
         "--json",
-        "number,url,state,title",
+        "number,url,state,title,reviewDecision,isDraft,statusCheckRollup",
         "--limit",
         "1",
       ],
       expect.objectContaining({ cwd: CWD, timeout: 10000 })
     );
-    expect(pr).toEqual({ number: 7, url: "u", state: "open", title: "t" });
+    // statusCheckRollup is collapsed via summarizePrChecks; review/draft narrowed.
+    expect(pr).toEqual({
+      number: 7,
+      url: "u",
+      state: "open",
+      title: "t",
+      reviewDecision: "APPROVED",
+      isDraft: false,
+      checks: "passing",
+    });
+  });
+
+  it("getPRForBranch: unknown reviewDecision narrows to '' and isDraft coerces", () => {
+    execFileSyncMock.mockReturnValue(
+      JSON.stringify([
+        {
+          number: 9,
+          url: "u",
+          state: "open",
+          title: "t",
+          reviewDecision: null,
+          isDraft: true,
+          statusCheckRollup: [],
+        },
+      ])
+    );
+    expect(getPRForBranch(CWD, "feat/x")).toEqual({
+      number: 9,
+      url: "u",
+      state: "open",
+      title: "t",
+      reviewDecision: "",
+      isDraft: true,
+      checks: "none",
+    });
   });
 
   it("getCurrentBranch: argv + trim", () => {
@@ -136,6 +186,10 @@ describe("pr.ts — execFile argv (no shell strings)", () => {
       url: "https://github.com/o/r/pull/42",
       state: "open",
       title: "my title",
+      // A freshly created PR has no reviews/checks yet.
+      reviewDecision: "",
+      isDraft: false,
+      checks: "none",
     });
   });
 

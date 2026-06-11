@@ -7,12 +7,18 @@ import type { CommitSummary, CommitDetail } from "@/lib/git-history";
 import type { GitStatus } from "@/lib/git-status";
 import type { MultiRepoGitStatus } from "@/lib/multi-repo-git";
 import type { ProjectRepository } from "@/lib/db";
+// pr-badge is the client-safe seam (no node builtins) for these shapes; importing
+// from lib/pr.ts here would pull the server-only dispatch DB chain into the client.
+import type { ReviewDecision, CheckSummary } from "@/lib/pr-badge";
 
 export interface PRInfo {
   number: number;
   url: string;
   state: string;
   title: string;
+  reviewDecision: ReviewDecision;
+  isDraft: boolean;
+  checks: CheckSummary;
 }
 
 export interface PRData {

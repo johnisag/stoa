@@ -469,6 +469,9 @@ export const Pane = memo(function Pane({
           onTerminalCopy={() => terminalRef?.enterSelectMode()}
           onTerminalPaste={() => terminalRef?.pasteFromClipboard()}
           onTerminalAttach={() => terminalRef?.openFilePicker()}
+          onTerminalAttachSelection={() =>
+            terminalRef?.attachSelectionToAgent()
+          }
           onCompose={session ? () => setShowCompose(true) : undefined}
         />
       )}

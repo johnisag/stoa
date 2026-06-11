@@ -9,6 +9,7 @@ import {
   useMemo,
 } from "react";
 import { useTheme } from "next-themes";
+import { toast } from "sonner";
 import "@xterm/xterm/css/xterm.css";
 import {
   WifiOff,
@@ -18,6 +19,7 @@ import {
   Copy,
   ClipboardPaste,
   Paperclip,
+  MessageSquarePlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
@@ -29,7 +31,10 @@ import type { AttachPayload } from "./hooks/useTerminalConnection.types";
 import { useViewport } from "@/hooks/useViewport";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { uploadFileToTemp } from "@/lib/file-upload";
-import { formatPathsForAgent } from "@/lib/path-display";
+import {
+  formatPathsForAgent,
+  formatTerminalTextForAgent,
+} from "@/lib/path-display";
 import { FilePicker } from "@/components/FilePicker";
 
 export type { TerminalScrollState };
@@ -50,6 +55,9 @@ export interface TerminalHandle {
   enterSelectMode: () => void;
   pasteFromClipboard: () => void;
   openFilePicker: () => void;
+  /** Inject the current terminal selection into the agent's prompt as context
+   * (bracketed paste, no Enter). Returns false if there's nothing selected. */
+  attachSelectionToAgent: () => boolean;
 }
 
 interface TerminalProps {
@@ -185,6 +193,33 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       }
     }, [paste, focus]);
 
+    // Grab the current selection and inject it into the agent's prompt as
+    // context — kills the copy-the-stack-trace-then-paste dance. In select mode
+    // the selectable text is the overlay <pre> (a real DOM selection); outside
+    // it the xterm canvas owns its own selection model. Try the DOM first, fall
+    // back to xterm. Strip control chars (keystroke-injection guard) and go in
+    // as ONE bracketed paste with NO trailing Enter, so the user can add their
+    // question before submitting.
+    const attachSelectionToAgent = useCallback(() => {
+      // Pick the selection source by MODE — not "any page selection first", which
+      // would inject a stray selection elsewhere on the page (sidebar, a drawer).
+      // In select mode the text is the overlay <pre> (a real DOM selection);
+      // outside it xterm owns its own selection model.
+      const raw = selectMode
+        ? (window.getSelection()?.toString() ?? "")
+        : (xtermRef.current?.getSelection() ?? "");
+      const text = formatTerminalTextForAgent(raw);
+      if (!text) {
+        toast.error("Select some terminal text first");
+        return false;
+      }
+      setSelectMode(false);
+      paste(text);
+      focus();
+      toast.success("Added to agent");
+      return true;
+    }, [selectMode, xtermRef, paste, focus]);
+
     // Expose imperative methods
     useImperativeHandle(ref, () => ({
       sendCommand,
@@ -198,6 +233,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       enterSelectMode: () => setSelectMode(true),
       pasteFromClipboard: handlePasteFromClipboard,
       openFilePicker: () => setShowFilePicker(true),
+      attachSelectionToAgent,
     }));
 
     // Extract terminal text for select mode overlay
@@ -266,8 +302,18 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             onTouchEnd={(e) => e.stopPropagation()}
           >
             <div className="bg-primary text-primary-foreground flex items-center justify-between px-3 py-2 text-xs font-medium">
-              <span>Select text, then Copy</span>
+              <span>Select text, then Copy or Attach</span>
               <div className="flex items-center gap-2">
+                <button
+                  // preventDefault on mousedown so the click doesn't first
+                  // collapse the text selection we're about to read.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={attachSelectionToAgent}
+                  className="bg-primary-foreground/20 flex items-center gap-1 rounded px-2 py-0.5 text-xs"
+                >
+                  <MessageSquarePlus className="h-3 w-3" />
+                  Add to agent
+                </button>
                 <button
                   onClick={() => {
                     const sel = window.getSelection()?.toString();
@@ -344,6 +390,15 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             >
               <ClipboardPaste className="h-4 w-4" />
             </button>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={attachSelectionToAgent}
+              className="bg-secondary hover:bg-accent focus-visible:ring-ring flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition-all outline-none focus-visible:ring-2"
+              title="Add selected text to agent"
+              aria-label="Add selected text to agent"
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+            </button>
             {showImageButton && (
               <button
                 onClick={() => setShowFilePicker(true)}
@@ -375,6 +430,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             onKeyPress={sendInput}
             onFilePicker={() => setShowFilePicker(true)}
             onCopy={copySelection}
+            onAttachSelection={attachSelectionToAgent}
             selectMode={selectMode}
             onSelectModeChange={setSelectMode}
             visible={true}
