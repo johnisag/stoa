@@ -11,6 +11,7 @@ import {
 import {
   Menu,
   Rocket,
+  PenLine,
   ChevronLeft,
   ChevronRight,
   Terminal as TerminalIcon,
@@ -73,6 +74,8 @@ interface MobileTabBarProps {
   onMenuClick?: () => void;
   /** Opens the Dispatch control plane (GitHub issues → agent fleet). */
   onDispatchClick?: () => void;
+  /** Opens the full-screen prompt composer (sends straight to this terminal). */
+  onComposeClick?: () => void;
   onViewModeChange: (mode: ViewMode) => void;
   onSelectSession?: (sessionId: string) => void;
 }
@@ -86,6 +89,7 @@ export function MobileTabBar({
   workerCount,
   onMenuClick,
   onDispatchClick,
+  onComposeClick,
   onViewModeChange,
   onSelectSession,
 }: MobileTabBarProps) {
@@ -178,6 +182,23 @@ export function MobileTabBar({
           className="h-8 w-8 shrink-0"
         >
           <Rocket className="h-4 w-4" />
+        </Button>
+      )}
+
+      {/* Compose — a roomy full-screen prompt that sends straight to the active
+          terminal, far easier than typing a long prompt into the xterm on a phone. */}
+      {onComposeClick && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Compose prompt"
+          onClick={(e) => {
+            e.stopPropagation();
+            onComposeClick();
+          }}
+          className="h-8 w-8 shrink-0"
+        >
+          <PenLine className="h-4 w-4" />
         </Button>
       )}
 

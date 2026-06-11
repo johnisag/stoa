@@ -31,6 +31,7 @@ import {
 } from "react-resizable-panels";
 import { GitDrawer } from "@/components/GitDrawer";
 import { ShellDrawer } from "@/components/ShellDrawer";
+import { PromptQueueModal } from "@/components/PromptQueueModal";
 import { useSnapshot } from "valtio";
 import { fileOpenStore, fileOpenActions } from "@/stores/fileOpen";
 import { paneCommandStore, paneCommandActions } from "@/stores/paneCommands";
@@ -117,6 +118,8 @@ export const Pane = memo(function Pane({
     const stored = localStorage.getItem("shellDrawerOpen");
     return stored === "true";
   });
+  // Full-screen prompt composer — sends straight to this pane's active terminal.
+  const [showCompose, setShowCompose] = useState(false);
   const terminalRefs = useRef<Map<string, TerminalHandle | null>>(new Map());
   const paneData = getPaneData(paneId);
   const activeTab = getActiveTab(paneId);
@@ -333,6 +336,22 @@ export const Pane = memo(function Pane({
     [sessions, terminalRef]
   );
 
+  // Inject a file/folder path from the tree into the active agent's prompt
+  // (right-click → "Add to agent"). Reuses the terminal's sendInput — the same
+  // seam the file picker uses — then surfaces the terminal so the user sees the
+  // path land and can keep typing.
+  const handleAddToAgent = useCallback(
+    (text: string) => {
+      if (!terminalRef) return;
+      terminalRef.sendInput(text);
+      setViewMode("terminal");
+      // Defer focus: the terminal is display:none until the view switch renders,
+      // and focus() on a hidden element is ignored.
+      requestAnimationFrame(() => terminalRef.focus());
+    },
+    [terminalRef]
+  );
+
   // Track current tab ID for cleanup
   const activeTabIdRef = useRef<string | null>(null);
   activeTabIdRef.current = activeTab?.id || null;
@@ -409,6 +428,7 @@ export const Pane = memo(function Pane({
           workerCount={workerCount}
           onMenuClick={onMenuClick}
           onDispatchClick={onDispatchClick}
+          onComposeClick={session ? () => setShowCompose(true) : undefined}
           onViewModeChange={setViewMode}
           onSelectSession={onSelectSession}
         />
@@ -449,6 +469,7 @@ export const Pane = memo(function Pane({
           onTerminalCopy={() => terminalRef?.enterSelectMode()}
           onTerminalPaste={() => terminalRef?.pasteFromClipboard()}
           onTerminalAttach={() => terminalRef?.openFilePicker()}
+          onCompose={session ? () => setShowCompose(true) : undefined}
         />
       )}
 
@@ -510,6 +531,7 @@ export const Pane = memo(function Pane({
               <FileExplorer
                 workingDirectory={session.working_directory}
                 fileEditor={fileEditor}
+                onAddToAgent={handleAddToAgent}
               />
             </div>
           )}
@@ -603,6 +625,7 @@ export const Pane = memo(function Pane({
                       <FileExplorer
                         workingDirectory={session.working_directory}
                         fileEditor={fileEditor}
+                        onAddToAgent={handleAddToAgent}
                       />
                     </div>
                   )}
@@ -660,6 +683,24 @@ export const Pane = memo(function Pane({
             </>
           )}
         </ResizablePanelGroup>
+      )}
+
+      {/* Full-screen composer — sends the prompt straight to the active
+          terminal, then closes. Uses xterm BRACKETED paste (not sendCommand,
+          which is a raw write that would submit a multi-line prompt line-by-line)
+          then a single Enter, and surfaces the terminal so the send is visible. */}
+      {showCompose && session && (
+        <PromptQueueModal
+          sessionId={session.id}
+          name={session.name}
+          mode="compose"
+          onSend={(text) => {
+            terminalRef?.paste(text);
+            terminalRef?.sendInput("\r");
+            setViewMode("terminal");
+          }}
+          onClose={() => setShowCompose(false)}
+        />
       )}
     </div>
   );

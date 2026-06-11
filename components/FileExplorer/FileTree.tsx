@@ -9,11 +9,12 @@ import {
   FolderOpen,
   Loader2,
   Copy,
+  Plus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { FileNode } from "@/lib/file-utils";
-import { relativePath } from "@/lib/path-display";
+import { relativePath, formatPathsForAgent } from "@/lib/path-display";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import {
   ContextMenu,
@@ -26,6 +27,9 @@ interface FileTreeProps {
   nodes: FileNode[];
   basePath: string;
   onFileClick: (path: string) => void;
+  /** Inject a path into the active agent's prompt (right-click → "Add to agent").
+   *  Omitted where no terminal is in scope (e.g. the docked file drawer). */
+  onAddToAgent?: (path: string) => void;
   depth?: number;
 }
 
@@ -38,6 +42,7 @@ export function FileTree({
   nodes,
   basePath,
   onFileClick,
+  onAddToAgent,
   depth = 0,
 }: FileTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -177,6 +182,16 @@ export function FileTree({
                 </button>
               </ContextMenuTrigger>
               <ContextMenuContent>
+                {onAddToAgent && (
+                  <ContextMenuItem
+                    onSelect={() =>
+                      onAddToAgent(formatPathsForAgent(node.path))
+                    }
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add to agent
+                  </ContextMenuItem>
+                )}
                 <ContextMenuItem onSelect={() => handleCopyPath(node.path)}>
                   <Copy className="h-3.5 w-3.5" />
                   Copy path
@@ -198,6 +213,7 @@ export function FileTree({
                 nodes={children}
                 basePath={basePath}
                 onFileClick={onFileClick}
+                onAddToAgent={onAddToAgent}
                 depth={depth + 1}
               />
             )}

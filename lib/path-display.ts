@@ -27,3 +27,24 @@ export function relativePath(absPath: string, basePath: string): string {
   if (a.startsWith(b + "/")) return a.slice(b.length + 1);
   return absPath;
 }
+
+/**
+ * Format one or more paths for injection into an agent's prompt. Normalizes to
+ * forward slashes (the form agents/repos expect, cross-platform), double-quotes
+ * any path containing whitespace so the agent reads it as a single token, joins
+ * multiple with a single space, and appends a trailing space so the cursor lands
+ * ready for the next word. Empty/blank entries are dropped. Display-side only —
+ * this is text typed into a prompt, not a shell argv.
+ */
+export function formatPathsForAgent(paths: string | string[]): string {
+  const list = (Array.isArray(paths) ? paths : [paths])
+    // Strip C0 control chars + DEL FIRST: a filename can legally contain a raw
+    // newline or ESC, and injected verbatim into the pty that's a keystroke
+    // (Enter, or a bracketed-paste escape) — a keystroke-injection vector that
+    // quoting does NOT neutralize. Then normalize separators to forward slashes.
+    .map((p) => p.replace(/[\u0000-\u001f\u007f]/g, "").replace(/\\/g, "/"))
+    .filter((p) => p.trim() !== "");
+  if (list.length === 0) return "";
+  const quoted = list.map((p) => (/\s/.test(p) ? `"${p}"` : p));
+  return quoted.join(" ") + " ";
+}

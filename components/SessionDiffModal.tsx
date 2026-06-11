@@ -126,6 +126,7 @@ export function SessionDiffModal({
         ) : (
           <DiffFileList
             diff={data?.diff ?? ""}
+            sessionId={sessionId}
             emptyLabel={
               data?.supported === false
                 ? "This session isn't in a git repository."
