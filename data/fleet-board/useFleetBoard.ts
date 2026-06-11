@@ -1,0 +1,54 @@
+"use client";
+
+import { useMemo } from "react";
+import { useInbox } from "@/data/verdict-inbox/queries";
+import {
+  useBoardQuery,
+  usePendingQuery,
+  useDispatchReposQuery,
+} from "@/data/dispatch/queries";
+import { composeFleetCards, bucketByLane } from "@/lib/fleet-board/lanes";
+
+/**
+ * The fleet board's data: composes the three EXISTING read models (verdict inbox +
+ * dispatch board + pending backlog) into the six lifecycle lanes. Reuses the
+ * inbox's normalization so the board stays verdict-identical with it. All three
+ * already poll while open (5–8s), which is the board's live-refresh — there is no
+ * dispatch/ceremony WS push, so we don't pretend otherwise.
+ */
+export function useFleetBoard(open: boolean) {
+  const inbox = useInbox(open);
+  const board = useBoardQuery(open);
+  const pending = usePendingQuery(open);
+  const repos = useDispatchReposQuery(open);
+
+  const lanes = useMemo(
+    () =>
+      bucketByLane(
+        composeFleetCards(
+          board.data ?? [],
+          pending.data ?? [],
+          inbox.data ?? []
+        )
+      ),
+    [board.data, pending.data, inbox.data]
+  );
+
+  const repoById = useMemo(
+    () => new Map((repos.data ?? []).map((r) => [r.id, r])),
+    [repos.data]
+  );
+
+  const total = useMemo(
+    () => Object.values(lanes).reduce((n, cards) => n + cards.length, 0),
+    [lanes]
+  );
+
+  return {
+    lanes,
+    repoById,
+    total,
+    isLoading: inbox.isLoading || board.isLoading || pending.isLoading,
+    isError: inbox.isError || board.isError || pending.isError,
+  };
+}

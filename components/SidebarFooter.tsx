@@ -5,6 +5,7 @@ import {
   BarChart3,
   Workflow,
   Inbox,
+  Columns3,
   Compass,
 } from "lucide-react";
 import {
@@ -27,6 +28,8 @@ interface SidebarFooterProps {
   onShowWorkflows?: () => void;
   /** Opens the Verdict Inbox (the fleet review queue). */
   onShowVerdictInbox?: () => void;
+  /** Opens the Fleet Board (the fleet by lifecycle stage). */
+  onShowFleetBoard?: () => void;
 }
 
 export function SidebarFooter({
@@ -36,6 +39,7 @@ export function SidebarFooter({
   onShowAnalytics,
   onShowWorkflows,
   onShowVerdictInbox,
+  onShowFleetBoard,
 }: SidebarFooterProps = {}) {
   return (
     <div className="mt-auto px-3 pt-2 pb-3">
@@ -107,6 +111,23 @@ export function SidebarFooter({
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p>Verdict Inbox</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {onShowFleetBoard && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={onShowFleetBoard}
+                  aria-label="Fleet Board"
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
+                >
+                  <Columns3 className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Fleet Board</p>
               </TooltipContent>
             </Tooltip>
           )}

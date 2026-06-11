@@ -49,6 +49,7 @@ import { DispatchView } from "@/components/views/DispatchView";
 import { AnalyticsView } from "@/components/views/AnalyticsView";
 import { WorkflowsView } from "@/components/views/WorkflowsView";
 import { VerdictInboxView } from "@/components/views/VerdictInboxView";
+import { FleetBoardView } from "@/components/views/FleetBoardView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
@@ -143,6 +144,7 @@ function HomeContent() {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showWorkflows, setShowWorkflows] = useState(false);
   const [showVerdictInbox, setShowVerdictInbox] = useState(false);
+  const [showFleetBoard, setShowFleetBoard] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [copiedSessionId, setCopiedSessionId] = useState(false);
@@ -721,6 +723,8 @@ function HomeContent() {
     setShowWorkflows,
     showVerdictInbox,
     setShowVerdictInbox,
+    showFleetBoard,
+    setShowFleetBoard,
     onShowShortcuts: () => setShowHelp(true),
     onShowGuide: () => setShowGuide(true),
     notificationSettings,
@@ -783,6 +787,9 @@ function HomeContent() {
         open={showVerdictInbox}
         onOpenChange={setShowVerdictInbox}
       />
+      {/* Fleet Board — the autonomous fleet as a lifecycle kanban (reuses the
+          inbox read model + cards). Self-contained; opened via setShowFleetBoard. */}
+      <FleetBoardView open={showFleetBoard} onOpenChange={setShowFleetBoard} />
     </>
   );
 }

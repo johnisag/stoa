@@ -19,6 +19,7 @@ import {
   BarChart3,
   Workflow,
   Inbox,
+  Columns3,
 } from "lucide-react";
 import { PaneLayout } from "@/components/PaneLayout";
 import {
@@ -51,6 +52,7 @@ export function DesktopView({
   setShowAnalytics,
   setShowWorkflows,
   setShowVerdictInbox,
+  setShowFleetBoard,
   onShowShortcuts,
   onShowGuide,
   notificationSettings,
@@ -274,6 +276,21 @@ export function DesktopView({
               </TooltipTrigger>
               <TooltipContent>
                 <p>Verdict Inbox</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Fleet Board (the fleet by lifecycle stage)"
+                  onClick={() => setShowFleetBoard(true)}
+                >
+                  <Columns3 className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Fleet Board</p>
               </TooltipContent>
             </Tooltip>
             <Tooltip>
