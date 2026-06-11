@@ -13,7 +13,7 @@ export interface WebSocketCallbacks {
   /** Fired after each "output" message is written (incl. the attach snapshot). */
   onOutput?: () => void;
   /** Fired when the agent process exits (server "exit" message). */
-  onExit?: () => void;
+  onExit?: (code?: number) => void;
   /** Server "reset" frame — clear the screen+scrollback right before the
    *  snapshot replay that follows (prevents duplicated scrollback on reconnect). */
   onReset?: () => void;
@@ -156,8 +156,13 @@ export function createWebSocketConnection(
           }
         });
       } else if (msg.type === "exit") {
-        term.write("\r\n\x1b[33m[Session ended]\x1b[0m\r\n");
-        callbacks.onExit?.();
+        // Fire onExit from the write-completion callback so the FIFO write queue
+        // has flushed the agent's final output into the buffer BEFORE the auto-
+        // retry classifier reads the screen (term.write parses asynchronously).
+        // Pass the exit code so a clean exit (0) is never auto-retried.
+        term.write("\r\n\x1b[33m[Session ended]\x1b[0m\r\n", () =>
+          callbacks.onExit?.(msg.code)
+        );
       }
     } catch {
       term.write(event.data);

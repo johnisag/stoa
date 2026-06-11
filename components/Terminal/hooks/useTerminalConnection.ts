@@ -7,10 +7,16 @@ import type { SearchAddon } from "@xterm/addon-search";
 import { WS_RECONNECT_BASE_DELAY } from "../constants";
 import type {
   AttachPayload,
+  AutoRetryState,
   TerminalScrollState,
   UseTerminalConnectionProps,
   UseTerminalConnectionReturn,
 } from "./useTerminalConnection.types";
+import {
+  isTransientFailure,
+  nextRetryDelay,
+  shouldKeepRetrying,
+} from "@/lib/auto-retry";
 import {
   createTerminal,
   updateTerminalForMobile,
@@ -48,6 +54,15 @@ export function useTerminalConnection({
   // True once the agent process exits ("exit" message). Drives the Relaunch
   // overlay and (via sessionEndedRef) suppresses auto-reconnect respawn.
   const [sessionEnded, setSessionEnded] = useState(false);
+  // Pending auto-retry when the agent exited on a TRANSIENT failure (rate-limit /
+  // network hiccup): which attempt and when it fires. null = nothing scheduled.
+  // Drives the "retrying in Ns · cancel" affordance; capped + backed off below.
+  const [autoRetry, setAutoRetry] = useState<AutoRetryState | null>(null);
+  // The countdown timer + the running attempt count for the current ended state,
+  // in refs so the WS callbacks (which capture stale state) and the unmount
+  // cleanup can read/clear them synchronously.
+  const autoRetryTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoRetryAttemptRef = useRef<number>(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Last attach request, re-sent on every (re)connect so the native pty session
@@ -132,9 +147,16 @@ export function useTerminalConnection({
       if (prev?.key !== payload.key) {
         const term = xtermRef.current;
         term?.reset();
-        // Switching sessions clears any prior "ended" gate.
+        // Switching sessions clears any prior "ended" gate + auto-retry: the new
+        // session starts with a fresh attempt budget, no inherited countdown.
         sessionEndedRef.current = false;
         setSessionEnded(false);
+        if (autoRetryTimerRef.current) {
+          clearTimeout(autoRetryTimerRef.current);
+          autoRetryTimerRef.current = null;
+        }
+        autoRetryAttemptRef.current = 0;
+        setAutoRetry(null);
         // Cover the freshly-cleared (black) screen with a brief overlay until the
         // incoming session's first output paints — no blank flash on switch.
         // Cleared by the WS onOutput callback below (the snapshot arrives as an
@@ -211,32 +233,123 @@ export function useTerminalConnection({
     reconnectFnRef.current?.();
   }, []);
 
+  // Cancel a pending auto-retry — the user's override (and the structural stop
+  // when the cap is reached or the session is torn down). Clears the timer + the
+  // surfaced countdown but LEAVES the session ended, so the plain Relaunch button
+  // takes over. Safe to call when nothing is armed (no-op).
+  const cancelAutoRetry = useCallback(() => {
+    if (autoRetryTimerRef.current) {
+      clearTimeout(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
+    }
+    setAutoRetry(null);
+  }, []);
+
   // Explicit relaunch after the agent exited: clear the "ended" gate and
   // re-attach WITH spawn (reusing the stored payload) so the server respawns a
   // fresh agent. This is the ONLY path that respawns an exited session — auto-
-  // reconnect stays suppressed while ended.
-  const relaunch = useCallback(() => {
-    sessionEndedRef.current = false;
-    setSessionEnded(false);
-    const payload = attachPayloadRef.current;
-    const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN && payload) {
-      // Keep the existing scrollback (no reset): the respawned agent's output
-      // appends below the prior history + [Session ended] marker.
-      ws.send(
-        JSON.stringify({
-          type: "attach",
-          key: payload.key,
-          spawn: payload.spawn,
-        })
+  // reconnect stays suppressed while ended. `fromAutoRetry` is set only by the
+  // backoff timer; a MANUAL relaunch (the default) is the user taking over, so it
+  // resets the auto-retry attempt budget — a later transient exit gets the full
+  // allowance again rather than inheriting a near-exhausted count.
+  const doRelaunch = useCallback(
+    (fromAutoRetry: boolean) => {
+      // A relaunch supersedes any pending auto-retry (don't double-fire).
+      cancelAutoRetry();
+      if (!fromAutoRetry) autoRetryAttemptRef.current = 0;
+      sessionEndedRef.current = false;
+      setSessionEnded(false);
+      const payload = attachPayloadRef.current;
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN && payload) {
+        // Keep the existing scrollback (no reset): the respawned agent's output
+        // appends below the prior history + [Session ended] marker.
+        ws.send(
+          JSON.stringify({
+            type: "attach",
+            key: payload.key,
+            spawn: payload.spawn,
+          })
+        );
+      } else {
+        // Socket dropped — reconnect; tell onConnected to keep scrollback when it
+        // re-attaches (so relaunch preserves history on the reconnect path too).
+        preserveOnReattachRef.current = true;
+        reconnectFnRef.current?.();
+      }
+    },
+    [cancelAutoRetry]
+  );
+
+  // Public, arg-less relaunch (button onClick passes a MouseEvent, which must NOT
+  // be read as fromAutoRetry — so the manual path is always the counter-resetting
+  // one).
+  const relaunch = useCallback(() => doRelaunch(false), [doRelaunch]);
+
+  // Latest auto-retry relaunch in a ref so the backoff timer (armed once on exit)
+  // always fires the current closure, not the one captured when it was scheduled.
+  const relaunchRef = useRef(doRelaunch);
+  relaunchRef.current = doRelaunch;
+
+  // Read the tail of the rendered screen straight off the xterm buffer (the same
+  // source the select-mode overlay reads). We inspect only the bottom rows — a
+  // transient-failure notice is the agent's LAST output; old scrollback would
+  // false-positive (and the pure detector also slices to recent lines).
+  const readScreenTail = useCallback((): string => {
+    const term = xtermRef.current;
+    if (!term) return "";
+    try {
+      const buffer = term.buffer.active;
+      // End at the cursor row, not the viewport bottom: an agent that died before
+      // filling the screen leaves blank rows below the cursor, which would dilute
+      // the last-8-lines window the detectors scan (and hide the error text).
+      const endRow = Math.min(
+        buffer.baseY + buffer.cursorY + 1,
+        buffer.baseY + term.rows
       );
-    } else {
-      // Socket dropped — reconnect; tell onConnected to keep scrollback when it
-      // re-attaches (so relaunch preserves history on the reconnect path too).
-      preserveOnReattachRef.current = true;
-      reconnectFnRef.current?.();
+      const startRow = Math.max(0, endRow - 30);
+      const lines: string[] = [];
+      for (let i = startRow; i < endRow; i++) {
+        const line = buffer.getLine(i);
+        if (line) lines.push(line.translateToString(true));
+      }
+      return lines.join("\n");
+    } catch {
+      // A disposed/partially-initialized xterm — fail closed (no auto-retry).
+      return "";
     }
   }, []);
+
+  // Arm the NEXT auto-retry if the session ended on a TRANSIENT failure and we're
+  // still under the cap. Conservative: fires only when isTransientRateLimit reads
+  // a rate-limit / network signal off the final screen (a real failure falls
+  // through to the manual Relaunch), waits an EXPONENTIAL backoff, and STOPS once
+  // the attempt count exceeds the cap. The timer relaunches; if that relaunch
+  // also ends transiently, onExit arms the next one (with a longer delay) until
+  // the cap — never a tight loop, always user-cancelable.
+  const armAutoRetry = useCallback(
+    (exitCode?: number) => {
+      // A CLEAN exit (the user typed /exit or the agent finished) is never auto-
+      // retried, even if transient-looking text sits in the scrollback — fail closed
+      // so we don't respawn a session the user was done with.
+      if (exitCode === 0) return;
+      const attempt = autoRetryAttemptRef.current + 1;
+      if (!shouldKeepRetrying(attempt)) return; // cap reached → leave it for the user
+      if (!isTransientFailure(readScreenTail())) return; // non-transient → don't retry
+      // Structural no-double-arm: clear any timer already pending for this ended
+      // state so Cancel can always stop the one armed timer (and we never fire twice).
+      if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current);
+      autoRetryAttemptRef.current = attempt;
+      const delay = nextRetryDelay(attempt);
+      setAutoRetry({ attempt, retryAtMs: Date.now() + delay });
+      autoRetryTimerRef.current = setTimeout(() => {
+        autoRetryTimerRef.current = null;
+        setAutoRetry(null);
+        relaunchRef.current(true);
+      }, delay);
+    },
+    [readScreenTail]
+  );
 
   // Main setup effect
   useEffect(() => {
@@ -351,10 +464,13 @@ export function useTerminalConnection({
             if (!preserve) xtermRef.current?.reset();
           },
           // Agent process exited: mark ended so auto-reconnect stops respawning
-          // and the Terminal shows a Relaunch affordance.
-          onExit: () => {
+          // and the Terminal shows a Relaunch affordance. If the final screen
+          // shows a TRANSIENT failure (rate-limit / network), arm a capped,
+          // backed-off auto-retry instead of leaving it dead until noticed.
+          onExit: (code?: number) => {
             sessionEndedRef.current = true;
             setSessionEnded(true);
+            armAutoRetry(code);
           },
         },
         wsRef,
@@ -459,6 +575,12 @@ export function useTerminalConnection({
         attachTimerRef.current = null;
       }
 
+      // Dispose any pending auto-retry timer (so it can't fire after unmount).
+      if (autoRetryTimerRef.current) {
+        clearTimeout(autoRetryTimerRef.current);
+        autoRetryTimerRef.current = null;
+      }
+
       // Reset refs
       reconnectDelayRef.current = WS_RECONNECT_BASE_DELAY;
 
@@ -527,5 +649,7 @@ export function useTerminalConnection({
     reconnect,
     sessionEnded,
     relaunch,
+    autoRetry,
+    cancelAutoRetry,
   };
 }

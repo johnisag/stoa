@@ -39,7 +39,9 @@ function fakeTerm() {
   return {
     cols: 80,
     rows: 24,
-    write: vi.fn(),
+    // write may carry a completion callback (the exit path fires onExit from it,
+    // once the FIFO write queue has flushed) — invoke it synchronously here.
+    write: vi.fn((_s: string, cb?: () => void) => cb?.()),
     focus: vi.fn(),
     onData: vi.fn(),
     attachCustomKeyEventHandler: vi.fn(),
@@ -114,7 +116,8 @@ describe("createWebSocketConnection — exited session suppresses reconnect", ()
 
     expect(onExit).toHaveBeenCalledTimes(1);
     expect(term.write).toHaveBeenCalledWith(
-      expect.stringContaining("[Session ended]")
+      expect.stringContaining("[Session ended]"),
+      expect.any(Function)
     );
   });
 });
