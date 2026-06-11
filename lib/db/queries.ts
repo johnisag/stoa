@@ -49,6 +49,13 @@ export const queries = {
   deleteSession: (db: Database.Database) =>
     getStmt(db, `DELETE FROM sessions WHERE id = ?`),
 
+  // Survey worker sessions (the autonomous maintainer): named `stoa-survey-<id>`.
+  // At startup every one is an orphan — the in-memory surveyRuns map that tracked
+  // them is wiped by a restart — so the sweep reclaims them. ('-' is a literal in
+  // LIKE; only % and _ are wildcards.)
+  listSurveySessions: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM sessions WHERE name LIKE 'stoa-survey-%'`),
+
   updateSessionWorktree: (db: Database.Database) =>
     getStmt(
       db,

@@ -81,5 +81,6 @@ next-env.d.ts
 # Local planning / analysis scratchpads — never tracked.
 todays-work.md
 must-have.md
+small-big.md
 .tmp-*.mjs
 tmp-*.mjs

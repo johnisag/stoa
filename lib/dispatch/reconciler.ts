@@ -33,6 +33,7 @@ import {
   hasSurveyRun,
   trackedSurveyIds,
   buildMaintainerTaskBody,
+  sweepOrphanedSurveys,
   DEDUP_LIST_CAP,
   DEFAULT_SURVEY_CAP,
   type SurveyRunStatus,
@@ -577,5 +578,14 @@ export async function reviewGatePass(): Promise<void> {
  * any genuinely-dead worker it skips is swept by the first 60s tick.
  */
 export async function reconcileOrphans(): Promise<void> {
+  // Reclaim survey sessions/worktrees orphaned by a restart (the in-memory
+  // surveyRuns map doesn't survive one). FIRST — it's fast (DB + kill) and runs at
+  // t≈0, before the slow per-worker gh calls below could let the 60s tick spawn a
+  // fresh survey. Decoupled so a failure here never blocks the worker sweep.
+  try {
+    await sweepOrphanedSurveys();
+  } catch (err) {
+    console.error("maintainer: orphan-survey sweep failed:", err);
+  }
   await sweepActiveWorkers({ guardEmptyList: true });
 }
