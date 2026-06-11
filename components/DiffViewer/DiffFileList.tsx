@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { UnifiedDiff } from "./UnifiedDiff";
+import { UnifiedDiff, type OnCommentLine } from "./UnifiedDiff";
 import {
   parseDiff,
   getDiffFileName,
@@ -17,9 +17,12 @@ import {
 export function DiffFileList({
   diff,
   emptyLabel = "No changes.",
+  onCommentLine,
 }: {
   diff: string;
   emptyLabel?: string;
+  /** Opt-in: makes each diff line commentable (only the live-session review). */
+  onCommentLine?: OnCommentLine;
 }) {
   const files = useMemo(() => {
     if (!diff) return [];
@@ -48,6 +51,7 @@ export function DiffFileList({
           diff={f.parsed}
           fileName={f.fileName}
           expanded={expanded}
+          onCommentLine={onCommentLine}
         />
       ))}
     </div>
