@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   X,
   ListPlus,
@@ -11,6 +11,8 @@ import {
   PenLine,
   ChevronUp,
   ChevronDown,
+  History,
+  Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +22,7 @@ import {
   useClearQueue,
 } from "@/hooks/useSessionQueue";
 import { isSendable, normalizeForSend } from "@/lib/prompt-compose";
+import { getHistory, recordPrompt, searchHistory } from "@/lib/prompt-history";
 
 /**
  * Queue follow-up prompts to a session while it works (`mode="queue"`, the
@@ -57,6 +60,12 @@ export function PromptQueueModal({
   const [text, setText] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
 
+  // Recent prompts sent to THIS session (localStorage-backed, newest-first), and
+  // whether the history picker is open. Loaded after mount — localStorage doesn't
+  // exist on the server.
+  const [history, setHistory] = useState<string[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+
   const items = queue ?? [];
 
   // Auto-focus the textarea on open so you can start typing immediately. Mount
@@ -65,14 +74,27 @@ export function PromptQueueModal({
     taRef.current?.focus();
   }, []);
 
-  // Escape dismisses (mobile keyboards have no obvious close).
+  // Hydrate the prompt history from localStorage once mounted (keyed by session).
+  useEffect(() => {
+    setHistory(getHistory(window.localStorage, sessionId));
+  }, [sessionId]);
+
+  // Record a prompt into this session's history and reflect it in local state.
+  const remember = (t: string) => {
+    setHistory(recordPrompt(window.localStorage, sessionId, t));
+  };
+
+  // Escape dismisses (mobile keyboards have no obvious close). The history picker
+  // is a sub-layer, so Escape closes it first and only then the whole modal.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      if (showHistory) setShowHistory(false);
+      else onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, showHistory]);
 
   const grow = () => {
     const el = taRef.current;
@@ -85,6 +107,7 @@ export function PromptQueueModal({
     const t = normalizeForSend(text);
     if (!t) return;
     enqueue.mutate(t);
+    remember(t);
     setText("");
     requestAnimationFrame(grow); // shrink back after clearing
   };
@@ -93,8 +116,22 @@ export function PromptQueueModal({
   const send = () => {
     const t = normalizeForSend(text);
     if (!t) return;
+    remember(t);
     onSend?.(t);
     onClose();
+  };
+
+  // Drop a past prompt back into the input and return focus there to edit/send.
+  const reuse = (prompt: string) => {
+    setText(prompt);
+    setShowHistory(false);
+    requestAnimationFrame(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(prompt.length, prompt.length);
+      grow();
+    });
   };
 
   return (
@@ -240,6 +277,22 @@ export function PromptQueueModal({
       )}
 
       <div className="border-border bg-background/95 safe-area-bottom border-t p-3 backdrop-blur-sm">
+        {/* Re-fire a past prompt without retyping it. Only shown once this
+            session has some history to reuse. */}
+        {history.length > 0 && (
+          <div className="mb-2 flex">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowHistory(true)}
+              className="text-muted-foreground h-8"
+              aria-label="Reuse a recent prompt"
+            >
+              <History className="mr-1 h-4 w-4" />
+              Recent prompts
+            </Button>
+          </div>
+        )}
         {compose ? (
           <Button
             onClick={send}
@@ -278,6 +331,95 @@ export function PromptQueueModal({
             </Button>
           </div>
         )}
+      </div>
+
+      {showHistory && (
+        <PromptHistoryPicker
+          history={history}
+          onPick={reuse}
+          onClose={() => setShowHistory(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Overlay picker over the prompts recently sent to this session: type to fuzzy-
+ * filter (reusing the QuickSwitcher matcher), tap one to drop it back into the
+ * input. Newest-first when the query is empty.
+ */
+function PromptHistoryPicker({
+  history,
+  onPick,
+  onClose,
+}: {
+  history: string[];
+  onPick: (prompt: string) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Auto-focus the filter on open. Mount only.
+  useEffect(() => {
+    searchRef.current?.focus();
+  }, []);
+
+  const results = useMemo(
+    () => searchHistory(history, query),
+    [history, query]
+  );
+
+  return (
+    <div
+      className="bg-background/80 absolute inset-0 z-10 flex flex-col backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="border-border bg-background mx-auto mt-12 flex max-h-[80%] w-full max-w-lg flex-col overflow-hidden rounded-lg border shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-border flex items-center gap-2 border-b p-2">
+          <Search className="text-muted-foreground ml-1 h-4 w-4 flex-shrink-0" />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter recent prompts…"
+            className="placeholder:text-muted-foreground flex-1 bg-transparent text-sm outline-none"
+          />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onClose}
+            className="h-8 w-8"
+            aria-label="Close recent prompts"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        <div className="overflow-auto p-1">
+          {results.length === 0 ? (
+            <div className="text-muted-foreground px-3 py-8 text-center text-sm">
+              No matching prompts.
+            </div>
+          ) : (
+            <ul className="space-y-0.5">
+              {results.map((prompt, i) => (
+                <li key={`${i}-${prompt.slice(0, 32)}`}>
+                  <button
+                    type="button"
+                    onClick={() => onPick(prompt)}
+                    className="hover:bg-muted focus-visible:bg-muted w-full rounded-md px-3 py-2 text-left text-sm break-words whitespace-pre-wrap outline-none"
+                  >
+                    {prompt}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );

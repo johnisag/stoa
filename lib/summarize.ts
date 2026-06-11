@@ -47,6 +47,41 @@ export function parseClaudeTranscript(jsonl: string): string {
   return messages.join("\n\n");
 }
 
+/**
+ * The text of the LAST assistant turn in a parsed Claude Code transcript, as the
+ * agent's own markdown (not the hard-wrapped terminal render). `entries` is the
+ * array of parsed JSONL objects (one per line). Mirrors parseClaudeTranscript's
+ * extraction: only assistant TEXT blocks count (tool calls + thinking are
+ * dropped) and sidechain (Task sub-agent) turns are skipped so the result is the
+ * main thread's reply, not a sub-agent's. Walks from the end and returns the
+ * first qualifying turn's joined text, or "" when none is found. Pure →
+ * unit-testable; the route owns reading the JSONL and parsing the lines.
+ */
+export function lastAssistantText(entries: unknown[]): string {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i] as {
+      type?: string;
+      isSidechain?: boolean;
+      message?: { content?: unknown };
+    } | null;
+    if (!entry || entry.type !== "assistant" || entry.isSidechain) continue;
+    const content = entry.message?.content;
+    if (!Array.isArray(content)) continue;
+    const text = content
+      .filter(
+        (block): block is { type: string; text: string } =>
+          !!block &&
+          typeof block === "object" &&
+          (block as { type?: unknown }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string"
+      )
+      .map((block) => block.text)
+      .join("\n");
+    if (text.trim()) return text;
+  }
+  return "";
+}
+
 /** The instruction handed to `claude -p` over the conversation (on stdin). */
 export function buildSummaryPrompt(): string {
   return `Summarize this Claude Code conversation in under 300 words. Focus on: what was built, key files changed, current state, and any pending work. Be specific.`;

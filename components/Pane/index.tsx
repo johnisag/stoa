@@ -352,6 +352,21 @@ export const Pane = memo(function Pane({
     [terminalRef]
   );
 
+  // Insert a saved snippet (from the shared store the mobile toolbar also uses)
+  // into the active terminal. Content is already control-char-sanitized by
+  // SnippetsModal. Use bracketed PASTE (not sendInput) so a multi-line snippet
+  // goes in as ONE paste and does NOT auto-submit — a raw \n through sendInput is
+  // an Enter keystroke. The user reviews and presses Enter.
+  const handleSnippetInsert = useCallback(
+    (content: string) => {
+      if (!terminalRef || !content) return;
+      terminalRef.paste(content);
+      setViewMode("terminal");
+      requestAnimationFrame(() => terminalRef.focus());
+    },
+    [terminalRef]
+  );
+
   // Track current tab ID for cleanup
   const activeTabIdRef = useRef<string | null>(null);
   activeTabIdRef.current = activeTab?.id || null;
@@ -472,6 +487,7 @@ export const Pane = memo(function Pane({
           onTerminalAttachSelection={() =>
             terminalRef?.attachSelectionToAgent()
           }
+          onSnippetInsert={handleSnippetInsert}
           onCompose={session ? () => setShowCompose(true) : undefined}
         />
       )}

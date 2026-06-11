@@ -34,6 +34,27 @@ export async function uploadFileToTemp(file: File): Promise<string | null> {
 }
 
 /**
+ * Fetch a web page as context: POST the URL to /api/web-fetch, which reduces the
+ * page to readable text, strips control chars, writes it to a temp file, and
+ * returns the path. The FilePicker injects that path like an uploaded file.
+ *
+ * @param url - The http(s) URL to fetch
+ * @returns The path to the temp file. THROWS with the route's specific message
+ *   (timeout / blocked host / 404 / no readable text) so the caller can toast it.
+ */
+export async function fetchUrlToTemp(url: string): Promise<string> {
+  const res = await fetch("/api/web-fetch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.path) return data.path;
+  throw new Error(data.error || "Couldn't fetch that URL");
+}
+
+/**
  * Partition the settled results of a batch of `uploadFileToTemp` calls into the
  * successfully uploaded paths and a count of failures, so a bulk attach can
  * survive a partial failure: inject every path that landed and still report how
