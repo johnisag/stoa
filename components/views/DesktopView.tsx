@@ -52,6 +52,7 @@ export function DesktopView({
   setShowWorkflows,
   setShowVerdictInbox,
   onShowShortcuts,
+  onShowGuide,
   notificationSettings,
   permissionGranted,
   updateSettings,
@@ -111,7 +112,10 @@ export function DesktopView({
               />
             </div>
 
-            <SidebarFooter onShowShortcuts={onShowShortcuts} />
+            <SidebarFooter
+              onShowShortcuts={onShowShortcuts}
+              onShowGuide={onShowGuide}
+            />
           </div>
         ) : (
           <SidebarRail

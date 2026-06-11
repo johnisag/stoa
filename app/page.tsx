@@ -54,6 +54,7 @@ import { getSwitchableSessionOrder } from "@/lib/session-navigation";
 import { getActiveBackend } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
+import { StoaGuide } from "@/components/StoaGuide";
 import type { Keybinding } from "@/lib/keybindings";
 
 // Global navigation shortcuts (mod = ⌘ on macOS, Ctrl elsewhere). Module-level
@@ -142,6 +143,7 @@ function HomeContent() {
   const [showWorkflows, setShowWorkflows] = useState(false);
   const [showVerdictInbox, setShowVerdictInbox] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const [copiedSessionId, setCopiedSessionId] = useState(false);
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
 
@@ -714,6 +716,7 @@ function HomeContent() {
     showVerdictInbox,
     setShowVerdictInbox,
     onShowShortcuts: () => setShowHelp(true),
+    onShowGuide: () => setShowGuide(true),
     notificationSettings,
     permissionGranted,
     updateSettings,
@@ -752,6 +755,8 @@ function HomeContent() {
         open={showHelp}
         onOpenChange={setShowHelp}
       />
+      {/* Plain-English feature tour (opened from the sidebar footer). */}
+      <StoaGuide open={showGuide} onOpenChange={setShowGuide} />
       {/* Dispatch control plane (GitHub-issue -> agent fleet). Self-contained
           dialog; the nav buttons in Desktop/MobileView open it via setShowDispatch. */}
       <DispatchView open={showDispatch} onOpenChange={setShowDispatch} />

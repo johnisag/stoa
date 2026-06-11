@@ -164,12 +164,30 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
 
       <section className="space-y-1.5">
         <h3 className="flex items-center gap-2 text-base font-semibold">
+          <GitMerge className="h-4 w-4" aria-hidden="true" /> Auto-merge
+          (optional)
+        </h3>
+        <p className="text-muted-foreground">
+          By default, accepting a PR is your one tap. Arm{" "}
+          <span className="text-foreground font-medium">auto-merge</span> on an
+          issue and Stoa merges its PR for you the moment it&apos;s truly ready
+          — no conflicts, checks green (or none configured — arm{" "}
+          <span className="text-foreground">verify</span> for repos with no CI),
+          the critic approved (if the repo is gated), and the verify command
+          passed (if armed). It only ever merges what those gates allow, so it
+          can run an overnight fleet end-to-end without you. Leave it off and
+          every merge stays your call.
+        </p>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
           <CheckCircle className="h-4 w-4" aria-hidden="true" /> Accepting the
           work
         </h3>
         <p className="text-muted-foreground">
-          Always your tap, from the In-flight card. Stoa never accepts changes
-          without you.
+          Always your tap (unless you armed auto-merge), from the In-flight
+          card. Stoa never accepts changes without you.
         </p>
       </section>
 
