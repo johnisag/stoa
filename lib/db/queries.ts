@@ -504,12 +504,13 @@ export const queries = {
 
   // Local (GitHub-free) task: source='local', issue_number 0 (excluded from the
   // gh-dedupe partial index so locals never collide), freeform body in task_body.
-  // The status param is 'pending' or 'scheduled'; scheduled_at is null unless scheduled.
+  // status is 'pending' or 'scheduled'; scheduled_at/recurrence null unless scheduled
+  // (recurrence 'hourly'|'daily'|'weekly' makes a scheduled task repeat).
   insertLocalTask: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT INTO issue_dispatches (id, repo_id, issue_number, issue_title, task_body, issue_created_at, scheduled_at, source, status)
-       VALUES (?, ?, 0, ?, ?, ?, ?, 'local', ?)`
+      `INSERT INTO issue_dispatches (id, repo_id, issue_number, issue_title, task_body, issue_created_at, scheduled_at, recurrence, source, status)
+       VALUES (?, ?, 0, ?, ?, ?, ?, ?, 'local', ?)`
     ),
 
   // Schedule a candidate for a future time: 'scheduled' until the reconciler

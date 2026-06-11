@@ -171,6 +171,9 @@ export function createSchema(db: Database.Database): void {
       -- drains both identically; only the worker prompt + the dedupe index differ.
       source TEXT NOT NULL DEFAULT 'github',
       task_body TEXT,
+      -- Recurrence for a scheduled LOCAL task ('hourly'|'daily'|'weekly'); null =
+      -- one-shot. On promotion the reconciler re-arms the next occurrence.
+      recurrence TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE,

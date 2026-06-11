@@ -107,6 +107,8 @@ export interface IssueDispatch {
   source: string;
   /** Freeform task body for a local task (source='local'); null for GitHub issues. */
   task_body: string | null;
+  /** Recurrence for a scheduled local task ('hourly'|'daily'|'weekly'); null = once. */
+  recurrence: string | null;
   created_at: string;
   updated_at: string;
 }

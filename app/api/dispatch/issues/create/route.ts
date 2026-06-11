@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { getDb, queries } from "@/lib/db";
 import { createIssue } from "@/lib/dispatch/create";
 import { dispatchOne } from "@/lib/dispatch/dispatcher";
+import { normalizeRecurrence } from "@/lib/dispatch/recurrence";
 import type { DispatchRepo, IssueDispatch } from "@/lib/dispatch/types";
 
 /**
@@ -73,9 +74,23 @@ export async function POST(request: NextRequest) {
         disposition === "scheduled"
           ? new Date(scheduledAt).toISOString()
           : null;
+      // Recurrence only applies to a SCHEDULED local task; 'once'/unknown → null.
+      const recurrence =
+        disposition === "scheduled"
+          ? normalizeRecurrence(body?.recurrence)
+          : null;
       queries
         .insertLocalTask(db)
-        .run(id, repo.id, title, issueBody || null, nowIso, schedAt, status);
+        .run(
+          id,
+          repo.id,
+          title,
+          issueBody || null,
+          nowIso,
+          schedAt,
+          recurrence,
+          status
+        );
     } else {
       created = await createIssue({
         repoSlug: repo.repo_slug,
