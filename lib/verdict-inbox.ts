@@ -27,6 +27,9 @@ export interface InboxItem {
   id: string;
   /** The session id (ceremony items) — the action endpoints key on it. */
   sessionId: string | null;
+  /** The dispatch repo id (dispatch items only) — lets a finding be remembered as
+   * a per-repo lesson. null for ceremonies (no tracked dispatch repo). */
+  repoId: string | null;
   prNumber: number | null;
   prUrl: string | null;
   /** Headline: the issue title (#N) or the session's branch. */
@@ -73,6 +76,7 @@ export function listInboxItems(): InboxItem[] {
       type: "dispatch",
       id: d.id,
       sessionId: null,
+      repoId: d.repo_id,
       prNumber: d.pr_number,
       prUrl: d.pr_url,
       // Local tasks have no issue number — show the bare title, not "(#0)".
@@ -110,6 +114,7 @@ export function listInboxItems(): InboxItem[] {
       type: "ceremony",
       id: c.id,
       sessionId: session.id,
+      repoId: null,
       prNumber: c.pr_number,
       prUrl: c.pr_url,
       title: session.branch_name ?? session.name,

@@ -605,31 +605,61 @@ export const queries = {
        )`
     ),
 
-  // Fleet memory: the most recent distinct lessons for a repo (newest first), to
-  // inject into a new worker's prompt. Args: (repo_id, limit).
+  // Fleet memory: the most recent distinct lessons for a repo, to inject into a
+  // worker's prompt. Operator-curated MANUAL rules sort first (always injected),
+  // then recent auto findings. Args: (repo_id, limit).
   listRecentLessons: (db: Database.Database) =>
     getStmt(
       db,
       `SELECT lens, text FROM repo_lessons
-       WHERE repo_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`
+       WHERE repo_id = ?
+       ORDER BY (source = 'manual') DESC, created_at DESC, rowid DESC LIMIT ?`
     ),
 
-  // Fleet memory: ALL of a repo's lessons (newest first) for the visibility view.
+  // Fleet memory: ALL of a repo's lessons for the visibility view (manual rules
+  // first, then newest findings). source distinguishes the two in the UI.
   listLessonsForRepo: (db: Database.Database) =>
     getStmt(
       db,
-      `SELECT id, lens, text, created_at FROM repo_lessons
-       WHERE repo_id = ? ORDER BY created_at DESC, rowid DESC`
+      `SELECT id, lens, text, source, created_at FROM repo_lessons
+       WHERE repo_id = ?
+       ORDER BY (source = 'manual') DESC, created_at DESC, rowid DESC`
     ),
 
-  // Fleet memory: forget everything learned for a repo (operator clears the ledger).
+  // Fleet memory: forget the auto-captured FINDINGS for a repo (the noise);
+  // operator-curated manual rules survive (removed individually via deleteLesson).
   clearLessonsForRepo: (db: Database.Database) =>
-    getStmt(db, `DELETE FROM repo_lessons WHERE repo_id = ?`),
+    getStmt(
+      db,
+      `DELETE FROM repo_lessons WHERE repo_id = ? AND source = 'auto'`
+    ),
 
   // Fleet memory: forget ONE lesson (e.g. a stale or wrong finding). Scoped to the
   // repo too, so a lesson id can't be deleted out from under another repo's URL.
   deleteLesson: (db: Database.Database) =>
     getStmt(db, `DELETE FROM repo_lessons WHERE id = ? AND repo_id = ?`),
+
+  // Fleet memory: an operator-curated MANUAL rule, inserted only if the text isn't
+  // already a lesson (NOT EXISTS guard — idempotent under concurrent "remember").
+  // Args: (id, repo_id, lens, text, repo_id, text).
+  insertManualLesson: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO repo_lessons (id, repo_id, lens, text, source)
+       SELECT ?, ?, ?, ?, 'manual'
+       WHERE NOT EXISTS (
+         SELECT 1 FROM repo_lessons WHERE repo_id = ? AND text = ?
+       )`
+    ),
+
+  // Fleet memory: PROMOTE an existing lesson (same text) to manual so it survives
+  // "forget findings" — used when curating a fact that the critic already found.
+  // Args: (repo_id, text). changes===0 ⇒ no existing row, caller inserts fresh.
+  markLessonManual: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE repo_lessons SET source = 'manual' WHERE repo_id = ? AND text = ?`
+    ),
 
   listDispatchesForRepo: (db: Database.Database) =>
     getStmt(

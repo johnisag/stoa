@@ -15,12 +15,12 @@
 
 import { randomUUID } from "crypto";
 import { getDb, queries } from "../db";
-import { expandHome } from "../platform";
+import { expandHome, normalizePathForCompare } from "../platform";
 import { readReviewerFindings } from "./reviewer";
 import type { DispatchRepo, IssueDispatch } from "./types";
 
 /** A finding is a pointed note, not an essay — cap it so the prompt stays lean. */
-const MAX_LESSON_LEN = 280;
+export const MAX_LESSON_LEN = 280;
 /** How many recent lessons to inject into a worker's prompt. */
 const MAX_LESSONS_INJECTED = 8;
 
@@ -39,7 +39,7 @@ export function buildLessonsBlock(lessons: Lesson[]): string {
     .map((l) => `- ${l.lens ? `[${l.lens}] ` : ""}${l.text}`)
     .join("\n");
   return (
-    `\n\nKNOWN PITFALLS IN THIS REPO (past review findings — avoid repeating these):\n` +
+    `\n\nKNOWN PITFALLS IN THIS REPO (past findings + your rules — follow these):\n` +
     bullets +
     `\n`
   );
@@ -53,6 +53,27 @@ export function getLessonsBlock(repoId: string): string {
       .listRecentLessons(getDb())
       .all(repoId, MAX_LESSONS_INJECTED) as Lesson[];
     return buildLessonsBlock(rows);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Lessons block for an INTERACTIVE session: if its working directory is a tracked
+ * dispatch repo's root, return that repo's pitfalls block, else "". Best-effort
+ * (never throws) so it can't break session creation — it just lets interactive
+ * work in a dispatch repo benefit from the same fleet memory.
+ */
+export function getLessonsBlockForCwd(cwd: string): string {
+  try {
+    const target = normalizePathForCompare(expandHome(cwd));
+    const repos = queries
+      .getEnabledDispatchRepos(getDb())
+      .all() as DispatchRepo[];
+    const match = repos.find(
+      (r) => normalizePathForCompare(expandHome(r.repo_path)) === target
+    );
+    return match ? getLessonsBlock(match.id) : "";
   } catch {
     return "";
   }

@@ -555,6 +555,8 @@ export interface Lesson {
   id: string;
   lens: string | null;
   text: string;
+  /** 'auto' (critic finding) or 'manual' (operator-curated rule). */
+  source: string;
   created_at: string;
 }
 
@@ -572,6 +574,31 @@ export function useLessons(repoId: string | null, enabled: boolean) {
       return data.lessons ?? [];
     },
     staleTime: 5000,
+  });
+}
+
+/** Add an operator-curated manual rule (or promote a matching finding to manual).
+ * The "remember this" surface — used by the lessons dialog + the verdict inbox. */
+export function useAddLesson() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      repoId: string;
+      text: string;
+      lens?: string | null;
+    }) => {
+      const res = await fetch(`/api/dispatch/repos/${input.repoId}/lessons`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: input.text, lens: input.lens ?? null }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to remember");
+      }
+    },
+    onSuccess: (_d, input) =>
+      qc.invalidateQueries({ queryKey: dispatchKeys.lessons(input.repoId) }),
   });
 }
 
