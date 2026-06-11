@@ -68,6 +68,22 @@ export interface BuildFlagsOptions {
 const SPINNER_CHARS = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/;
 
 /**
+ * Whether to pass `modelFlag <model>` for this spawn. The model drives a FRESH
+ * launch, but on resume/fork we skip it for providers that restore the session's
+ * own model (Claude) — re-asserting would override it, e.g. an older session row
+ * that stored the previously-inert default. Shared by both spawn paths
+ * (buildAgentArgs / pty and the per-provider buildFlags / tmux) so they agree.
+ */
+function shouldPassModel(
+  def: ProviderDefinition,
+  options: BuildFlagsOptions
+): boolean {
+  if (!options.model || !def.modelFlag) return false;
+  const resuming = Boolean(options.sessionId || options.parentSessionId);
+  return !(resuming && def.restoresModelOnResume);
+}
+
+/**
  * Claude Code Provider
  * Anthropic's official CLI for Claude
  */
@@ -91,6 +107,12 @@ export const claudeProvider: AgentProvider = {
       def.autoApproveFlag
     ) {
       flags.push(def.autoApproveFlag);
+    }
+
+    // Model — the picker drives a fresh launch; omitted on resume (Claude keeps
+    // the session's own model). Mirrors buildAgentArgs / the pty path.
+    if (shouldPassModel(def, options)) {
+      flags.push(`${def.modelFlag} ${options.model}`);
     }
 
     // Resume/fork
@@ -184,7 +206,7 @@ export const codexProvider: AgentProvider = {
       flags.push(def.autoApproveFlag);
     }
 
-    if (options.model && def.modelFlag) {
+    if (shouldPassModel(def, options)) {
       flags.push(`${def.modelFlag} ${options.model}`);
     }
 
@@ -251,7 +273,7 @@ export const hermesProvider: AgentProvider = {
     if (options.sessionId && def.resumeFlag) {
       flags.push(`${def.resumeFlag} ${options.sessionId}`);
     }
-    if (options.model && def.modelFlag) {
+    if (shouldPassModel(def, options)) {
       flags.push(`${def.modelFlag} ${options.model}`);
     }
     if (options.initialPrompt?.trim() && def.initialPromptFlag !== undefined) {
@@ -355,8 +377,8 @@ export function buildAgentArgs(
   if ((options.skipPermissions || options.autoApprove) && def.autoApproveFlag) {
     args.push(def.autoApproveFlag);
   }
-  if (options.model && def.modelFlag) {
-    args.push(def.modelFlag, options.model);
+  if (shouldPassModel(def, options)) {
+    args.push(def.modelFlag!, options.model!);
   }
   if (options.sessionId && def.resumeFlag) {
     args.push(def.resumeFlag, options.sessionId);

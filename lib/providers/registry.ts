@@ -39,6 +39,12 @@ export interface ProviderDefinition {
   // Model configuration
   modelFlag?: string; // Flag for specifying model
 
+  // True when the CLI restores a resumed session's own model on `--resume`
+  // (Claude does). For such a provider we DON'T re-pass `modelFlag` when
+  // resuming/forking — forcing it would override the session's real model
+  // (notably an older row that stored the previously-inert default).
+  restoresModelOnResume?: boolean;
+
   // Initial prompt configuration
   // undefined = no support, '' = positional arg, string = flag (e.g., '--prompt')
   initialPromptFlag?: string;
@@ -62,7 +68,13 @@ export const PROVIDERS: ProviderDefinition[] = [
     supportsResume: true,
     supportsFork: true,
     resumeFlag: "--resume",
-    modelFlag: undefined, // Claude doesn't expose model flag
+    // Claude Code DOES take --model (an alias for the latest of a family —
+    // 'fable'/'opus'/'sonnet'/'haiku' — or a full id like 'claude-fable-5'), so the
+    // model picker actually drives the launch model. Verified via `claude --help`.
+    // On `--resume` Claude restores the session's own model, so we omit --model
+    // then (see restoresModelOnResume) rather than override it.
+    modelFlag: "--model",
+    restoresModelOnResume: true,
     initialPromptFlag: "", // Positional argument
     supportsOrchestration: true, // reads project .mcp.json on launch
   },
@@ -100,6 +112,9 @@ export const PROVIDERS: ProviderDefinition[] = [
     //    (`hermes model` live-fetches /v1/models), so Stoa offers a FREE-TEXT
     //    model field (no static list) rather than a dropdown. An empty model
     //    leaves Hermes on its own configured default (no -m passed).
+    //    restoresModelOnResume is deliberately UNSET: Hermes re-asserts `-m` on
+    //    resume (the long-standing behavior) — whether its TUI restores its own
+    //    model is unverified, so we don't drop the flag.
     //  - -z initial prompt held until interactive-vs-one-shot is confirmed.
     autoApproveFlag: "--yolo",
     resumeFlag: "--resume",
