@@ -7,6 +7,7 @@ import {
   Plus,
   Minus,
   MessageSquarePlus,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ParsedDiff, DiffHunk, DiffLine } from "@/lib/diff-parser";
@@ -25,6 +26,10 @@ interface UnifiedDiffProps {
   expanded?: boolean;
   onToggle?: () => void;
   onCommentLine?: OnCommentLine;
+  /** Opt-in (multi-file review): whether this file is marked "viewed". */
+  viewed?: boolean;
+  /** Opt-in: flip the "viewed" flag for this file. Adds the tick affordance. */
+  onToggleViewed?: () => void;
 }
 
 export function UnifiedDiff({
@@ -33,11 +38,21 @@ export function UnifiedDiff({
   expanded = true,
   onToggle,
   onCommentLine,
+  viewed = false,
+  onToggleViewed,
 }: UnifiedDiffProps) {
   const [localExpanded, setLocalExpanded] = useState(expanded);
-  const isExpanded = onToggle ? expanded : localExpanded;
+  // A viewed file collapses regardless of the local toggle so the list reads as
+  // "ticked off". Clicking its header un-views it (see handleToggle), which
+  // re-expands — so the header chevron is never a dead control.
+  const isExpanded = (onToggle ? expanded : localExpanded) && !viewed;
 
   const handleToggle = () => {
+    // Header click on a viewed file = un-view it (re-expands), not a hidden no-op.
+    if (viewed && onToggleViewed) {
+      onToggleViewed();
+      return;
+    }
     if (onToggle) {
       onToggle();
     } else {
@@ -46,40 +61,73 @@ export function UnifiedDiff({
   };
 
   return (
-    <div className="border-border overflow-hidden rounded-lg border">
+    <div
+      className={cn(
+        "border-border overflow-hidden rounded-lg border transition-opacity",
+        viewed && "opacity-50"
+      )}
+    >
       {/* File header */}
-      <button
-        onClick={handleToggle}
-        className={cn(
-          "flex w-full items-center gap-2 px-3 py-2.5 text-sm",
-          "bg-muted/50 hover:bg-muted text-left transition-colors",
-          "min-h-[44px]" // Mobile touch target
-        )}
-      >
-        {isExpanded ? (
-          <ChevronDown className="text-muted-foreground h-4 w-4 flex-shrink-0" />
-        ) : (
-          <ChevronRight className="text-muted-foreground h-4 w-4 flex-shrink-0" />
-        )}
-
-        <span className="flex-1 truncate font-mono text-xs">{fileName}</span>
-
-        {/* Stats */}
-        <span className="flex flex-shrink-0 items-center gap-2 text-xs">
-          {diff.additions > 0 && (
-            <span className="flex items-center gap-0.5 text-green-500">
-              <Plus className="h-3 w-3" />
-              {diff.additions}
-            </span>
+      <div className="bg-muted/50 flex items-center">
+        <button
+          onClick={handleToggle}
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-sm",
+            "hover:bg-muted text-left transition-colors",
+            "min-h-[44px]" // Mobile touch target
           )}
-          {diff.deletions > 0 && (
-            <span className="flex items-center gap-0.5 text-red-500">
-              <Minus className="h-3 w-3" />
-              {diff.deletions}
-            </span>
+        >
+          {isExpanded ? (
+            <ChevronDown className="text-muted-foreground h-4 w-4 flex-shrink-0" />
+          ) : (
+            <ChevronRight className="text-muted-foreground h-4 w-4 flex-shrink-0" />
           )}
-        </span>
-      </button>
+
+          <span className="flex-1 truncate font-mono text-xs">{fileName}</span>
+
+          {/* Stats */}
+          <span className="flex flex-shrink-0 items-center gap-2 text-xs">
+            {diff.additions > 0 && (
+              <span className="flex items-center gap-0.5 text-green-500">
+                <Plus className="h-3 w-3" />
+                {diff.additions}
+              </span>
+            )}
+            {diff.deletions > 0 && (
+              <span className="flex items-center gap-0.5 text-red-500">
+                <Minus className="h-3 w-3" />
+                {diff.deletions}
+              </span>
+            )}
+          </span>
+        </button>
+
+        {/* "Viewed" tick (opt-in). Sits outside the collapse button so ticking
+            a file off doesn't also toggle its expand state. */}
+        {onToggleViewed && (
+          <button
+            type="button"
+            onClick={onToggleViewed}
+            role="checkbox"
+            aria-checked={viewed}
+            aria-label={viewed ? "Mark as not viewed" : "Mark as viewed"}
+            title={viewed ? "Mark as not viewed" : "Mark as viewed"}
+            // 44px tap target (mobile-first) around a 24px visual box.
+            className="flex h-11 w-11 flex-shrink-0 items-center justify-center"
+          >
+            <span
+              className={cn(
+                "flex h-6 w-6 items-center justify-center rounded border transition-colors",
+                viewed
+                  ? "border-green-500 bg-green-500/20 text-green-500"
+                  : "border-border text-muted-foreground/50 hover:border-muted-foreground/50 hover:text-muted-foreground"
+              )}
+            >
+              <Check className={cn("h-4 w-4", !viewed && "opacity-0")} />
+            </span>
+          </button>
+        )}
+      </div>
 
       {/* Diff content */}
       {isExpanded && (

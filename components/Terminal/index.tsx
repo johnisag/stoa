@@ -29,6 +29,7 @@ import type { AttachPayload } from "./hooks/useTerminalConnection.types";
 import { useViewport } from "@/hooks/useViewport";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { uploadFileToTemp } from "@/lib/file-upload";
+import { formatPathsForAgent } from "@/lib/path-display";
 import { FilePicker } from "@/components/FilePicker";
 
 export type { TerminalScrollState };
@@ -36,6 +37,9 @@ export type { TerminalScrollState };
 export interface TerminalHandle {
   sendCommand: (command: string) => void;
   sendInput: (data: string) => void;
+  /** Inject text via xterm's bracketed paste (multi-line goes in as ONE paste,
+   * not executed line-by-line). Does NOT submit — follow with sendInput("\r"). */
+  paste: (text: string) => void;
   attachSession: (payload: AttachPayload) => void;
   focus: () => void;
   hasSelection: () => boolean;
@@ -133,7 +137,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     // Handle image selection - paste file path into terminal
     const handleImageSelect = useCallback(
       (filePath: string) => {
-        sendInput(filePath);
+        sendInput(formatPathsForAgent(filePath));
         setShowFilePicker(false);
         focus();
       },
@@ -147,7 +151,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         try {
           const path = await uploadFileToTemp(file);
           if (path) {
-            sendInput(path);
+            sendInput(formatPathsForAgent(path));
             focus();
           }
         } catch (err) {
@@ -185,6 +189,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     useImperativeHandle(ref, () => ({
       sendCommand,
       sendInput,
+      paste,
       attachSession,
       focus,
       hasSelection,

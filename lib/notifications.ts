@@ -1,5 +1,7 @@
 // Notification utilities for Stoa
 
+import { toneForEvent } from "./notification-sound";
+
 export type NotificationEvent = "waiting" | "error" | "completed";
 
 export interface NotificationSettings {
@@ -99,17 +101,30 @@ export function sendBrowserNotification(
   return notification;
 }
 
-// Audio notification
+// Audio notification — a short WebAudio-synthesized beep (no external asset).
 let audioContext: AudioContext | null = null;
+// Debounce rapid beeps so a flurry of transitions can't stack overlapping
+// oscillators into a buzz; one cue every BEEP_DEBOUNCE_MS is plenty.
+let lastBeepAt = 0;
+const BEEP_DEBOUNCE_MS = 400;
 
 export function playNotificationSound(
   type: NotificationEvent = "waiting"
 ): void {
   if (typeof window === "undefined") return;
 
+  const now = Date.now();
+  if (now - lastBeepAt < BEEP_DEBOUNCE_MS) return;
+  lastBeepAt = now;
+
   try {
     if (!audioContext) {
       audioContext = new AudioContext();
+    }
+    // Created `suspended` under the autoplay policy if the first beep fires
+    // before any user gesture — resume it, else it's cached silent forever.
+    if (audioContext.state === "suspended") {
+      void audioContext.resume();
     }
 
     const oscillator = audioContext.createOscillator();
@@ -118,31 +133,22 @@ export function playNotificationSound(
     oscillator.connect(gainNode);
     gainNode.connect(audioContext.destination);
 
-    // Different tones for different events
-    const frequencies: Record<NotificationEvent, number[]> = {
-      waiting: [800, 600], // Two-tone descending (needs attention)
-      error: [300, 200], // Low tones (error)
-      completed: [600, 800], // Two-tone ascending (success)
-    };
+    // Tone params (frequency sequence + timing) are selected by event type in
+    // the pure helper, so the "which beep?" mapping is unit-tested separately.
+    const { freqs, step, gain } = toneForEvent(type);
+    const start = audioContext.currentTime;
 
-    const freqs = frequencies[type];
-    const duration = 0.1;
-
-    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-
+    // Schedule each frequency back-to-back on the single oscillator.
     freqs.forEach((freq, i) => {
-      const startTime = audioContext!.currentTime + i * duration;
-      oscillator.frequency.setValueAtTime(freq, startTime);
+      oscillator.frequency.setValueAtTime(freq, start + i * step);
     });
 
-    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(
-      0.01,
-      audioContext.currentTime + freqs.length * duration
-    );
+    const end = start + freqs.length * step;
+    gainNode.gain.setValueAtTime(gain, start);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, end);
 
-    oscillator.start(audioContext.currentTime);
-    oscillator.stop(audioContext.currentTime + freqs.length * duration);
+    oscillator.start(start);
+    oscillator.stop(end);
   } catch {
     // Audio not available
   }

@@ -19,6 +19,10 @@ import {
 import { setupTouchScroll } from "./touch-scroll";
 import { createWebSocketConnection } from "./websocket-connection";
 import { setupResizeHandlers } from "./resize-handlers";
+import { imageFilesFromClipboard } from "./terminal-image-paste";
+import { uploadFileToTemp } from "@/lib/file-upload";
+import { formatPathsForAgent } from "@/lib/path-display";
+import { toast } from "sonner";
 
 export type { TerminalScrollState } from "./useTerminalConnection.types";
 
@@ -245,6 +249,7 @@ export function useTerminalConnection({
     let cleanupResizeHandlers: (() => void) | null = null;
     let cleanupWebSocket: (() => void) | null = null;
     let cleanupTerminal: (() => void) | null = null;
+    let cleanupImagePaste: (() => void) | null = null;
 
     let rafId = 0;
     let sizeWaitFrames = 0;
@@ -369,6 +374,56 @@ export function useTerminalConnection({
         isMobile,
         sendResize: wsManager.sendResize,
       });
+
+      // Paste a clipboard IMAGE straight into the agent: upload each image to a
+      // temp file and inject the path(s), mirroring the file picker's paste path
+      // (FilePicker.tsx) + drop handler. Plain-text paste is untouched — we only
+      // preventDefault (and skip xterm's text paste) when image items are
+      // present, so non-image pastes fall through to bracketed-paste as before.
+      // Capture phase + the container guard match the Cmd+A/Cmd+C handler in
+      // terminal-init.ts (the paste lands on xterm's hidden helper textarea).
+      const handlePaste = (event: ClipboardEvent) => {
+        const el = terminalRef.current;
+        if (!el || !el.contains(document.activeElement)) return;
+        const images = imageFilesFromClipboard(event.clipboardData?.items);
+        if (images.length === 0) return;
+        event.preventDefault();
+        // Stop xterm's own paste handler (and the file picker's document
+        // listener) from ALSO firing — otherwise a clipboard holding image+text
+        // pastes the text too, and a pure-image paste still emits a stray
+        // bracketed-paste pair.
+        event.stopPropagation();
+        void (async () => {
+          try {
+            const results = await Promise.allSettled(
+              images.map((file) => uploadFileToTemp(file))
+            );
+            const paths = results.flatMap((r) =>
+              r.status === "fulfilled" && r.value ? [r.value] : []
+            );
+            // Reuse the shared formatter: quotes whitespace paths (Windows tmp
+            // dirs include the username) and strips control chars.
+            const injected = formatPathsForAgent(paths);
+            if (injected) wsManager.sendInput(injected);
+            // Surface failures — including a PARTIAL one (some images uploaded,
+            // some didn't), not only a total wipeout.
+            const failed = results.length - paths.length;
+            if (failed > 0) {
+              toast.error(
+                failed === results.length
+                  ? "Couldn't upload the pasted image"
+                  : `${failed} of ${results.length} pasted images failed to upload`
+              );
+            }
+          } catch (err) {
+            console.error("paste image upload failed:", err);
+            toast.error("Couldn't upload the pasted image");
+          }
+        })();
+      };
+      document.addEventListener("paste", handlePaste, true);
+      cleanupImagePaste = () =>
+        document.removeEventListener("paste", handlePaste, true);
     };
     rafId = requestAnimationFrame(init);
 
@@ -392,6 +447,7 @@ export function useTerminalConnection({
       }
 
       // Cleanup in reverse order
+      cleanupImagePaste?.();
       cleanupResizeHandlers?.();
       cleanupWebSocket?.();
       cleanupTouchScroll?.();

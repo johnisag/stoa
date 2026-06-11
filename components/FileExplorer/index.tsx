@@ -30,11 +30,15 @@ import type { OpenFile } from "@/hooks/useFileEditor";
 interface FileExplorerProps {
   workingDirectory: string;
   fileEditor: UseFileEditorReturn;
+  /** Inject a file/folder path into the active agent's prompt (tree right-click
+   *  → "Add to agent"). Omitted disables the menu item. */
+  onAddToAgent?: (path: string) => void;
 }
 
 export function FileExplorer({
   workingDirectory,
   fileEditor,
+  onAddToAgent,
 }: FileExplorerProps) {
   const { isMobile, isHydrated } = useViewport();
   const [files, setFiles] = useState<FileNode[]>([]);
@@ -142,6 +146,7 @@ export function FileExplorer({
         activeFile={activeFile}
         saving={saving}
         onFileClick={handleFileClick}
+        onAddToAgent={onAddToAgent}
         onSelectTab={setActiveFile}
         onCloseTab={handleCloseFile}
         onSave={handleSave}
@@ -169,6 +174,7 @@ export function FileExplorer({
       activeFile={activeFile}
       saving={saving}
       onFileClick={handleFileClick}
+      onAddToAgent={onAddToAgent}
       onSelectTab={setActiveFile}
       onCloseTab={handleCloseFile}
       onSave={handleSave}
@@ -194,6 +200,7 @@ interface DesktopFileExplorerProps {
   activeFile: OpenFile | undefined;
   saving: boolean;
   onFileClick: (path: string) => void;
+  onAddToAgent?: (path: string) => void;
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
   onSave: () => void;
@@ -216,6 +223,7 @@ function DesktopFileExplorer({
   activeFile,
   saving,
   onFileClick,
+  onAddToAgent,
   onSelectTab,
   onCloseTab,
   onSave,
@@ -282,6 +290,7 @@ function DesktopFileExplorer({
               nodes={files}
               basePath={workingDirectory}
               onFileClick={onFileClick}
+              onAddToAgent={onAddToAgent}
             />
           )}
         </div>
@@ -359,6 +368,7 @@ function MobileFileExplorer({
   activeFile,
   saving,
   onFileClick,
+  onAddToAgent,
   onSelectTab,
   onCloseTab,
   onSave,
@@ -465,6 +475,7 @@ function MobileFileExplorer({
             nodes={files}
             basePath={workingDirectory}
             onFileClick={onFileClick}
+            onAddToAgent={onAddToAgent}
           />
         )}
       </div>

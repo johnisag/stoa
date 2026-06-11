@@ -14,6 +14,7 @@ import {
   Copy,
   ClipboardPaste,
   Paperclip,
+  PenLine,
 } from "lucide-react";
 import {
   Tooltip,
@@ -65,6 +66,8 @@ interface DesktopTabBarProps {
   onTerminalCopy: () => void;
   onTerminalPaste: () => void;
   onTerminalAttach: () => void;
+  /** Opens the full-screen prompt composer (sends straight to this terminal). */
+  onCompose?: () => void;
 }
 
 // A view-toggle icon button: labelled + focus-ringed in one place so every
@@ -139,6 +142,7 @@ export function DesktopTabBar({
   onTerminalCopy,
   onTerminalPaste,
   onTerminalAttach,
+  onCompose,
 }: DesktopTabBarProps) {
   const getTabName = (tab: Tab) => {
     if (tab.sessionId) {
@@ -260,6 +264,25 @@ export function DesktopTabBar({
             controls. Only in terminal view — they act on the active terminal. */}
         {showTerminalActions && (
           <>
+            {onCompose && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCompose();
+                    }}
+                    aria-label="Compose prompt"
+                    className="h-6 w-6"
+                  >
+                    <PenLine className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Compose prompt</TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

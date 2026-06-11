@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { baseName, dirName, relativePath } from "@/lib/path-display";
+import {
+  baseName,
+  dirName,
+  relativePath,
+  formatPathsForAgent,
+} from "@/lib/path-display";
 
 describe("baseName", () => {
   it("handles both separators", () => {
@@ -46,5 +51,59 @@ describe("relativePath", () => {
     expect(relativePath("/home/u/project2/x.ts", "/home/u/proj")).toBe(
       "/home/u/project2/x.ts"
     );
+  });
+});
+
+describe("formatPathsForAgent", () => {
+  it("appends a trailing space so the cursor lands ready", () => {
+    expect(formatPathsForAgent("/home/u/proj/src/db.ts")).toBe(
+      "/home/u/proj/src/db.ts "
+    );
+  });
+
+  it("normalizes Windows separators to forward slashes", () => {
+    expect(formatPathsForAgent("C:\\Users\\u\\proj\\db.ts")).toBe(
+      "C:/Users/u/proj/db.ts "
+    );
+  });
+
+  it("double-quotes a path containing whitespace", () => {
+    expect(formatPathsForAgent("/home/u/my docs/notes.md")).toBe(
+      '"/home/u/my docs/notes.md" '
+    );
+  });
+
+  it("quotes a Windows path with spaces after normalizing", () => {
+    expect(formatPathsForAgent("C:\\Program Files\\app\\x.ts")).toBe(
+      '"C:/Program Files/app/x.ts" '
+    );
+  });
+
+  it("joins multiple paths with a single space, quoting only those that need it", () => {
+    expect(formatPathsForAgent(["/a/x.ts", "/a/my dir/y.ts", "/a/z.ts"])).toBe(
+      '/a/x.ts "/a/my dir/y.ts" /a/z.ts '
+    );
+  });
+
+  it("drops empty and blank entries", () => {
+    expect(formatPathsForAgent(["", "  ", "/a/x.ts"])).toBe("/a/x.ts ");
+  });
+
+  it("returns an empty string when there is nothing to inject", () => {
+    expect(formatPathsForAgent([])).toBe("");
+    expect(formatPathsForAgent("")).toBe("");
+  });
+
+  it("strips control characters (keystroke-injection guard)", () => {
+    // A filename can legally contain a raw newline/ESC/DEL; injected verbatim into
+    // the pty those are keystrokes (Enter, bracketed-paste escapes). Build them via
+    // fromCharCode so there are no literal control bytes in this source.
+    const nl = String.fromCharCode(10);
+    const esc = String.fromCharCode(27);
+    const del = String.fromCharCode(127);
+    expect(formatPathsForAgent(`/a/foo${nl}bar.ts`)).toBe("/a/foobar.ts ");
+    expect(formatPathsForAgent(`/a/x${esc}${del}y.ts`)).toBe("/a/xy.ts ");
+    // Strips before the whitespace check, so a path that's only control chars drops.
+    expect(formatPathsForAgent(nl + esc)).toBe("");
   });
 });

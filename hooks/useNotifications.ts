@@ -17,6 +17,7 @@ import {
   clearTabNotifications,
 } from "@/lib/notifications";
 import { sanitizeNotificationText } from "@/lib/notification-text";
+import { shouldBeep } from "@/lib/notification-sound";
 
 type SessionStatus = "idle" | "running" | "waiting" | "error" | "dead";
 
@@ -142,8 +143,9 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         );
       }
 
-      // Sound
-      if (settings.sound) {
+      // Audio cue — synthesized beep, gated by the master Sound toggle AND this
+      // event's per-event toggle (the playback itself debounces rapid repeats).
+      if (shouldBeep(settings, event)) {
         playNotificationSound(event);
       }
 
