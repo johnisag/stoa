@@ -57,7 +57,32 @@ export function nextOccurrence(
     const missed = Math.floor((nowMs - base) / interval);
     next = base + (missed + 1) * interval;
   }
-  return new Date(next).toISOString();
+  // A near-max-date anchor can push `next` past the ECMAScript date range, where
+  // toISOString() throws RangeError — which, unguarded inside the reconciler tick,
+  // would halt the whole fleet. Fail closed to null (this repo's corrupt-Date class).
+  const at = new Date(next);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toISOString();
+}
+
+/**
+ * Is a cadence-driven job due to run at `nowMs`? True when a cadence is armed AND
+ * either it has never run (`lastIso` null → first run), its anchor is corrupt
+ * (re-run and re-stamp), or at least one full interval has elapsed since `lastIso`.
+ * Pure — the maintainer pass uses this for its survey cadence. Reuses
+ * nextOccurrence (with the anchor as `nowMs`, so the result is anchor+interval).
+ */
+export function isRecurrenceDue(
+  recurrence: string | null,
+  lastIso: string | null,
+  nowMs: number
+): boolean {
+  if (!normalizeRecurrence(recurrence)) return false;
+  if (!lastIso) return true;
+  const lastMs = Date.parse(lastIso);
+  if (Number.isNaN(lastMs)) return true; // corrupt anchor → run now, re-stamp
+  const next = nextOccurrence(recurrence, lastIso, lastMs);
+  return next !== null && Date.parse(next) <= nowMs;
 }
 
 /** Short human label for the scheduled list, e.g. "repeats daily" (null if once). */

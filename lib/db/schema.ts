@@ -129,6 +129,14 @@ export function createSchema(db: Database.Database): void {
       merge_train INTEGER NOT NULL DEFAULT 0,
       verify_gate INTEGER NOT NULL DEFAULT 0,
       verify_command TEXT,
+      -- Autonomous maintainer (opt-in, default off): on a cadence, a survey agent
+      -- proposes its OWN backlog against the goal. Proposals are NEVER auto-
+      -- dispatched (the issue_dispatches.maintainer_proposed fence) — they wait for
+      -- one-tap Approve. cadence is 'hourly'|'daily'|'weekly' (recurrence.ts).
+      maintainer_survey_enabled INTEGER NOT NULL DEFAULT 0,
+      maintainer_survey_goal TEXT,
+      maintainer_survey_cadence TEXT,
+      maintainer_survey_last_at TEXT,
       project_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -174,6 +182,10 @@ export function createSchema(db: Database.Database): void {
       -- Recurrence for a scheduled LOCAL task ('hourly'|'daily'|'weekly'); null =
       -- one-shot. On promotion the reconciler re-arms the next occurrence.
       recurrence TEXT,
+      -- 1 = proposed by the autonomous maintainer survey. The fail-closed fence:
+      -- the auto-dispatch loop excludes these, so a maintainer proposal is NEVER
+      -- auto-shipped (even on an auto-mode repo) — it waits for one-tap Approve.
+      maintainer_proposed INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE,

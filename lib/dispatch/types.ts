@@ -40,6 +40,16 @@ export interface DispatchRepo {
   /** The command to run for verification (typecheck/test/build); steps chained with
    * `&&` (Stoa's own delimiter — never a shell). null = nothing armed. */
   verify_command: string | null;
+  /** 0/1 — opt-in autonomous maintainer: a survey agent proposes its own backlog
+   * on a cadence (proposals NEVER auto-dispatch — they wait for one-tap Approve). */
+  maintainer_survey_enabled: number;
+  /** The maintenance objective the survey works toward (free text), e.g. "keep CI
+   * green, deps current, the issue backlog triaged". null = none set. */
+  maintainer_survey_goal: string | null;
+  /** Survey cadence: 'hourly'|'daily'|'weekly' (recurrence.ts); null = none. */
+  maintainer_survey_cadence: string | null;
+  /** ISO time the survey last ran (the cadence anchor); null = never. */
+  maintainer_survey_last_at: string | null;
   project_id: string | null;
   created_at: string;
   updated_at: string;
@@ -109,6 +119,9 @@ export interface IssueDispatch {
   task_body: string | null;
   /** Recurrence for a scheduled local task ('hourly'|'daily'|'weekly'); null = once. */
   recurrence: string | null;
+  /** 0/1 — proposed by the autonomous maintainer survey. Fenced out of auto-dispatch
+   * (waits for one-tap Approve), even on an auto-mode repo. */
+  maintainer_proposed: number;
   created_at: string;
   updated_at: string;
 }
@@ -125,6 +138,22 @@ export interface PlanTask {
  * output — never spawn workers off a plan we couldn't validate. */
 export type PlanParseResult =
   | { ok: true; tasks: PlanTask[] }
+  | { ok: false; error: string };
+
+/** One maintenance task a survey agent proposed. `rationale` is the SPECIFIC signal
+ * that triggered it (a failing test, an issue #, an outdated package) — required, so
+ * the operator always sees WHY before approving. `rank` 1 = highest. */
+export interface SurveyTask {
+  title: string;
+  body: string;
+  rationale: string;
+  rank: number;
+}
+
+/** Result of parsing a maintainer survey's artifact. Fail-closed; an EMPTY task
+ * list is a valid "nothing needs doing" answer (ok:true, tasks:[]). */
+export type SurveyParseResult =
+  | { ok: true; tasks: SurveyTask[] }
   | { ok: false; error: string };
 
 /**

@@ -7,6 +7,7 @@ import {
   nextOccurrence,
   normalizeRecurrence,
   recurrenceLabel,
+  isRecurrenceDue,
 } from "@/lib/dispatch/recurrence";
 import { planScheduledPromotion } from "@/lib/dispatch/reconciler";
 import type { IssueDispatch } from "@/lib/dispatch/types";
@@ -61,6 +62,48 @@ describe("nextOccurrence", () => {
     expect(nextOccurrence("daily", "junk", NOW)).toBe(
       "2026-06-07T12:00:00.000Z"
     );
+  });
+
+  it("fails closed to null on a near-max-date anchor (no reconciler-halting RangeError)", () => {
+    // A valid Date.parse but past the ECMAScript range once an interval is added →
+    // toISOString() would throw; nextOccurrence must return null instead.
+    expect(
+      nextOccurrence("weekly", "+275760-09-10T00:00:00.000Z", NOW)
+    ).toBeNull();
+  });
+});
+
+describe("isRecurrenceDue (used by the maintainer survey cadence)", () => {
+  it("never run (no anchor) + a cadence armed → due", () => {
+    expect(isRecurrenceDue("daily", null, NOW)).toBe(true);
+  });
+
+  it("no cadence armed → never due (fail-closed)", () => {
+    expect(isRecurrenceDue(null, null, NOW)).toBe(false);
+    expect(isRecurrenceDue("once", null, NOW)).toBe(false);
+    expect(isRecurrenceDue("toString", null, NOW)).toBe(false); // prototype-key guard
+  });
+
+  it("an interval has fully elapsed → due", () => {
+    expect(isRecurrenceDue("daily", "2026-06-05T11:00:00.000Z", NOW)).toBe(
+      true
+    );
+    expect(isRecurrenceDue("hourly", "2026-06-06T10:30:00.000Z", NOW)).toBe(
+      true
+    );
+  });
+
+  it("within the interval → NOT due", () => {
+    expect(isRecurrenceDue("daily", "2026-06-06T11:00:00.000Z", NOW)).toBe(
+      false
+    );
+    expect(isRecurrenceDue("weekly", "2026-06-02T12:00:00.000Z", NOW)).toBe(
+      false
+    );
+  });
+
+  it("a corrupt anchor → due (re-run, re-stamp; never a RangeError)", () => {
+    expect(isRecurrenceDue("daily", "not-a-date", NOW)).toBe(true);
   });
 });
 

@@ -371,6 +371,23 @@ export const queries = {
   deleteDispatchRepo: (db: Database.Database) =>
     getStmt(db, `DELETE FROM dispatch_repos WHERE id = ?`),
 
+  // Autonomous maintainer config (a focused update so it doesn't disturb the
+  // positional updateDispatchRepo). Args: (enabled 0/1, goal|null, cadence|null, id).
+  updateMaintainerSurvey: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE dispatch_repos SET maintainer_survey_enabled = ?, maintainer_survey_goal = ?, maintainer_survey_cadence = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Stamp the cadence anchor (pass-only — never operator-settable). Intentionally
+  // does NOT bump updated_at: this is a machine timestamp, not a config edit, so it
+  // mustn't churn the row's mtime. Args: (iso|null, id).
+  setMaintainerSurveyRanAt: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE dispatch_repos SET maintainer_survey_last_at = ? WHERE id = ?`
+    ),
+
   // Dispatch — reviewer gate
   listPrOpen: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM issue_dispatches WHERE status = 'pr_open'`),
@@ -571,6 +588,49 @@ export const queries = {
       db,
       `SELECT * FROM issue_dispatches WHERE repo_id = ? AND status = 'pending'
        ORDER BY issue_created_at ASC`
+    ),
+
+  // The AUTO-DISPATCH fence: pending rows the auto loop may drain — EXCLUDES
+  // maintainer-proposed rows, so a survey proposal is never auto-shipped (it waits
+  // for one-tap Approve). The only difference from listPendingForRepo.
+  listPendingDispatchableForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM issue_dispatches
+       WHERE repo_id = ? AND status = 'pending' AND maintainer_proposed = 0
+       ORDER BY issue_created_at ASC`
+    ),
+
+  // A maintainer-proposed local task: pending, fenced from auto-dispatch. Args:
+  // (id, repo_id, issue_title, task_body, issue_created_at).
+  insertMaintainerTask: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO issue_dispatches (id, repo_id, issue_number, issue_title, task_body, issue_created_at, source, status, maintainer_proposed)
+       VALUES (?, ?, 0, ?, ?, ?, 'local', 'pending', 1)`
+    ),
+
+  // Dedup backstop: is there already an OPEN local task with this exact title?
+  // Args: (repo_id, title). Catches the exact-title race the agent's semantic dedup
+  // can miss. "Open" = in flight or awaiting action; cancelled/merged/failed are
+  // deliberately excluded so a dropped, completed, or not-yet-landed task can be
+  // re-proposed by a later survey (the operator can dismiss a stale failed row).
+  findOpenLocalTaskByTitle: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT 1 FROM issue_dispatches
+       WHERE repo_id = ? AND source = 'local' AND issue_title = ?
+         AND status IN ('pending','dispatched','pr_open','scheduled') LIMIT 1`
+    ),
+
+  // The open-task list fed to the survey so it dedupes semantically. Newest first,
+  // capped by the caller. Args: (repo_id, limit).
+  listOpenTasksForSurveyDedup: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT issue_title, task_body FROM issue_dispatches
+       WHERE repo_id = ? AND status IN ('pending','dispatched','pr_open','scheduled')
+       ORDER BY created_at DESC LIMIT ?`
     ),
 
   // Conflict-aware decomposition: set a row's file-ownership claims (JSON).

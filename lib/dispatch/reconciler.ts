@@ -24,8 +24,20 @@ import { captureLessons } from "./lessons";
 import { mergeTrainPass } from "./merge-train";
 import { verifyPass } from "./verify";
 import { sessionCeremonyPass } from "./session-ceremony";
-import { nextOccurrence } from "./recurrence";
+import { nextOccurrence, isRecurrenceDue } from "./recurrence";
 import { isLocalTask } from "./task-label";
+import {
+  spawnSurvey,
+  readSurveyRun,
+  cleanupSurveyRun,
+  hasSurveyRun,
+  trackedSurveyIds,
+  buildMaintainerTaskBody,
+  DEDUP_LIST_CAP,
+  DEFAULT_SURVEY_CAP,
+  type SurveyRunStatus,
+} from "./maintainer";
+import type { SurveyTask } from "./types";
 import {
   nextReviewAction,
   spawnReviewPanel,
@@ -225,8 +237,11 @@ export async function reconcileTick(): Promise<void> {
 
       // 3. Auto dispatches now; review leaves candidates for manual approval.
       if (repo.mode !== "auto") continue;
+      // The fence: maintainer-proposed rows are EXCLUDED here (maintainer_proposed=1),
+      // so a survey proposal never auto-ships even on an auto-mode repo — it waits
+      // for one-tap Approve in the Backlog. Everything else is identical.
       const pending = queries
-        .listPendingForRepo(db)
+        .listPendingDispatchableForRepo(db)
         .all(repo.id) as IssueDispatch[];
       // Conflict-aware: skip pending rows whose claims overlap a LIVE claim
       // (dispatched/pr_open — file custody held until merge) or another row chosen
@@ -247,6 +262,15 @@ export async function reconcileTick(): Promise<void> {
     // broadcast. guardEmptyList=false: 60s in, the backend is ready, so an empty
     // list genuinely means "no live sessions" and dead workers should be swept.
     await sweepActiveWorkers({ guardEmptyList: false });
+
+    // 4b. Autonomous maintainer (opt-in per repo): on its cadence, run a survey
+    // agent that proposes its OWN backlog; file ready proposals as pending local
+    // tasks fenced out of step 3's auto loop (they wait for one-tap Approve). After
+    // the sweep so a just-finished survey's run is reaped before we read it, and
+    // before the review passes (a freshly-filed task isn't a PR yet, so order vs.
+    // them is moot). Survey spawns are bounded only by one-in-flight-per-repo
+    // (hasSurveyRun) — they don't consume the dispatch concurrency/daily budget.
+    await maintainerPass();
 
     // 5. Reviewer gate (opt-in per repo): spawn a 3-critic panel on each new PR
     // and aggregate their verdict comments into the cached decision for the
@@ -339,6 +363,131 @@ export async function sweepActiveWorkers(opts: {
       queries.updateDispatchStatus(db).run("failed", d.id);
       console.log(`dispatch: worker swept → failed (${d.id})`);
     }
+  }
+}
+
+/** First non-empty line of a task body, trimmed and capped — the dedup-list hint
+ * shown to the survey so it judges overlap by meaning. */
+function firstLine(body: string | null): string {
+  if (!body) return "";
+  const line = body.split("\n").find((l) => l.trim().length > 0) ?? "";
+  const trimmed = line.trim();
+  return trimmed.length > 120 ? `${trimmed.slice(0, 117)}…` : trimmed;
+}
+
+/** File a ready survey's proposals as pending, maintainer-proposed local tasks in
+ * ONE transaction, skipping any whose exact title already has an open task (the
+ * dedup backstop behind the agent's semantic dedup). */
+function fileSurveyTasks(
+  db: ReturnType<typeof getDb>,
+  repoId: string,
+  tasks: SurveyTask[],
+  nowIso: string
+): void {
+  db.transaction(() => {
+    for (const task of tasks) {
+      if (queries.findOpenLocalTaskByTitle(db).get(repoId, task.title)) {
+        continue; // an open task with this exact title already exists
+      }
+      queries
+        .insertMaintainerTask(db)
+        .run(
+          randomUUID(),
+          repoId,
+          task.title,
+          buildMaintainerTaskBody(task),
+          nowIso
+        );
+    }
+  })();
+}
+
+/**
+ * Autonomous-maintainer pass (opt-in per repo). Two halves, both no-ops unless a
+ * repo armed `maintainer_survey_enabled` with a goal:
+ *
+ *   (a) SPAWN — for each enabled, armed repo whose cadence is due and which has no
+ *       survey already in flight, stamp `last_at` (the cadence anchor, written
+ *       BEFORE the spawn so a crash can't re-fire it every tick) then launch a
+ *       read-only survey worker. On a spawn failure the anchor is rolled back so
+ *       the next tick retries.
+ *   (b) FILE — for each tracked survey run, poll its survey artifact: 'ready' files the
+ *       proposed tasks as pending local rows (maintainer_proposed=1, fenced out of
+ *       step-3 auto-dispatch — they wait for one-tap Approve), de-duped by exact
+ *       title; 'ready' and 'failed' both reclaim the worktree. 'running' waits.
+ */
+export async function maintainerPass(): Promise<void> {
+  const db = getDb();
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  // (a) Spawn surveys whose cadence is due.
+  const repos = queries.getEnabledDispatchRepos(db).all() as DispatchRepo[];
+  for (const repo of repos) {
+    if (repo.maintainer_survey_enabled !== 1) continue;
+    const goal = repo.maintainer_survey_goal?.trim();
+    if (!goal) continue; // armed but no goal → nothing to survey toward
+    if (
+      !isRecurrenceDue(
+        repo.maintainer_survey_cadence,
+        repo.maintainer_survey_last_at,
+        nowMs
+      )
+    ) {
+      continue;
+    }
+    if (hasSurveyRun(repo.id)) continue; // a survey is already in flight (spawn-once)
+
+    // Stamp the anchor BEFORE spawning; roll back if the spawn throws so the next
+    // tick retries instead of waiting a whole interval on a transient failure.
+    const prevAnchor = repo.maintainer_survey_last_at;
+    queries.setMaintainerSurveyRanAt(db).run(nowIso, repo.id);
+    try {
+      const openTasks = (
+        queries
+          .listOpenTasksForSurveyDedup(db)
+          .all(repo.id, DEDUP_LIST_CAP) as {
+          issue_title: string | null;
+          task_body: string | null;
+        }[]
+      ).map((r) => ({
+        title: r.issue_title ?? "",
+        bodyFirstLine: firstLine(r.task_body),
+      }));
+      await spawnSurvey(repo, goal, openTasks);
+    } catch (err) {
+      queries.setMaintainerSurveyRanAt(db).run(prevAnchor, repo.id);
+      console.error(
+        `maintainer: survey spawn failed (${repo.repo_slug}):`,
+        err
+      );
+    }
+  }
+
+  // (b) File ready surveys; reclaim finished/failed ones.
+  for (const surveyId of trackedSurveyIds()) {
+    let status: SurveyRunStatus;
+    try {
+      status = await readSurveyRun(surveyId);
+    } catch {
+      continue; // transient read/list error → re-poll next tick
+    }
+    if (status.status === "running") continue;
+    if (status.status === "ready" && status.tasks.length > 0) {
+      try {
+        // Enforce the cap structurally (it's only advisory in the prompt) so a
+        // runaway/injected survey can't flood the backlog with proposals.
+        fileSurveyTasks(
+          db,
+          status.repoId,
+          status.tasks.slice(0, DEFAULT_SURVEY_CAP),
+          nowIso
+        );
+      } catch (err) {
+        console.error("maintainer: filing survey tasks failed:", err);
+      }
+    }
+    await cleanupSurveyRun(surveyId);
   }
 }
 

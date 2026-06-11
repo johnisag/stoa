@@ -265,6 +265,9 @@ export type UpdateRepoPatch = Partial<{
   mergeTrain: boolean;
   verifyGate: boolean;
   verifyCommand: string | null;
+  maintainerSurveyEnabled: boolean;
+  maintainerSurveyGoal: string | null;
+  maintainerSurveyCadence: string | null;
 }>;
 
 export function useUpdateRepo() {
@@ -328,6 +331,19 @@ export function useUpdateRepo() {
                   : {}),
                 ...(patch.verifyCommand !== undefined
                   ? { verify_command: patch.verifyCommand }
+                  : {}),
+                ...(patch.maintainerSurveyEnabled !== undefined
+                  ? {
+                      maintainer_survey_enabled: patch.maintainerSurveyEnabled
+                        ? 1
+                        : 0,
+                    }
+                  : {}),
+                ...(patch.maintainerSurveyGoal !== undefined
+                  ? { maintainer_survey_goal: patch.maintainerSurveyGoal }
+                  : {}),
+                ...(patch.maintainerSurveyCadence !== undefined
+                  ? { maintainer_survey_cadence: patch.maintainerSurveyCadence }
                   : {}),
               }
             : r

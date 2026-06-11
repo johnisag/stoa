@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries } from "@/lib/db";
 import { isValidAgentType } from "@/lib/providers";
 import { parseVerifySteps } from "@/lib/dispatch/verify";
+import { normalizeRecurrence } from "@/lib/dispatch/recurrence";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -109,6 +110,42 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     // stuck on a now-fixed misconfiguration).
     if (verifyCommand !== repo.verify_command) {
       queries.clearVerifyForRepo(db).run(id);
+    }
+
+    // Autonomous-maintainer config (a focused, separate update — last_at is never
+    // operator-settable; cadence is restricted to a real recurrence via normalize).
+    if (
+      body?.maintainerSurveyEnabled !== undefined ||
+      body?.maintainerSurveyGoal !== undefined ||
+      body?.maintainerSurveyCadence !== undefined
+    ) {
+      const maintainerEnabled =
+        body?.maintainerSurveyEnabled !== undefined
+          ? body.maintainerSurveyEnabled
+            ? 1
+            : 0
+          : repo.maintainer_survey_enabled;
+      const maintainerGoal =
+        body?.maintainerSurveyGoal !== undefined
+          ? typeof body.maintainerSurveyGoal === "string" &&
+            body.maintainerSurveyGoal.trim()
+            ? body.maintainerSurveyGoal.trim()
+            : null
+          : repo.maintainer_survey_goal;
+      const maintainerCadence =
+        body?.maintainerSurveyCadence !== undefined
+          ? normalizeRecurrence(body.maintainerSurveyCadence)
+          : repo.maintainer_survey_cadence;
+      // Enabling with no cadence set yet defaults to weekly, so a one-tap enable
+      // actually ARMS the survey (a null cadence is never due) — and matches the
+      // "weekly" the cadence picker shows by default. Disabling leaves it as-is.
+      const effectiveCadence =
+        maintainerEnabled === 1 && !maintainerCadence
+          ? "weekly"
+          : maintainerCadence;
+      queries
+        .updateMaintainerSurvey(db)
+        .run(maintainerEnabled, maintainerGoal, effectiveCadence, id);
     }
     return NextResponse.json({
       repo: queries.getDispatchRepo(db).get(id) as DispatchRepo,
