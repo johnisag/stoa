@@ -8,9 +8,12 @@ import {
   Camera,
   Loader2,
   RotateCcw,
+  Pencil,
+  Send,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { DiffFileList } from "@/components/DiffViewer/DiffFileList";
 import {
   useSessionSnapshots,
@@ -18,6 +21,7 @@ import {
   useSnapshotDiff,
   useRestoreSnapshot,
 } from "@/hooks/useSessionSnapshots";
+import { normalizeEditedPrompt } from "@/lib/snapshot-prompt";
 
 function ago(iso: string): string {
   if (!iso) return "";
@@ -35,8 +39,8 @@ function ago(iso: string): string {
 /**
  * Per-turn snapshot timeline for a session: browse the working-tree snapshots
  * captured at each turn boundary (opt-in via STOA_SNAPSHOTS) or on demand via
- * "Checkpoint now", and view the diff each one introduced. Read-only — restore/
- * rewind is a later stage.
+ * "Checkpoint now", view the diff each one introduced, rewind to one, or
+ * "Rewind & re-run" (rewind + send a fresh prompt from that point).
  */
 export function SnapshotTimeline({
   sessionId,
@@ -57,6 +61,10 @@ export function SnapshotTimeline({
   const restore = useRestoreSnapshot(sessionId);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // "Rewind & re-run from here": an inline composer (opened empty). On submit we
+  // rewind to this turn THEN send the typed prompt — so cancelling is free.
+  const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const { data: diff, isLoading: diffLoading } = useSnapshotDiff(
     sessionId,
     selectedSeq
@@ -69,6 +77,7 @@ export function SnapshotTimeline({
   const openTimeline = () => {
     setSelectedSeq(null);
     setConfirming(false);
+    setEditingPrompt(null);
   };
 
   const doRestore = (seq: number) => {
@@ -83,6 +92,51 @@ export function SnapshotTimeline({
       },
       onError: (err) => toast.error(`Rewind failed: ${err.message}`),
     });
+  };
+
+  // Open the (empty) composer WITHOUT rewinding yet — so Cancel is free and a
+  // dead session/failed restore never leaves a half-applied state. The rewind
+  // happens on submit, paired with the send (see sendEditedPrompt).
+  const startEditRerun = () => {
+    setConfirming(false);
+    setEditingPrompt("");
+  };
+
+  // Submit: rewind to this turn, THEN send the new prompt. The summary shown in
+  // the header is the agent's last rendered line, not the user's prompt — so we
+  // pre-fill empty and ask what to do from here, rather than seeding chrome.
+  const sendEditedPrompt = async () => {
+    const text = normalizeEditedPrompt(editingPrompt ?? "");
+    if (sending || !text || !selected) return; // guard double-send / empty / no target
+    setSending(true);
+    try {
+      // 1. Rewind the worktree to this turn (saves a safety snapshot of current).
+      const r = await restore.mutateAsync(selected.seq);
+      if (!r.restored) throw new Error("Couldn't rewind to this turn");
+      if (r.safetySeq) toast.success(`Saved current as #${r.safetySeq}`);
+      // 2. Send the new prompt — the backend wraps multi-line text in a bracketed
+      // paste and submits with Enter, so we send raw normalized text.
+      const res = await fetch(`/api/sessions/${sessionId}/send-keys`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, pressEnter: true }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(
+          res.status === 400
+            ? "Rewound, but this session's agent isn't running"
+            : d.error || "Rewound, but couldn't reach the session"
+        );
+      }
+      toast.success("Re-ran from this turn");
+      setEditingPrompt(null);
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -130,22 +184,39 @@ export function SnapshotTimeline({
             Checkpoint
           </Button>
         )}
-        {selected && !confirming && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setConfirming(true)}
-            disabled={restore.isPending || isRunning}
-            title={isRunning ? "Stop the agent to rewind" : undefined}
-            className="h-9"
-          >
-            {restore.isPending ? (
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-            ) : (
-              <RotateCcw className="mr-1 h-4 w-4" />
-            )}
-            {isRunning ? "Running…" : "Restore"}
-          </Button>
+        {selected && !confirming && editingPrompt === null && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => startEditRerun()}
+              disabled={restore.isPending || isRunning}
+              title={isRunning ? "Stop the agent to edit & re-run" : undefined}
+              className="h-9"
+            >
+              {restore.isPending ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <Pencil className="mr-1 h-4 w-4" />
+              )}
+              Edit &amp; re-run
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirming(true)}
+              disabled={restore.isPending || isRunning}
+              title={isRunning ? "Stop the agent to rewind" : undefined}
+              className="h-9"
+            >
+              {restore.isPending ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <RotateCcw className="mr-1 h-4 w-4" />
+              )}
+              {isRunning ? "Running…" : "Restore"}
+            </Button>
+          </>
         )}
         <Button
           variant="ghost"
@@ -240,6 +311,57 @@ export function SnapshotTimeline({
           </ul>
         )}
       </div>
+
+      {/* Re-run composer. On submit we rewind the workspace to this turn THEN
+          send this prompt — so Cancel here leaves the workspace untouched. */}
+      {selected && editingPrompt !== null && (
+        <div className="border-border bg-background/95 safe-area-bottom border-t p-3 backdrop-blur-sm">
+          <div className="mx-auto max-w-3xl space-y-2">
+            <div className="text-muted-foreground text-xs">
+              Rewind to turn #{selected.seq} and re-run — what should the agent
+              do from here?
+            </div>
+            <Textarea
+              autoFocus
+              value={editingPrompt}
+              onChange={(e) => setEditingPrompt(e.target.value)}
+              placeholder="Type the prompt to run from this point…"
+              className="min-h-[80px]"
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  sendEditedPrompt();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setEditingPrompt(null);
+                }
+              }}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setEditingPrompt(null)}
+                disabled={sending}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={sendEditedPrompt}
+                disabled={sending || !normalizeEditedPrompt(editingPrompt)}
+              >
+                {sending ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="mr-1 h-4 w-4" />
+                )}
+                Re-run
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

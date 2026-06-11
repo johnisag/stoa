@@ -22,6 +22,7 @@ import {
   Circle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ContextMeter } from "@/components/ContextMeter";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
 import { getActiveBackend } from "@/lib/client/backend";
 import type { Session, Project } from "@/lib/db";
@@ -285,6 +286,9 @@ export function MobileTabBar({
           <ChevronRight className="h-4 w-4" />
         </button>
       </div>
+
+      {/* Live context-window meter for this session (Claude-only; self-hides). */}
+      {session && <ContextMeter sessionId={session.id} />}
 
       {/* View mode toggle */}
       {session?.working_directory && (

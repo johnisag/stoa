@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseClaudeUsage } from "../lib/session-cost";
+import {
+  parseClaudeUsage,
+  parseClaudeContextTokens,
+} from "../lib/session-cost";
 
 // A few JSONL lines like Claude Code writes: user turns (no usage) + assistant
 // turns carrying message.usage, plus a blank + a malformed line to skip.
@@ -44,5 +47,40 @@ describe("parseClaudeUsage", () => {
       cacheRead: 0,
       cacheWrite: 0,
     });
+  });
+});
+
+describe("parseClaudeContextTokens", () => {
+  it("uses the LAST assistant turn's input + cache (not the cumulative total)", () => {
+    // The first turn carries 100 + 200 + 10 = 310; the last carries only 5.
+    // Context occupancy is the latest turn, so it must be 5, not the sum.
+    expect(parseClaudeContextTokens(JSONL)).toBe(5);
+  });
+
+  it("sums input + cache read + cache write of the final turn", () => {
+    const jsonl = [
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "m1",
+          usage: {
+            input_tokens: 1_000,
+            output_tokens: 200,
+            cache_read_input_tokens: 50_000,
+            cache_creation_input_tokens: 2_000,
+          },
+        },
+      }),
+    ].join("\n");
+    expect(parseClaudeContextTokens(jsonl)).toBe(53_000); // 1000 + 50000 + 2000
+  });
+
+  it("is 0 for an empty / usage-less transcript", () => {
+    expect(parseClaudeContextTokens("")).toBe(0);
+    expect(
+      parseClaudeContextTokens(
+        JSON.stringify({ type: "user", message: { content: "hi" } })
+      )
+    ).toBe(0);
   });
 });

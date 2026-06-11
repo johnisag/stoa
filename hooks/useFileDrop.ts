@@ -17,13 +17,14 @@ interface DragHandlers {
  * Hook for handling file drag and drop on a container element.
  *
  * @param containerRef - Ref to the container element for relatedTarget checking
- * @param onFileDrop - Callback when a file is dropped
+ * @param onFileDrop - Callback when one or more files are dropped (a multi-file
+ *   drop passes every dropped file, so the consumer can attach them in one go)
  * @param options - Optional configuration
  * @returns isDragging state and drag event handlers to spread onto the container
  */
 export function useFileDrop(
   containerRef: RefObject<HTMLElement | null>,
-  onFileDrop: (file: File) => void,
+  onFileDrop: (files: File[]) => void,
   options?: UseFileDropOptions
 ): { isDragging: boolean; dragHandlers: DragHandlers } {
   const [isDragging, setIsDragging] = useState(false);
@@ -70,7 +71,7 @@ export function useFileDrop(
 
       const files = Array.from(e.dataTransfer.files);
       if (files.length > 0) {
-        onFileDrop(files[0]);
+        onFileDrop(files);
       }
     },
     [onFileDrop, options?.disabled]

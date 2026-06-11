@@ -58,6 +58,7 @@ import { getActiveBackend } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
 import { StoaGuide } from "@/components/StoaGuide";
+import { SessionDiffModal } from "@/components/SessionDiffModal";
 import type { Keybinding } from "@/lib/keybindings";
 
 // Global navigation shortcuts (mod = ⌘ on macOS, Ctrl elsewhere). Module-level
@@ -156,6 +157,11 @@ function HomeContent() {
   const [showFleetBoard, setShowFleetBoard] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  // Session whose diff to show via the "See changes" jump (fired when a turn
+  // completes). null = the diff modal is closed.
+  const [seeChangesSessionId, setSeeChangesSessionId] = useState<string | null>(
+    null
+  );
   const [copiedSessionId, setCopiedSessionId] = useState(false);
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
 
@@ -530,7 +536,10 @@ function HomeContent() {
     updateSettings,
     requestPermission,
     permissionGranted,
-  } = useNotifications({ onSessionClick: handleNotificationClick });
+  } = useNotifications({
+    onSessionClick: handleNotificationClick,
+    onSeeChanges: setSeeChangesSessionId,
+  });
 
   // Session statuses
   const { sessionStatuses } = useSessionStatuses({
@@ -727,6 +736,10 @@ function HomeContent() {
   const activeSession = sessions.find(
     (s) => s.id === focusedActiveTab?.sessionId
   );
+  // The session whose "See changes" diff is showing (null when closed).
+  const seeChangesSession = seeChangesSessionId
+    ? sessions.find((s) => s.id === seeChangesSessionId)
+    : undefined;
   const startDevServerProject = startDevServerProjectId
     ? (projects.find((p) => p.id === startDevServerProjectId) ?? null)
     : null;
@@ -824,6 +837,15 @@ function HomeContent() {
       {/* Fleet Board — the autonomous fleet as a lifecycle kanban (reuses the
           inbox read model + cards). Self-contained; opened via setShowFleetBoard. */}
       <FleetBoardView open={showFleetBoard} onOpenChange={setShowFleetBoard} />
+      {/* "See changes" jump-to-diff: opened by the transient toast action when a
+          session's turn completes (useNotifications -> onSeeChanges). */}
+      {seeChangesSessionId && (
+        <SessionDiffModal
+          sessionId={seeChangesSessionId}
+          name={seeChangesSession?.name ?? "Session"}
+          onClose={() => setSeeChangesSessionId(null)}
+        />
+      )}
     </>
   );
 }

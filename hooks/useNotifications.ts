@@ -18,6 +18,7 @@ import {
 } from "@/lib/notifications";
 import { sanitizeNotificationText } from "@/lib/notification-text";
 import { shouldBeep } from "@/lib/notification-sound";
+import { shouldOfferSeeChanges } from "@/lib/see-changes";
 
 type SessionStatus = "idle" | "running" | "waiting" | "error" | "dead";
 
@@ -32,6 +33,8 @@ interface SessionState {
 
 interface UseNotificationsOptions {
   onSessionClick?: (sessionId: string) => void;
+  /** Open the diff of what a session just changed (the "See changes" jump). */
+  onSeeChanges?: (sessionId: string) => void;
 }
 
 // Don't re-notify the same session+event within this window. Dedups flaps
@@ -41,7 +44,7 @@ interface UseNotificationsOptions {
 const NOTIFY_COOLDOWN_MS = 8000;
 
 export function useNotifications(options: UseNotificationsOptions = {}) {
-  const { onSessionClick } = options;
+  const { onSessionClick, onSeeChanges } = options;
   const [settings, setSettings] =
     useState<NotificationSettings>(defaultSettings);
   const [permissionGranted, setPermissionGranted] = useState(false);
@@ -157,6 +160,30 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
     [settings, permissionGranted, onSessionClick]
   );
 
+  // Transient "See changes" affordance: when the active session's turn settles
+  // to idle, surface a dismissible toast whose action opens the diff of what it
+  // just changed. It still respects the master `settings.enabled` kill switch
+  // (checkStateChanges returns early when off), but not the per-EVENT toggles —
+  // it's a navigation shortcut, not an alert. The caller gates it through the
+  // same cooldown as `notify` (so status flaps don't stack toasts), and a stable
+  // toast id makes sonner REPLACE rather than pile up repeats.
+  const offerSeeChanges = useCallback(
+    (sessionId: string, sessionName: string) => {
+      const safeName = sanitizeNotificationText(sessionName, {
+        fallback: "Session",
+      });
+      toast(`${safeName} finished`, {
+        id: `seechanges-${sessionId}`,
+        description: "Review what changed",
+        action: {
+          label: "See changes",
+          onClick: () => onSeeChanges?.(sessionId),
+        },
+      });
+    },
+    [onSeeChanges]
+  );
+
   // Check for state changes and notify
   const checkStateChanges = useCallback(
     (sessions: SessionState[], activeSessionId?: string | null) => {
@@ -195,6 +222,17 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         // Skip if unchanged, or if it's the session you're already looking at.
         if (prevStatus === currentStatus) return;
         if (session.id === activeSessionId && windowFocused) {
+          // The session you're watching gets no "completed" ping (you can see
+          // it). But when its turn just settled to idle, offer a one-tap jump to
+          // the diff of what it changed — review is then one tap, not a hunt.
+          // The previousStates update below is the once-per-transition gate.
+          if (
+            onSeeChanges &&
+            shouldOfferSeeChanges(prevStatus, currentStatus) &&
+            shouldNotify(`${session.id}-seechanges`)
+          ) {
+            offerSeeChanges(session.id, session.name);
+          }
           previousStates.current.set(session.id, currentStatus);
           return;
         }
@@ -243,6 +281,7 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         validKeys.add(`${id}-waiting`);
         validKeys.add(`${id}-error`);
         validKeys.add(`${id}-completed`);
+        validKeys.add(`${id}-seechanges`);
       }
       for (const key of lastNotified.current.keys()) {
         if (!validKeys.has(key)) lastNotified.current.delete(key);
@@ -254,7 +293,7 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         setTabNotificationCount(newWaitingCount);
       }
     },
-    [settings.enabled, notify]
+    [settings.enabled, notify, onSeeChanges, offerSeeChanges]
   );
 
   // Clear notifications when focused

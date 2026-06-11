@@ -182,6 +182,7 @@ describe("getAnalyticsReport", () => {
         model: "sonnet",
         tokens: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0 },
         costUsd: 2.5,
+        contextTokens: 100,
         supported: true,
       },
     });

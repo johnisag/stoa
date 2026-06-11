@@ -7,6 +7,7 @@ import {
   Send,
   Loader2,
   AlertTriangle,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -31,10 +32,42 @@ export function CommitForm({
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   const canCommit = stagedCount > 0 && message.trim().length > 0;
+
+  // Draft a Conventional Commit message from the staged diff and drop it into
+  // the textarea. The route guards (400s) when nothing is staged.
+  const handleGenerate = async () => {
+    if (stagedCount === 0 || generating) return;
+
+    setError(null);
+    setSuccess(null);
+    setGenerating(true);
+
+    try {
+      const res = await fetch("/api/git/commit-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: workingDirectory }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error || !data.message) {
+        setError(data.error || "Failed to generate a commit message");
+        return;
+      }
+
+      setMessage(data.message);
+    } catch {
+      setError("Failed to generate a commit message");
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const handleCommit = async (): Promise<boolean> => {
     if (!canCommit) return false;
@@ -144,20 +177,44 @@ export function CommitForm({
 
       {/* Commit message input */}
       <div className="space-y-1.5">
-        <label className="text-muted-foreground flex items-center gap-1 text-xs">
-          <GitCommit className="h-3 w-3" />
-          Commit message
-        </label>
+        <div className="flex items-center justify-between">
+          <label className="text-muted-foreground flex items-center gap-1 text-xs">
+            <GitCommit className="h-3 w-3" />
+            Commit message
+          </label>
+          {/* Draft a Conventional Commit message from the staged diff. */}
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={generating || committing || pushing}
+            title="Draft a commit message from the staged diff"
+            className={cn(
+              "text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs",
+              "disabled:cursor-not-allowed disabled:opacity-50"
+            )}
+          >
+            {generating ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Sparkles className="h-3 w-3" />
+            )}
+            {generating ? "Generating…" : "Generate"}
+          </button>
+        </div>
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Describe your changes..."
           rows={3}
+          // Disabled while generating so a freshly-typed message can't be
+          // silently clobbered by the draft landing.
+          disabled={generating}
           className={cn(
             "w-full resize-none rounded-md px-3 py-2 text-sm",
             "bg-muted/50",
             "focus:ring-primary/50 focus:ring-2 focus:outline-none",
-            "placeholder:text-muted-foreground/50"
+            "placeholder:text-muted-foreground/50",
+            generating && "opacity-60"
           )}
         />
       </div>
@@ -174,7 +231,7 @@ export function CommitForm({
           variant="outline"
           size="default"
           onClick={handleCommit}
-          disabled={!canCommit || committing || pushing}
+          disabled={!canCommit || committing || pushing || generating}
           className="min-h-[44px] flex-1"
         >
           {committing ? (
@@ -189,7 +246,7 @@ export function CommitForm({
           variant="default"
           size="default"
           onClick={handleCommitAndPush}
-          disabled={!canCommit || committing || pushing}
+          disabled={!canCommit || committing || pushing || generating}
           className="min-h-[44px] flex-1"
         >
           {pushing ? (
