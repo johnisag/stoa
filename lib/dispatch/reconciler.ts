@@ -24,6 +24,8 @@ import { captureLessons } from "./lessons";
 import { mergeTrainPass } from "./merge-train";
 import { verifyPass } from "./verify";
 import { sessionCeremonyPass } from "./session-ceremony";
+import { nextOccurrence } from "./recurrence";
+import { isLocalTask } from "./task-label";
 import {
   nextReviewAction,
   spawnReviewPanel,
@@ -101,6 +103,48 @@ export function dueDispatchIds(
     .map((r) => r.id);
 }
 
+/** A recurring task to re-arm: the fields to insert its NEXT occurrence as a
+ * fresh scheduled local task. */
+export interface ScheduledReArm {
+  repoId: string;
+  title: string | null;
+  taskBody: string | null;
+  scheduledAt: string;
+  recurrence: string;
+  autoMerge: number;
+}
+
+/**
+ * Plan the scheduled-promotion step: which rows to promote to 'pending', and the
+ * recurring LOCAL tasks to re-arm (their next future occurrence). Pure so the
+ * re-arm is unit-testable; the reconciler applies the DB writes. A recurring row
+ * is re-armed BEFORE it's promoted, so the chore keeps firing even though this
+ * instance becomes a one-time dispatch.
+ */
+export function planScheduledPromotion(
+  scheduled: IssueDispatch[],
+  nowMs: number
+): { promoteIds: string[]; reArms: ScheduledReArm[] } {
+  const promoteIds = dueDispatchIds(scheduled, nowMs);
+  const due = new Set(promoteIds);
+  const reArms: ScheduledReArm[] = [];
+  for (const row of scheduled) {
+    if (!due.has(row.id) || !row.recurrence || !isLocalTask(row)) continue;
+    const nextAt = nextOccurrence(row.recurrence, row.scheduled_at, nowMs);
+    if (nextAt) {
+      reArms.push({
+        repoId: row.repo_id,
+        title: row.issue_title,
+        taskBody: row.task_body,
+        scheduledAt: nextAt,
+        recurrence: row.recurrence,
+        autoMerge: row.auto_merge,
+      });
+    }
+  }
+  return { promoteIds, reArms };
+}
+
 let tickBusy = false;
 
 /**
@@ -114,12 +158,36 @@ export async function reconcileTick(): Promise<void> {
   try {
     const db = getDb();
     // 0. Promote any scheduled rows that have come due → pending, so the normal
-    // headroom/mode logic below dispatches or surfaces them this tick.
-    const dueIds = dueDispatchIds(
-      queries.listScheduled(db).all() as IssueDispatch[],
-      Date.now()
-    );
-    for (const id of dueIds) queries.promoteScheduledToPending(db).run(id);
+    // headroom/mode logic below dispatches or surfaces them this tick. A recurring
+    // local task is re-armed first (its next occurrence is inserted as a fresh
+    // scheduled clone) so the chore keeps firing.
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    const scheduledRows = queries.listScheduled(db).all() as IssueDispatch[];
+    const { promoteIds, reArms } = planScheduledPromotion(scheduledRows, now);
+    // Apply atomically: if a re-arm insert or a promote throws mid-block, NOTHING
+    // commits and the next tick retries cleanly — otherwise an inserted clone +
+    // an un-promoted (still-due) original would fork a duplicate recurrence chain.
+    db.transaction(() => {
+      for (const r of reArms) {
+        const cloneId = randomUUID();
+        queries
+          .insertLocalTask(db)
+          .run(
+            cloneId,
+            r.repoId,
+            r.title,
+            r.taskBody,
+            nowIso,
+            r.scheduledAt,
+            r.recurrence,
+            "scheduled"
+          );
+        if (r.autoMerge) queries.setDispatchAutoMerge(db).run(1, cloneId);
+      }
+      for (const id of promoteIds)
+        queries.promoteScheduledToPending(db).run(id);
+    })();
 
     const repos = queries.getEnabledDispatchRepos(db).all() as DispatchRepo[];
     for (const repo of repos) {

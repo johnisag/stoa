@@ -104,7 +104,10 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
             <span className="text-foreground inline-flex items-center gap-1 font-medium">
               <Clock className="h-3.5 w-3.5" aria-hidden="true" /> Schedule
             </span>{" "}
-            — creates it and starts it at a time you choose.
+            — creates it and starts it at a time you choose. A local task can
+            also <span className="text-foreground">repeat</span> (hourly, daily,
+            or weekly) — a recurring chore like a nightly dependency bump runs
+            itself every time, no babysitting.
           </li>
         </ul>
       </section>

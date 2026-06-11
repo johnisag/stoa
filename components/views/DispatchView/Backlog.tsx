@@ -25,6 +25,11 @@ import {
 } from "@/data/dispatch/queries";
 import { AGENT_BADGE, repoUrl, timeAgo } from "./shared";
 import { isLocalTask, taskLabel } from "@/lib/dispatch/task-label";
+import {
+  RECURRENCE_OPTIONS,
+  recurrenceLabel,
+  type Recurrence,
+} from "@/lib/dispatch/recurrence";
 
 /** Create a GitHub issue or a local task and either queue it to the backlog or
  * dispatch a worker for it immediately. */
@@ -37,6 +42,7 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
   const [labels, setLabels] = useState("");
   const [autoMerge, setAutoMerge] = useState(false);
   const [scheduledAt, setScheduledAt] = useState("");
+  const [recurrence, setRecurrence] = useState<Recurrence>("once");
   const isLocal = source === "local";
   const [pending, setPending] = useState<
     null | "backlog" | "now" | "scheduled"
@@ -90,17 +96,25 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
         disposition,
         autoMerge,
         ...(disposition === "scheduled"
-          ? { scheduledAt: new Date(scheduledAt).toISOString() }
+          ? {
+              scheduledAt: new Date(scheduledAt).toISOString(),
+              // Recurrence is local-only; the route ignores it for GitHub issues.
+              ...(isLocal ? { recurrence } : {}),
+            }
           : {}),
       },
       {
         onSuccess: (d) => {
           const what = d.issue ? `#${d.issue.number}` : `"${taskTitle}"`;
+          const repeats =
+            disposition === "scheduled" && isLocal
+              ? recurrenceLabel(recurrence)
+              : null;
           const action =
             disposition === "now"
               ? "dispatched"
               : disposition === "scheduled"
-                ? "scheduled"
+                ? `scheduled${repeats ? ` · ${repeats}` : ""}`
                 : "added to backlog";
           toast.success(
             `${what} ${action}${autoMerge ? " · auto-merge on" : ""}`
@@ -109,7 +123,10 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
           setBody("");
           setLabels("");
           setAutoMerge(false);
-          if (disposition === "scheduled") setScheduledAt("");
+          if (disposition === "scheduled") {
+            setScheduledAt("");
+            setRecurrence("once");
+          }
         },
         onError: (e) => toast.error((e as Error).message),
         onSettled: () => setPending(null),
@@ -195,6 +212,27 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
               aria-label="Schedule time"
               className="h-8 w-[190px]"
             />
+            {isLocal && (
+              <Select
+                value={recurrence}
+                onValueChange={(v) => setRecurrence(v as Recurrence)}
+              >
+                <SelectTrigger
+                  className="h-8 w-[100px]"
+                  aria-label="Repeat"
+                  title="Repeat this scheduled task (local tasks only)"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {RECURRENCE_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -298,6 +336,9 @@ export function Backlog({ open }: { open: boolean }) {
                           timeZoneName: "short",
                         })}
                       </>
+                    )}
+                    {recurrenceLabel(d.recurrence) && (
+                      <> &middot; {recurrenceLabel(d.recurrence)}</>
                     )}
                   </div>
                 </div>

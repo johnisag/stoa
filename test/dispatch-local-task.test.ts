@@ -197,10 +197,28 @@ describe("local task intake — partial dedupe index", () => {
   it("local tasks (issue_number 0) never collide", () => {
     queries
       .insertLocalTask(db)
-      .run(randomUUID(), repoId, "Task A", "body A", "t", null, "pending");
+      .run(
+        randomUUID(),
+        repoId,
+        "Task A",
+        "body A",
+        "t",
+        null,
+        null,
+        "pending"
+      );
     queries
       .insertLocalTask(db)
-      .run(randomUUID(), repoId, "Task B", "body B", "t", null, "pending");
+      .run(
+        randomUUID(),
+        repoId,
+        "Task B",
+        "body B",
+        "t",
+        null,
+        null,
+        "pending"
+      );
     const rows = db
       .prepare("SELECT * FROM issue_dispatches WHERE source = 'local'")
       .all() as IssueDispatch[];
@@ -215,7 +233,7 @@ describe("local task intake — partial dedupe index", () => {
       .run(randomUUID(), repoId, 7, "Issue 7", "u", "t");
     queries
       .insertLocalTask(db)
-      .run(randomUUID(), repoId, "Task", "b", "t", null, "pending");
+      .run(randomUUID(), repoId, "Task", "b", "t", null, null, "pending");
     const gh = queries
       .getDispatchByRepoIssue(db)
       .get(repoId, 7) as IssueDispatch;
@@ -233,6 +251,7 @@ describe("local task intake — partial dedupe index", () => {
         "b",
         "t",
         "2026-07-01T00:00:00Z",
+        null,
         "scheduled"
       );
     const row = db

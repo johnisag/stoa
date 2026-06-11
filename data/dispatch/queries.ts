@@ -12,6 +12,7 @@ import type { AgentType } from "@/lib/providers";
 import type { DiscoveredRepo } from "@/lib/dispatch/discover";
 import type { GitHubRepo, PreparedRepo } from "@/lib/dispatch/github";
 import type { TriageIssue } from "@/lib/dispatch/triage";
+import type { Recurrence } from "@/lib/dispatch/recurrence";
 import { dispatchKeys } from "./keys";
 
 export type { DiscoveredRepo, GitHubRepo, PreparedRepo, TriageIssue };
@@ -218,6 +219,8 @@ export interface CreateIssueInput {
   autoMerge?: boolean;
   /** 'local' = a GitHub-free task (no gh issue); default 'github'. */
   source?: "github" | "local";
+  /** Recurrence for a scheduled local task ('once' = no repeat). */
+  recurrence?: Recurrence;
 }
 
 /** Create a GitHub issue (source 'github') or a freeform local task (source

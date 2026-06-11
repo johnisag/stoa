@@ -563,6 +563,22 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 29,
+    name: "add_recurrence_to_issue_dispatches",
+    up: (db) => {
+      // Cron recurrence (#7): a scheduled LOCAL task can repeat. recurrence
+      // ('hourly'|'daily'|'weekly'); null/absent = one-shot = exactly today's
+      // behavior. Guarded ALTER (migration-24..28 pattern).
+      const hasColumn = (table: string, column: string): boolean =>
+        (
+          db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        ).some((c) => c.name === column);
+      if (!hasColumn("issue_dispatches", "recurrence")) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN recurrence TEXT`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
