@@ -120,7 +120,9 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           still can&apos;t, the work surfaces for you to decide. The repo also{" "}
           <span className="text-foreground">remembers</span> what the critic
           flagged, so the next agent on that repo is told the known pitfalls up
-          front and stops repeating them.
+          front and stops repeating them — tap the{" "}
+          <span className="text-foreground">brain</span> icon on a repo to see
+          everything it&apos;s learned, and forget a stale one.
         </p>
       </section>
 
