@@ -60,14 +60,20 @@ export function actionsForKind(
 
 /**
  * The same respond actions surfaced as in-app per-card quick buttons, driven by
- * the session's live status: a waiting session gets the full decision, a running
- * or errored one just gets stop, and idle/dead have nothing to act on. Mirrors
- * actionsForKind (push) so the board and the lock screen offer the same choices.
+ * the session's live status: a session at an ACTUAL prompt gets the full decision
+ * (approve/reject/stop), a running or errored one just gets stop, and a session
+ * that's idle/dead — or merely "waiting" because it finished its turn with no
+ * question on screen — has nothing to act on. `hasPrompt` distinguishes a real
+ * prompt from a finished turn (both read as "waiting"); without it the buttons
+ * flickered up every time an agent stopped generating.
  */
-export function cardActionsForStatus(status: SessionStatus): RespondAction[] {
+export function cardActionsForStatus(
+  status: SessionStatus,
+  hasPrompt = false
+): RespondAction[] {
   switch (status) {
     case "waiting":
-      return ["approve", "reject", "stop"];
+      return hasPrompt ? ["approve", "reject", "stop"] : [];
     case "running":
     case "error":
       return ["stop"];

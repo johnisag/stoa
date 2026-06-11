@@ -19,6 +19,7 @@ interface SessionStatus {
   status: "idle" | "running" | "waiting" | "error" | "dead";
   lastLine?: string;
   rateLimit?: RateLimitState | null;
+  hasPrompt?: boolean;
 }
 
 interface ProjectsSectionProps {
@@ -279,6 +280,9 @@ export function ProjectsSection({
                                 summarizingSessionId === session.id
                               }
                               tmuxStatus={sessionStatuses?.[session.id]?.status}
+                              hasPrompt={
+                                sessionStatuses?.[session.id]?.hasPrompt
+                              }
                               lastLine={sessionStatuses?.[session.id]?.lastLine}
                               rateLimited={
                                 !!sessionStatuses?.[session.id]?.rateLimit
@@ -348,6 +352,10 @@ export function ProjectsSection({
                                         isActive={worker.id === activeSessionId}
                                         tmuxStatus={
                                           sessionStatuses?.[worker.id]?.status
+                                        }
+                                        hasPrompt={
+                                          sessionStatuses?.[worker.id]
+                                            ?.hasPrompt
                                         }
                                         lastLine={
                                           sessionStatuses?.[worker.id]?.lastLine

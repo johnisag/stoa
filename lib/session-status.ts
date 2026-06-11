@@ -66,6 +66,10 @@ export interface StatusDelta {
   lastLine: string;
   /** Rate-limit state, so the client can badge "limited / resets in N". */
   rateLimit: RateLimitState | null;
+  /** Whether the session is at an ACTUAL prompt (a question awaiting Y/n/approve),
+   * vs merely "waiting" because it finished its turn — so the card shows
+   * approve/reject only when there's something to approve. */
+  hasPrompt: boolean;
 }
 
 // One snapshot value per session, so a diff is a cheap string compare. NUL
@@ -75,10 +79,11 @@ const snapKey = (s: {
   status: SessionStatus;
   lastLine: string;
   rateLimit: RateLimitState | null;
+  prompt: PromptState | null;
 }) =>
   `${s.status}\0${s.lastLine}\0${
     s.rateLimit ? `${s.rateLimit.reason}@${s.rateLimit.resetAt ?? ""}` : ""
-  }`;
+  }\0${s.prompt ? "p" : ""}`;
 
 /**
  * Entries that CHANGED vs the previous snapshot (new id, different status, or
@@ -99,6 +104,7 @@ export function diffStatuses(
         status: s.status,
         lastLine: s.lastLine,
         rateLimit: s.rateLimit,
+        hasPrompt: s.prompt != null,
       });
     }
   }
@@ -132,7 +138,14 @@ export function detectPushEvents(
     const p = prev.get(s.id);
     if (p === undefined || p === s.status) continue;
     if (s.status === "waiting") {
-      events.push({ id: s.id, name: s.name, kind: "waiting" });
+      // A real prompt (Y/n / approve) → "needs your input" (approve/reject). No
+      // prompt means the agent just FINISHED its turn → "done", not an approval
+      // request — so we don't page (or show buttons) for a question that isn't there.
+      events.push({
+        id: s.id,
+        name: s.name,
+        kind: s.prompt ? "waiting" : "done",
+      });
     } else if (s.status === "error") {
       events.push({ id: s.id, name: s.name, kind: "error" });
     } else if (s.status === "idle" && (p === "running" || p === "waiting")) {

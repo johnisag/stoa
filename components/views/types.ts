@@ -11,6 +11,9 @@ export interface SessionStatus {
   claudeSessionId?: string | null;
   /** Provider rate-limit state (null/absent when not limited). */
   rateLimit?: RateLimitState | null;
+  /** True when an ACTUAL prompt is on screen — so a card shows approve/reject only
+   * when there's a real question, not just because the agent finished its turn. */
+  hasPrompt?: boolean;
 }
 
 export interface ViewProps {

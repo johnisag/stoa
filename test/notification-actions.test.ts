@@ -50,20 +50,26 @@ describe("actionsForKind", () => {
 });
 
 describe("cardActionsForStatus", () => {
-  it("a waiting session offers the full decision", () => {
-    expect(cardActionsForStatus("waiting")).toEqual([
+  it("a waiting session AT A PROMPT offers the full decision", () => {
+    expect(cardActionsForStatus("waiting", true)).toEqual([
       "approve",
       "reject",
       "stop",
     ]);
   });
-  it("running and error sessions only offer stop", () => {
-    expect(cardActionsForStatus("running")).toEqual(["stop"]);
-    expect(cardActionsForStatus("error")).toEqual(["stop"]);
+  it("a waiting session with NO prompt (finished its turn) offers nothing", () => {
+    // The flicker fix: don't show approve/reject just because the agent stopped.
+    expect(cardActionsForStatus("waiting", false)).toEqual([]);
+    expect(cardActionsForStatus("waiting")).toEqual([]); // defaults to no-prompt
+  });
+  it("running and error sessions only offer stop (prompt flag is irrelevant)", () => {
+    expect(cardActionsForStatus("running", true)).toEqual(["stop"]);
+    expect(cardActionsForStatus("running", false)).toEqual(["stop"]);
+    expect(cardActionsForStatus("error", false)).toEqual(["stop"]);
   });
   it("idle and dead sessions have no quick actions", () => {
-    expect(cardActionsForStatus("idle")).toEqual([]);
-    expect(cardActionsForStatus("dead")).toEqual([]);
+    expect(cardActionsForStatus("idle", true)).toEqual([]);
+    expect(cardActionsForStatus("dead", true)).toEqual([]);
   });
   it("only ever returns valid respond actions", () => {
     for (const status of [
@@ -73,8 +79,9 @@ describe("cardActionsForStatus", () => {
       "idle",
       "dead",
     ] as const)
-      for (const a of cardActionsForStatus(status))
-        expect(isRespondAction(a)).toBe(true);
+      for (const hasPrompt of [true, false])
+        for (const a of cardActionsForStatus(status, hasPrompt))
+          expect(isRespondAction(a)).toBe(true);
   });
 });
 

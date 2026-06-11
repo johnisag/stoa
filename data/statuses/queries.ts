@@ -22,6 +22,7 @@ interface UseSessionStatusesOptions {
       id: string;
       name: string;
       status: SessionStatus["status"];
+      hasPrompt?: boolean;
     }>,
     activeSessionId?: string | null
   ) => void;
@@ -66,6 +67,7 @@ export function useSessionStatusesQuery({
       id: s.id,
       name: s.name,
       status: (statuses[s.id]?.status || "dead") as SessionStatus["status"],
+      hasPrompt: statuses[s.id]?.hasPrompt,
     }));
     checkStateChanges(sessionStates, activeSessionId);
     // Note: claude_session_id is now updated server-side in /api/sessions/status
