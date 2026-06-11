@@ -28,6 +28,7 @@ import { expandHome } from "../platform";
 import { getPrReadiness, type CheckSummary } from "./auto-merge";
 import { spawnInWorktree } from "./reviewer";
 import type { DispatchRepo, IssueDispatch } from "./types";
+import { taskRef } from "./task-label";
 
 /** Max rebase-repair rounds before a CONFLICTING PR is left for a human
  * (env-overridable; `STOA_MAX_REBASE_ROUNDS=0` disables the train even when armed). */
@@ -91,8 +92,8 @@ export function buildRebaseFixPrompt(
 ): string {
   const base = repo.base_branch || "main";
   return (
-    `[Stoa] Pull request #${d.pr_number} in ${repo.repo_slug} (issue ` +
-    `#${d.issue_number}: "${d.issue_title ?? ""}") CONFLICTS with ${base} — the ` +
+    `[Stoa] Pull request #${d.pr_number} in ${repo.repo_slug} (${taskRef(d)}) ` +
+    `CONFLICTS with ${base} — the ` +
     `base moved under it and GitHub can't merge it until it's rebased.\n\n` +
     `You are in the PR's worktree on branch "${d.branch_name ?? ""}".\n\n` +
     `1. Fetch the latest base:\n` +

@@ -27,6 +27,7 @@ import {
   useMergeDispatch,
 } from "@/data/dispatch/queries";
 import { AGENT_BADGE, STATUS_META, repoUrl, timeAgo } from "./shared";
+import { taskLabel } from "@/lib/dispatch/task-label";
 
 function Card({
   d,
@@ -93,7 +94,7 @@ function Card({
         className="line-clamp-2 font-medium hover:underline"
         title={d.issue_title ?? undefined}
       >
-        #{d.issue_number} {d.issue_title ?? "(untitled issue)"}
+        {taskLabel(d)}
       </a>
 
       <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -298,7 +299,7 @@ function Card({
       {showDiff && d.session_id && (
         <SessionDiffModal
           sessionId={d.session_id}
-          name={`#${d.issue_number} ${d.issue_title ?? ""}`.trim()}
+          name={taskLabel(d)}
           onClose={() => setShowDiff(false)}
         />
       )}

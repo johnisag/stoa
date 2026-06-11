@@ -24,17 +24,20 @@ import {
   useScheduledQuery,
 } from "@/data/dispatch/queries";
 import { AGENT_BADGE, repoUrl, timeAgo } from "./shared";
+import { isLocalTask, taskLabel } from "@/lib/dispatch/task-label";
 
-/** Create a real GitHub issue and either queue it to the backlog or dispatch a
- * worker for it immediately. */
+/** Create a GitHub issue or a local task and either queue it to the backlog or
+ * dispatch a worker for it immediately. */
 function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
   const create = useCreateIssue();
   const [repoId, setRepoId] = useState("");
+  const [source, setSource] = useState<"github" | "local">("github");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [labels, setLabels] = useState("");
   const [autoMerge, setAutoMerge] = useState(false);
   const [scheduledAt, setScheduledAt] = useState("");
+  const isLocal = source === "local";
   const [pending, setPending] = useState<
     null | "backlog" | "now" | "scheduled"
   >(null);
@@ -57,7 +60,7 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
   const submit = (disposition: "backlog" | "now" | "scheduled") => {
     if (!repoId) return;
     if (!title.trim()) {
-      toast.error("An issue title is required");
+      toast.error("A title is required");
       return;
     }
     if (disposition === "scheduled" && Number.isNaN(Date.parse(scheduledAt))) {
@@ -70,15 +73,20 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
       );
     }
     setPending(disposition);
+    const taskTitle = title.trim();
     create.mutate(
       {
         repoId,
-        title: title.trim(),
+        source,
+        title: taskTitle,
         body,
-        labels: labels
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
+        // Labels are a GitHub-issue concept only; a local task has none.
+        labels: isLocal
+          ? []
+          : labels
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
         disposition,
         autoMerge,
         ...(disposition === "scheduled"
@@ -87,14 +95,15 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
       },
       {
         onSuccess: (d) => {
+          const what = d.issue ? `#${d.issue.number}` : `"${taskTitle}"`;
+          const action =
+            disposition === "now"
+              ? "dispatched"
+              : disposition === "scheduled"
+                ? "scheduled"
+                : "added to backlog";
           toast.success(
-            `Created #${d.issue.number} — ${
-              disposition === "now"
-                ? "dispatching a worker"
-                : disposition === "scheduled"
-                  ? "scheduled"
-                  : "added to backlog"
-            }${autoMerge ? " · auto-merge on" : ""}`
+            `${what} ${action}${autoMerge ? " · auto-merge on" : ""}`
           );
           setTitle("");
           setBody("");
@@ -111,12 +120,25 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
   return (
     <div className="bg-muted/30 space-y-2 rounded-md border border-dashed p-3">
       <p className="text-muted-foreground text-xs">
-        Creates a real GitHub issue on the selected repo, then queues it or
-        dispatches a worker immediately.
+        {isLocal
+          ? "Queues a freeform task — no GitHub issue. A worker drains it through the same review → merge pipeline."
+          : "Creates a real GitHub issue on the selected repo, then queues it or dispatches a worker immediately."}
       </p>
       <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={source}
+          onValueChange={(v) => setSource(v as "github" | "local")}
+        >
+          <SelectTrigger className="h-8 w-[130px]" aria-label="Task source">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="github">GitHub issue</SelectItem>
+            <SelectItem value="local">Local task</SelectItem>
+          </SelectContent>
+        </Select>
         <Select value={repoId} onValueChange={setRepoId}>
-          <SelectTrigger className="h-8 w-[200px]" aria-label="Issue repo">
+          <SelectTrigger className="h-8 w-[180px]" aria-label="Issue repo">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -128,25 +150,31 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
           </SelectContent>
         </Select>
         <Input
-          placeholder="Issue title"
+          placeholder={isLocal ? "Task title" : "Issue title"}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           className="h-8 min-w-[200px] flex-1"
         />
       </div>
       <Textarea
-        placeholder="Description (optional)"
+        placeholder={
+          isLocal
+            ? "Task description — the worker reads this as its brief"
+            : "Description (optional)"
+        }
         value={body}
         onChange={(e) => setBody(e.target.value)}
         className="min-h-[56px] text-sm"
       />
       <div className="flex flex-wrap items-center gap-2">
-        <Input
-          placeholder="Labels (comma-separated)"
-          value={labels}
-          onChange={(e) => setLabels(e.target.value)}
-          className="h-8 w-48"
-        />
+        {!isLocal && (
+          <Input
+            placeholder="Labels (comma-separated)"
+            value={labels}
+            onChange={(e) => setLabels(e.target.value)}
+            className="h-8 w-48"
+          />
+        )}
         <label
           className="text-muted-foreground flex items-center gap-1.5 text-xs"
           title="Merge the worker's PR automatically once it's ready (no conflicts, checks green, critic-approved if the repo is review-gated)."
@@ -247,11 +275,18 @@ export function Backlog({ open }: { open: boolean }) {
               >
                 <Clock className="text-muted-foreground h-4 w-4 shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div
-                    className="truncate text-sm font-medium"
-                    title={d.issue_title ?? undefined}
-                  >
-                    #{d.issue_number} {d.issue_title ?? "(untitled issue)"}
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="truncate text-sm font-medium"
+                      title={d.issue_title ?? undefined}
+                    >
+                      {taskLabel(d)}
+                    </span>
+                    {isLocalTask(d) && (
+                      <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium">
+                        local
+                      </span>
+                    )}
                   </div>
                   <div className="text-muted-foreground mt-0.5 text-xs">
                     {repo?.repo_slug ?? "unknown repo"}
@@ -322,18 +357,35 @@ export function Backlog({ open }: { open: boolean }) {
                         {repo.agent_type}
                       </span>
                     )}
-                    <a
-                      href={
-                        d.issue_url ?? (repo ? repoUrl(repo.repo_slug) : "#")
-                      }
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="truncate text-sm font-medium hover:underline"
-                      title={d.issue_title ?? undefined}
-                    >
-                      #{d.issue_number} {d.issue_title ?? "(untitled issue)"}
-                    </a>
-                    <ExternalLink className="text-muted-foreground h-3 w-3 shrink-0" />
+                    {isLocalTask(d) ? (
+                      <>
+                        <span
+                          className="truncate text-sm font-medium"
+                          title={d.issue_title ?? undefined}
+                        >
+                          {taskLabel(d)}
+                        </span>
+                        <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium">
+                          local
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <a
+                          href={
+                            d.issue_url ??
+                            (repo ? repoUrl(repo.repo_slug) : "#")
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="truncate text-sm font-medium hover:underline"
+                          title={d.issue_title ?? undefined}
+                        >
+                          {taskLabel(d)}
+                        </a>
+                        <ExternalLink className="text-muted-foreground h-3 w-3 shrink-0" />
+                      </>
+                    )}
                   </div>
                   <div className="text-muted-foreground mt-0.5 text-xs">
                     {repo?.repo_slug ?? "unknown repo"}

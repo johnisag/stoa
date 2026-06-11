@@ -29,9 +29,10 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           <Rocket className="h-4 w-4" aria-hidden="true" /> What is Dispatch?
         </h3>
         <p className="text-muted-foreground">
-          Dispatch turns GitHub issues into finished work. You point it at a
-          repository, and an AI agent works on each issue and proposes the
-          changes for you to review and accept.
+          Dispatch turns tasks — GitHub issues <em>or</em> quick local notes —
+          into finished work. You point it at a repository, and an AI agent
+          works on each one and proposes the changes for you to review and
+          accept.
         </p>
       </section>
 
@@ -50,7 +51,8 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           </li>
           <li>
             <span className="text-foreground font-medium">Backlog</span> —
-            create new issues, and approve ones waiting for an agent.
+            create new work (a GitHub issue or a local task), and approve ones
+            waiting for an agent.
           </li>
           <li>
             <span className="text-foreground font-medium">In flight</span> —
@@ -74,11 +76,24 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
       </section>
 
       <section className="space-y-1.5">
-        <h3 className="text-base font-semibold">When you create an issue</h3>
+        <h3 className="text-base font-semibold">GitHub issue or local task</h3>
+        <p className="text-muted-foreground">
+          In the Backlog, the source toggle chooses how a task enters the queue.{" "}
+          <span className="text-foreground font-medium">GitHub issue</span>{" "}
+          opens a real issue on the repo (tracked on GitHub, visible to your
+          team). <span className="text-foreground font-medium">Local task</span>{" "}
+          is a freeform note that stays in Stoa — no GitHub issue needed, ideal
+          for quick capture from your phone. Both run through the exact same
+          pipeline (agent → review → merge) and still end in a pull request.
+        </p>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="text-base font-semibold">When you add a task</h3>
         <ul className="text-muted-foreground space-y-1">
           <li>
             <span className="text-foreground font-medium">Dispatch now</span> —
-            creates the issue <em>and</em> starts an agent on it right away.
+            adds the task <em>and</em> starts an agent on it right away.
           </li>
           <li>
             <span className="text-foreground font-medium">Add to backlog</span>{" "}

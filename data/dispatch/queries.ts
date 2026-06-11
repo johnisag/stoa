@@ -216,10 +216,13 @@ export interface CreateIssueInput {
   scheduledAt?: string;
   /** Opt-in: auto-merge the worker's PR once it's ready. */
   autoMerge?: boolean;
+  /** 'local' = a GitHub-free task (no gh issue); default 'github'. */
+  source?: "github" | "local";
 }
 
-/** Create a real GitHub issue on a tracked repo and either dispatch it now or
- * leave it in the backlog. Refreshes the backlog + board. */
+/** Create a GitHub issue (source 'github') or a freeform local task (source
+ * 'local') on a tracked repo and either dispatch it now, schedule it, or leave it
+ * in the backlog. Refreshes the backlog + board. */
 export function useCreateIssue() {
   const qc = useQueryClient();
   return useMutation({
@@ -234,7 +237,8 @@ export function useCreateIssue() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to create issue");
-      return data as { issue: { number: number; url: string } };
+      // `issue` is null for a local (GitHub-free) task.
+      return data as { issue: { number: number; url: string } | null };
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: dispatchKeys.pending() });

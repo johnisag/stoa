@@ -24,6 +24,7 @@ import { wrapWithBanner } from "../banner";
 import { getSessionBackend } from "../session-backend";
 import { resolveBinary, expandHome } from "../platform";
 import type { DispatchRepo, IssueDispatch } from "./types";
+import { isLocalTask, taskLabel, taskRef } from "./task-label";
 
 const execFileAsync = promisify(execFile);
 const gh = resolveBinary("gh") || "gh";
@@ -79,15 +80,22 @@ export function buildLensReviewPrompt(
   lens: (typeof REVIEW_LENSES)[number]
 ): string {
   const round = d.fix_rounds;
+  // Local tasks have no GitHub issue to read — give the critic the task brief
+  // inline and drop the (failing) `gh issue view 0` line.
+  const readStep = isLocalTask(d)
+    ? `1. Read the change:\n   gh pr diff ${d.pr_number}\n` +
+      (d.task_body?.trim()
+        ? `\nThe task it implements:\n${d.task_body.trim()}\n\n`
+        : "")
+    : `1. Read the change and the issue:\n` +
+      `   gh pr diff ${d.pr_number}\n` +
+      `   gh issue view ${d.issue_number} --repo ${repo.repo_slug}\n`;
   return (
     `[Stoa] You are ONE of three INDEPENDENT reviewers for pull request ` +
-    `#${d.pr_number} in ${repo.repo_slug} (it resolves issue #${d.issue_number}: ` +
-    `"${d.issue_title ?? ""}").\n\n` +
+    `#${d.pr_number} in ${repo.repo_slug} (it resolves ${taskRef(d)}).\n\n` +
     `YOUR LENS: ${lens.title}. Judge ONLY through this lens — ${lens.focus}.\n\n` +
     `Review ONLY — do NOT modify code, commit, or push anything.\n\n` +
-    `1. Read the change and the issue:\n` +
-    `   gh pr diff ${d.pr_number}\n` +
-    `   gh issue view ${d.issue_number} --repo ${repo.repo_slug}\n` +
+    readStep +
     `2. Assess it through your lens. Be concrete and terse.\n` +
     `3. Post ONE PR comment on #${d.pr_number} (gh pr comment ${d.pr_number}) — a ` +
     `few lines of findings, then the LAST line EXACTLY this marker, verbatim, ` +
@@ -427,7 +435,7 @@ export function nextReviewAction(input: {
 export function buildFixPrompt(repo: DispatchRepo, d: IssueDispatch): string {
   return (
     `[Stoa] A reviewer requested changes on pull request #${d.pr_number} in ` +
-    `${repo.repo_slug} (issue #${d.issue_number}: "${d.issue_title ?? ""}").\n\n` +
+    `${repo.repo_slug} (${taskRef(d)}).\n\n` +
     `You are in the PR's worktree.\n\n` +
     `1. Read the feedback and the diff:\n` +
     `   gh pr view ${d.pr_number} --comments\n` +
@@ -541,7 +549,9 @@ export async function spawnInWorktree(
       baseBranch: repo.base_branch,
       worktreePath: d.worktree_path,
       branchName: d.branch_name,
-      label: `${repo.repo_slug}#${d.issue_number}`,
+      label: isLocalTask(d)
+        ? `${repo.repo_slug} ${taskLabel(d)}`
+        : `${repo.repo_slug}#${d.issue_number}`,
     },
     sessionName,
     prompt,

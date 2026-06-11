@@ -502,6 +502,16 @@ export const queries = {
        VALUES (?, ?, ?, ?, ?, ?, 'pending')`
     ),
 
+  // Local (GitHub-free) task: source='local', issue_number 0 (excluded from the
+  // gh-dedupe partial index so locals never collide), freeform body in task_body.
+  // The status param is 'pending' or 'scheduled'; scheduled_at is null unless scheduled.
+  insertLocalTask: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO issue_dispatches (id, repo_id, issue_number, issue_title, task_body, issue_created_at, scheduled_at, source, status)
+       VALUES (?, ?, 0, ?, ?, ?, ?, 'local', ?)`
+    ),
+
   // Schedule a candidate for a future time: 'scheduled' until the reconciler
   // promotes it to 'pending' at/after scheduled_at.
   insertScheduledCandidate: (db: Database.Database) =>

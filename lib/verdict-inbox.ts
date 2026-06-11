@@ -17,6 +17,7 @@ import type {
   DispatchRepo,
   SessionCeremony,
 } from "./dispatch/types";
+import { isLocalTask } from "./dispatch/task-label";
 
 export type InboxItemType = "dispatch" | "ceremony";
 
@@ -74,9 +75,12 @@ export function listInboxItems(): InboxItem[] {
       sessionId: null,
       prNumber: d.pr_number,
       prUrl: d.pr_url,
-      title: d.issue_title
-        ? `${d.issue_title} (#${d.issue_number})`
-        : `Issue #${d.issue_number}`,
+      // Local tasks have no issue number — show the bare title, not "(#0)".
+      title: isLocalTask(d)
+        ? (d.issue_title ?? "(untitled task)")
+        : d.issue_title
+          ? `${d.issue_title} (#${d.issue_number})`
+          : `Issue #${d.issue_number}`,
       subtitle: repo?.repo_slug ?? "—",
       branch: d.branch_name,
       reviewDecision: d.review_decision,
