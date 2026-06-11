@@ -147,50 +147,53 @@ export function ProjectsSection({
     [allSessionIds]
   );
 
-  // Group sessions by project_id
-  const sessionsByProject = sessions
-    .filter((s) => !s.conductor_session_id) // Exclude workers
-    .reduce(
-      (acc, session) => {
-        const projectId = session.project_id || "uncategorized";
-        if (!acc[projectId]) acc[projectId] = [];
-        acc[projectId].push(session);
-        return acc;
-      },
-      {} as Record<string, Session[]>
-    );
+  // Group sessions by project (excluding workers) and workers by conductor —
+  // recomputed only when `sessions` changes, not on every status-delta render.
+  const sessionsByProject = useMemo(() => {
+    const acc: Record<string, Session[]> = {};
+    for (const session of sessions) {
+      if (session.conductor_session_id) continue; // workers grouped below
+      const projectId = session.project_id || "uncategorized";
+      if (!acc[projectId]) acc[projectId] = [];
+      acc[projectId].push(session);
+    }
+    return acc;
+  }, [sessions]);
 
-  // Group workers by conductor
-  const workersByConduct = sessions.reduce(
-    (acc, session) => {
-      if (session.conductor_session_id) {
-        if (!acc[session.conductor_session_id])
-          acc[session.conductor_session_id] = [];
-        acc[session.conductor_session_id].push(session);
+  const workersByConduct = useMemo(() => {
+    const acc: Record<string, Session[]> = {};
+    for (const session of sessions) {
+      if (!session.conductor_session_id) continue;
+      if (!acc[session.conductor_session_id])
+        acc[session.conductor_session_id] = [];
+      acc[session.conductor_session_id].push(session);
+    }
+    return acc;
+  }, [sessions]);
+
+  // Dev servers grouped by project (all + the running subset), precomputed in a
+  // single O(devServers) pass so the per-project lookups in the render loop are
+  // O(1) instead of the old O(projects × devServers) filter-per-project.
+  const { devServersByProject, runningDevServersByProject } = useMemo(() => {
+    const all: Record<string, DevServer[]> = {};
+    const running: Record<string, DevServer[]> = {};
+    for (const ds of devServers) {
+      if (!all[ds.project_id]) all[ds.project_id] = [];
+      all[ds.project_id].push(ds);
+      if (ds.status === "running") {
+        if (!running[ds.project_id]) running[ds.project_id] = [];
+        running[ds.project_id].push(ds);
       }
-      return acc;
-    },
-    {} as Record<string, Session[]>
-  );
-
-  // Get running dev servers for a project (for ProjectCard badge)
-  const getProjectRunningServers = (projectId: string): DevServer[] => {
-    return devServers.filter(
-      (ds) => ds.project_id === projectId && ds.status === "running"
-    );
-  };
-
-  // Get all dev servers for a project
-  const getProjectDevServers = (projectId: string): DevServer[] => {
-    return devServers.filter((ds) => ds.project_id === projectId);
-  };
+    }
+    return { devServersByProject: all, runningDevServersByProject: running };
+  }, [devServers]);
 
   return (
     <div className="space-y-1">
       {projects.map((project) => {
         const projectSessions = sessionsByProject[project.id] || [];
-        const runningServers = getProjectRunningServers(project.id);
-        const projectDevServers = getProjectDevServers(project.id);
+        const runningServers = runningDevServersByProject[project.id] || [];
+        const projectDevServers = devServersByProject[project.id] || [];
 
         return (
           <div key={project.id} className="space-y-0.5">

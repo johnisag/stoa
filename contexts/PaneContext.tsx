@@ -6,6 +6,7 @@ import {
   useState,
   useCallback,
   useEffect,
+  useMemo,
   type ReactNode,
 } from "react";
 import {
@@ -274,31 +275,56 @@ export function PaneProvider({ children }: { children: ReactNode }) {
   const canSplit = !isMobile && countPanes(state.layout) < MAX_PANES;
   const canClose = !isMobile && countPanes(state.layout) > 1;
 
-  return (
-    <PaneContext.Provider
-      value={{
-        state,
-        focusedPaneId: state.focusedPaneId,
-        canSplit,
-        canClose,
-        isMobile,
-        focusPane,
-        splitHorizontal,
-        splitVertical,
-        close,
-        addTab,
-        closeTab,
-        switchTab,
-        attachSession,
-        detachSession,
-        reconcileSessions,
-        getPaneData,
-        getActiveTab,
-      }}
-    >
-      {children}
-    </PaneContext.Provider>
+  // Memoize the context value so a re-render of PaneProvider that ISN'T a pane
+  // state change doesn't mint a fresh value and re-render every usePanes()
+  // consumer (panes/terminals). The useViewport resize listener fires one such
+  // render on every resize event, and hydration flips two more at mount — those
+  // are what this absorbs. NOTE: a selection click DOES change `state`, so it
+  // still fans out to consumers; decoupling that needs memoized Terminal/Pane
+  // props (a follow-up), not this memo. Identity changes only when pane state
+  // (or isMobile) changes; the callbacks are useCallback-stable and
+  // getPaneData/getActiveTab track state.panes (covered by the `state` dep).
+  const value = useMemo<PaneContextValue>(
+    () => ({
+      state,
+      focusedPaneId: state.focusedPaneId,
+      canSplit,
+      canClose,
+      isMobile,
+      focusPane,
+      splitHorizontal,
+      splitVertical,
+      close,
+      addTab,
+      closeTab,
+      switchTab,
+      attachSession,
+      detachSession,
+      reconcileSessions,
+      getPaneData,
+      getActiveTab,
+    }),
+    [
+      state,
+      canSplit,
+      canClose,
+      isMobile,
+      focusPane,
+      splitHorizontal,
+      splitVertical,
+      close,
+      addTab,
+      closeTab,
+      switchTab,
+      attachSession,
+      detachSession,
+      reconcileSessions,
+      getPaneData,
+      getActiveTab,
+    ]
   );
+
+  return <PaneContext.Provider value={value}>{children}</PaneContext.Provider>;
 }
 
 export function usePanes() {
