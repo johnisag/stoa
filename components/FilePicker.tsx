@@ -14,10 +14,11 @@ import {
   Clipboard,
   Search,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { uploadFileToTemp } from "@/lib/file-upload";
+import { uploadFileToTemp, partitionUploads } from "@/lib/file-upload";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { useViewport } from "@/hooks/useViewport";
 import { useDirectoryBrowser } from "@/hooks/useDirectoryBrowser";
@@ -36,7 +37,14 @@ const IMAGE_EXTENSIONS = [
 
 interface FilePickerProps {
   initialPath?: string;
+  /** Select a single file (a file-browser click, or one uploaded file). */
   onSelect: (path: string) => void;
+  /**
+   * Inject several uploaded paths in one gesture (bulk drop / multi-select).
+   * When omitted, falls back to calling `onSelect` once per path so the picker
+   * still works for consumers that only handle single selection.
+   */
+  onSelectMany?: (paths: string[]) => void;
   onClose: () => void;
 }
 
@@ -49,6 +57,7 @@ function isImageFile(node: FileNode) {
 export function FilePicker({
   initialPath,
   onSelect,
+  onSelectMany,
   onClose,
 }: FilePickerProps) {
   const {
@@ -71,26 +80,46 @@ export function FilePicker({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { isMobile } = useViewport();
 
-  // Handle dropped/pasted/selected file
-  const handleFile = useCallback(
-    async (file: File) => {
+  // Handle dropped/pasted/selected files. Uploads every file in parallel and
+  // survives a partial failure (allSettled): inject the paths that landed in a
+  // single gesture and toast how many didn't.
+  const handleFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
       setUploading(true);
       try {
-        const path = await uploadFileToTemp(file);
-        if (path) {
-          onSelect(path);
+        const settled = await Promise.allSettled(
+          files.map((file) => uploadFileToTemp(file))
+        );
+        const { paths, failures } = partitionUploads(settled);
+        if (failures > 0) {
+          toast.error(
+            failures === 1
+              ? "1 file failed to upload"
+              : `${failures} files failed to upload`
+          );
+        }
+        if (paths.length > 0) {
+          // Inject every successful path in ONE gesture when the consumer can
+          // take a batch; otherwise fall back to single selection per path.
+          if (onSelectMany) {
+            onSelectMany(paths);
+          } else {
+            for (const path of paths) onSelect(path);
+          }
         }
       } catch (err) {
-        console.error("Failed to upload file:", err);
+        console.error("Failed to upload files:", err);
+        toast.error("Failed to upload files");
       } finally {
         setUploading(false);
       }
     },
-    [onSelect]
+    [onSelect, onSelectMany]
   );
 
   // Drag and drop (desktop only)
-  const { isDragging, dragHandlers } = useFileDrop(dropZoneRef, handleFile, {
+  const { isDragging, dragHandlers } = useFileDrop(dropZoneRef, handleFiles, {
     disabled: uploading || isMobile,
   });
 
@@ -100,21 +129,22 @@ export function FilePicker({
       const items = e.clipboardData?.items;
       if (!items) return;
 
+      const files: File[] = [];
       for (const item of items) {
         if (item.kind === "file") {
           const file = item.getAsFile();
-          if (file) {
-            e.preventDefault();
-            handleFile(file);
-            break;
-          }
+          if (file) files.push(file);
         }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        handleFiles(files);
       }
     };
 
     document.addEventListener("paste", handlePaste);
     return () => document.removeEventListener("paste", handlePaste);
-  }, [handleFile]);
+  }, [handleFiles]);
 
   const handleItemClick = (node: FileNode) => {
     if (node.type === "directory") {
@@ -193,10 +223,13 @@ export function FilePicker({
           <input
             ref={fileInputRef}
             type="file"
+            multiple
             className="hidden"
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleFile(file);
+              const files = Array.from(e.target.files ?? []);
+              if (files.length > 0) handleFiles(files);
+              // Reset so re-picking the same file(s) fires onChange again.
+              e.target.value = "";
             }}
           />
           <Button
@@ -211,7 +244,7 @@ export function FilePicker({
             ) : (
               <Upload className="h-4 w-4" />
             )}
-            {uploading ? "Uploading..." : "Upload file"}
+            {uploading ? "Uploading..." : "Upload files"}
           </Button>
           <span className="text-muted-foreground text-xs">
             or select a file below
@@ -236,14 +269,14 @@ export function FilePicker({
             <div className="flex items-center gap-2">
               <Upload className="text-primary h-5 w-5" />
               <span className="text-primary text-sm font-medium">
-                Drop file here
+                Drop files here
               </span>
             </div>
           ) : (
             <div className="flex flex-col items-center gap-1 text-center">
               <div className="text-muted-foreground flex items-center gap-2">
                 <Upload className="h-4 w-4" />
-                <span className="text-sm">Drop file here</span>
+                <span className="text-sm">Drop files here</span>
               </div>
               <div className="text-muted-foreground flex items-center gap-1 text-xs">
                 <Clipboard className="h-3 w-3" />

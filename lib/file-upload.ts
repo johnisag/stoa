@@ -32,3 +32,25 @@ export async function uploadFileToTemp(file: File): Promise<string | null> {
   console.error("Upload failed:", data.error);
   return null;
 }
+
+/**
+ * Partition the settled results of a batch of `uploadFileToTemp` calls into the
+ * successfully uploaded paths and a count of failures, so a bulk attach can
+ * survive a partial failure: inject every path that landed and still report how
+ * many didn't. A failure is a rejected upload OR one that resolved to `null`
+ * (the server returned no path). Pure — order is preserved.
+ */
+export function partitionUploads(
+  results: PromiseSettledResult<string | null>[]
+): { paths: string[]; failures: number } {
+  const paths: string[] = [];
+  let failures = 0;
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) {
+      paths.push(r.value);
+    } else {
+      failures++;
+    }
+  }
+  return { paths, failures };
+}

@@ -30,7 +30,7 @@ import type { TerminalScrollState } from "./hooks";
 import type { AttachPayload } from "./hooks/useTerminalConnection.types";
 import { useViewport } from "@/hooks/useViewport";
 import { useFileDrop } from "@/hooks/useFileDrop";
-import { uploadFileToTemp } from "@/lib/file-upload";
+import { uploadFileToTemp, partitionUploads } from "@/lib/file-upload";
 import {
   formatPathsForAgent,
   formatTerminalTextForAgent,
@@ -152,18 +152,42 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       [sendInput, focus]
     );
 
-    // Handle file drop - upload and insert path into terminal
+    // Handle a bulk attach - inject every uploaded path in ONE injection.
+    const handleImagesSelect = useCallback(
+      (filePaths: string[]) => {
+        sendInput(formatPathsForAgent(filePaths));
+        setShowFilePicker(false);
+        focus();
+      },
+      [sendInput, focus]
+    );
+
+    // Handle file drop - upload and insert path(s) into terminal. A multi-file
+    // drop uploads every file in parallel (allSettled) and injects the paths
+    // that landed in one go.
     const handleFileDrop = useCallback(
-      async (file: File) => {
+      async (files: File[]) => {
+        if (files.length === 0) return;
         setIsUploading(true);
         try {
-          const path = await uploadFileToTemp(file);
-          if (path) {
-            sendInput(formatPathsForAgent(path));
+          const settled = await Promise.allSettled(
+            files.map((file) => uploadFileToTemp(file))
+          );
+          const { paths, failures } = partitionUploads(settled);
+          if (failures > 0) {
+            toast.error(
+              failures === 1
+                ? "1 file failed to upload"
+                : `${failures} files failed to upload`
+            );
+          }
+          if (paths.length > 0) {
+            sendInput(formatPathsForAgent(paths));
             focus();
           }
         } catch (err) {
-          console.error("Failed to upload file:", err);
+          console.error("Failed to upload files:", err);
+          toast.error("Failed to upload files");
         } finally {
           setIsUploading(false);
         }
@@ -417,6 +441,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           <FilePicker
             initialPath="~"
             onSelect={handleImageSelect}
+            onSelectMany={handleImagesSelect}
             onClose={() => setShowFilePicker(false)}
           />
         )}

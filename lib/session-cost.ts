@@ -14,6 +14,13 @@ export interface SessionCost {
   model: string | null;
   tokens: TokenUsage;
   costUsd: number | null;
+  /**
+   * Live context-window occupancy: the tokens the model SAW on its most recent
+   * turn (input + cache read + cache write), i.e. how full the window is right
+   * now — NOT the cumulative `tokens` total (which grows every turn). 0 when the
+   * transcript carries no usage yet. Powers the per-session context meter.
+   */
+  contextTokens: number;
   /** false for non-Claude agents (no comparable transcript) — shown as "—". */
   supported: boolean;
 }
@@ -58,14 +65,54 @@ export function parseClaudeUsage(jsonl: string): TokenUsage {
 }
 
 /**
- * Read + sum usage for a Claude session from its on-disk transcript. Async (so
- * the cost route can read all sessions concurrently without blocking the event
- * loop). Returns null when the transcript can't be read (best-effort).
+ * Live context-window occupancy = the input the model saw on its LAST turn
+ * (input + cache read + cache write), not the running output total. That last
+ * assistant turn's input bucket is the whole conversation re-sent, so it's the
+ * best proxy for "how full is the window right now". Walks forward and keeps the
+ * latest turn's number (transcripts are append-only). Pure → unit-testable.
+ */
+export function parseClaudeContextTokens(jsonl: string): number {
+  let latest = 0;
+  const seen = new Set<string>(); // dedupe replayed/retried turns by message id
+  for (const line of jsonl.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const entry = JSON.parse(t);
+      if (entry?.type !== "assistant") continue;
+      // Skip Task sub-agent (sidechain) turns: their fresh, small context isn't
+      // the main thread's occupancy, and right after a sub-agent run the LAST
+      // assistant entry is the sub-agent's — which would make the meter drop and
+      // mask near-exhaustion (the one thing it exists to surface).
+      if (entry?.isSidechain) continue;
+      const usage = entry.message?.usage;
+      if (!usage) continue;
+      const id = entry.message?.id;
+      if (id) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      latest =
+        (usage.input_tokens || 0) +
+        (usage.cache_read_input_tokens || 0) +
+        (usage.cache_creation_input_tokens || 0);
+    } catch {
+      // skip a malformed line
+    }
+  }
+  return latest;
+}
+
+/**
+ * Read + sum usage for a Claude session from its on-disk transcript, plus the
+ * live context-window occupancy (last turn's input). Async (so the cost route
+ * can read all sessions concurrently without blocking the event loop). Returns
+ * null when the transcript can't be read (best-effort).
  */
 export async function readClaudeSessionUsage(
   cwd: string,
   claudeSessionId: string
-): Promise<TokenUsage | null> {
+): Promise<{ tokens: TokenUsage; contextTokens: number } | null> {
   // The id is interpolated into the path and can originate from an external
   // POST field — reject anything that isn't a plain id token so it can't
   // traverse out of ~/.claude/projects.
@@ -80,7 +127,10 @@ export async function readClaudeSessionUsage(
       join(projectDir, `${claudeSessionId}.jsonl`),
       "utf-8"
     );
-    return parseClaudeUsage(raw);
+    return {
+      tokens: parseClaudeUsage(raw),
+      contextTokens: parseClaudeContextTokens(raw),
+    };
   } catch {
     return null;
   }
@@ -107,20 +157,27 @@ export async function computeSessionCosts(
     ) {
       return [
         s.id,
-        { ...base, tokens: ZERO_USAGE, costUsd: null, supported: false },
+        {
+          ...base,
+          tokens: ZERO_USAGE,
+          costUsd: null,
+          contextTokens: 0,
+          supported: false,
+        },
       ];
     }
-    const tokens =
-      (await readClaudeSessionUsage(
-        s.working_directory,
-        s.claude_session_id
-      )) ?? ZERO_USAGE;
+    const usage = await readClaudeSessionUsage(
+      s.working_directory,
+      s.claude_session_id
+    );
+    const tokens = usage?.tokens ?? ZERO_USAGE;
     return [
       s.id,
       {
         ...base,
         tokens,
         costUsd: computeCostUsd(tokens, s.model),
+        contextTokens: usage?.contextTokens ?? 0,
         supported: true,
       },
     ];

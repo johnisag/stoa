@@ -23,6 +23,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { ContextMeter } from "@/components/ContextMeter";
 import type { ReactNode } from "react";
 import type { Session } from "@/lib/db";
 
@@ -213,6 +214,9 @@ export function DesktopTabBar({
           <TooltipContent>New tab</TooltipContent>
         </Tooltip>
       </div>
+
+      {/* Live context-window meter for this session (Claude-only; self-hides). */}
+      {session && <ContextMeter sessionId={session.id} />}
 
       {/* View Toggle */}
       {session?.working_directory && (
