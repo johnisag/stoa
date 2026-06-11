@@ -48,3 +48,26 @@ export function formatPathsForAgent(paths: string | string[]): string {
   const quoted = list.map((p) => (/\s/.test(p) ? `"${p}"` : p));
   return quoted.join(" ") + " ";
 }
+
+/**
+ * Prepare arbitrary captured terminal text (e.g. a selected stack trace) for
+ * injection into an agent's prompt. Strips C0 control chars + DEL — injected
+ * verbatim into the pty those are keystrokes (Enter, ESC, bracketed-paste
+ * escapes), a keystroke-injection vector — but KEEPS tab and newline, which are
+ * legitimate layout in captured output and ride in safely as ONE bracketed
+ * paste. Normalizes CRLF / lone CR to LF, trims surrounding whitespace / blank
+ * lines, and returns "" when nothing meaningful is left. Display-side only —
+ * this is text typed into a prompt, not a shell argv.
+ */
+export function formatTerminalTextForAgent(text: string): string {
+  if (!text) return "";
+  return (
+    text
+      .replace(/\x0d\x0a?/g, "\x0a") // normalize CRLF / lone CR to LF first
+      // Strip C0 controls + DEL but KEEP tab (\x09) and newline (\x0a), so the
+      // captured layout survives injection as a single bracketed paste.
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+      // Trim surrounding whitespace / blank lines.
+      .replace(/^\s+|\s+$/g, "")
+  );
+}

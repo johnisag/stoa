@@ -16,6 +16,7 @@ import {
   Copy,
   Pencil,
   Sparkles,
+  ScrollText,
   Square,
   CheckSquare,
   ExternalLink,
@@ -51,6 +52,7 @@ import { SessionQuickActions } from "./SessionQuickActions";
 import { SessionDiffModal } from "./SessionDiffModal";
 import { SnapshotTimeline } from "./SnapshotTimeline";
 import { PromptQueueModal } from "./PromptQueueModal";
+import { SessionSummaryModal } from "./SessionSummaryModal";
 import { AutoModeDialog } from "./AutoModeDialog";
 import { cardActionsForStatus } from "@/lib/notification-actions";
 import type { Session, Group } from "@/lib/db";
@@ -187,6 +189,7 @@ function SessionCardComponent({
   const [showDiff, setShowDiff] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
   const [showAuto, setShowAuto] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const justStartedEditingRef = useRef(false);
@@ -321,6 +324,12 @@ function SessionCardComponent({
             {isSummarizing ? "Summarizing..." : "Fresh start"}
           </MenuItem>
         )}
+        {/* Read-only digest of what the agent did — no fork, no compaction.
+            Lets you catch up on a long autonomous run without scrolling. */}
+        <MenuItem onClick={() => setShowSummary(true)}>
+          <ScrollText className="mr-2 h-3 w-3" />
+          Summarize (read-only)
+        </MenuItem>
         <MenuSeparator />
         <MenuItem onClick={() => setShowDiff(true)}>
           <GitCompare className="mr-2 h-3 w-3" />
@@ -641,6 +650,13 @@ function SessionCardComponent({
           sessionId={session.id}
           name={session.name}
           onClose={() => setShowQueue(false)}
+        />
+      )}
+      {showSummary && (
+        <SessionSummaryModal
+          sessionId={session.id}
+          name={session.name}
+          onClose={() => setShowSummary(false)}
         />
       )}
       {showAuto && (

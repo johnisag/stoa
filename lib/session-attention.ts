@@ -40,20 +40,39 @@ export function countNeedsAttention(
 }
 
 /**
- * The id of the next session needing attention after `currentId` (wrapping), or
- * null if none. From outside the set (or no current), returns the first. Order
- * follows the given `sessions` array.
+ * The id of the next session in `orderedIds` after `currentId` (wrapping) whose
+ * status needs attention (waiting / error), or null when none do. From outside the
+ * set (or no current) it starts at the first attention session. The single jump
+ * primitive — pure + testable. Callers pass whichever order they navigate (the raw
+ * sessions' ids for the sidebar badge, or `getSwitchableSessionOrder` for the
+ * keyboard jump) so the badge and the shortcut share ONE logic.
+ */
+export function nextAttentionSession(
+  orderedIds: readonly string[],
+  currentId: string | null | undefined,
+  statusById: StatusMap | undefined
+): string | null {
+  if (!statusById) return null;
+  const attention = orderedIds.filter((id) =>
+    needsAttention(statusById[id]?.status)
+  );
+  if (attention.length === 0) return null;
+  const idx = attention.indexOf(currentId ?? "");
+  return attention[(idx + 1) % attention.length];
+}
+
+/**
+ * The next attention session over a `Session[]` order (the sidebar badge's set).
+ * Delegates to `nextAttentionSession` so there's no duplicate jump logic to drift.
  */
 export function nextAttentionSessionId(
   sessions: Session[],
   statuses: StatusMap | undefined,
   currentId: string | null | undefined
 ): string | null {
-  if (!statuses) return null;
-  const attention = sessions.filter((s) =>
-    needsAttention(statuses[s.id]?.status)
+  return nextAttentionSession(
+    sessions.map((s) => s.id),
+    currentId,
+    statuses
   );
-  if (attention.length === 0) return null;
-  const idx = attention.findIndex((s) => s.id === currentId);
-  return attention[(idx + 1) % attention.length].id;
 }

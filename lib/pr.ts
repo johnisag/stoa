@@ -3,6 +3,13 @@ import {
   type ExecFileSyncOptionsWithStringEncoding,
 } from "child_process";
 import { resolveBinary } from "./platform";
+// Pure PR-status helpers from the dependency-free lib/pr-badge (NOT via
+// dispatch/auto-merge, which would drag the DB/worktrees chain into this module).
+import {
+  summarizePrChecks,
+  type CheckSummary,
+  type ReviewDecision,
+} from "./pr-badge";
 
 // Resolve gh once. On Windows an npm/winget-installed `gh` may be a `.cmd` shim,
 // which ENOENTs under execFile when invoked bare — resolveBinary picks a
@@ -34,6 +41,12 @@ export interface PRInfo {
   url: string;
   state: string;
   title: string;
+  /** GitHub's review verdict; "" when no review is required/given. */
+  reviewDecision: ReviewDecision;
+  /** Whether the PR is a draft. */
+  isDraft: boolean;
+  /** CI rollup collapsed to one verdict (reuses the dispatch summary). */
+  checks: CheckSummary;
 }
 
 export interface CommitInfo {
@@ -187,7 +200,8 @@ export function getPRForBranch(
         "--head",
         branchName,
         "--json",
-        "number,url,state,title",
+        // reviewDecision/isDraft/statusCheckRollup feed the review-status badge.
+        "number,url,state,title,reviewDecision,isDraft,statusCheckRollup",
         "--limit",
         "1",
       ],
@@ -198,8 +212,34 @@ export function getPRForBranch(
         windowsHide: true,
       }
     );
-    const prs = JSON.parse(output);
-    return prs.length > 0 ? prs[0] : null;
+    const prs = JSON.parse(output) as Array<{
+      number: number;
+      url: string;
+      state: string;
+      title: string;
+      reviewDecision?: unknown;
+      isDraft?: unknown;
+      statusCheckRollup?: unknown;
+    }>;
+    const raw = prs[0];
+    if (!raw) return null;
+    const reviewDecision = (
+      typeof raw.reviewDecision === "string" ? raw.reviewDecision : ""
+    ).toUpperCase();
+    return {
+      number: raw.number,
+      url: raw.url,
+      state: raw.state,
+      title: raw.title,
+      reviewDecision:
+        reviewDecision === "APPROVED" ||
+        reviewDecision === "CHANGES_REQUESTED" ||
+        reviewDecision === "REVIEW_REQUIRED"
+          ? reviewDecision
+          : "",
+      isDraft: raw.isDraft === true,
+      checks: summarizePrChecks(raw.statusCheckRollup),
+    };
   } catch {
     return null;
   }
@@ -254,6 +294,10 @@ export function createPR(
     url,
     state: "open",
     title,
+    // A freshly created PR has no reviews/checks yet (gh re-fetches on next poll).
+    reviewDecision: "",
+    isDraft: false,
+    checks: "none",
   };
 }
 

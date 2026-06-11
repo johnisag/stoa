@@ -40,6 +40,70 @@ export function clearQueue(sessionId: string): void {
   queues.delete(sessionId);
 }
 
+// The ticker dispatches item 0 whenever the agent goes idle, so a client view can
+// be stale by the time the user taps. `expectedText` (the item the client THOUGHT
+// was at `index`) makes each op address by (index, text): if the queue shifted and
+// the text no longer matches, the op is a no-op — never mutating the wrong prompt.
+function mismatched(
+  q: string[],
+  index: number,
+  expectedText?: string
+): boolean {
+  return expectedText !== undefined && q[index] !== expectedText;
+}
+
+/**
+ * Remove the item at `index`; returns the updated queue. Out-of-range indices
+ * are a no-op. Prunes the queue when it empties. No-ops if `expectedText` is given
+ * and doesn't match the item at `index` (the queue raced).
+ */
+export function removeAt(
+  sessionId: string,
+  index: number,
+  expectedText?: string
+): string[] {
+  const q = queues.get(sessionId);
+  if (!q || index < 0 || index >= q.length) return [...(q ?? [])];
+  if (mismatched(q, index, expectedText)) return [...q];
+  q.splice(index, 1);
+  if (q.length === 0) queues.delete(sessionId);
+  return [...q];
+}
+
+/**
+ * Swap the item at `index` with the one before it (move it earlier in dispatch
+ * order); returns the updated queue. A no-op for the first item, a bad index, or
+ * an `expectedText` mismatch (the queue raced).
+ */
+export function moveUp(
+  sessionId: string,
+  index: number,
+  expectedText?: string
+): string[] {
+  const q = queues.get(sessionId);
+  if (!q || index <= 0 || index >= q.length) return [...(q ?? [])];
+  if (mismatched(q, index, expectedText)) return [...q];
+  [q[index - 1], q[index]] = [q[index], q[index - 1]];
+  return [...q];
+}
+
+/**
+ * Swap the item at `index` with the one after it (move it later in dispatch
+ * order); returns the updated queue. A no-op for the last item, a bad index, or
+ * an `expectedText` mismatch (the queue raced).
+ */
+export function moveDown(
+  sessionId: string,
+  index: number,
+  expectedText?: string
+): string[] {
+  const q = queues.get(sessionId);
+  if (!q || index < 0 || index >= q.length - 1) return [...(q ?? [])];
+  if (mismatched(q, index, expectedText)) return [...q];
+  [q[index], q[index + 1]] = [q[index + 1], q[index]];
+  return [...q];
+}
+
 /** Whether any session has a pending queue (keeps the ticker alive). */
 export function hasAnyQueued(): boolean {
   return queues.size > 0;

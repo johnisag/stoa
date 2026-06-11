@@ -6,6 +6,7 @@ export {
   useRenameSession,
   useForkSession,
   useSummarizeSession,
+  useSessionDigest,
   useMoveSessionToGroup,
   useMoveSessionToProject,
 } from "./queries";

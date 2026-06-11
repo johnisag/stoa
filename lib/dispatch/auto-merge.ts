@@ -24,57 +24,11 @@ import type { DispatchRepo, IssueDispatch } from "./types";
 const execFileAsync = promisify(execFile);
 const gh = resolveBinary("gh") || "gh";
 
-export type CheckSummary = "passing" | "pending" | "failing" | "none";
-
-/**
- * Collapse gh's `statusCheckRollup` into one verdict. Pure + unit-tested.
- *   failing — any check concluded in a non-success terminal state
- *   pending — any check still running/queued (and none failing)
- *   passing — at least one check, all successful / neutral / skipped
- *   none    — no checks configured on the PR
- * A CheckRun carries `status` + `conclusion`; a StatusContext carries `state`.
- */
-export function summarizePrChecks(rollup: unknown): CheckSummary {
-  if (!Array.isArray(rollup) || rollup.length === 0) return "none";
-  let pending = false;
-  for (const raw of rollup) {
-    const c = (raw ?? {}) as {
-      status?: unknown;
-      conclusion?: unknown;
-      state?: unknown;
-    };
-    // StatusContext (legacy commit statuses): carries `state`, no status/conclusion.
-    if (typeof c.state === "string") {
-      const state = c.state.toUpperCase();
-      if (state === "SUCCESS") continue;
-      if (state === "PENDING" || state === "EXPECTED") {
-        pending = true;
-        continue;
-      }
-      return "failing"; // FAILURE | ERROR
-    }
-    // CheckRun: status QUEUED|IN_PROGRESS|COMPLETED; conclusion SUCCESS|FAILURE|…
-    if (
-      typeof c.status === "string" &&
-      c.status.toUpperCase() !== "COMPLETED"
-    ) {
-      pending = true; // still running/queued
-      continue;
-    }
-    const concl = (
-      typeof c.conclusion === "string" ? c.conclusion : ""
-    ).toUpperCase();
-    if (concl === "SUCCESS" || concl === "NEUTRAL" || concl === "SKIPPED") {
-      continue;
-    }
-    if (!concl) {
-      pending = true; // no terminal verdict yet (or an unrecognized shape) → wait
-      continue;
-    }
-    return "failing"; // FAILURE | CANCELLED | TIMED_OUT | ACTION_REQUIRED | …
-  }
-  return pending ? "pending" : "passing";
-}
+// CheckSummary + summarizePrChecks live in the pure, dependency-free lib/pr-badge
+// (so the client PR badge can use them); imported for local use here and
+// re-exported so the rest of the dispatch fleet keeps its existing import path.
+import { summarizePrChecks, type CheckSummary } from "../pr-badge";
+export { summarizePrChecks, type CheckSummary };
 
 export type AutoMergeAction = "merge" | "wait" | "skip";
 

@@ -172,6 +172,29 @@ export function useSummarizeSession() {
   });
 }
 
+/**
+ * Read-only digest of what the agent did in a session. Hits the summarize
+ * route's GET (no fork, no compaction), so it's safe to open mid-run. Only
+ * fetched when `enabled` (the modal is open) and re-fetched on every open — a
+ * long autonomous run keeps moving, so a cached digest would go stale fast.
+ */
+export function useSessionDigest(sessionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["session-digest", sessionId],
+    enabled,
+    queryFn: async (): Promise<{ summary: string }> => {
+      const res = await fetch(`/api/sessions/${sessionId}/summarize`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to summarize");
+      return { summary: data.summary ?? "" };
+    },
+    staleTime: 0, // the run keeps moving — always re-summarize on open
+    gcTime: 30000, // bound the cached digest's lifetime
+    refetchOnWindowFocus: false,
+    retry: false, // summarizing spawns `claude -p`; don't hammer it on failure
+  });
+}
+
 export function useMoveSessionToGroup() {
   const queryClient = useQueryClient();
 

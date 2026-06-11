@@ -15,6 +15,7 @@ import {
   ClipboardPaste,
   Paperclip,
   PenLine,
+  MessageSquarePlus,
 } from "lucide-react";
 import {
   Tooltip,
@@ -66,6 +67,8 @@ interface DesktopTabBarProps {
   onTerminalCopy: () => void;
   onTerminalPaste: () => void;
   onTerminalAttach: () => void;
+  /** Inject the current terminal selection into the agent's prompt as context. */
+  onTerminalAttachSelection: () => void;
   /** Opens the full-screen prompt composer (sends straight to this terminal). */
   onCompose?: () => void;
 }
@@ -142,6 +145,7 @@ export function DesktopTabBar({
   onTerminalCopy,
   onTerminalPaste,
   onTerminalAttach,
+  onTerminalAttachSelection,
   onCompose,
 }: DesktopTabBarProps) {
   const getTabName = (tab: Tab) => {
@@ -300,6 +304,28 @@ export function DesktopTabBar({
               </TooltipTrigger>
               <TooltipContent>Select text to copy</TooltipContent>
             </Tooltip>
+            {showTerminalAttach && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    // preventDefault on mousedown so the click doesn't collapse
+                    // the text selection we're about to read.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTerminalAttachSelection();
+                    }}
+                    aria-label="Add selected text to agent"
+                    className="h-6 w-6"
+                  >
+                    <MessageSquarePlus className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Add selection to agent</TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

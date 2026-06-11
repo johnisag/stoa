@@ -53,6 +53,7 @@ import { FleetBoardView } from "@/components/views/FleetBoardView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
+import { nextAttentionSession } from "@/lib/session-attention";
 import { getActiveBackend } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
@@ -77,6 +78,14 @@ const NAV_KEYBINDINGS: Keybinding[] = [
     chord: "alt+arrowup",
     action: "prev-session",
     description: "Previous session",
+  },
+  {
+    // mod+shift+letter (not alt+letter) to dodge the macOS Alt-glyph
+    // normalization the pane toggles below also avoid. Jumps to the next
+    // session that needs you (waiting / error), wrapping.
+    chord: "mod+shift+a",
+    action: "next-attention",
+    description: "Jump to next session needing attention",
   },
   {
     // No allowInInput: these are app-chrome actions, and on the tmux backend
@@ -579,11 +588,36 @@ function HomeContent() {
     [sessions, projects, focusedActiveTab?.sessionId, handleSelectSession]
   );
 
+  // Jump to the next session that needs you (waiting / error), wrapping — over
+  // the same sidebar order as Alt+arrows. No-op with a toast when nothing does.
+  const jumpToNextAttention = useCallback(() => {
+    const order = getSwitchableSessionOrder(sessions, projects);
+    const targetId = nextAttentionSession(
+      order,
+      focusedActiveTab?.sessionId,
+      sessionStatuses
+    );
+    if (!targetId) {
+      toast("Nothing needs you", {
+        description: "No session is waiting for input or errored.",
+      });
+      return;
+    }
+    handleSelectSession(targetId);
+  }, [
+    sessions,
+    projects,
+    focusedActiveTab?.sessionId,
+    sessionStatuses,
+    handleSelectSession,
+  ]);
+
   // Global keyboard shortcuts: ⌘/Ctrl-K switcher, Alt+↓/↑ next/prev session.
   useGlobalKeybindings(NAV_KEYBINDINGS, (action) => {
     if (action === "open-switcher") setShowQuickSwitcher(true);
     else if (action === "next-session") selectRelativeSession(1);
     else if (action === "prev-session") selectRelativeSession(-1);
+    else if (action === "next-attention") jumpToNextAttention();
     else if (action === "toggle-sidebar") setSidebarOpen((v) => !v);
     else if (action === "split-pane") splitHorizontal(focusedPaneId);
     else if (action === "pane-toggle-git")

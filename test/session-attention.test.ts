@@ -3,6 +3,7 @@ import {
   needsAttention,
   countNeedsAttention,
   nextAttentionSessionId,
+  nextAttentionSession,
   type SessionStatusValue,
 } from "@/lib/session-attention";
 import type { Session } from "@/lib/db";
@@ -97,5 +98,35 @@ describe("nextAttentionSessionId", () => {
     expect(nextAttentionSessionId(sessions, st, "a")).toBe("b"); // current not attention
     expect(nextAttentionSessionId(sessions, st, null)).toBe("b"); // no current
     expect(nextAttentionSessionId(sessions, st, "zzz")).toBe("b"); // unknown
+  });
+});
+
+describe("nextAttentionSession", () => {
+  const order = ["a", "b", "c", "d"];
+
+  it("returns null when nothing needs attention", () => {
+    expect(
+      nextAttentionSession(order, "a", statuses({ a: "idle", b: "running" }))
+    ).toBeNull();
+    expect(nextAttentionSession(order, "a", {})).toBeNull();
+    expect(
+      nextAttentionSession([], "a", statuses({ a: "waiting" }))
+    ).toBeNull();
+    expect(nextAttentionSession(order, "a", undefined)).toBeNull();
+  });
+
+  it("returns the next attention id after current, wrapping", () => {
+    const st = statuses({ a: "idle", b: "waiting", c: "running", d: "error" });
+    // current "b" (an attention session) -> next attention is "d"
+    expect(nextAttentionSession(order, "b", st)).toBe("d");
+    // current "d" (last attention) -> wraps to "b"
+    expect(nextAttentionSession(order, "d", st)).toBe("b");
+  });
+
+  it("starts at the first attention id when current is outside the set", () => {
+    const st = statuses({ a: "idle", b: "waiting", d: "error" });
+    expect(nextAttentionSession(order, "a", st)).toBe("b"); // current not attention
+    expect(nextAttentionSession(order, null, st)).toBe("b"); // no current
+    expect(nextAttentionSession(order, "zzz", st)).toBe("b"); // current not in list
   });
 });
