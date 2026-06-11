@@ -166,6 +166,11 @@ export function createSchema(db: Database.Database): void {
       verify_sha TEXT,
       verify_ran_at TEXT,
       file_claims TEXT,
+      -- Intake source: 'github' (a real issue, issue_number > 0) or 'local' (a
+      -- freeform task typed into Stoa, issue_number 0 + task_body). The reconciler
+      -- drains both identically; only the worker prompt + the dedupe index differ.
+      source TEXT NOT NULL DEFAULT 'github',
+      task_body TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE,
@@ -225,7 +230,9 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_session_events_key ON session_events(session_key);
     CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_created ON session_events(created_at);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_repo_issue ON issue_dispatches(repo_id, issue_number);
+    -- Dedupe real GitHub issues only (number > 0); local tasks use issue_number 0
+    -- and must NOT collide, so they're excluded from the uniqueness via a partial index.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_repo_issue ON issue_dispatches(repo_id, issue_number) WHERE issue_number > 0;
     CREATE INDEX IF NOT EXISTS idx_dispatch_status ON issue_dispatches(status);
     CREATE INDEX IF NOT EXISTS idx_dispatch_repo ON issue_dispatches(repo_id);
     CREATE INDEX IF NOT EXISTS idx_session_ceremonies_step ON session_ceremonies(step);

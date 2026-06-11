@@ -7,12 +7,13 @@ import type { DispatchRepo, IssueDispatch } from "@/lib/dispatch/types";
 
 /**
  * POST /api/dispatch/issues/create
- *   { repoId, title, body?, labels?, disposition: "now" | "backlog" }
+ *   { repoId, title, body?, labels?, disposition, source?: "github" | "local" }
  *
- * Creates a REAL GitHub issue on the tracked repo via gh, records it as a
- * dispatch candidate, then either spawns a worker immediately ("now") or leaves
- * it pending in the backlog ("backlog"). The 60s reconciler dedupes on
- * (repo, issue#) so it won't re-ingest the issue we just recorded.
+ * Records a dispatch candidate. source 'github' (default) creates a REAL GitHub
+ * issue via gh first; source 'local' is a freeform task with no GitHub issue
+ * (issue_number 0, body in task_body). Either way it then spawns a worker
+ * immediately ("now"), schedules it, or leaves it pending in the backlog. The
+ * 60s reconciler dedupes GitHub issues on (repo, issue#); local tasks never dedupe.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -34,6 +35,9 @@ export async function POST(request: NextRequest) {
     const scheduledAt =
       typeof body?.scheduledAt === "string" ? body.scheduledAt.trim() : "";
     const autoMerge = body?.autoMerge === true;
+    // Intake source: 'local' is a GitHub-free task (no gh issue, freeform body);
+    // anything else creates a real GitHub issue (the original behavior).
+    const source = body?.source === "local" ? "local" : "github";
 
     if (!repoId || !title) {
       return NextResponse.json(
@@ -56,36 +60,47 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
     }
 
-    // 1. Create the real GitHub issue.
-    const created = await createIssue({
-      repoSlug: repo.repo_slug,
-      repoPath: repo.repo_path,
-      title,
-      body: issueBody,
-      labels,
-    });
-
-    // 2. Record it as a candidate. issue_created_at = now so the backlog shows
+    // 1+2. Record a candidate. issue_created_at = now so the backlog shows
     // "raised just now". A "scheduled" disposition parks it as 'scheduled' until
-    // its time; everything else lands as 'pending'.
+    // its time; everything else lands as 'pending'. A LOCAL task skips GitHub
+    // entirely (no gh issue) — its freeform body is stored in task_body.
     const id = randomUUID();
     const nowIso = new Date().toISOString();
-    if (disposition === "scheduled") {
+    let created: { number: number; url: string } | null = null;
+    if (source === "local") {
+      const status = disposition === "scheduled" ? "scheduled" : "pending";
+      const schedAt =
+        disposition === "scheduled"
+          ? new Date(scheduledAt).toISOString()
+          : null;
       queries
-        .insertScheduledCandidate(db)
-        .run(
-          id,
-          repo.id,
-          created.number,
-          title,
-          created.url,
-          nowIso,
-          new Date(scheduledAt).toISOString()
-        );
+        .insertLocalTask(db)
+        .run(id, repo.id, title, issueBody || null, nowIso, schedAt, status);
     } else {
-      queries
-        .upsertDispatchCandidate(db)
-        .run(id, repo.id, created.number, title, created.url, nowIso);
+      created = await createIssue({
+        repoSlug: repo.repo_slug,
+        repoPath: repo.repo_path,
+        title,
+        body: issueBody,
+        labels,
+      });
+      if (disposition === "scheduled") {
+        queries
+          .insertScheduledCandidate(db)
+          .run(
+            id,
+            repo.id,
+            created.number,
+            title,
+            created.url,
+            nowIso,
+            new Date(scheduledAt).toISOString()
+          );
+      } else {
+        queries
+          .upsertDispatchCandidate(db)
+          .run(id, repo.id, created.number, title, created.url, nowIso);
+      }
     }
     // Opt-in auto-merge: persist the flag so the reconciler merges this row's PR
     // once it's ready (no conflicts, checks green, critic-approved if gated).
@@ -94,10 +109,10 @@ export async function POST(request: NextRequest) {
     }
     const row = queries.getDispatch(db).get(id) as IssueDispatch | undefined;
     if (!row) {
-      // Can't happen for a fresh issue number (no INSERT OR IGNORE conflict), but
-      // never silently downgrade a "now" to backlog — surface it instead.
+      // Can't happen for a fresh row id (no INSERT conflict), but never silently
+      // downgrade a "now" to backlog — surface it instead.
       return NextResponse.json(
-        { error: "Issue created but could not be recorded" },
+        { error: "Task could not be recorded" },
         { status: 500 }
       );
     }

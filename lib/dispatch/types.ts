@@ -102,6 +102,11 @@ export interface IssueDispatch {
   /** Conflict-aware decomposition: JSON array of repo-relative path prefixes this
    * task exclusively owns. null/absent = no claims (co-scheduling unaffected). */
   file_claims: string | null;
+  /** Intake source: 'github' (a real issue) or 'local' (a freeform task typed
+   * into Stoa — issue_number is 0 and the body lives in task_body). */
+  source: string;
+  /** Freeform task body for a local task (source='local'); null for GitHub issues. */
+  task_body: string | null;
   created_at: string;
   updated_at: string;
 }

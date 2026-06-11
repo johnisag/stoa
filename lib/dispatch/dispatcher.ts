@@ -26,7 +26,10 @@ import { getSessionBackend } from "../session-backend";
 import { expandHome } from "../platform";
 import type { DispatchRepo, IssueDispatch } from "./types";
 
-/** Seed prompt: worktree boundary note + issue context + "open a PR" house rule. */
+/** Seed prompt: worktree boundary note + issue/task context + "open a PR" house
+ * rule. A local task (issueNumber <= 0, source='local') has no GitHub issue, so
+ * the prompt carries the freeform body directly and drops the `gh issue view` /
+ * `Closes #N` lines. */
 export function buildIssuePrompt(
   repo: DispatchRepo,
   issueNumber: number,
@@ -35,12 +38,34 @@ export function buildIssuePrompt(
   branchName: string,
   // Fleet memory: recent critic findings for this repo, pre-rendered (empty when
   // none). Pure here so it stays testable — the caller reads the ledger.
-  lessonsBlock = ""
+  lessonsBlock = "",
+  // Freeform body for a local task (null for GitHub issues).
+  taskBody: string | null = null
 ): string {
-  return (
+  const boundary =
     `[Stoa] You are working inside a git worktree at ${worktreePath} on branch ` +
     `"${branchName}". Make ALL file edits inside this directory — do not edit the ` +
-    `base checkout or any other branch.\n\n` +
+    `base checkout or any other branch.\n\n`;
+
+  // Local/freeform task: no GitHub issue to read or close.
+  if (issueNumber <= 0) {
+    const body = taskBody?.trim() ? `\n${taskBody.trim()}\n` : "";
+    return (
+      boundary +
+      `You have been dispatched to complete this task in ${repo.repo_slug}: ` +
+      `"${issueTitle}".\n` +
+      body +
+      `\n1. Implement a complete, focused change and commit it on this branch.\n` +
+      `2. Open a pull request:\n` +
+      `   gh pr create --base ${repo.base_branch} --head ${branchName} ` +
+      `--title "<concise title>" --body "<what changed>"\n\n` +
+      `Keep the change scoped to this task.` +
+      lessonsBlock
+    );
+  }
+
+  return (
+    boundary +
     `You have been dispatched to resolve GitHub issue #${issueNumber} in ` +
     `${repo.repo_slug}: "${issueTitle}".\n\n` +
     `1. Read the full issue: gh issue view ${issueNumber} --repo ${repo.repo_slug}\n` +
@@ -54,7 +79,10 @@ export function buildIssuePrompt(
 }
 
 function issueToSessionName(issueNumber: number, issueTitle: string): string {
-  const base = `#${issueNumber} ${issueTitle}`.trim();
+  // Local tasks have no issue number — show the bare title (no "#0").
+  const base = (
+    issueNumber > 0 ? `#${issueNumber} ${issueTitle}` : issueTitle
+  ).trim();
   return base.length > 60 ? base.slice(0, 60) : base;
 }
 
@@ -89,10 +117,15 @@ export async function dispatchOne(
     const provider = getProvider(repo.agent_type);
     const model = resolveModelForAgent(repo.agent_type, undefined);
 
-    // 1. Worktree per issue (createWorktree owns branch naming + uniqueness).
+    // 1. Worktree per task (createWorktree owns branch naming + uniqueness).
+    // Local tasks have no issue number, so name the worktree by the row id.
+    const featureName =
+      issueNumber > 0
+        ? `issue-${issueNumber}`
+        : `task-${candidate.id.slice(0, 8)}`;
     const { worktreePath, branchName } = await createWorktree({
       projectPath: expandHome(repo.repo_path),
-      featureName: `issue-${issueNumber}`,
+      featureName,
       baseBranch: repo.base_branch,
     });
     createdWorktree = worktreePath;
@@ -141,7 +174,8 @@ export async function dispatchOne(
       issueTitle,
       worktreePath,
       branchName,
-      getLessonsBlock(repo.id)
+      getLessonsBlock(repo.id),
+      candidate.task_body
     );
     const { binary, args } = buildAgentArgs(repo.agent_type, {
       model,
@@ -160,7 +194,8 @@ export async function dispatchOne(
       args,
     });
   } catch (err) {
-    console.error(`dispatch failed for ${repo.repo_slug}#${issueNumber}:`, err);
+    const ref = issueNumber > 0 ? `#${issueNumber}` : ` task "${issueTitle}"`;
+    console.error(`dispatch failed for ${repo.repo_slug}${ref}:`, err);
     // Clean up the worktree+branch so the disk doesn't leak and a future attempt
     // for this issue doesn't collide on the branch name.
     if (createdWorktree) {

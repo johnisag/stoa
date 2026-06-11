@@ -19,6 +19,7 @@ import { expandHome } from "../platform";
 import { getPrReadiness, type CheckSummary } from "./auto-merge";
 import { spawnInWorktree } from "./reviewer";
 import type { DispatchRepo, IssueDispatch } from "./types";
+import { taskRef } from "./task-label";
 
 /** Max CI-fix rounds before a red PR is left for a human (env-overridable;
  * `STOA_MAX_CI_FIX_ROUNDS=0` disables CI auto-fix even on an armed repo). */
@@ -67,7 +68,7 @@ export function nextCiFixAction(input: {
 export function buildCiFixPrompt(repo: DispatchRepo, d: IssueDispatch): string {
   return (
     `[Stoa] CI is FAILING on pull request #${d.pr_number} in ${repo.repo_slug} ` +
-    `(issue #${d.issue_number}: "${d.issue_title ?? ""}").\n\n` +
+    `(${taskRef(d)}).\n\n` +
     `You are in the PR's worktree on branch "${d.branch_name ?? ""}".\n\n` +
     `1. See which checks failed and why:\n` +
     `   gh pr checks ${d.pr_number}\n` +

@@ -526,6 +526,43 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 28,
+    name: "add_local_task_intake_to_issue_dispatches",
+    up: (db) => {
+      // Generalized intake (#7): a task can now come from a real GitHub issue OR a
+      // freeform "local" task typed into Stoa (no issue required). Local rows carry
+      // source='local', issue_number 0, and the freeform body in task_body. Both
+      // sources drain through the SAME reconciler/pool. Guarded ALTERs
+      // (migration-24..26 pattern); NULL/'github' default = exactly today's behavior.
+      const hasColumn = (table: string, column: string): boolean =>
+        (
+          db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        ).some((c) => c.name === column);
+      // Swap the index FIRST: the guarded ALTERs below can throw "duplicate
+      // column" under a concurrent-init race, which the runner catches and records
+      // the migration as applied — so doing the swap first guarantees it can never
+      // be stranded behind a caught ALTER. The swap only touches issue_number
+      // (pre-existing), so it doesn't depend on the new columns.
+      //
+      // Make (repo, issue_number) uniqueness apply only to real GitHub issues
+      // (number > 0). Local tasks share issue_number 0 and must not collide, so a
+      // partial index excludes them. gh ingest dedupe (getDispatchByRepoIssue +
+      // INSERT OR IGNORE) is unchanged — it only ever passes positive numbers.
+      db.exec(`DROP INDEX IF EXISTS idx_dispatch_repo_issue`);
+      db.exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_repo_issue ON issue_dispatches(repo_id, issue_number) WHERE issue_number > 0`
+      );
+      if (!hasColumn("issue_dispatches", "source")) {
+        db.exec(
+          `ALTER TABLE issue_dispatches ADD COLUMN source TEXT NOT NULL DEFAULT 'github'`
+        );
+      }
+      if (!hasColumn("issue_dispatches", "task_body")) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN task_body TEXT`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

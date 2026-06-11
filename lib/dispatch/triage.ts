@@ -21,7 +21,8 @@ export interface TriageIssue extends EligibleIssue {
  * Overlay open issues with their dispatch state, keyed by issue number. Pure and
  * order-preserving (gh's sort is kept). An issue with no dispatch row gets
  * `{ dispatchStatus: null, dispatchId: null }` — i.e. freely dispatchable. The
- * (repo, issue_number) unique index guarantees at most one row per number.
+ * partial (repo, issue_number) unique index guarantees at most one row per
+ * number > 0 (local tasks use 0, are never GitHub issues, and aren't triaged here).
  */
 export function annotateTriageIssues(
   issues: EligibleIssue[],
