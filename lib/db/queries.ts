@@ -603,6 +603,23 @@ export const queries = {
        WHERE repo_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`
     ),
 
+  // Fleet memory: ALL of a repo's lessons (newest first) for the visibility view.
+  listLessonsForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT id, lens, text, created_at FROM repo_lessons
+       WHERE repo_id = ? ORDER BY created_at DESC, rowid DESC`
+    ),
+
+  // Fleet memory: forget everything learned for a repo (operator clears the ledger).
+  clearLessonsForRepo: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM repo_lessons WHERE repo_id = ?`),
+
+  // Fleet memory: forget ONE lesson (e.g. a stale or wrong finding). Scoped to the
+  // repo too, so a lesson id can't be deleted out from under another repo's URL.
+  deleteLesson: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM repo_lessons WHERE id = ? AND repo_id = ?`),
+
   listDispatchesForRepo: (db: Database.Database) =>
     getStmt(
       db,

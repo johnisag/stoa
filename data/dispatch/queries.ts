@@ -542,3 +542,50 @@ export function useCancelPlan() {
     },
   });
 }
+
+// ── Fleet memory: the per-repo lessons ledger (visibility) ───────────────────
+export interface Lesson {
+  id: string;
+  lens: string | null;
+  text: string;
+  created_at: string;
+}
+
+/** What the critic has flagged for a repo (newest first). Lazy: only while open. */
+export function useLessons(repoId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: repoId
+      ? dispatchKeys.lessons(repoId)
+      : dispatchKeys.lessons("none"),
+    enabled: enabled && !!repoId,
+    queryFn: async (): Promise<Lesson[]> => {
+      const res = await fetch(`/api/dispatch/repos/${repoId}/lessons`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to load lessons");
+      return data.lessons ?? [];
+    },
+    staleTime: 5000,
+  });
+}
+
+/** Forget a repo's lessons — all of them, or one (pass a lessonId). */
+export function useClearLessons() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { repoId: string; lessonId?: string }) => {
+      const qs = input.lessonId
+        ? `?lesson=${encodeURIComponent(input.lessonId)}`
+        : "";
+      const res = await fetch(
+        `/api/dispatch/repos/${input.repoId}/lessons${qs}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to clear lessons");
+      }
+    },
+    onSuccess: (_d, input) =>
+      qc.invalidateQueries({ queryKey: dispatchKeys.lessons(input.repoId) }),
+  });
+}

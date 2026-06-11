@@ -1,7 +1,14 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Plus, Trash2, ExternalLink, Loader2, Inbox } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  ExternalLink,
+  Loader2,
+  Inbox,
+  Brain,
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -32,6 +39,7 @@ import {
 import { useProjectsQuery } from "@/data/projects";
 import { AGENT_BADGE, repoUrl } from "./shared";
 import { OpenIssuesBrowser } from "./OpenIssuesBrowser";
+import { LessonsDialog } from "./LessonsDialog";
 
 const EMPTY: CreateRepoInput = {
   repoPath: "",
@@ -122,6 +130,7 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
   const [label, setLabel] = useState(repo.label_filter ?? "");
   const [verifyCmd, setVerifyCmd] = useState(repo.verify_command ?? "");
   const [browsing, setBrowsing] = useState(false);
+  const [showLessons, setShowLessons] = useState(false);
 
   const patch = (p: UpdateRepoPatch) =>
     update.mutate(
@@ -314,6 +323,17 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
           />
         </Button>
 
+        {/* fleet memory: what the critic has flagged for this repo */}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="What the fleet learned (critic findings)"
+          title="What the fleet learned"
+          onClick={() => setShowLessons(true)}
+        >
+          <Brain className="text-muted-foreground h-4 w-4" />
+        </Button>
+
         {/* delete */}
         <Button
           variant="ghost"
@@ -349,6 +369,13 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
         </div>
       )}
       {browsing && <OpenIssuesBrowser repo={repo} />}
+      <LessonsDialog
+        repoId={repo.id}
+        repoSlug={repo.repo_slug}
+        reviewGate={repo.review_gate === 1}
+        open={showLessons}
+        onOpenChange={setShowLessons}
+      />
     </div>
   );
 }
