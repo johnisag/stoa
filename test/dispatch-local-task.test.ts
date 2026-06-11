@@ -270,9 +270,9 @@ describe("migration 28 — upgrade from a pre-28 database", () => {
     const old = new Database(":memory:");
     // Minimal PRE-28 shape: issue_number NOT NULL, the OLD non-partial unique
     // index, and NO source/task_body columns.
-    // issue_dispatches with the OLD full index + a minimal repo_lessons (later
-    // migrations 29/30 ALTER these; runMigrations runs every pending migration,
-    // so the fixture needs the tables those touch).
+    // issue_dispatches with the OLD full index, plus minimal repo_lessons and
+    // dispatch_repos (later migrations 29/30/31 ALTER these; runMigrations runs
+    // every pending migration, so the fixture needs the tables those touch).
     old.exec(`
       CREATE TABLE issue_dispatches (
         id TEXT PRIMARY KEY,
@@ -289,6 +289,7 @@ describe("migration 28 — upgrade from a pre-28 database", () => {
         text TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE TABLE dispatch_repos (id TEXT PRIMARY KEY);
       CREATE TABLE _migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
     `);
     // Pretend migrations 1..27 already ran so runMigrations applies ONLY 28.

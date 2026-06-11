@@ -24,7 +24,11 @@ import {
   useScheduledQuery,
 } from "@/data/dispatch/queries";
 import { AGENT_BADGE, repoUrl, timeAgo } from "./shared";
-import { isLocalTask, taskLabel } from "@/lib/dispatch/task-label";
+import {
+  isLocalTask,
+  taskLabel,
+  maintainerWhy,
+} from "@/lib/dispatch/task-label";
 import {
   RECURRENCE_OPTIONS,
   recurrenceLabel,
@@ -409,6 +413,14 @@ export function Backlog({ open }: { open: boolean }) {
                         <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium">
                           local
                         </span>
+                        {d.maintainer_proposed === 1 && (
+                          <span
+                            className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[11px] font-medium text-violet-600 dark:text-violet-300"
+                            title="Proposed by the autonomous maintainer survey — review the rationale, then Approve or Cancel."
+                          >
+                            maintainer
+                          </span>
+                        )}
                       </>
                     ) : (
                       <>
@@ -434,6 +446,24 @@ export function Backlog({ open }: { open: boolean }) {
                       <> &middot; raised {timeAgo(d.issue_created_at)}</>
                     )}
                   </div>
+                  {/* The maintainer's rationale + full brief — shown at the approve
+                      point so the operator sees WHY and exactly WHAT they'd spawn a
+                      worker for (the body is agent-authored; never approve unseen). */}
+                  {maintainerWhy(d) && (
+                    <div className="text-muted-foreground mt-0.5 line-clamp-2 text-xs break-words italic">
+                      why: {maintainerWhy(d)}
+                    </div>
+                  )}
+                  {d.maintainer_proposed === 1 && d.task_body && (
+                    <details className="mt-0.5">
+                      <summary className="text-muted-foreground hover:text-foreground cursor-pointer text-xs select-none">
+                        view brief
+                      </summary>
+                      <pre className="text-muted-foreground bg-muted/50 mt-1 max-h-48 overflow-auto rounded p-2 text-[11px] whitespace-pre-wrap">
+                        {d.task_body}
+                      </pre>
+                    </details>
+                  )}
                 </div>
                 <Button
                   size="sm"

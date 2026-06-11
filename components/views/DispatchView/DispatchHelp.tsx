@@ -9,6 +9,7 @@ import {
   GitMerge,
   ShieldCheck,
   Sparkles,
+  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -124,6 +125,31 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           flagged in red), then approve — it files the issues for you. Two tasks
           that touch the same files never run at the same time; the second waits
           for the first to merge.
+        </p>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <Wrench className="h-4 w-4" aria-hidden="true" /> Maintainer
+          (optional)
+        </h3>
+        <p className="text-muted-foreground">
+          Turn on <span className="text-foreground font-medium">maintain</span>{" "}
+          for a repo, give it a goal (e.g.{" "}
+          <span className="text-foreground">
+            keep CI green, deps current, the backlog triaged
+          </span>
+          ) and a cadence (weekly, daily, or hourly). On that schedule an agent
+          quietly investigates the repo on its own — runs the tests, checks open
+          issues and recent CI, looks for outdated dependencies and leftover
+          to-dos — and proposes its own short, ranked list of the most valuable
+          maintenance work, each item with the exact reason it&apos;s suggesting
+          it. The proposals land in your{" "}
+          <span className="text-foreground font-medium">Backlog</span> tagged{" "}
+          <span className="text-foreground">maintainer</span>, and{" "}
+          <em>never start on their own</em> — even on an auto repo they wait for
+          your one-tap Approve. So the fleet can find its own work, but you stay
+          the one who says go.
         </p>
       </section>
 

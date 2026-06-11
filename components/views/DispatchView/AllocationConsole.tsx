@@ -24,6 +24,7 @@ import {
 import { AGENT_OPTIONS } from "@/components/NewSessionDialog/NewSessionDialog.types";
 import type { AgentType } from "@/lib/providers";
 import type { DispatchRepo } from "@/lib/dispatch/types";
+import { RECURRENCE_OPTIONS } from "@/lib/dispatch/recurrence";
 import {
   useCreateRepo,
   useDeleteRepo,
@@ -57,6 +58,12 @@ const EMPTY: CreateRepoInput = {
   verifyGate: false,
   verifyCommand: "",
 };
+
+// Survey cadences — the recurring options only ("once" makes no sense for a
+// repeating maintenance survey). Reuses the cron picker's list so they stay in sync.
+const MAINTAINER_CADENCE_OPTIONS = RECURRENCE_OPTIONS.filter(
+  (o) => o.value !== "once"
+);
 
 /** A small single-select segmented control (radiogroup). Shared by the mode
  * toggle and the add-repo source picker so they stay visually + a11y identical. */
@@ -129,6 +136,9 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
   const [conc, setConc] = useState(String(repo.max_concurrency));
   const [label, setLabel] = useState(repo.label_filter ?? "");
   const [verifyCmd, setVerifyCmd] = useState(repo.verify_command ?? "");
+  const [maintainGoal, setMaintainGoal] = useState(
+    repo.maintainer_survey_goal ?? ""
+  );
   const [browsing, setBrowsing] = useState(false);
   const [showLessons, setShowLessons] = useState(false);
 
@@ -308,6 +318,25 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
           verify
         </label>
 
+        {/* Autonomous maintainer (opt-in): a survey agent proposes its own backlog
+            on a cadence. Proposals are FENCED out of auto-dispatch — they land in
+            the Backlog and wait for your one-tap Approve, even on an auto repo. */}
+        <label
+          className="text-muted-foreground flex items-center gap-1 text-xs"
+          title="Autonomous maintainer: on a cadence, a read-only survey agent investigates this repo (runs the tests, checks issues/CI, npm outdated, TODOs) and proposes its own ranked backlog toward a goal you set. Proposals are NEVER auto-dispatched — they wait for your one-tap Approve in the Backlog."
+        >
+          <Switch
+            checked={repo.maintainer_survey_enabled === 1}
+            onCheckedChange={(v) => patch({ maintainerSurveyEnabled: v })}
+            aria-label={
+              repo.maintainer_survey_enabled === 1
+                ? "Disable autonomous maintainer"
+                : "Enable autonomous maintainer"
+            }
+          />
+          maintain
+        </label>
+
         {/* browse open issues for one-tap triage */}
         <Button
           variant="ghost"
@@ -366,6 +395,52 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
             }}
             className="h-8 flex-1 font-mono text-xs"
           />
+        </div>
+      )}
+      {repo.maintainer_survey_enabled === 1 && (
+        <div className="flex flex-wrap items-center gap-2 px-3 pb-1">
+          <span className="text-muted-foreground shrink-0 text-xs">
+            maintain goal
+          </span>
+          <Input
+            placeholder="e.g. keep CI green, deps current, the issue backlog triaged"
+            value={maintainGoal}
+            onChange={(e) => setMaintainGoal(e.target.value)}
+            onBlur={() => {
+              const next = maintainGoal.trim() || null;
+              if (next !== repo.maintainer_survey_goal)
+                patch({ maintainerSurveyGoal: next });
+            }}
+            className="h-8 min-w-[200px] flex-1 text-xs"
+          />
+          <Select
+            value={repo.maintainer_survey_cadence ?? "weekly"}
+            onValueChange={(v) => patch({ maintainerSurveyCadence: v })}
+          >
+            <SelectTrigger
+              className="h-8 w-[110px]"
+              aria-label="Survey cadence"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MAINTAINER_CADENCE_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span
+            className="text-muted-foreground shrink-0 text-[11px]"
+            title="When the survey last ran"
+          >
+            {!repo.maintainer_survey_goal
+              ? "set a goal to start"
+              : repo.maintainer_survey_last_at
+                ? `last: ${new Date(repo.maintainer_survey_last_at).toLocaleString()}`
+                : "not yet run"}
+          </span>
         </div>
       )}
       {browsing && <OpenIssuesBrowser repo={repo} />}
@@ -736,7 +811,7 @@ export function AllocationConsole({ open }: { open: boolean }) {
             // when the server values change out from under it (another tab, the
             // reconciler), so the quota/concurrency/label fields don't go stale.
             <RepoRow
-              key={`${r.id}:${r.daily_quota}:${r.max_concurrency}:${r.label_filter ?? ""}`}
+              key={`${r.id}:${r.daily_quota}:${r.max_concurrency}:${r.label_filter ?? ""}:${r.maintainer_survey_goal ?? ""}`}
               repo={r}
             />
           ))}

@@ -203,6 +203,31 @@ describe("reconcileTick", () => {
     expect(queries.listPendingForRepo(db()).all(repo)).toHaveLength(0);
   });
 
+  it("THE FENCE: auto mode never dispatches a maintainer-proposed row (waits for approve)", async () => {
+    const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 5 });
+    // A normal pending candidate AND a maintainer-proposed one.
+    addPending(repo, 1);
+    queries
+      .insertMaintainerTask(db())
+      .run(
+        "maint-1",
+        repo,
+        "Maintainer proposal",
+        "[maintainer] stale dep",
+        "2026-06-01T00:00:00Z"
+      );
+
+    await reconcileTick();
+
+    // Exactly one dispatch — the normal candidate; the maintainer row is fenced.
+    expect(vi.mocked(dispatchOne)).toHaveBeenCalledTimes(1);
+    const dispatched = vi.mocked(dispatchOne).mock.calls[0][1] as IssueDispatch;
+    expect(dispatched.maintainer_proposed).toBe(0);
+    expect(dispatched.id).not.toBe("maint-1");
+    // It stays visible for one-tap approval (still pending in the plain list).
+    expect(getStatus("maint-1")).toBe("pending");
+  });
+
   it("honors the daily cap read from the DB (already-dispatched today)", async () => {
     const repo = addRepo({ mode: "auto", daily_quota: 2, max_concurrency: 5 });
     // Two workers already dispatched today → quota exhausted.

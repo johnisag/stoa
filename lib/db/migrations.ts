@@ -598,6 +598,50 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 31,
+    name: "add_maintainer_survey",
+    up: (db) => {
+      // Autonomous maintainer (opt-in, default off): a survey agent proposes its
+      // own backlog on a cadence. Proposals carry maintainer_proposed=1 and are
+      // structurally fenced out of auto-dispatch (they wait for one-tap Approve).
+      // Guarded ALTERs; defaults = exactly today's behavior (no surveys, no fence).
+      const hasColumn = (table: string, column: string): boolean =>
+        (
+          db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        ).some((c) => c.name === column);
+      const add = (table: string, column: string, ddl: string) => {
+        if (!hasColumn(table, column)) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+        }
+      };
+      add(
+        "dispatch_repos",
+        "maintainer_survey_enabled",
+        "maintainer_survey_enabled INTEGER NOT NULL DEFAULT 0"
+      );
+      add(
+        "dispatch_repos",
+        "maintainer_survey_goal",
+        "maintainer_survey_goal TEXT"
+      );
+      add(
+        "dispatch_repos",
+        "maintainer_survey_cadence",
+        "maintainer_survey_cadence TEXT"
+      );
+      add(
+        "dispatch_repos",
+        "maintainer_survey_last_at",
+        "maintainer_survey_last_at TEXT"
+      );
+      add(
+        "issue_dispatches",
+        "maintainer_proposed",
+        "maintainer_proposed INTEGER NOT NULL DEFAULT 0"
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
