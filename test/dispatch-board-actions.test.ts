@@ -28,8 +28,28 @@ describe("isActionAllowed", () => {
     }
   });
 
+  it("reconcile only when pr_open", () => {
+    expect(isActionAllowed("reconcile", "pr_open")).toBe(true);
+    for (const s of [
+      "pending",
+      "scheduled",
+      "dispatched",
+      "merged",
+      "failed",
+      "cancelled",
+    ] as const) {
+      expect(isActionAllowed("reconcile", s)).toBe(false);
+    }
+  });
+
   it("no action is allowed on a cancelled row", () => {
-    for (const a of ["approve", "cancel", "dismiss", "retry"] as const) {
+    for (const a of [
+      "approve",
+      "cancel",
+      "dismiss",
+      "retry",
+      "reconcile",
+    ] as const) {
       expect(isActionAllowed(a, "cancelled")).toBe(false);
     }
   });

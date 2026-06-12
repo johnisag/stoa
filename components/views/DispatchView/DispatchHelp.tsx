@@ -246,7 +246,14 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           A stuck agent&apos;s card turns red. Use{" "}
           <span className="text-foreground font-medium">Retry</span> to run it
           again, or <span className="text-foreground font-medium">Dismiss</span>{" "}
-          to clear it.
+          to clear it. If you merged or closed a pull request yourself on GitHub
+          and its card is still sitting in{" "}
+          <span className="text-foreground">In flight</span>, tap{" "}
+          <span className="text-foreground font-medium">Re-check</span> — Stoa
+          looks at the PR on GitHub and moves the card to{" "}
+          <span className="text-foreground">Merged</span>, or clears it if you
+          closed it without merging. Stoa does this on its own every minute too;
+          the button is just the instant version.
         </p>
       </section>
 
