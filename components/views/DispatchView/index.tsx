@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
 import { useBoardQuery, usePendingQuery } from "@/data/dispatch/queries";
 import { AllocationConsole } from "./AllocationConsole";
 import { Backlog } from "./Backlog";
@@ -23,9 +24,17 @@ type Tab = "allocation" | "plan" | "backlog" | "board";
 export function DispatchView({
   open,
   onOpenChange,
+  onOpenWorkflows,
+  onOpenVerdictInbox,
+  onOpenFleetBoard,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Jump to a sibling fleet dialog (closes this one, opens the target).
+   * Optional — each renders an icon in the header; wired in app/page.tsx. */
+  onOpenWorkflows?: () => void;
+  onOpenVerdictInbox?: () => void;
+  onOpenFleetBoard?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("allocation");
   const [showHelp, setShowHelp] = useState(false);
@@ -59,7 +68,7 @@ export function DispatchView({
         </DialogHeader>
 
         {/* segmented control + help */}
-        <div className="flex items-center justify-between px-6 pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-6 pb-3">
           <div className="bg-muted inline-flex rounded-md p-0.5 text-sm">
             {tabs.map((t) => (
               <button
@@ -86,16 +95,43 @@ export function DispatchView({
               </button>
             ))}
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="How Dispatch works"
-            title="How Dispatch works"
-            aria-pressed={showHelp}
-            onClick={() => setShowHelp((v) => !v)}
-          >
-            <HelpCircle className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            {/* Jump to a sibling fleet view without closing + reopening. */}
+            {onOpenWorkflows && (
+              <NavIconButton
+                entry={fleetNavEntry("workflows")}
+                onClick={onOpenWorkflows}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            {onOpenVerdictInbox && (
+              <NavIconButton
+                entry={fleetNavEntry("verdict-inbox")}
+                onClick={onOpenVerdictInbox}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            {onOpenFleetBoard && (
+              <NavIconButton
+                entry={fleetNavEntry("fleet-board")}
+                onClick={onOpenFleetBoard}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="How Dispatch works"
+              title="How Dispatch works"
+              aria-pressed={showHelp}
+              onClick={() => setShowHelp((v) => !v)}
+            >
+              <HelpCircle className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 pb-6">

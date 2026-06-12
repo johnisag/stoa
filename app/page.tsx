@@ -850,6 +850,14 @@ function HomeContent() {
       }
     };
 
+  // Cross-navigate between the mutually-exclusive fleet dialogs: close the
+  // current one and open the target so they never stack.
+  const switchFleet =
+    (close: (open: boolean) => void, open: (open: boolean) => void) => () => {
+      close(false);
+      open(true);
+    };
+
   return (
     <>
       {/* Gate the view on isHydrated so phones never flash DesktopView for a
@@ -875,7 +883,13 @@ function HomeContent() {
       <StoaGuide open={showGuide} onOpenChange={setShowGuide} />
       {/* Dispatch control plane (GitHub-issue -> agent fleet). Self-contained
           dialog; the nav buttons in Desktop/MobileView open it via setShowDispatch. */}
-      <DispatchView open={showDispatch} onOpenChange={setShowDispatch} />
+      <DispatchView
+        open={showDispatch}
+        onOpenChange={setShowDispatch}
+        onOpenWorkflows={switchFleet(setShowDispatch, setShowWorkflows)}
+        onOpenVerdictInbox={switchFleet(setShowDispatch, setShowVerdictInbox)}
+        onOpenFleetBoard={switchFleet(setShowDispatch, setShowFleetBoard)}
+      />
       {/* Insight / analytics over the audit ledger. Self-contained dialog;
           opened from the Desktop/Mobile nav via setShowAnalytics. */}
       <AnalyticsView open={showAnalytics} onOpenChange={setShowAnalytics} />
@@ -887,6 +901,9 @@ function HomeContent() {
         sessions={sessions}
         activeSessionId={focusedActiveTab?.sessionId ?? undefined}
         onOpenSession={openSessionFrom(setShowWorkflows)}
+        onOpenDispatch={switchFleet(setShowWorkflows, setShowDispatch)}
+        onOpenVerdictInbox={switchFleet(setShowWorkflows, setShowVerdictInbox)}
+        onOpenFleetBoard={switchFleet(setShowWorkflows, setShowFleetBoard)}
       />
       {/* Verdict Inbox — the fleet-wide review queue (dispatch + auto-mode
           sessions). Self-contained; opened via setShowVerdictInbox. */}
@@ -894,6 +911,9 @@ function HomeContent() {
         open={showVerdictInbox}
         onOpenChange={setShowVerdictInbox}
         onOpenSession={openSessionFrom(setShowVerdictInbox)}
+        onOpenDispatch={switchFleet(setShowVerdictInbox, setShowDispatch)}
+        onOpenWorkflows={switchFleet(setShowVerdictInbox, setShowWorkflows)}
+        onOpenFleetBoard={switchFleet(setShowVerdictInbox, setShowFleetBoard)}
       />
       {/* Fleet Board — the autonomous fleet as a lifecycle kanban (reuses the
           inbox read model + cards). Self-contained; opened via setShowFleetBoard. */}
@@ -901,6 +921,9 @@ function HomeContent() {
         open={showFleetBoard}
         onOpenChange={setShowFleetBoard}
         onOpenSession={openSessionFrom(setShowFleetBoard)}
+        onOpenDispatch={switchFleet(setShowFleetBoard, setShowDispatch)}
+        onOpenWorkflows={switchFleet(setShowFleetBoard, setShowWorkflows)}
+        onOpenVerdictInbox={switchFleet(setShowFleetBoard, setShowVerdictInbox)}
       />
       {/* "See changes" jump-to-diff: opened by the transient toast action when a
           session's turn completes (useNotifications -> onSeeChanges). */}

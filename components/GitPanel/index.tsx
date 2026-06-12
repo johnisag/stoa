@@ -24,6 +24,8 @@ import { GitPanelTabs, type GitTab } from "./GitPanelTabs";
 import { CommitHistory } from "./CommitHistory";
 import { DiffView } from "@/components/DiffViewer/DiffModal";
 import { useViewport } from "@/hooks/useViewport";
+import { useConfirm } from "@/components/ConfirmProvider";
+import { baseName } from "@/lib/path-display";
 import {
   useGitStatus,
   usePRStatus,
@@ -63,6 +65,7 @@ export function GitPanel({
   repositories = [],
 }: GitPanelProps) {
   const { isMobile } = useViewport();
+  const confirm = useConfirm();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<GitTab>("changes");
   const [showPRModal, setShowPRModal] = useState(false);
@@ -219,6 +222,42 @@ export function GitPanel({
     }
   };
 
+  // Destructive: drop a file's uncommitted edits. Fail-closed — gated behind the
+  // themed confirm dialog (whose Cancel button is focused on open, so a stray
+  // Enter cancels) BEFORE the route ever runs. Only then do we POST to
+  // /api/git/discard, which runs `git checkout -- <file>` (execFile argv, no
+  // shell) for a tracked file. Scoped to unstaged/untracked rows.
+  const handleDiscard = async (file: GitFile | MultiRepoGitFile) => {
+    const confirmed = await confirm({
+      title: "Discard changes?",
+      description: `Permanently discard the uncommitted changes to ${baseName(
+        file.path
+      )}? This can't be undone — an untracked file is deleted, a tracked file is reverted to its last commit.`,
+      confirmLabel: "Discard",
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    // In multi-repo mode, use the file's repoPath
+    const repoPath =
+      "repoPath" in file && file.repoPath ? file.repoPath : primaryRepoPath;
+    try {
+      await fetch("/api/git/discard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: repoPath, file: file.path }),
+      });
+      // Close the diff if we just discarded the file it was showing.
+      if (selectedFile?.file.path === file.path) {
+        setSelectedFile(null);
+      }
+      // Refetch git status so the row disappears.
+      queryClient.invalidateQueries({ queryKey: gitKeys.all });
+    } catch {
+      // Ignore errors
+    }
+  };
+
   const handleStageAll = () => {
     stageMutation.mutate(undefined);
   };
@@ -321,6 +360,7 @@ export function GitPanel({
         onUnstage={handleUnstage}
         onStageAll={handleStageAll}
         onUnstageAll={handleUnstageAll}
+        onDiscard={handleDiscard}
         onBack={() => setSelectedFile(null)}
         onCommit={() => {
           queryClient.invalidateQueries({
@@ -422,6 +462,7 @@ export function GitPanel({
                     onFileClick={handleFileClick}
                     onStage={handleStage}
                     onStageAll={handleStageAll}
+                    onDiscard={handleDiscard}
                     isStaged={false}
                   />
                 )}
@@ -435,6 +476,7 @@ export function GitPanel({
                     selectedPath={selectedFile?.file.path}
                     onFileClick={handleFileClick}
                     onStage={handleStage}
+                    onDiscard={handleDiscard}
                     isStaged={false}
                   />
                 )}
@@ -555,6 +597,7 @@ interface MobileGitPanelProps {
   onUnstage: (file: GitFile) => void;
   onStageAll: () => void;
   onUnstageAll: () => void;
+  onDiscard: (file: GitFile) => void;
   onBack: () => void;
   onCommit: () => void;
   onShowPRModal: () => void;
@@ -580,6 +623,7 @@ function MobileGitPanel({
   onUnstage,
   onStageAll,
   onUnstageAll,
+  onDiscard,
   onBack,
   onCommit,
   onShowPRModal,
@@ -708,6 +752,7 @@ function MobileGitPanel({
                 onFileClick={onFileClick}
                 onStage={onStage}
                 onStageAll={onStageAll}
+                onDiscard={onDiscard}
                 isStaged={false}
               />
             )}
@@ -720,6 +765,7 @@ function MobileGitPanel({
                 emptyMessage="No untracked files"
                 onFileClick={onFileClick}
                 onStage={onStage}
+                onDiscard={onDiscard}
                 isStaged={false}
               />
             )}

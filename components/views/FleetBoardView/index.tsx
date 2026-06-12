@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
 import { useFleetBoard } from "@/data/fleet-board/useFleetBoard";
 import { LANES, ATTENTION_LANES } from "@/lib/fleet-board/lanes";
 import { FleetCard } from "./FleetCard";
@@ -26,12 +27,20 @@ export function FleetBoardView({
   open,
   onOpenChange,
   onOpenSession,
+  onOpenDispatch,
+  onOpenWorkflows,
+  onOpenVerdictInbox,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Jump into a card's live worker session (ceremony rows carry a session id).
    * Threaded through FleetCard -> InboxCard; wired in page.tsx like WorkflowsView. */
   onOpenSession?: (sessionId: string) => void;
+  /** Jump to a sibling fleet dialog (closes this one, opens the target).
+   * Optional — each renders an icon in the header; wired in app/page.tsx. */
+  onOpenDispatch?: () => void;
+  onOpenWorkflows?: () => void;
+  onOpenVerdictInbox?: () => void;
 }) {
   const [showHelp, setShowHelp] = useState(false);
   const { lanes, repoById, total, isLoading, isError, isFetching, refetch } =
@@ -55,7 +64,7 @@ export function FleetBoardView({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center justify-between px-6 pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-6 pb-3">
           <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
             {isLoading ? (
               "…"
@@ -70,16 +79,43 @@ export function FleetBoardView({
               </>
             )}
           </span>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="How the Fleet Board works"
-            title="How the Fleet Board works"
-            aria-pressed={showHelp}
-            onClick={() => setShowHelp((v) => !v)}
-          >
-            <HelpCircle className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            {/* Jump to a sibling fleet view without closing + reopening. */}
+            {onOpenDispatch && (
+              <NavIconButton
+                entry={fleetNavEntry("dispatch")}
+                onClick={onOpenDispatch}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            {onOpenWorkflows && (
+              <NavIconButton
+                entry={fleetNavEntry("workflows")}
+                onClick={onOpenWorkflows}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            {onOpenVerdictInbox && (
+              <NavIconButton
+                entry={fleetNavEntry("verdict-inbox")}
+                onClick={onOpenVerdictInbox}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="How the Fleet Board works"
+              title="How the Fleet Board works"
+              aria-pressed={showHelp}
+              onClick={() => setShowHelp((v) => !v)}
+            >
+              <HelpCircle className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-auto px-6 pb-6">
