@@ -136,7 +136,7 @@ export function DesktopView({
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Header */}
         <header className="flex items-center justify-between px-4 py-2">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -161,10 +161,15 @@ export function DesktopView({
             </Tooltip>
 
             {activeSession && (
-              <div className="flex items-center gap-2">
-                <span className="font-medium">{activeSession.name}</span>
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  className="truncate font-medium"
+                  title={activeSession.name}
+                >
+                  {activeSession.name}
+                </span>
                 {activeSession.tmux_name && (
-                  <span className="text-muted-foreground text-xs">
+                  <span className="text-muted-foreground max-w-[20ch] truncate text-xs">
                     {activeSession.tmux_name}
                   </span>
                 )}
@@ -217,7 +222,7 @@ export function DesktopView({
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
