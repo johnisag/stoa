@@ -23,10 +23,15 @@ import {
 import { cn } from "@/lib/utils";
 import {
   CHAT_PROVIDER_OPTIONS,
+  DEFAULT_CHAT_PROVIDER,
   loadChatProvider,
   saveChatProvider,
+  defaultChatModel,
+  loadChatModel,
+  saveChatModel,
   type ChatProvider,
 } from "@/lib/chat-settings";
+import { getModelOptions } from "@/lib/model-catalog";
 import { useViewport } from "@/hooks/useViewport";
 import { useAsk, type ChatMessage } from "@/data/chat/useAsk";
 
@@ -56,7 +61,12 @@ export function ChatView({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [provider, setProvider] = useState<ChatProvider>("claude");
+  const [provider, setProvider] = useState<ChatProvider>(DEFAULT_CHAT_PROVIDER);
+  // Defaults to Opus for Claude (the chatbox default, not the agent's Sonnet) —
+  // sourced from chat-settings so the literal lives in exactly one place.
+  const [model, setModel] = useState(() =>
+    defaultChatModel(DEFAULT_CHAT_PROVIDER)
+  );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const { isMobile } = useViewport();
@@ -65,9 +75,12 @@ export function ChatView({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Hydrate the persisted provider once mounted — localStorage is client-only.
+  // Hydrate the persisted provider + model once mounted — localStorage is
+  // client-only.
   useEffect(() => {
-    setProvider(loadChatProvider());
+    const p = loadChatProvider();
+    setProvider(p);
+    setModel(loadChatModel(p));
   }, []);
 
   // On open: start a fresh conversation so a late answer from a previously-closed
@@ -98,6 +111,14 @@ export function ChatView({
     const next = value as ChatProvider;
     setProvider(next);
     saveChatProvider(next);
+    // The model is provider-specific — re-resolve (keeps the saved model if it's
+    // valid for the new provider, else falls back to that provider's default).
+    setModel(loadChatModel(next));
+  }
+
+  function handleModelChange(value: string) {
+    setModel(value);
+    saveChatModel(provider, value);
   }
 
   // Auto-grow the composer up to a cap (mirrors PromptQueueModal's grow()).
@@ -121,7 +142,7 @@ export function ChatView({
     requestAnimationFrame(grow); // shrink back after clearing
 
     ask.mutate(
-      { question, history, provider },
+      { question, history, provider, model },
       {
         onSuccess: (answer) => {
           setMessages((prev) => [
@@ -177,27 +198,49 @@ export function ChatView({
               Ask about your fleet, sessions, and recent activity.
             </DialogDescription>
           </div>
-          {/* Which agent answers — persisted across reloads. */}
-          <Select value={provider} onValueChange={handleProviderChange}>
-            <SelectTrigger
-              className="h-8 w-auto gap-1.5 text-xs"
-              aria-label="Answering agent"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CHAT_PROVIDER_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                  {option.value === "claude" && (
-                    <span className="text-muted-foreground ml-1.5 text-xs">
-                      · default
-                    </span>
-                  )}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {/* Which agent + model answers — both persisted across reloads. */}
+          <div className="flex items-center gap-2">
+            <Select value={provider} onValueChange={handleProviderChange}>
+              <SelectTrigger
+                className="h-8 w-auto gap-1.5 text-xs"
+                aria-label="Answering agent"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CHAT_PROVIDER_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                    {option.value === "claude" && (
+                      <span className="text-muted-foreground ml-1.5 text-xs">
+                        · default
+                      </span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={model} onValueChange={handleModelChange}>
+              <SelectTrigger
+                className="h-8 w-auto gap-1.5 text-xs"
+                aria-label="Model"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {getModelOptions(provider).map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                    {option.value === defaultChatModel(provider) && (
+                      <span className="text-muted-foreground ml-1.5 text-xs">
+                        · default
+                      </span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </DialogHeader>
 
         {/* Message list */}

@@ -52,6 +52,25 @@ describe("buildAskArgs — per-provider non-interactive argv (cross-platform gua
       }
     }
   });
+
+  it("threads a catalog model into argv per provider, prompt still on stdin", () => {
+    // The model is a fixed CATALOG token (validated server-side), so it's safe in
+    // argv even though the prompt never is.
+    const claude = buildAskArgs("claude", PROMPT, "opus");
+    expect(claude.args).toEqual(["-p", "--model", "opus"]);
+    expect(claude.input).toBe(PROMPT);
+    expect(claude.args).not.toContain(PROMPT);
+
+    const codex = buildAskArgs("codex", PROMPT, "gpt-5.4");
+    expect(codex.args).toEqual(["exec", "-c", "model=gpt-5.4"]);
+    expect(codex.input).toBe(PROMPT);
+    expect(codex.args).not.toContain(PROMPT);
+  });
+
+  it("omits the model flag when no model is given (agent's own default)", () => {
+    expect(buildAskArgs("claude", PROMPT).args).toEqual(["-p"]);
+    expect(buildAskArgs("codex", PROMPT).args).toEqual(["exec"]);
+  });
 });
 
 describe("buildAskPrompt — grounds the question in the gathered context", () => {
