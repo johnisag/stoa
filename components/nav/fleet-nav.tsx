@@ -8,6 +8,7 @@ import {
   Bell,
   Compass,
   Command,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -70,6 +71,12 @@ export const FLEET_NAV: readonly FleetNavEntry[] = [
     label: "Fleet Board",
     icon: Columns3,
     ariaLabel: "Fleet Board (the fleet by lifecycle stage)",
+  },
+  {
+    id: "ask-stoa",
+    label: "Ask Stoa",
+    icon: Sparkles,
+    ariaLabel: "Ask Stoa (chat about your fleet)",
   },
   {
     id: "notifications",

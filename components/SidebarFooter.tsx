@@ -28,6 +28,8 @@ interface SidebarFooterProps {
   onShowFleetBoard?: () => void;
   /** Opens the notification settings (sound, per-event toggles, push). */
   onShowNotifications?: () => void;
+  /** Opens the Ask Stoa chatbox. */
+  onShowChat?: () => void;
 }
 
 export function SidebarFooter({
@@ -39,6 +41,7 @@ export function SidebarFooter({
   onShowVerdictInbox,
   onShowFleetBoard,
   onShowNotifications,
+  onShowChat,
 }: SidebarFooterProps = {}) {
   // "Needs me" count for the Verdict Inbox / Fleet Board nav badges — a cheap 30s
   // background poll shared with the desktop header (same query key). Only run it
@@ -92,6 +95,13 @@ export function SidebarFooter({
               variant="footer"
               onClick={onShowFleetBoard}
               count={attentionCount}
+            />
+          )}
+          {onShowChat && (
+            <NavIconButton
+              entry={fleetNavEntry("ask-stoa")}
+              variant="footer"
+              onClick={onShowChat}
             />
           )}
           {onShowNotifications && (

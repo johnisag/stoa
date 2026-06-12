@@ -30,6 +30,7 @@ export function MobileView({
   setShowWorkflows,
   setShowVerdictInbox,
   setShowFleetBoard,
+  setShowChat,
   showNotificationSettings,
   setShowNotificationSettings,
   notificationSettings,
@@ -123,6 +124,10 @@ export function MobileView({
             }}
             onShowNotifications={() => {
               setShowNotificationSettings(true);
+              setSidebarOpen(false);
+            }}
+            onShowChat={() => {
+              setShowChat(true);
               setSidebarOpen(false);
             }}
           />

@@ -45,6 +45,8 @@ export interface ViewProps {
   setShowVerdictInbox: (show: boolean) => void;
   showFleetBoard: boolean;
   setShowFleetBoard: (show: boolean) => void;
+  showChat: boolean;
+  setShowChat: (show: boolean) => void;
   onShowShortcuts: () => void;
   onShowGuide: () => void;
 

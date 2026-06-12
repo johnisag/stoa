@@ -50,6 +50,7 @@ import { AnalyticsView } from "@/components/views/AnalyticsView";
 import { WorkflowsView } from "@/components/views/WorkflowsView";
 import { VerdictInboxView } from "@/components/views/VerdictInboxView";
 import { FleetBoardView } from "@/components/views/FleetBoardView";
+import { ChatView } from "@/components/views/ChatView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
@@ -191,6 +192,7 @@ function HomeContent() {
   const [showWorkflows, setShowWorkflows] = useState(false);
   const [showVerdictInbox, setShowVerdictInbox] = useState(false);
   const [showFleetBoard, setShowFleetBoard] = useState(false);
+  const [showChat, setShowChat] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   // Session whose diff to show via the "See changes" jump (fired when a turn
@@ -697,6 +699,7 @@ function HomeContent() {
           isMobile ? () => setShowVerdictInbox(true) : undefined
         }
         onFleetBoardClick={isMobile ? () => setShowFleetBoard(true) : undefined}
+        onAskStoaClick={isMobile ? () => setShowChat(true) : undefined}
         onSelectSession={handleSelectSession}
       />
     ),
@@ -818,6 +821,8 @@ function HomeContent() {
     setShowVerdictInbox,
     showFleetBoard,
     setShowFleetBoard,
+    showChat,
+    setShowChat,
     onShowShortcuts: () => setShowHelp(true),
     onShowGuide: () => setShowGuide(true),
     notificationSettings,
@@ -925,6 +930,9 @@ function HomeContent() {
         onOpenWorkflows={switchFleet(setShowFleetBoard, setShowWorkflows)}
         onOpenVerdictInbox={switchFleet(setShowFleetBoard, setShowVerdictInbox)}
       />
+      {/* Ask Stoa — a read-only NL chatbox over the fleet's own data, answered by
+          the user-selected agent. Self-contained; opened via setShowChat. */}
+      <ChatView open={showChat} onOpenChange={setShowChat} />
       {/* "See changes" jump-to-diff: opened by the transient toast action when a
           session's turn completes (useNotifications -> onSeeChanges). */}
       {seeChangesSessionId && (
