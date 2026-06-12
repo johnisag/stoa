@@ -110,16 +110,18 @@ export const claudeProvider: AgentProvider = {
     }
 
     // Model — the picker drives a fresh launch; omitted on resume (Claude keeps
-    // the session's own model). Mirrors buildAgentArgs / the pty path.
+    // the session's own model). Mirrors buildAgentArgs / the pty path. The value
+    // is shell-quoted (tmux execs this in a shell): safe tokens pass through
+    // unchanged, a metacharacter-bearing one is quoted so it can't break out.
     if (shouldPassModel(def, options)) {
-      flags.push(`${def.modelFlag} ${options.model}`);
+      flags.push(`${def.modelFlag} ${shellQuoteArg(options.model!)}`);
     }
 
-    // Resume/fork
+    // Resume/fork (session ids are shell-quoted too — same reason as the model).
     if (options.sessionId && def.resumeFlag) {
-      flags.push(`${def.resumeFlag} ${options.sessionId}`);
+      flags.push(`${def.resumeFlag} ${shellQuoteArg(options.sessionId)}`);
     } else if (options.parentSessionId && def.resumeFlag) {
-      flags.push(`${def.resumeFlag} ${options.parentSessionId}`);
+      flags.push(`${def.resumeFlag} ${shellQuoteArg(options.parentSessionId)}`);
       flags.push("--fork-session");
     }
 
@@ -207,7 +209,8 @@ export const codexProvider: AgentProvider = {
     }
 
     if (shouldPassModel(def, options)) {
-      flags.push(`${def.modelFlag} ${options.model}`);
+      // Shell-quoted — tmux execs this in a shell (safe tokens pass through).
+      flags.push(`${def.modelFlag} ${shellQuoteArg(options.model!)}`);
     }
 
     // Initial prompt (positional argument for Codex)
@@ -271,10 +274,13 @@ export const hermesProvider: AgentProvider = {
     // a restart on the TMUX backend — the pty path (buildAgentArgs) already
     // wires it. Hermes has no fork, so no fork branch.
     if (options.sessionId && def.resumeFlag) {
-      flags.push(`${def.resumeFlag} ${options.sessionId}`);
+      flags.push(`${def.resumeFlag} ${shellQuoteArg(options.sessionId)}`);
     }
     if (shouldPassModel(def, options)) {
-      flags.push(`${def.modelFlag} ${options.model}`);
+      // Shell-quoted — Hermes models are FREE-TEXT, so an unquoted value would be
+      // shell injection into the tmux launch on the POSIX backend. shellQuoteArg
+      // leaves a normal model untouched and quotes anything with metacharacters.
+      flags.push(`${def.modelFlag} ${shellQuoteArg(options.model!)}`);
     }
     if (options.initialPrompt?.trim() && def.initialPromptFlag !== undefined) {
       const prompt = options.initialPrompt.trim().replace(/'/g, "'\\''");
@@ -401,6 +407,19 @@ export function buildAgentArgs(
 }
 
 /**
+ * Backslash-escape the chars that stay active inside a double-quoted POSIX shell
+ * string (`\ " $ \``). The SINGLE source for double-quote escaping — used by
+ * shellQuoteArg below AND by the tmux init-script fallback in app/page.tsx, where
+ * a raw command is interpolated into the tmux backend's outer `"${command}"` and
+ * needs the same containment. (Bash history `!` is intentionally NOT escaped: in
+ * double quotes `\!` keeps the backslash, so escaping it would corrupt benign
+ * prompts; non-interactive shells don't history-expand.)
+ */
+export function escapeForDoubleQuotes(token: string): string {
+  return token.replace(/(["\\$`])/g, "\\$1");
+}
+
+/**
  * Shell-quote a single clean argv token for the tmux backend's `exec <cmd>`
  * line (the pty backend spawns argv directly and needs no quoting). Bare
  * word-safe tokens pass through; anything else is wrapped in double quotes with
@@ -409,7 +428,7 @@ export function buildAgentArgs(
  */
 export function shellQuoteArg(token: string): string {
   if (/^[A-Za-z0-9_./=:-]+$/.test(token)) return token;
-  return `"${token.replace(/(["\\$`])/g, "\\$1")}"`;
+  return `"${escapeForDoubleQuotes(token)}"`;
 }
 
 /**
