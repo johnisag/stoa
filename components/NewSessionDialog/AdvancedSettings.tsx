@@ -58,44 +58,67 @@ export function AdvancedSettings({
               </span>
             </label>
           </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="skipPermissions"
-              checked={skipPermissions}
-              disabled={!supportsAutoApprove}
-              onChange={(e) => onSkipPermissionsChange(e.target.checked)}
-              className="border-border bg-background accent-primary h-4 w-4 rounded disabled:cursor-not-allowed disabled:opacity-50"
-            />
-            <label htmlFor="skipPermissions" className="cursor-pointer text-sm">
-              Auto-approve tool calls
-              <span className="text-muted-foreground ml-1">
-                {supportsAutoApprove
-                  ? `(${provider.autoApproveFlag})`
-                  : "(not supported)"}
-              </span>
-            </label>
+          <div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="skipPermissions"
+                checked={skipPermissions}
+                disabled={!supportsAutoApprove}
+                onChange={(e) => onSkipPermissionsChange(e.target.checked)}
+                className="border-border bg-background accent-primary h-4 w-4 rounded disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <label
+                htmlFor="skipPermissions"
+                className="cursor-pointer text-sm"
+              >
+                Auto-approve tool calls
+                <span className="text-muted-foreground ml-1">
+                  {supportsAutoApprove
+                    ? `(${provider.autoApproveFlag})`
+                    : "(not supported)"}
+                </span>
+              </label>
+            </div>
+            {skipPermissions && supportsAutoApprove && (
+              // Plain-language consequence, shown only once it's enabled — so the
+              // choice is informed without a wall of text by default.
+              <p className="text-destructive mt-1 ml-6 text-xs">
+                The agent will edit files and run shell commands without asking
+                you first — enable only for code and machines you trust.
+              </p>
+            )}
           </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="enableOrchestration"
-              checked={supportsOrchestration && enableOrchestration}
-              disabled={!supportsOrchestration}
-              onChange={(e) => onEnableOrchestrationChange(e.target.checked)}
-              className="border-border bg-background accent-primary h-4 w-4 rounded disabled:cursor-not-allowed disabled:opacity-50"
-            />
-            <label
-              htmlFor="enableOrchestration"
-              className="cursor-pointer text-sm"
-            >
-              Enable orchestration
-              <span className="text-muted-foreground ml-1">
-                {supportsOrchestration
-                  ? "(conductor — can spawn worker sessions via spawn_worker)"
-                  : "(Claude only for now)"}
-              </span>
-            </label>
+          <div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="enableOrchestration"
+                checked={supportsOrchestration && enableOrchestration}
+                disabled={!supportsOrchestration}
+                onChange={(e) => onEnableOrchestrationChange(e.target.checked)}
+                className="border-border bg-background accent-primary h-4 w-4 rounded disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <label
+                htmlFor="enableOrchestration"
+                className="cursor-pointer text-sm"
+              >
+                Enable orchestration
+                <span className="text-muted-foreground ml-1">
+                  {supportsOrchestration
+                    ? "(conductor — can spawn worker sessions via spawn_worker)"
+                    : "(Claude only for now)"}
+                </span>
+              </label>
+            </div>
+            {supportsOrchestration && enableOrchestration && (
+              // The workers a conductor spawns ALWAYS run auto-approve — surface
+              // that here too, so enabling orchestration is informed consent.
+              <p className="text-destructive mt-1 ml-6 text-xs">
+                Worker sessions always run with auto-approve — they edit files
+                and run commands without asking.
+              </p>
+            )}
           </div>
         </div>
       )}

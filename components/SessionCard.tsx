@@ -51,6 +51,7 @@ import {
   ContextMenuTrigger,
 } from "./ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { AutoApproveBadge } from "./AutoApproveBadge";
 import { SessionQuickActions } from "./SessionQuickActions";
 import { SessionDiffModal } from "./SessionDiffModal";
 import { SnapshotTimeline } from "./SnapshotTimeline";
@@ -561,6 +562,11 @@ function SessionCardComponent({
           )}
         </div>
       )}
+
+      {/* Auto-approve (YOLO) danger signal — this session runs tool calls
+          unprompted, and fork inherits it, so flag it in the list too. Icon-only
+          here; auto_approve is a SQLite 0/1, so coerce. */}
+      {Boolean(session.auto_approve) && <AutoApproveBadge label={false} />}
 
       {/* Fork indicator */}
       {session.parent_session_id && (

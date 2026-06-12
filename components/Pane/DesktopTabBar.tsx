@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "@/components/ContextMeter";
+import { AutoApproveBadge } from "@/components/AutoApproveBadge";
 import { SnippetsModal } from "@/components/Terminal/SnippetsModal";
 import { useState, type ReactNode } from "react";
 import type { Session } from "@/lib/db";
@@ -231,6 +232,10 @@ export function DesktopTabBar({
 
         {/* Live context-window meter for this session (Claude-only; self-hides). */}
         {session && <ContextMeter sessionId={session.id} />}
+
+        {/* Persistent danger signal when this session auto-approves all tool calls
+            (auto_approve is a SQLite 0/1 — coerce so it can't render a stray "0"). */}
+        {session && Boolean(session.auto_approve) && <AutoApproveBadge />}
 
         {/* View Toggle */}
         {session?.working_directory && (
