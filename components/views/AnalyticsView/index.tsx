@@ -13,6 +13,7 @@ import { useState } from "react";
 import { BarChart3, AlertTriangle, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { SegmentedTabs } from "@/components/ui/segmented-tabs";
 import {
   Dialog,
   DialogContent,
@@ -94,43 +95,28 @@ export function AnalyticsView({
 
         {/* segmented control + window picker + refresh */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-6 pb-3">
-          <div
-            role="tablist"
-            aria-label="Insight lenses"
-            className="bg-muted inline-flex max-w-full flex-nowrap overflow-x-auto rounded-md p-0.5 text-sm [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          >
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.key}
-                onClick={() => setTab(t.key)}
-                className={cn(
-                  "inline-flex min-h-[40px] items-center gap-1.5 rounded px-3 py-1.5 whitespace-nowrap transition-colors",
-                  tab === t.key
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {t.label}
-                {t.badge != null && t.badge > 0 && (
-                  <span
-                    className={cn(
-                      "rounded-full px-1.5 text-xs",
-                      t.key === "issues"
-                        ? hasCritical
-                          ? "bg-red-500/20 text-red-400"
-                          : "bg-yellow-500/20 text-yellow-400"
-                        : "bg-foreground/10"
-                    )}
-                  >
-                    {t.badge}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
+          <SegmentedTabs
+            ariaLabel="Insight lenses"
+            value={tab}
+            onChange={setTab}
+            className="max-w-full flex-nowrap overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            tabs={tabs.map((t) => ({
+              key: t.key,
+              label: t.label,
+              badge:
+                t.badge != null
+                  ? {
+                      count: t.badge,
+                      className:
+                        t.key === "issues"
+                          ? hasCritical
+                            ? "bg-red-500/20 text-red-400"
+                            : "bg-yellow-500/20 text-yellow-400"
+                          : undefined,
+                    }
+                  : undefined,
+            }))}
+          />
           <div className="flex items-center gap-2">
             <div className="bg-muted inline-flex rounded-md p-0.5 text-xs">
               {WINDOWS.map((w) => (

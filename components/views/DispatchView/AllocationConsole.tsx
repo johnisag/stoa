@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { SegmentedTabs } from "@/components/ui/segmented-tabs";
 import {
   Select,
   SelectContent,
@@ -65,49 +66,13 @@ const MAINTAINER_CADENCE_OPTIONS = RECURRENCE_OPTIONS.filter(
   (o) => o.value !== "once"
 );
 
-/** A small single-select segmented control (radiogroup). Shared by the mode
- * toggle and the add-repo source picker so they stay visually + a11y identical. */
-function SegmentedControl<T extends string>({
-  options,
-  value,
-  onChange,
-  ariaLabel,
-  disabled,
-}: {
-  options: readonly T[];
-  value: T;
-  onChange: (v: T) => void;
-  ariaLabel: string;
-  disabled?: boolean;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label={ariaLabel}
-      className="bg-muted inline-flex rounded-md p-0.5 text-xs"
-    >
-      {options.map((o) => (
-        <button
-          key={o}
-          type="button"
-          role="radio"
-          aria-checked={value === o}
-          disabled={disabled}
-          onClick={() => value !== o && onChange(o)}
-          className={cn(
-            "rounded px-2.5 py-0.5 capitalize transition-colors",
-            value === o
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-            disabled && "cursor-not-allowed opacity-50"
-          )}
-        >
-          {o}
-        </button>
-      ))}
-    </div>
-  );
-}
+/** Compact single-select strip — the same shared {@link SegmentedTabs} as the
+ * fleet dialogs, but sized DOWN to sit inline among form fields: drop the
+ * 40px touch-target min-height + roomy padding (right for the dialog tab strips,
+ * chunky for these dense toggles) back to the original compact form. `onChange`
+ * fires on every click, so callers guard same-value clicks to avoid a redundant
+ * mutation/reset. */
+const SEGMENTED_TAB_CLASS = "min-h-0 px-2.5 py-0.5 text-xs capitalize";
 
 function ModeToggle({
   value,
@@ -119,12 +84,16 @@ function ModeToggle({
   disabled?: boolean;
 }) {
   return (
-    <SegmentedControl
-      options={["review", "auto"] as const}
-      value={value}
-      onChange={onChange}
+    <SegmentedTabs
       ariaLabel="Dispatch mode"
+      value={value}
+      onChange={(v) => value !== v && onChange(v)}
       disabled={disabled}
+      tabClassName={SEGMENTED_TAB_CLASS}
+      tabs={[
+        { key: "review", label: "review" },
+        { key: "auto", label: "auto" },
+      ]}
     />
   );
 }
@@ -558,11 +527,18 @@ function AddRepoForm() {
       {/* Source picker — auto-fill from a Stoa project, a scanned local repo, or
           a GitHub repo (cloned locally on demand) instead of typing the path. */}
       <div className="flex flex-wrap items-center gap-2">
-        <SegmentedControl
-          options={["manual", "project", "scan", "github"] as const}
-          value={source}
+        <SegmentedTabs
           ariaLabel="Repo source"
+          value={source}
+          tabClassName={SEGMENTED_TAB_CLASS}
+          tabs={[
+            { key: "manual", label: "manual" },
+            { key: "project", label: "project" },
+            { key: "scan", label: "scan" },
+            { key: "github", label: "github" },
+          ]}
           onChange={(s) => {
+            if (s === source) return;
             setSource(s);
             // Drop any in-flight pick from the previous source so its late
             // resolve/clone can't write into the form or keep the spinner up.

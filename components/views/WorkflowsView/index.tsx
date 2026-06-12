@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { HelpCircle, Workflow } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { SegmentedTabs } from "@/components/ui/segmented-tabs";
 import {
   Dialog,
   DialogContent,
@@ -118,32 +118,19 @@ export function WorkflowsView({
 
         {/* segmented control + help */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-6 pb-3">
-          <div className="bg-muted inline-flex rounded-md p-0.5 text-sm">
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                aria-pressed={tab === t.key}
-                onClick={() => {
-                  setTab(t.key);
-                  setShowHelp(false);
-                }}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded px-3 py-1 transition-colors",
-                  tab === t.key
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {t.label}
-                {t.count != null && t.count > 0 && (
-                  <span className="bg-foreground/10 rounded-full px-1.5 text-xs">
-                    {t.count}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
+          <SegmentedTabs
+            ariaLabel="Workflows sections"
+            value={tab}
+            onChange={(key) => {
+              setTab(key);
+              setShowHelp(false);
+            }}
+            tabs={tabs.map((t) => ({
+              key: t.key,
+              label: t.label,
+              badge: t.count != null ? { count: t.count } : undefined,
+            }))}
+          />
           <div className="flex items-center gap-0.5">
             {/* Jump to a sibling fleet view without closing + reopening. */}
             {onOpenDispatch && (
