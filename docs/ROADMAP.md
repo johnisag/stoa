@@ -7,8 +7,8 @@ Linux.**
 **Status (2026-06-12):** the **UI/UX campaign is COMPLETE** — all **21** items
 from the multi-agent UI/UX research (#214) shipped across **7 waves, PRs
 #215–#221**, each built by parallel worktree agents and merged through the full
-ceremony (gate → multi-agent review → 3-OS CI). The next build is the
-**"Ask / Command Stoa" chatbox** (below), promoted from the parked bets.
+ceremony (gate → multi-agent review → 3-OS CI). The **"Ask Stoa" chatbox Phase 1
+has now shipped** (#223); Phase 2 ("Command Stoa") is next.
 
 ---
 
@@ -20,14 +20,19 @@ structural answer to the surface-area/discoverability problem the whole UI/UX
 campaign kept circling: _ask, don't hunt_ — and it's the most mobile-native idea
 on the board (type or dictate one request).
 
-- **Settings — agent selector:** a setting to choose which agent backs the
-  chatbox — **Claude / Codex / Hermes** (reuse the provider registry +
-  `buildAgentArgs`; persist in settings; default to the latest Claude).
-- **Phase 1 — "Ask Stoa" (read-only, build first):** Q&A over Stoa's own data —
-  the audit ledger, transcripts, session statuses, cost — plus how-to. Low risk
-  (no mutation), doubles as in-app help. _e.g. "what did the fleet do yesterday
-  across all sessions?", "which sessions are stuck on me?"_
-- **Phase 2 — "Command Stoa" (act, later):** NL → Stoa ops (spawn / dispatch /
+- **✅ Phase 1 — "Ask Stoa" (read-only) — SHIPPED (#223).** A ChatView dialog +
+  `POST /api/ask`: gathers a compact read-only fleet-state context
+  (`getAnalyticsReport` + live `computeManagedStatuses` + the session roster) and
+  answers via the user-selected agent CLI in non-interactive mode (prompt on
+  **stdin** = injection-safe). A new "Ask Stoa" nav destination (desktop header,
+  mobile footer, mobile Fleet launcher) via `FLEET_NAV`; provider choice persisted
+  in localStorage. **Ships Claude + Codex** — Hermes deferred (its only one-shot
+  mode was an argv `-z`, command-injectable under the Windows shell, and
+  unverified per the registry). _Follow-ups: re-add Hermes once `-z` one-shot is
+  verified + a stdin/temp-file path replaces argv; a Stop/abort button; Windows
+  tree-kill on timeout; optional how-to context (StoaGuide) so "how does X work"
+  is answerable; sync-test ASK_PROVIDERS ↔ CHAT_PROVIDER_OPTIONS._
+- **▶ Phase 2 — "Command Stoa" (act) — NEXT.** NL → Stoa ops (spawn / dispatch /
   worktree) via the existing `stoa` MCP tool surface, always **propose → confirm
   → execute**, fail-closed + audited. _e.g. "start 3 sessions on the-grid:
   x1 hermes / x2 claude / x3 codex."_
