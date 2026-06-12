@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Loader2, Send, Sparkles, X } from "lucide-react";
+import { Check, HelpCircle, Loader2, Send, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,6 +39,7 @@ import {
   type ChatItem,
   type ChatMessage,
 } from "@/data/chat/useCommand";
+import { ChatHelp } from "./ChatHelp";
 
 // Starter prompts for the empty state — a mix of read-only questions (grounded in
 // the fleet's live state + recent activity) and one ACTION, hinting that Stoa can
@@ -76,6 +77,7 @@ export function ChatView({
   );
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [input, setInput] = useState("");
+  const [showHelp, setShowHelp] = useState(false);
   const { isMobile } = useViewport();
 
   const propose = useProposeCommand();
@@ -112,11 +114,13 @@ export function ChatView({
     }
   }, [open, isMobile]);
 
-  // Keep the newest turn (and the thinking indicator) in view as it arrives.
+  // Keep the newest turn (and the thinking indicator) in view as it arrives —
+  // but when the help panel is open, pin to the TOP so it reads from the start and
+  // an arriving answer can't yank it mid-read.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, propose.isPending]);
+    if (el) el.scrollTop = showHelp ? 0 : el.scrollHeight;
+  }, [messages, propose.isPending, showHelp]);
 
   function handleProviderChange(value: string) {
     const next = value as ChatProvider;
@@ -138,6 +142,20 @@ export function ChatView({
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+  }
+
+  // Drop an example prompt into the composer (from the empty-state chips or the
+  // help panel): fill it, close help, focus. The user reviews/edits before sending.
+  // No-op while a request is in flight (the composer is disabled then — picking
+  // would fill a disabled field and a failing send could clobber the example).
+  function pickExample(text: string) {
+    if (propose.isPending) return;
+    setInput(text);
+    setShowHelp(false);
+    requestAnimationFrame(() => {
+      taRef.current?.focus();
+      grow();
+    });
   }
 
   function send() {
@@ -291,6 +309,7 @@ export function ChatView({
     if (!next) {
       setMessages([]);
       setInput("");
+      setShowHelp(false);
       executingRef.current = false;
       propose.reset();
       execute.reset();
@@ -368,12 +387,28 @@ export function ChatView({
                 ))}
               </SelectContent>
             </Select>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto"
+              aria-label="How Ask Stoa works"
+              title="How Ask Stoa works"
+              aria-pressed={showHelp}
+              onClick={() => setShowHelp((v) => !v)}
+            >
+              <HelpCircle className="h-4 w-4" />
+            </Button>
           </div>
         </DialogHeader>
 
-        {/* Message list */}
+        {/* Message list (or the help panel, toggled by the header "?") */}
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6">
-          {messages.length === 0 && !propose.isPending ? (
+          {showHelp ? (
+            <ChatHelp
+              onClose={() => setShowHelp(false)}
+              onPickExample={pickExample}
+            />
+          ) : messages.length === 0 && !propose.isPending ? (
             <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-4 text-center text-sm">
               <Sparkles className="h-8 w-8 opacity-40" />
               <p className="max-w-xs">
@@ -384,13 +419,7 @@ export function ChatView({
                   <li key={q}>
                     <button
                       type="button"
-                      onClick={() => {
-                        setInput(q);
-                        requestAnimationFrame(() => {
-                          taRef.current?.focus();
-                          grow();
-                        });
-                      }}
+                      onClick={() => pickExample(q)}
                       className="bg-muted/40 hover:bg-muted rounded-full px-3 py-1.5 text-xs transition-colors"
                     >
                       {q}
