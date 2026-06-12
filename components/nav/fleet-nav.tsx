@@ -141,6 +141,7 @@ export function NavIconButton({
   variant,
   tooltipSide,
   count,
+  showLabel = false,
 }: {
   entry: FleetNavEntry;
   onClick: () => void;
@@ -149,6 +150,10 @@ export function NavIconButton({
   tooltipSide?: "top" | "bottom";
   /** "Needs me" count; renders an amber corner badge when > 0 (no badge otherwise). */
   count?: number;
+  /** Render the label text BESIDE the icon — a prominent, unmistakable button for
+   * a flagship destination (e.g. the chatbox), and skip the now-redundant tooltip.
+   * Header variant only. */
+  showLabel?: boolean;
 }) {
   const Icon = entry.icon;
   const side = tooltipSide ?? "top";
@@ -157,32 +162,38 @@ export function NavIconButton({
   const ariaLabel = showBadge
     ? `${entry.ariaLabel} — ${count} ${count === 1 ? "needs" : "need"} you`
     : entry.ariaLabel;
+
+  const trigger =
+    variant === "header" ? (
+      <Button
+        variant="ghost"
+        size={showLabel ? "sm" : "icon-sm"}
+        aria-label={ariaLabel}
+        onClick={onClick}
+        className="relative"
+      >
+        <Icon className="h-4 w-4" />
+        {showLabel && <span className="ml-1.5">{entry.label}</span>}
+        {showBadge && <CountBadge count={count!} />}
+      </Button>
+    ) : (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={ariaLabel}
+        className="text-muted-foreground hover:text-foreground hover:bg-accent relative rounded p-1 transition-colors"
+      >
+        <Icon className="h-4 w-4" />
+        {showBadge && <CountBadge count={count!} />}
+      </button>
+    );
+
+  // A visible label is its own affordance — skip the (now redundant) tooltip.
+  if (showLabel) return trigger;
+
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        {variant === "header" ? (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={ariaLabel}
-            onClick={onClick}
-            className="relative"
-          >
-            <Icon className="h-4 w-4" />
-            {showBadge && <CountBadge count={count!} />}
-          </Button>
-        ) : (
-          <button
-            type="button"
-            onClick={onClick}
-            aria-label={ariaLabel}
-            className="text-muted-foreground hover:text-foreground hover:bg-accent relative rounded p-1 transition-colors"
-          >
-            <Icon className="h-4 w-4" />
-            {showBadge && <CountBadge count={count!} />}
-          </button>
-        )}
-      </TooltipTrigger>
+      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
       <TooltipContent side={side}>
         <p>{entry.label}</p>
         {showBadge && (
