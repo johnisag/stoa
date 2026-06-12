@@ -19,12 +19,14 @@ import type { DispatchRepo } from "@/lib/dispatch/types";
 export function FleetCard({
   card,
   repoById,
+  onOpenSession,
 }: {
   card: FleetCardData;
   repoById: Map<string, DispatchRepo>;
+  onOpenSession?: (sessionId: string) => void;
 }) {
   if (card.source === "inbox" && card.inbox) {
-    return <InboxCard item={card.inbox} />;
+    return <InboxCard item={card.inbox} onOpenSession={onOpenSession} />;
   }
   const d = card.dispatch;
   if (!d) return null;

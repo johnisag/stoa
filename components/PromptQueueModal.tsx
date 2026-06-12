@@ -136,7 +136,12 @@ export function PromptQueueModal({
 
   return (
     <div
-      className="bg-background fixed inset-0 z-50 flex flex-col"
+      // Pin to the top and size to --app-height (the VISUAL viewport, tracked
+      // app-wide by useViewportHeight in page.tsx) rather than a full-100vh
+      // `inset-0`. On mobile this shrinks the overlay above the on-screen
+      // keyboard so the footer (Send/Add) stays reachable instead of being
+      // pushed under it. Falls back to 100vh where --app-height is unset.
+      className="bg-background h-app max-h-app fixed inset-x-0 top-0 z-50 flex flex-col"
       onClick={(e) => e.stopPropagation()}
     >
       <div className="border-border bg-background/95 flex items-center gap-2 border-b p-3 backdrop-blur-sm">
@@ -181,19 +186,22 @@ export function PromptQueueModal({
       </div>
 
       {compose ? (
-        // Roomy full-height composer — the textarea fills the body so long,
-        // structured prompts are comfortable to write on a phone.
-        <div className="flex-1 overflow-hidden p-3">
+        // Roomy composer — the textarea fills the body so long, structured
+        // prompts are comfortable to write on a phone. `min-h-0 flex-1` lets
+        // this region shrink (the overlay tracks the visual viewport above the
+        // keyboard) so the pinned Send footer always stays on-screen; the
+        // textarea scrolls internally rather than pushing the footer down.
+        <div className="min-h-0 flex-1 overflow-hidden p-3">
           <textarea
             ref={taRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="Write a prompt to send now… (multi-line OK)"
-            className="border-input bg-background focus-visible:ring-ring/60 h-full w-full resize-none rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2"
+            className="border-input bg-background focus-visible:ring-ring/60 h-full w-full resize-none overflow-auto rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2"
           />
         </div>
       ) : (
-        <div className="flex-1 overflow-auto p-3">
+        <div className="min-h-0 flex-1 overflow-auto p-3">
           {isLoading ? (
             <div className="text-muted-foreground flex h-full items-center justify-center gap-2 text-sm">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading…

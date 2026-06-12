@@ -240,7 +240,12 @@ export function NotificationSettings({
   return (
     <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" className="relative">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="relative"
+          aria-label="Notifications (sound, per-event toggles, push)"
+        >
           <Bell
             className={cn(
               "h-4 w-4",

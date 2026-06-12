@@ -25,9 +25,13 @@ import { FleetBoardHelp } from "./FleetBoardHelp";
 export function FleetBoardView({
   open,
   onOpenChange,
+  onOpenSession,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Jump into a card's live worker session (ceremony rows carry a session id).
+   * Threaded through FleetCard -> InboxCard; wired in page.tsx like WorkflowsView. */
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const [showHelp, setShowHelp] = useState(false);
   const { lanes, repoById, total, isLoading, isError, isFetching, refetch } =
@@ -157,6 +161,7 @@ export function FleetBoardView({
                             key={card.key}
                             card={card}
                             repoById={repoById}
+                            onOpenSession={onOpenSession}
                           />
                         ))}
                         {hidden > 0 && (

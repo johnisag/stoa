@@ -8,25 +8,14 @@ import { StartServerDialog } from "@/components/DevServers/StartServerDialog";
 import { SidebarFooter } from "@/components/SidebarFooter";
 import { SidebarRail } from "@/components/SidebarRail";
 import { Button } from "@/components/ui/button";
-import {
-  PanelLeftClose,
-  PanelLeft,
-  Plus,
-  Copy,
-  Check,
-  Command,
-  Rocket,
-  BarChart3,
-  Workflow,
-  Inbox,
-  Columns3,
-} from "lucide-react";
+import { PanelLeftClose, PanelLeft, Plus, Copy, Check } from "lucide-react";
 import { PaneLayout } from "@/components/PaneLayout";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import type { ViewProps } from "./types";
 import { fileOpenActions } from "@/stores/fileOpen";
@@ -223,97 +212,46 @@ export function DesktopView({
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Insight (analytics over the audit ledger)"
-                  onClick={() => setShowAnalytics(true)}
-                >
-                  <BarChart3 className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Insight</p>
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Dispatch (GitHub issues to agents)"
-                  onClick={() => setShowDispatch(true)}
-                >
-                  <Rocket className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Dispatch</p>
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Workflows (run an agent pipeline from a template)"
-                  onClick={() => setShowWorkflows(true)}
-                >
-                  <Workflow className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Workflows</p>
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Verdict Inbox (the fleet review queue)"
-                  onClick={() => setShowVerdictInbox(true)}
-                >
-                  <Inbox className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Verdict Inbox</p>
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Fleet Board (the fleet by lifecycle stage)"
-                  onClick={() => setShowFleetBoard(true)}
-                >
-                  <Columns3 className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Fleet Board</p>
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Quick switch (Cmd/Ctrl+K)"
-                  onClick={() => setShowQuickSwitcher(true)}
-                >
-                  <Command className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Quick switch</p>
-                <p className="text-muted-foreground text-xs">⌘K</p>
-              </TooltipContent>
-            </Tooltip>
+            {/* Fleet destinations — rendered from the shared FLEET_NAV
+                descriptor so this header stays in lockstep with the sidebar
+                footer. onClick wiring stays here (it's surface-specific). */}
+            <NavIconButton
+              entry={fleetNavEntry("insight")}
+              variant="header"
+              onClick={() => setShowAnalytics(true)}
+            />
+            <NavIconButton
+              entry={fleetNavEntry("dispatch")}
+              variant="header"
+              onClick={() => setShowDispatch(true)}
+            />
+            <NavIconButton
+              entry={fleetNavEntry("workflows")}
+              variant="header"
+              onClick={() => setShowWorkflows(true)}
+            />
+            <NavIconButton
+              entry={fleetNavEntry("verdict-inbox")}
+              variant="header"
+              onClick={() => setShowVerdictInbox(true)}
+            />
+            <NavIconButton
+              entry={fleetNavEntry("fleet-board")}
+              variant="header"
+              onClick={() => setShowFleetBoard(true)}
+            />
+            {onShowGuide && (
+              <NavIconButton
+                entry={fleetNavEntry("guide")}
+                variant="header"
+                onClick={onShowGuide}
+              />
+            )}
+            <NavIconButton
+              entry={fleetNavEntry("quick-switch")}
+              variant="header"
+              onClick={() => setShowQuickSwitcher(true)}
+            />
             <NotificationSettings
               open={showNotificationSettings}
               onOpenChange={setShowNotificationSettings}
