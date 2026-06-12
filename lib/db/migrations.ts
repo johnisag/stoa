@@ -642,6 +642,29 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 32,
+    name: "backfill_worker_auto_approve",
+    up: (db) => {
+      // Workers always run with the bypass flag (lib/orchestration.ts spawns them
+      // autoApprove:true), but rows created before createWorkerSession set
+      // auto_approve=1 stored the column default 0. Backfill so the auto-approve
+      // danger badge flags pre-upgrade workers too. Idempotent.
+      // Guard the table existing — some migration tests run on a partial DB.
+      const hasSessions =
+        (
+          db
+            .prepare(
+              `SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'`
+            )
+            .all() as { name: string }[]
+        ).length > 0;
+      if (!hasSessions) return;
+      db.exec(
+        `UPDATE sessions SET auto_approve = 1 WHERE conductor_session_id IS NOT NULL AND auto_approve = 0`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

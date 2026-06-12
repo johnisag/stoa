@@ -25,11 +25,13 @@ import {
   Users,
   ChevronDown,
   Circle,
+  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CountBadge } from "@/components/nav/fleet-nav";
 import { useAttentionCount } from "@/data/verdict-inbox/useAttentionCount";
 import { ContextMeter } from "@/components/ContextMeter";
+import { AutoApproveBadge } from "@/components/AutoApproveBadge";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
 import { getActiveBackend } from "@/lib/client/backend";
 import type { Session, Project } from "@/lib/db";
@@ -344,6 +346,14 @@ export function MobileTabBar({
                     )}
                   />
                   <span className="flex-1 truncate">{s.name}</span>
+                  {Boolean(s.auto_approve) && (
+                    // On a phone this dropdown is the primary session list, so flag
+                    // YOLO sessions here too (plain icon — no button in a menuitem).
+                    <ShieldAlert
+                      className="text-destructive h-3 w-3 shrink-0"
+                      aria-label="Auto-approve on"
+                    />
+                  )}
                   {sessionProject &&
                     sessionProject.name !== "Uncategorized" && (
                       <span className="text-muted-foreground text-xs">
@@ -369,6 +379,12 @@ export function MobileTabBar({
 
       {/* Live context-window meter for this session (Claude-only; self-hides). */}
       {session && <ContextMeter sessionId={session.id} />}
+
+      {/* Danger signal when this session auto-approves all tool calls (icon-only
+          here — the bar is cramped; auto_approve is a SQLite 0/1, so coerce). */}
+      {session && Boolean(session.auto_approve) && (
+        <AutoApproveBadge label={false} />
+      )}
 
       {/* View mode toggle */}
       {session?.working_directory && (
