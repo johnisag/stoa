@@ -7,6 +7,7 @@ import {
   type AskHistoryTurn,
   type AskProvider,
 } from "@/lib/ask";
+import { getModelOptions } from "@/lib/model-catalog";
 
 /**
  * POST /api/ask — answer a natural-language question about the user's Stoa fleet.
@@ -18,7 +19,9 @@ import {
  *
  * Body:  { question: string,
  *          history?: { role: "user" | "assistant"; content: string }[],
- *          provider: "claude" | "codex" | "hermes" }
+ *          provider?: "claude" | "codex",   // default "claude"
+ *          model?: string }                 // a getModelOptions(provider) token;
+ *                                            // anything else → the agent's default
  * Reply: { answer } on success, or { error } with a 4xx/5xx status.
  */
 export async function POST(request: NextRequest) {
@@ -28,10 +31,12 @@ export async function POST(request: NextRequest) {
       question: rawQuestion,
       history: rawHistory,
       provider: rawProvider,
+      model: rawModel,
     } = body as {
       question?: unknown;
       history?: unknown;
       provider?: unknown;
+      model?: unknown;
     };
 
     // Validate the question (non-empty string).
@@ -58,6 +63,16 @@ export async function POST(request: NextRequest) {
     const provider: AskProvider =
       rawProvider === undefined ? "claude" : (rawProvider as AskProvider);
 
+    // Validate the model SERVER-SIDE: only a value from the provider's catalog is
+    // honored (a fixed token, never user free-text), else fall through to the
+    // agent's own default. So a crafted body can't smuggle an arbitrary string
+    // into the argv `--model`/`-c model=` flag.
+    const model =
+      typeof rawModel === "string" &&
+      getModelOptions(provider).some((o) => o.value === rawModel)
+        ? rawModel
+        : undefined;
+
     // Normalize history: keep only well-formed {role, content} turns.
     const history: AskHistoryTurn[] = Array.isArray(rawHistory)
       ? rawHistory
@@ -78,7 +93,7 @@ export async function POST(request: NextRequest) {
 
     let answer: string;
     try {
-      answer = await runAsk(provider, prompt);
+      answer = await runAsk(provider, prompt, { model });
     } catch (err) {
       console.error(`[ask] ${provider} agent failed:`, err);
       return NextResponse.json(

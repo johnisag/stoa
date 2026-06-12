@@ -12,6 +12,8 @@ export interface AskInput {
   question: string;
   history: ChatMessage[];
   provider: ChatProvider;
+  /** Catalog model for the provider (e.g. "opus"); the route validates it. */
+  model: string;
 }
 
 /**

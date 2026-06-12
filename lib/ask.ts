@@ -60,28 +60,35 @@ export interface AskSpawn {
 
 /**
  * Per-provider NON-INTERACTIVE invocation. Flags are VERIFIED from `<cli> --help`:
- *   - claude: `claude -p`   → prompt on STDIN.
- *   - codex:  `codex exec`  → prompt on STDIN (exec reads stdin when no prompt
- *                             arg — "Run Codex non-interactively").
- * The prompt is on STDIN for BOTH (never argv) — critical, because `runAsk`
- * spawns with `shell: isWindows` and the prompt embeds untrusted fleet context;
- * argv under a shell would be command-injectable. No `--dangerously-*`/bypass
- * flag is ever added — this is read-only Q&A. The binary is resolved with
+ *   - claude: `claude -p [--model <m>]`   → prompt on STDIN.
+ *   - codex:  `codex exec [-c model=<m>]` → prompt on STDIN (exec reads stdin
+ *                             when no prompt arg — "Run Codex non-interactively").
+ * `model` is an optional CATALOG value (e.g. "opus" for claude, "gpt-5.4" for
+ * codex) — it's a fixed token from getModelOptions, never user free-text, so it's
+ * not an injection vector even though it rides in argv. Omitted → the agent's own
+ * default. The prompt is ALWAYS on STDIN (never argv) — critical, because
+ * `runAsk` spawns with `shell: isWindows` and the prompt embeds untrusted fleet
+ * context; argv under a shell would be command-injectable. No `--dangerously-*`/
+ * bypass flag is ever added — this is read-only Q&A. The binary is resolved with
  * resolveBinary (so the Windows .cmd shim is found), falling back to the bare
  * name. Pure → unit-tested as the cross-platform argv regression guard.
  */
-export function buildAskArgs(provider: AskProvider, prompt: string): AskSpawn {
+export function buildAskArgs(
+  provider: AskProvider,
+  prompt: string,
+  model?: string
+): AskSpawn {
   switch (provider) {
     case "claude":
       return {
         binary: resolveBinary("claude") || "claude",
-        args: ["-p"],
+        args: model ? ["-p", "--model", model] : ["-p"],
         input: prompt,
       };
     case "codex":
       return {
         binary: resolveBinary("codex") || "codex",
-        args: ["exec"],
+        args: model ? ["exec", "-c", `model=${model}`] : ["exec"],
         input: prompt,
       };
   }
@@ -196,6 +203,8 @@ export async function gatherStoaContext(windowDays = 1): Promise<string> {
 }
 
 export interface RunAskOptions {
+  /** Optional catalog model (e.g. "opus"); omitted → the agent's own default. */
+  model?: string;
   /** Hard wall-clock cap; the child is KILLED past it so a hung/interactive
    * process can't wedge the request. */
   timeoutMs?: number;
@@ -213,9 +222,9 @@ const DEFAULT_ASK_TIMEOUT_MS = 60_000;
 export function runAsk(
   provider: AskProvider,
   prompt: string,
-  { timeoutMs = DEFAULT_ASK_TIMEOUT_MS }: RunAskOptions = {}
+  { model, timeoutMs = DEFAULT_ASK_TIMEOUT_MS }: RunAskOptions = {}
 ): Promise<string> {
-  const { binary, args, input } = buildAskArgs(provider, prompt);
+  const { binary, args, input } = buildAskArgs(provider, prompt, model);
 
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
