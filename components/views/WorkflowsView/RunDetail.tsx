@@ -1,7 +1,8 @@
 "use client";
 
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Terminal } from "lucide-react";
 import { usePollRun } from "@/data/pipelines/queries";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   AGENT_BADGE,
@@ -17,15 +18,28 @@ import {
  * terminal). Steps are rendered in the spec's authored order so the DAG reads
  * top-down; each row shows status, agent, dependencies, elapsed time, and any
  * failure/skip detail. A status dot pulses while a step is running.
+ *
+ * Once a step has spawned its worker it carries a `sessionId` (StepState) — the
+ * only produced-artifact identifier a pipeline step exposes (there is no PR/
+ * branch on the run/step shape). When `onOpenSession` is wired, each such step
+ * offers an "Open session" jump so a finished run hands off to its terminal
+ * rather than dead-ending at "done".
  */
 export function RunDetail({
   runId,
   open,
   onBack,
+  onOpenSession,
 }: {
   runId: string;
   open: boolean;
   onBack: () => void;
+  /**
+   * Jump to a step's spawned worker session by its Stoa session id. Optional —
+   * supplied from app/page.tsx (it owns the attach/terminal machinery); absent
+   * in contexts that can't drive a terminal, where the affordance is hidden.
+   */
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const { data: run, isError } = usePollRun(runId, open);
   const meta = run ? RUN_STATUS_META[run.status] : null;
@@ -76,6 +90,7 @@ export function RunDetail({
             {run.spec.steps.map((step) => {
               const st = run.steps[step.id];
               const sm = STEP_STATUS_META[st?.status ?? "pending"];
+              const stepSessionId = st?.sessionId ?? null;
               return (
                 <li
                   key={step.id}
@@ -128,6 +143,20 @@ export function RunDetail({
                       {formatDuration(st.startedAt, st.endedAt)}
                       {st.endedAt == null ? " elapsed" : ""}
                     </span>
+                  )}
+                  {/* Hand off to the step's spawned worker session — the only
+                      produced artifact a step exposes. Shown once a worker
+                      exists (sessionId set) and a jump handler is wired. */}
+                  {onOpenSession && stepSessionId && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1 w-fit"
+                      onClick={() => onOpenSession(stepSessionId)}
+                    >
+                      <Terminal className="mr-1.5 h-3 w-3" />
+                      Open session
+                    </Button>
                   )}
                 </li>
               );

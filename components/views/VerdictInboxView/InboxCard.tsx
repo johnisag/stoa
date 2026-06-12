@@ -12,6 +12,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useConfirm } from "@/components/ConfirmProvider";
 import { Button } from "@/components/ui/button";
 import { STATUS_META } from "@/components/views/DispatchView/shared";
 import type { DispatchStatus } from "@/lib/dispatch/types";
@@ -91,6 +92,7 @@ export function InboxCard({ item }: { item: InboxItem }) {
   );
   const { merge, dismiss, retry } = useInboxActions();
   const addLesson = useAddLesson();
+  const confirm = useConfirm();
 
   // "Remember this": promote a finding into a permanent per-repo rule (fleet
   // memory) so a future worker is warned up front. Dispatch items only (a repo).
@@ -137,6 +139,21 @@ export function InboxCard({ item }: { item: InboxItem }) {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Action failed");
     }
+  };
+
+  // Merge lands the PR on its base branch — irreversible from the UI, so confirm
+  // first (every other destructive action in the repo routes through useConfirm).
+  const onMerge = async () => {
+    if (
+      !(await confirm({
+        title: `Merge PR #${item.prNumber}?`,
+        description: "This merges the pull request into its base branch.",
+        confirmLabel: "Merge",
+        destructive: false,
+      }))
+    )
+      return;
+    await run(merge, "Merged")();
   };
 
   return (
@@ -272,12 +289,7 @@ export function InboxCard({ item }: { item: InboxItem }) {
 
       <div className="flex flex-wrap gap-2 pl-5">
         {canMerge && (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={run(merge, "Merged")}
-          >
+          <Button size="sm" variant="outline" disabled={busy} onClick={onMerge}>
             {merge.isPending ? (
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             ) : (

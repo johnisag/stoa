@@ -828,6 +828,15 @@ function HomeContent() {
         onOpenChange={setShowWorkflows}
         sessions={sessions}
         activeSessionId={focusedActiveTab?.sessionId ?? undefined}
+        onOpenSession={(sessionId) => {
+          const session = sessions.find((s) => s.id === sessionId);
+          if (session) {
+            setShowWorkflows(false);
+            attachToSession(session);
+          } else {
+            toast.error("Session not found — it may have been deleted.");
+          }
+        }}
       />
       {/* Verdict Inbox — the fleet-wide review queue (dispatch + auto-mode
           sessions). Self-contained; opened via setShowVerdictInbox. */}

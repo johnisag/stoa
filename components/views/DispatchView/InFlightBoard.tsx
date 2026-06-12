@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useConfirm } from "@/components/ConfirmProvider";
 import { Button } from "@/components/ui/button";
 import { SessionDiffModal } from "@/components/SessionDiffModal";
 import type {
@@ -40,13 +41,26 @@ function Card({
   const [showDiff, setShowDiff] = useState(false);
   const merge = useMergeDispatch();
   const action = useDispatchAction();
+  const confirm = useConfirm();
   const isPrOpen = d.status === "pr_open";
   const isFailed = d.status === "failed";
-  const doMerge = () =>
+  // Merge lands the PR on its base branch — irreversible from the UI, so confirm
+  // first (every other destructive action in the repo routes through useConfirm).
+  const doMerge = async () => {
+    if (
+      !(await confirm({
+        title: `Merge PR #${d.pr_number}?`,
+        description: "This merges the pull request into its base branch.",
+        confirmLabel: "Merge",
+        destructive: false,
+      }))
+    )
+      return;
     merge.mutate(d.id, {
       onSuccess: () => toast.success(`Merged PR #${d.pr_number}`),
       onError: (e) => toast.error((e as Error).message),
     });
+  };
   const doFailedAction = (act: "retry" | "dismiss") =>
     action.mutate(
       { id: d.id, action: act },

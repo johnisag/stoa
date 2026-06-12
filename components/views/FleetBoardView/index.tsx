@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Columns3, HelpCircle, Loader2 } from "lucide-react";
+import { Columns3, HelpCircle, Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,7 +30,8 @@ export function FleetBoardView({
   onOpenChange: (open: boolean) => void;
 }) {
   const [showHelp, setShowHelp] = useState(false);
-  const { lanes, repoById, total, isLoading, isError } = useFleetBoard(open);
+  const { lanes, repoById, total, isLoading, isError, isFetching, refetch } =
+    useFleetBoard(open);
   // The lanes that want the human — surfaced in the header so "what needs me?"
   // is answered without scrolling to the right-hand columns.
   const attentionCount = lanes.verified.length + lanes.failed.length;
@@ -85,8 +86,23 @@ export function FleetBoardView({
               <Loader2 className="h-4 w-4 animate-spin" /> Loading…
             </div>
           ) : isError ? (
-            <div className="py-10 text-center text-sm text-red-500">
-              Failed to load the board. Retrying…
+            <div className="flex flex-col items-center justify-center px-4 py-12">
+              <AlertCircle className="text-destructive/50 mb-3 h-10 w-10" />
+              <p className="text-destructive mb-2 text-sm">
+                Failed to load the board
+              </p>
+              <p className="text-muted-foreground mb-4 text-xs">
+                {isFetching ? "Retrying…" : "Tap retry to try again."}
+              </p>
+              <Button
+                variant="outline"
+                onClick={() => refetch()}
+                disabled={isFetching}
+                className="gap-2"
+              >
+                {isFetching && <Loader2 className="h-4 w-4 animate-spin" />}
+                Retry
+              </Button>
             </div>
           ) : total === 0 ? (
             <div className="text-muted-foreground py-10 text-center text-sm">

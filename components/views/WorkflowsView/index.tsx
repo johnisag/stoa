@@ -34,11 +34,17 @@ export function WorkflowsView({
   onOpenChange,
   sessions,
   activeSessionId,
+  onOpenSession,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sessions: Session[];
   activeSessionId?: string;
+  /**
+   * Jump to a finished step's spawned worker by its Stoa session id. Optional —
+   * threaded down to RunDetail; supplied from app/page.tsx (attach machinery).
+   */
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>("templates");
   const [pickedTemplate, setPickedTemplate] = useState<string | null>(null);
@@ -163,6 +169,7 @@ export function WorkflowsView({
               runId={openRunId}
               open={open}
               onBack={() => setOpenRunId(null)}
+              onOpenSession={onOpenSession}
             />
           ) : (
             <RunsList open={open} onOpen={setOpenRunId} />
