@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Loader2, Send, Sparkles } from "lucide-react";
+import { Check, Loader2, Send, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,26 +33,33 @@ import {
 } from "@/lib/chat-settings";
 import { getModelOptions } from "@/lib/model-catalog";
 import { useViewport } from "@/hooks/useViewport";
-import { useAsk, type ChatMessage } from "@/data/chat/useAsk";
+import {
+  useProposeCommand,
+  useExecuteCommand,
+  type ChatItem,
+  type ChatMessage,
+} from "@/data/chat/useCommand";
 
-// Starter questions for the empty state — they double as a hint at what the
-// read-only Ask-Stoa endpoint can actually answer: it's grounded in the fleet's
-// current state + recent activity (not Stoa how-to docs).
+// Starter prompts for the empty state — a mix of read-only questions (grounded in
+// the fleet's live state + recent activity) and one ACTION, hinting that Stoa can
+// also do things (it always confirms first).
 const EXAMPLE_QUESTIONS = [
   "What did the fleet do today?",
   "Which sessions are stuck on me?",
-  "How much has the fleet cost today?",
+  "Start a new Claude session",
 ];
 
 /**
- * Ask Stoa — a self-contained, read-only chat dialog. The user asks
- * natural-language questions about their fleet + sessions and a chosen agent
- * (Claude or Codex) answers via the /api/ask backend, grounded in a live
- * fleet-state snapshot.
+ * Ask Stoa — a self-contained chat dialog that can both ANSWER and ACT. The user
+ * asks natural-language questions about their fleet + sessions, and a chosen agent
+ * (Claude or Codex) responds via the /api/command/propose backend, grounded in a
+ * live fleet-state snapshot. A request the agent maps to an allowlisted action
+ * (create_session) comes back as a CONFIRM CARD; nothing runs until the user
+ * confirms, which calls /api/command/execute (re-validated + audited server-side).
  *
- * User turns render as plain text in a right-aligned bubble; assistant turns
- * render as markdown (react-markdown + remark-gfm, the repo's MarkdownRenderer
- * stack). The conversation resets on open so reopening is fresh.
+ * User turns render as plain text in a right-aligned bubble; assistant ANSWERS
+ * render as markdown; PROPOSALS render as a confirm card; RESULTS as a status
+ * bubble. The conversation resets on open so reopening is fresh.
  */
 export function ChatView({
   open,
@@ -67,13 +74,17 @@ export function ChatView({
   const [model, setModel] = useState(() =>
     defaultChatModel(DEFAULT_CHAT_PROVIDER)
   );
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatItem[]>([]);
   const [input, setInput] = useState("");
   const { isMobile } = useViewport();
 
-  const ask = useAsk();
+  const propose = useProposeCommand();
+  const execute = useExecuteCommand();
   const taRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Synchronous re-entrancy lock for Confirm — a ref (not state) so a fast
+  // double-tap can't fire two executes before React re-renders the disabled state.
+  const executingRef = useRef(false);
 
   // Hydrate the persisted provider + model once mounted — localStorage is
   // client-only.
@@ -105,7 +116,7 @@ export function ChatView({
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, ask.isPending]);
+  }, [messages, propose.isPending]);
 
   function handleProviderChange(value: string) {
     const next = value as ChatProvider;
@@ -131,34 +142,139 @@ export function ChatView({
 
   function send() {
     const question = input.trim();
-    if (!question || ask.isPending) return;
+    if (!question || propose.isPending) return;
 
-    // Snapshot the prior turns as history BEFORE appending the new question, so
-    // the backend gets the conversation that preceded it.
-    const history = messages;
-    const userMessage: ChatMessage = { role: "user", content: question };
-    setMessages([...history, userMessage]);
+    // History = prior user turns + assistant ANSWERS, plus successful action
+    // RESULTS (so the agent knows what it already did); pending proposal cards are
+    // local UI state, not context. Snapshot BEFORE appending the new question.
+    const history: ChatMessage[] = messages
+      .filter(
+        (m) =>
+          m.role === "user" ||
+          (m.role === "assistant" && m.kind === "answer") ||
+          (m.role === "assistant" && m.kind === "result" && m.ok)
+      )
+      .map((m) => ({
+        role: m.role,
+        content: (m as { content: string }).content,
+      }));
+
+    // Keep a reference to the optimistic turn so onError can remove exactly IT,
+    // not "the last message" — a concurrent execute may append a result first.
+    const userItem: ChatItem = { role: "user", content: question };
+    setMessages((prev) => [...prev, userItem]);
     setInput("");
     requestAnimationFrame(grow); // shrink back after clearing
 
-    ask.mutate(
-      { question, history, provider, model },
+    propose.mutate(
+      { message: question, history, provider, model },
       {
-        onSuccess: (answer) => {
+        onSuccess: (reply) => {
           setMessages((prev) => [
             ...prev,
-            { role: "assistant", content: answer },
+            reply.kind === "answer"
+              ? { role: "assistant", kind: "answer", content: reply.text }
+              : {
+                  role: "assistant",
+                  kind: "proposal",
+                  proposal: {
+                    action: reply.action,
+                    params: reply.params,
+                    summary: reply.summary,
+                    project: reply.project,
+                  },
+                  status: "pending",
+                },
           ]);
         },
         onError: (err) => {
           // Drop the optimistic question back into the composer so it isn't lost.
           toast.error(
-            err instanceof Error ? err.message : "Failed to get an answer"
+            err instanceof Error ? err.message : "Failed to get a response"
           );
-          setMessages((prev) => prev.slice(0, -1));
+          setMessages((prev) => prev.filter((m) => m !== userItem));
           setInput(question);
         },
       }
+    );
+  }
+
+  // Confirm a pending proposal: run it via the execute endpoint (which re-validates
+  // server-side). The card flips to "executing" (synchronously, + a ref lock) so a
+  // double-tap can't run it twice; then to "confirmed" with a result bubble, or
+  // back to "pending" with an error bubble so it can be retried.
+  function handleConfirm(index: number) {
+    if (executingRef.current) return; // sync guard against a double-tap
+    const item = messages[index];
+    if (
+      !item ||
+      item.role !== "assistant" ||
+      item.kind !== "proposal" ||
+      item.status !== "pending"
+    ) {
+      return;
+    }
+    executingRef.current = true;
+    const { proposal } = item;
+    const setStatus = (status: "executing" | "confirmed" | "pending") =>
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === index && m.role === "assistant" && m.kind === "proposal"
+            ? { ...m, status }
+            : m
+        )
+      );
+    setStatus("executing");
+    execute.mutate(
+      { action: proposal.action, params: proposal.params },
+      {
+        onSuccess: (res) => {
+          setMessages((prev) => [
+            ...prev.map((m, i) =>
+              i === index && m.role === "assistant" && m.kind === "proposal"
+                ? { ...m, status: "confirmed" as const }
+                : m
+            ),
+            {
+              role: "assistant",
+              kind: "result",
+              ok: true,
+              content: `Created session **${res.name}** in **${res.project.name}**. Open it from the sidebar to start working.`,
+            },
+          ]);
+        },
+        onError: (err) => {
+          // Revert to pending so it can be retried; surface why it failed.
+          setStatus("pending");
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              kind: "result",
+              ok: false,
+              content:
+                err instanceof Error ? err.message : "Failed to run the action",
+            },
+          ]);
+        },
+        onSettled: () => {
+          executingRef.current = false;
+        },
+      }
+    );
+  }
+
+  // Decline a pending proposal — nothing runs; mark it cancelled.
+  function handleCancel(index: number) {
+    setMessages((prev) =>
+      prev.map((m, i) =>
+        i === index &&
+        m.role === "assistant" &&
+        m.kind === "proposal" &&
+        m.status === "pending"
+          ? { ...m, status: "cancelled" as const }
+          : m
+      )
     );
   }
 
@@ -175,12 +291,23 @@ export function ChatView({
     if (!next) {
       setMessages([]);
       setInput("");
-      ask.reset();
+      executingRef.current = false;
+      propose.reset();
+      execute.reset();
     }
     onOpenChange(next);
   }
 
-  const canSend = input.trim().length > 0 && !ask.isPending;
+  const canSend = input.trim().length > 0 && !propose.isPending;
+  // Only one action runs at a time (executingRef). Surface that on the cards: a
+  // pending Confirm disables while ANOTHER card is executing, so it never looks
+  // tappable-but-dead.
+  const anyExecuting = messages.some(
+    (m) =>
+      m.role === "assistant" &&
+      m.kind === "proposal" &&
+      m.status === "executing"
+  );
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -195,7 +322,8 @@ export function ChatView({
               Ask Stoa
             </DialogTitle>
             <DialogDescription>
-              Ask about your fleet, sessions, and recent activity.
+              Ask about your fleet — or tell Stoa to start a session. It always
+              asks you to confirm before acting.
             </DialogDescription>
           </div>
           {/* Which agent + model answers — both persisted across reloads. */}
@@ -245,11 +373,11 @@ export function ChatView({
 
         {/* Message list */}
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6">
-          {messages.length === 0 && !ask.isPending ? (
+          {messages.length === 0 && !propose.isPending ? (
             <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-4 text-center text-sm">
               <Sparkles className="h-8 w-8 opacity-40" />
               <p className="max-w-xs">
-                Ask anything about your fleet. For example:
+                Ask about your fleet, or tell Stoa to do something. For example:
               </p>
               <ul className="space-y-1.5">
                 {EXAMPLE_QUESTIONS.map((q) => (
@@ -270,29 +398,113 @@ export function ChatView({
                   </li>
                 ))}
               </ul>
+              <p className="text-muted-foreground/70 max-w-xs text-xs">
+                Actions (like starting a session) always ask you to confirm
+                first.
+              </p>
             </div>
           ) : (
             <div className="space-y-4 py-4">
-              {messages.map((message, i) =>
-                message.role === "user" ? (
-                  <div key={i} className="flex justify-end">
-                    <div className="bg-secondary text-secondary-foreground max-w-[85%] rounded-2xl rounded-br-sm px-3 py-2 text-sm whitespace-pre-wrap">
-                      {message.content}
+              {messages.map((message, i) => {
+                if (message.role === "user") {
+                  return (
+                    <div key={i} className="flex justify-end">
+                      <div className="bg-secondary text-secondary-foreground max-w-[85%] rounded-2xl rounded-br-sm px-3 py-2 text-sm whitespace-pre-wrap">
+                        {message.content}
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div key={i} className="flex justify-start">
-                    <div className="bg-muted/40 max-w-[90%] rounded-2xl rounded-bl-sm px-3 py-2">
-                      <article className="prose prose-sm dark:prose-invert max-w-none">
+                  );
+                }
+                if (message.kind === "answer") {
+                  return (
+                    <div key={i} className="flex justify-start">
+                      <div className="bg-muted/40 max-w-[90%] rounded-2xl rounded-bl-sm px-3 py-2">
+                        <article className="prose prose-sm dark:prose-invert max-w-none">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {message.content}
+                          </ReactMarkdown>
+                        </article>
+                      </div>
+                    </div>
+                  );
+                }
+                if (message.kind === "result") {
+                  return (
+                    <div key={i} className="flex justify-start">
+                      <div
+                        className={cn(
+                          "flex max-w-[90%] items-start gap-2 rounded-2xl rounded-bl-sm px-3 py-2 text-sm [&_p]:m-0",
+                          message.ok
+                            ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                            : "bg-destructive/10 text-destructive"
+                        )}
+                      >
+                        {message.ok ? (
+                          <Check className="mt-0.5 h-4 w-4 shrink-0" />
+                        ) : (
+                          <X className="mt-0.5 h-4 w-4 shrink-0" />
+                        )}
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {message.content}
                         </ReactMarkdown>
-                      </article>
+                      </div>
+                    </div>
+                  );
+                }
+                // Proposal — a confirm card. Nothing runs until the user confirms.
+                return (
+                  <div key={i} className="flex justify-start">
+                    <div className="border-border bg-muted/30 max-w-[90%] space-y-3 rounded-2xl rounded-bl-sm border px-4 py-3">
+                      <div className="flex items-start gap-2">
+                        <Sparkles className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
+                        <div className="space-y-0.5">
+                          <p className="text-sm font-medium">
+                            Stoa wants to act
+                          </p>
+                          <p className="text-muted-foreground text-sm">
+                            {message.proposal.summary}
+                          </p>
+                        </div>
+                      </div>
+                      {message.status === "pending" ||
+                      message.status === "executing" ? (
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => handleConfirm(i)}
+                            disabled={anyExecuting}
+                            className="h-8"
+                          >
+                            {message.status === "executing" ? (
+                              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Check className="mr-1 h-3.5 w-3.5" />
+                            )}
+                            Confirm
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleCancel(i)}
+                            disabled={message.status === "executing"}
+                            className="h-8"
+                          >
+                            <X className="mr-1 h-3.5 w-3.5" />
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground text-xs">
+                          {message.status === "confirmed"
+                            ? "Confirmed."
+                            : "Cancelled."}
+                        </p>
+                      )}
                     </div>
                   </div>
-                )
-              )}
-              {ask.isPending && (
+                );
+              })}
+              {propose.isPending && (
                 <div className="flex justify-start">
                   <div className="bg-muted/40 text-muted-foreground flex items-center gap-2 rounded-2xl rounded-bl-sm px-3 py-2 text-sm">
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -316,17 +528,17 @@ export function ChatView({
               }}
               onKeyDown={handleKeyDown}
               rows={1}
-              disabled={ask.isPending}
-              placeholder="Ask about your fleet…"
+              disabled={propose.isPending}
+              placeholder="Ask about your fleet, or start a session…"
               className="border-input bg-background focus-visible:ring-ring/60 max-h-32 min-h-[44px] flex-1 resize-none rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2 disabled:opacity-60"
             />
             <Button
               onClick={send}
               disabled={!canSend}
               className="h-11"
-              aria-label="Send question"
+              aria-label="Send"
             >
-              {ask.isPending ? (
+              {propose.isPending ? (
                 <Loader2 className={cn("h-4 w-4 animate-spin")} />
               ) : (
                 <Send className="mr-1 h-4 w-4" />
