@@ -120,4 +120,36 @@ describe("createWebSocketConnection — exited session suppresses reconnect", ()
       expect.any(Function)
     );
   });
+
+  it('fires onError and prints the reason on a server "error" frame', () => {
+    // Regression: the "error" frame used to match no branch and be silently
+    // dropped — in the native pty path the socket stays OPEN, so the screen just
+    // hung (a session-switch left "Switching…" stuck). It must surface the reason
+    // and fire onError so the hook shows the Relaunch bar.
+    const refs = makeRefs();
+    const onError = vi.fn();
+    const term = fakeTerm();
+    createWebSocketConnection(
+      term as never,
+      { ...baseCallbacks(), onError },
+      refs.wsRef as never,
+      refs.reconnectTimeoutRef as never,
+      refs.reconnectDelayRef as never,
+      refs.intentionalCloseRef as never,
+      refs.endedRef as never
+    );
+    const ws = FakeWebSocket.instances[0];
+    ws.onmessage?.({
+      data: JSON.stringify({
+        type: "error",
+        message: "Failed to attach session",
+      }),
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith("Failed to attach session");
+    expect(term.write).toHaveBeenCalledWith(
+      expect.stringContaining("[Failed to attach session]")
+    );
+  });
 });

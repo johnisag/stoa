@@ -51,9 +51,14 @@ export function useTerminalConnection({
   // covering the gap between reset() and the incoming snapshot's first paint.
   const [isAttaching, setIsAttaching] = useState(false);
   const attachTimerRef = useRef<NodeJS.Timeout | null>(null);
-  // True once the agent process exits ("exit" message). Drives the Relaunch
-  // overlay and (via sessionEndedRef) suppresses auto-reconnect respawn.
+  // True once the agent process exits ("exit" message), or an attach/spawn fails
+  // ("error" frame — see attachError below). Drives the Relaunch overlay and (via
+  // sessionEndedRef) suppresses auto-reconnect respawn.
   const [sessionEnded, setSessionEnded] = useState(false);
+  // The reason an attach/spawn FAILED (server "error" frame), or null. Reuses the
+  // session-ended bar but with this message in place of "Session ended", since the
+  // session never started. Cleared on relaunch / session switch.
+  const [attachError, setAttachError] = useState<string | null>(null);
   // Pending auto-retry when the agent exited on a TRANSIENT failure (rate-limit /
   // network hiccup): which attempt and when it fires. null = nothing scheduled.
   // Drives the "retrying in Ns · cancel" affordance; capped + backed off below.
@@ -151,6 +156,7 @@ export function useTerminalConnection({
         // session starts with a fresh attempt budget, no inherited countdown.
         sessionEndedRef.current = false;
         setSessionEnded(false);
+        setAttachError(null);
         if (autoRetryTimerRef.current) {
           clearTimeout(autoRetryTimerRef.current);
           autoRetryTimerRef.current = null;
@@ -259,6 +265,7 @@ export function useTerminalConnection({
       if (!fromAutoRetry) autoRetryAttemptRef.current = 0;
       sessionEndedRef.current = false;
       setSessionEnded(false);
+      setAttachError(null);
       const payload = attachPayloadRef.current;
       const ws = wsRef.current;
       if (ws?.readyState === WebSocket.OPEN && payload) {
@@ -472,6 +479,22 @@ export function useTerminalConnection({
             setSessionEnded(true);
             armAutoRetry(code);
           },
+          // Attach/spawn failed (server "error" frame). Tear down the transient
+          // "Switching…" overlay so it can't hang, mark the session ended (shows
+          // Relaunch + suppresses the silent reconnect-respawn), and surface the
+          // reason. No auto-retry: an attach failure is a setup error, not a
+          // mid-session blip — the user relaunches when they've addressed it. Any
+          // countdown left armed by a prior transient exit is cancelled, so it
+          // can't mask the error in the bar nor auto-relaunch a failed attach.
+          onError: (message?: string) => {
+            clearAttaching();
+            cancelAutoRetry();
+            sessionEndedRef.current = true;
+            setSessionEnded(true);
+            const reason = message || "Failed to start the session";
+            setAttachError(reason);
+            toast.error(reason);
+          },
         },
         wsRef,
         reconnectTimeoutRef,
@@ -648,6 +671,7 @@ export function useTerminalConnection({
     triggerResize,
     reconnect,
     sessionEnded,
+    attachError,
     relaunch,
     autoRetry,
     cancelAutoRetry,
