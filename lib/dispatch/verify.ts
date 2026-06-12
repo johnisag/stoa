@@ -336,7 +336,13 @@ export async function verifyPass(): Promise<void> {
       isAlive(d.ci_fixer_session_id) ||
       isAlive(d.rebase_fixer_session_id);
     const cwd = expandHome(d.worktree_path);
-    const { headRefOid } = await getPrReadiness(cwd, d.pr_number);
+    // The PR-state read is repo-explicit from the stable checkout; the verify
+    // COMMAND below still runs in the worktree (it needs the tree).
+    const { headRefOid } = await getPrReadiness(
+      expandHome(repo.repo_path),
+      d.pr_number,
+      repo.repo_slug
+    );
 
     // The head MOVED off the verdict's SHA (a fixer pushed) → clear the now-stale
     // verdict so the board/inbox stop showing a 'pass'/'fail' for a head that's

@@ -4,7 +4,7 @@
  * from [{name}] to string[]). No gh is spawned — canned JSON only.
  */
 import { describe, it, expect } from "vitest";
-import { parseIssues } from "@/lib/dispatch/issues";
+import { parseIssues, buildPrListByBranchArgs } from "@/lib/dispatch/issues";
 
 describe("parseIssues", () => {
   it("normalizes a well-formed gh issue list", () => {
@@ -57,5 +57,25 @@ describe("parseIssues", () => {
       { number: 1, labels: [{ name: "keep" }, {}, { name: 123 }, "nope"] },
     ]);
     expect(parseIssues(json)[0].labels).toEqual(["keep"]);
+  });
+});
+
+describe("buildPrListByBranchArgs — repo-explicit branch→PR lookup", () => {
+  it("appends --repo <slug> only when given (so the sweep is worktree-independent)", () => {
+    expect(buildPrListByBranchArgs("feature/x")).not.toContain("--repo");
+    expect(buildPrListByBranchArgs("feature/x", "owner/repo")).toEqual([
+      "pr",
+      "list",
+      "--head",
+      "feature/x",
+      "--state",
+      "all",
+      "--json",
+      "number,url,state",
+      "--limit",
+      "1",
+      "--repo",
+      "owner/repo",
+    ]);
   });
 });

@@ -184,6 +184,29 @@ export interface BranchPR {
   state: string; // "OPEN" | "MERGED" | "CLOSED"
 }
 
+/** Pure argv for looking up a PR by branch head (testable). --repo decouples gh
+ * from the cwd's git remote, so the sweep can run from the stable main checkout
+ * rather than the worker's worktree (which may have been reclaimed). */
+export function buildPrListByBranchArgs(
+  branchName: string,
+  repoSlug?: string | null
+): string[] {
+  const args = [
+    "pr",
+    "list",
+    "--head",
+    branchName,
+    "--state",
+    "all",
+    "--json",
+    "number,url,state",
+    "--limit",
+    "1",
+  ];
+  if (repoSlug) args.push("--repo", repoSlug);
+  return args;
+}
+
 /**
  * Look up the PR for a worktree branch in ANY state (async, non-blocking). Unlike
  * lib/pr.ts getPRForBranch (open-only), this sees MERGED/CLOSED too — so the sweep
@@ -192,23 +215,13 @@ export interface BranchPR {
  */
 export async function getPRForBranchAnyState(
   workingDir: string,
-  branchName: string
+  branchName: string,
+  repoSlug?: string | null
 ): Promise<BranchPR | null> {
   try {
     const { stdout } = await execFileAsync(
       gh,
-      [
-        "pr",
-        "list",
-        "--head",
-        branchName,
-        "--state",
-        "all",
-        "--json",
-        "number,url,state",
-        "--limit",
-        "1",
-      ],
+      buildPrListByBranchArgs(branchName, repoSlug),
       {
         cwd: workingDir,
         encoding: "utf-8",

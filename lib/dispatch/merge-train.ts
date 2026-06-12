@@ -181,8 +181,9 @@ export async function mergeTrainPass(): Promise<void> {
     }
 
     const { mergeable, checks } = await getPrReadiness(
-      expandHome(d.worktree_path),
-      d.pr_number
+      expandHome(repo.repo_path),
+      d.pr_number,
+      repo.repo_slug
     );
 
     // The PR is mergeable again (base caught up / a prior rebase landed it): zero

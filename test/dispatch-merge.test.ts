@@ -20,4 +20,28 @@ describe("buildMergeArgs", () => {
     expect(buildMergeArgs(1)).not.toContain("--auto");
     expect(buildMergeArgs(1, "merge")).not.toContain("--auto");
   });
+
+  it("adds --repo <slug> when given (so the merge is worktree-independent)", () => {
+    expect(buildMergeArgs(7, "squash", null, "owner/repo")).toEqual([
+      "pr",
+      "merge",
+      "7",
+      "--squash",
+      "--repo",
+      "owner/repo",
+    ]);
+    // sits after --match-head-commit
+    expect(buildMergeArgs(7, "merge", "abc123", "owner/repo")).toEqual([
+      "pr",
+      "merge",
+      "7",
+      "--merge",
+      "--match-head-commit",
+      "abc123",
+      "--repo",
+      "owner/repo",
+    ]);
+    // omitted (and argv unchanged) when no slug
+    expect(buildMergeArgs(7)).not.toContain("--repo");
+  });
 });

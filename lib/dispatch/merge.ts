@@ -23,10 +23,15 @@ export type MergeMethod = "squash" | "merge" | "rebase";
 export function buildMergeArgs(
   prNumber: number,
   method: MergeMethod = "squash",
-  matchHeadCommit?: string | null
+  matchHeadCommit?: string | null,
+  repoSlug?: string | null
 ): string[] {
   const args = ["pr", "merge", String(prNumber), `--${method}`];
   if (matchHeadCommit) args.push("--match-head-commit", matchHeadCommit);
+  // --repo decouples gh from the cwd's git remote, so the merge can run from the
+  // stable main checkout instead of the per-task worktree (which may be reclaimed
+  // — a gone worktree cwd otherwise makes Node throw a misleading "spawn gh ENOENT").
+  if (repoSlug) args.push("--repo", repoSlug);
   return args;
 }
 
@@ -37,10 +42,18 @@ export async function mergePR(opts: {
   prNumber: number;
   method?: MergeMethod;
   matchHeadCommit?: string | null;
+  /** When set, gh runs against this repo via --repo (worktree-independent); the
+   * cwd then only needs to be a real existing dir (the stable main checkout). */
+  repoSlug?: string | null;
 }): Promise<void> {
   await execFileAsync(
     gh,
-    buildMergeArgs(opts.prNumber, opts.method, opts.matchHeadCommit),
+    buildMergeArgs(
+      opts.prNumber,
+      opts.method,
+      opts.matchHeadCommit,
+      opts.repoSlug
+    ),
     {
       cwd: opts.cwd,
       encoding: "utf-8",

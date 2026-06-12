@@ -167,7 +167,9 @@ export function parsePanelComments(
 // undefined = not fetched yet; null = couldn't determine (→ never approve).
 let cachedActor: string | null | undefined;
 
-/** The authenticated gh account's login (cached). null on failure. */
+/** The authenticated gh account's login (cached on SUCCESS). null on failure —
+ * but a failure is NOT cached, so a transient/spawn error (e.g. a gone worktree
+ * cwd) can't poison the process-wide cache into never-approving every gated PR. */
 export async function getGhActor(cwd: string): Promise<string | null> {
   if (cachedActor !== undefined) return cachedActor;
   try {
@@ -177,10 +179,10 @@ export async function getGhActor(cwd: string): Promise<string | null> {
       { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
     );
     cachedActor = stdout.trim() || null;
+    return cachedActor;
   } catch {
-    cachedActor = null;
+    return null; // retry next call — don't cache a transient failure
   }
-  return cachedActor;
 }
 
 interface RawComment {
@@ -196,7 +198,8 @@ interface RawComment {
 export async function aggregatePanelVerdict(
   cwd: string,
   prNumber: number,
-  round: number
+  round: number,
+  repoSlug?: string | null
 ): Promise<PanelVerdict> {
   const incomplete: PanelVerdict = {
     byLens: {},
@@ -206,11 +209,15 @@ export async function aggregatePanelVerdict(
   try {
     const actor = await getGhActor(cwd);
     if (!actor) return incomplete;
-    const { stdout } = await execFileAsync(
-      gh,
-      ["pr", "view", String(prNumber), "--json", "comments"],
-      { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
-    );
+    // --repo makes the read worktree-independent (run from the stable checkout).
+    const args = ["pr", "view", String(prNumber), "--json", "comments"];
+    if (repoSlug) args.push("--repo", repoSlug);
+    const { stdout } = await execFileAsync(gh, args, {
+      cwd,
+      encoding: "utf-8",
+      timeout: 15000,
+      windowsHide: true,
+    });
     const parsed = JSON.parse(stdout) as { comments?: RawComment[] };
     const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
     // Sort oldest→newest so parsePanelComments' "latest wins per lens" is correct
