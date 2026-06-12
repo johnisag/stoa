@@ -3,7 +3,7 @@ import {
   type ExecFileSyncOptionsWithStringEncoding,
 } from "child_process";
 import { unlinkSync } from "fs";
-import { join } from "path";
+import { join, resolve, sep } from "path";
 import { devNull } from "os";
 import { expandHome, isWindows } from "./platform";
 
@@ -353,6 +353,18 @@ export function unstageAll(workingDir: string): void {
  * Discard changes to a file (checkout for tracked, delete for untracked)
  */
 export function discardChanges(workingDir: string, filePath: string): void {
+  // Containment guard: `filePath` must resolve to a path INSIDE the repo. The
+  // tracked branch (`git checkout -- <file>`) is already repo-scoped by git, but
+  // the untracked branch unlinkSync(join(workingDir, filePath)) would otherwise
+  // delete an arbitrary file via an absolute path or `../` traversal (the route
+  // is reachable directly, not only from the status-derived UI). Reject anything
+  // that escapes the working dir before running either destructive op.
+  const root = resolve(workingDir);
+  const target = resolve(workingDir, filePath);
+  if (target !== root && !target.startsWith(root + sep)) {
+    throw new Error("Refusing to discard a path outside the repository");
+  }
+
   // Check if file is tracked by git
   try {
     git(["ls-files", "--error-unmatch", filePath], workingDir, {

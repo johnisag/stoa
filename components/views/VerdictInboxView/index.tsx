@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
 import { useInbox, type InboxItem } from "@/data/verdict-inbox/queries";
 import { needsMe } from "@/lib/verdict-inbox-selectors";
 import { InboxCard } from "./InboxCard";
@@ -27,12 +28,20 @@ export function VerdictInboxView({
   open,
   onOpenChange,
   onOpenSession,
+  onOpenDispatch,
+  onOpenWorkflows,
+  onOpenFleetBoard,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Jump into a row's live worker session (ceremony items carry a session id).
    * Wired in page.tsx like WorkflowsView: look it up, close the dialog, attach. */
   onOpenSession?: (sessionId: string) => void;
+  /** Jump to a sibling fleet dialog (closes this one, opens the target).
+   * Optional — each renders an icon in the header; wired in app/page.tsx. */
+  onOpenDispatch?: () => void;
+  onOpenWorkflows?: () => void;
+  onOpenFleetBoard?: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [showHelp, setShowHelp] = useState(false);
@@ -88,7 +97,7 @@ export function VerdictInboxView({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center justify-between px-6 pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-6 pb-3">
           <div className="bg-muted inline-flex rounded-md p-0.5 text-sm">
             {tabs.map((t) => (
               <button
@@ -115,16 +124,43 @@ export function VerdictInboxView({
               </button>
             ))}
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="How the Verdict Inbox works"
-            title="How the Verdict Inbox works"
-            aria-pressed={showHelp}
-            onClick={() => setShowHelp((v) => !v)}
-          >
-            <HelpCircle className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            {/* Jump to a sibling fleet view without closing + reopening. */}
+            {onOpenDispatch && (
+              <NavIconButton
+                entry={fleetNavEntry("dispatch")}
+                onClick={onOpenDispatch}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            {onOpenWorkflows && (
+              <NavIconButton
+                entry={fleetNavEntry("workflows")}
+                onClick={onOpenWorkflows}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            {onOpenFleetBoard && (
+              <NavIconButton
+                entry={fleetNavEntry("fleet-board")}
+                onClick={onOpenFleetBoard}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="How the Verdict Inbox works"
+              title="How the Verdict Inbox works"
+              aria-pressed={showHelp}
+              onClick={() => setShowHelp((v) => !v)}
+            >
+              <HelpCircle className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 pb-6">

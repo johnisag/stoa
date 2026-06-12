@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
 import { useListRuns } from "@/data/pipelines/queries";
 import type { Session } from "@/lib/db";
 import { TemplatePicker } from "./TemplatePicker";
@@ -35,6 +36,9 @@ export function WorkflowsView({
   sessions,
   activeSessionId,
   onOpenSession,
+  onOpenDispatch,
+  onOpenVerdictInbox,
+  onOpenFleetBoard,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -45,6 +49,11 @@ export function WorkflowsView({
    * threaded down to RunDetail; supplied from app/page.tsx (attach machinery).
    */
   onOpenSession?: (sessionId: string) => void;
+  /** Jump to a sibling fleet dialog (closes this one, opens the target).
+   * Optional — each renders an icon in the header; wired in app/page.tsx. */
+  onOpenDispatch?: () => void;
+  onOpenVerdictInbox?: () => void;
+  onOpenFleetBoard?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("templates");
   const [pickedTemplate, setPickedTemplate] = useState<string | null>(null);
@@ -108,7 +117,7 @@ export function WorkflowsView({
         </DialogHeader>
 
         {/* segmented control + help */}
-        <div className="flex items-center justify-between px-6 pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-6 pb-3">
           <div className="bg-muted inline-flex rounded-md p-0.5 text-sm">
             {tabs.map((t) => (
               <button
@@ -135,16 +144,43 @@ export function WorkflowsView({
               </button>
             ))}
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="How Workflows work"
-            title="How Workflows work"
-            aria-pressed={showHelp}
-            onClick={() => setShowHelp((v) => !v)}
-          >
-            <HelpCircle className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            {/* Jump to a sibling fleet view without closing + reopening. */}
+            {onOpenDispatch && (
+              <NavIconButton
+                entry={fleetNavEntry("dispatch")}
+                onClick={onOpenDispatch}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            {onOpenVerdictInbox && (
+              <NavIconButton
+                entry={fleetNavEntry("verdict-inbox")}
+                onClick={onOpenVerdictInbox}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            {onOpenFleetBoard && (
+              <NavIconButton
+                entry={fleetNavEntry("fleet-board")}
+                onClick={onOpenFleetBoard}
+                variant="header"
+                tooltipSide="bottom"
+              />
+            )}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="How Workflows work"
+              title="How Workflows work"
+              aria-pressed={showHelp}
+              onClick={() => setShowHelp((v) => !v)}
+            >
+              <HelpCircle className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 pb-6">
