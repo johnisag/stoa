@@ -11,6 +11,7 @@ import {
 import {
   Menu,
   Rocket,
+  Workflow,
   PenLine,
   ChevronLeft,
   ChevronRight,
@@ -75,6 +76,8 @@ interface MobileTabBarProps {
   onMenuClick?: () => void;
   /** Opens the Dispatch control plane (GitHub issues → agent fleet). */
   onDispatchClick?: () => void;
+  /** Opens the Workflows view (run a multi-step agent pipeline from a template). */
+  onWorkflowsClick?: () => void;
   /** Opens the full-screen prompt composer (sends straight to this terminal). */
   onComposeClick?: () => void;
   onViewModeChange: (mode: ViewMode) => void;
@@ -90,6 +93,7 @@ export function MobileTabBar({
   workerCount,
   onMenuClick,
   onDispatchClick,
+  onWorkflowsClick,
   onComposeClick,
   onViewModeChange,
   onSelectSession,
@@ -149,7 +153,7 @@ export function MobileTabBar({
 
   return (
     <div
-      className="bg-muted flex items-center gap-2 px-2 py-1.5"
+      className="bg-muted flex items-center gap-1 px-2 py-1.5"
       onClick={(e) => e.stopPropagation()}
       onTouchStart={(e) => e.stopPropagation()}
       onTouchEnd={(e) => e.stopPropagation()}
@@ -183,6 +187,24 @@ export function MobileTabBar({
           className="h-8 w-8 shrink-0"
         >
           <Rocket className="h-4 w-4" />
+        </Button>
+      )}
+
+      {/* Workflows (run a pipeline template) — promoted to a one-tap entry for
+          the same reason as Dispatch: its only other path is the icon buried in
+          the swipe-drawer footer. */}
+      {onWorkflowsClick && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Workflows"
+          onClick={(e) => {
+            e.stopPropagation();
+            onWorkflowsClick();
+          }}
+          className="h-8 w-8 shrink-0"
+        >
+          <Workflow className="h-4 w-4" />
         </Button>
       )}
 
