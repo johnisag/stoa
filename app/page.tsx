@@ -792,6 +792,19 @@ function HomeContent() {
     renderPane,
   };
 
+  // Open a worker session from a fleet dialog: look it up, close that dialog, and
+  // attach (toast if it's gone). Shared by Workflows / Verdict Inbox / Fleet Board.
+  const openSessionFrom =
+    (close: (open: boolean) => void) => (sessionId: string) => {
+      const session = sessions.find((s) => s.id === sessionId);
+      if (session) {
+        close(false);
+        attachToSession(session);
+      } else {
+        toast.error("Session not found — it may have been deleted.");
+      }
+    };
+
   return (
     <>
       {/* Gate the view on isHydrated so phones never flash DesktopView for a
@@ -828,25 +841,22 @@ function HomeContent() {
         onOpenChange={setShowWorkflows}
         sessions={sessions}
         activeSessionId={focusedActiveTab?.sessionId ?? undefined}
-        onOpenSession={(sessionId) => {
-          const session = sessions.find((s) => s.id === sessionId);
-          if (session) {
-            setShowWorkflows(false);
-            attachToSession(session);
-          } else {
-            toast.error("Session not found — it may have been deleted.");
-          }
-        }}
+        onOpenSession={openSessionFrom(setShowWorkflows)}
       />
       {/* Verdict Inbox — the fleet-wide review queue (dispatch + auto-mode
           sessions). Self-contained; opened via setShowVerdictInbox. */}
       <VerdictInboxView
         open={showVerdictInbox}
         onOpenChange={setShowVerdictInbox}
+        onOpenSession={openSessionFrom(setShowVerdictInbox)}
       />
       {/* Fleet Board — the autonomous fleet as a lifecycle kanban (reuses the
           inbox read model + cards). Self-contained; opened via setShowFleetBoard. */}
-      <FleetBoardView open={showFleetBoard} onOpenChange={setShowFleetBoard} />
+      <FleetBoardView
+        open={showFleetBoard}
+        onOpenChange={setShowFleetBoard}
+        onOpenSession={openSessionFrom(setShowFleetBoard)}
+      />
       {/* "See changes" jump-to-diff: opened by the transient toast action when a
           session's turn completes (useNotifications -> onSeeChanges). */}
       {seeChangesSessionId && (

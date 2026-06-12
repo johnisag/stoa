@@ -50,9 +50,13 @@ function needsMe(i: InboxItem): boolean {
 export function VerdictInboxView({
   open,
   onOpenChange,
+  onOpenSession,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Jump into a row's live worker session (ceremony items carry a session id).
+   * Wired in page.tsx like WorkflowsView: look it up, close the dialog, attach. */
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [showHelp, setShowHelp] = useState(false);
@@ -186,7 +190,11 @@ export function VerdictInboxView({
           ) : (
             <div className="flex flex-col gap-2">
               {filtered.map((i) => (
-                <InboxCard key={`${i.type}:${i.id}`} item={i} />
+                <InboxCard
+                  key={`${i.type}:${i.id}`}
+                  item={i}
+                  onOpenSession={onOpenSession}
+                />
               ))}
             </div>
           )}

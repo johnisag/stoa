@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Loader2,
   ExternalLink,
+  Terminal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useConfirm } from "@/components/ConfirmProvider";
@@ -83,8 +84,16 @@ function stateLabel(item: InboxItem): string {
 }
 
 /** One review item — issue/session, verdict badge, expand for the critic's
- * per-lens findings (loaded live on expand), and merge / dismiss / retry. */
-export function InboxCard({ item }: { item: InboxItem }) {
+ * per-lens findings (loaded live on expand), and merge / dismiss / retry. When
+ * `onOpenSession` is wired, ceremony items (which carry a Stoa session id) get an
+ * "Open session" button to jump into the live worker terminal and intervene. */
+export function InboxCard({
+  item,
+  onOpenSession,
+}: {
+  item: InboxItem;
+  onOpenSession?: (sessionId: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const { data: findings = [], isLoading: loadingFindings } = useFindings(
     item,
@@ -288,6 +297,19 @@ export function InboxCard({ item }: { item: InboxItem }) {
       )}
 
       <div className="flex flex-wrap gap-2 pl-5">
+        {/* Jump into the live worker session to intervene — the in-app path the
+            "needs me" rows (stuck / changes requested) were missing. Only ceremony
+            items carry a Stoa session id; dispatch items don't, so it's hidden there. */}
+        {onOpenSession && item.sessionId && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onOpenSession(item.sessionId!)}
+          >
+            <Terminal className="mr-1.5 h-3.5 w-3.5" />
+            Open session
+          </Button>
+        )}
         {canMerge && (
           <Button size="sm" variant="outline" disabled={busy} onClick={onMerge}>
             {merge.isPending ? (
