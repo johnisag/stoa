@@ -144,4 +144,11 @@ export type SessionEventType =
   | "input_text"
   | "input_paste"
   | "input_enter"
-  | "input_escape";
+  | "input_escape"
+  // Command Stoa (chatbox actions) lifecycle — written under a synthetic
+  // session_key, so analytics (which joins events to real sessions) ignores them
+  // while the append-only audit trail keeps them. See lib/command/audit.ts.
+  | "command_proposed"
+  | "command_executed"
+  | "command_rejected"
+  | "command_failed";
