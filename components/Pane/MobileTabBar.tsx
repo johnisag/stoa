@@ -15,6 +15,7 @@ import {
   Inbox,
   Columns3,
   Boxes,
+  Sparkles,
   PenLine,
   ChevronLeft,
   ChevronRight,
@@ -87,6 +88,8 @@ interface MobileTabBarProps {
   onVerdictInboxClick?: () => void;
   /** Opens the Fleet Board (the fleet by lifecycle stage). */
   onFleetBoardClick?: () => void;
+  /** Opens the Ask Stoa chatbox. */
+  onAskStoaClick?: () => void;
   /** Opens the full-screen prompt composer (sends straight to this terminal). */
   onComposeClick?: () => void;
   onViewModeChange: (mode: ViewMode) => void;
@@ -105,6 +108,7 @@ export function MobileTabBar({
   onWorkflowsClick,
   onVerdictInboxClick,
   onFleetBoardClick,
+  onAskStoaClick,
   onComposeClick,
   onViewModeChange,
   onSelectSession,
@@ -130,7 +134,8 @@ export function MobileTabBar({
     onDispatchClick ||
     onWorkflowsClick ||
     onVerdictInboxClick ||
-    onFleetBoardClick;
+    onFleetBoardClick ||
+    onAskStoaClick;
 
   // Ambient "needs me" count on the Fleet launcher — the only always-visible nav
   // on this mobile-first surface, so the signal belongs here too (shares the
@@ -249,6 +254,12 @@ export function MobileTabBar({
               <DropdownMenuItem onSelect={() => onFleetBoardClick()}>
                 <Columns3 className="mr-2 h-4 w-4" />
                 Fleet Board
+              </DropdownMenuItem>
+            )}
+            {onAskStoaClick && (
+              <DropdownMenuItem onSelect={() => onAskStoaClick()}>
+                <Sparkles className="mr-2 h-4 w-4" />
+                Ask Stoa
               </DropdownMenuItem>
             )}
           </DropdownMenuContent>

@@ -60,6 +60,7 @@ export function DesktopView({
   setShowWorkflows,
   setShowVerdictInbox,
   setShowFleetBoard,
+  setShowChat,
   onShowShortcuts,
   onShowGuide,
   notificationSettings,
@@ -344,7 +345,12 @@ export function DesktopView({
                 </>
               );
             })()}
-            {/* Guide and Quick switch stay always visible (not collapsed). */}
+            {/* Ask Stoa, Guide, Quick switch stay always visible (not collapsed). */}
+            <NavIconButton
+              entry={fleetNavEntry("ask-stoa")}
+              variant="header"
+              onClick={() => setShowChat(true)}
+            />
             {onShowGuide && (
               <NavIconButton
                 entry={fleetNavEntry("guide")}

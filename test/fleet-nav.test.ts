@@ -8,6 +8,7 @@ import {
   Bell,
   Compass,
   Command,
+  Sparkles,
 } from "lucide-react";
 import { FLEET_NAV, fleetNavEntry } from "@/components/nav/fleet-nav";
 
@@ -23,6 +24,7 @@ describe("FLEET_NAV", () => {
       "workflows",
       "verdict-inbox",
       "fleet-board",
+      "ask-stoa",
       "notifications",
       "guide",
       "quick-switch",
@@ -36,6 +38,7 @@ describe("FLEET_NAV", () => {
     expect(icons.workflows).toBe(Workflow);
     expect(icons["verdict-inbox"]).toBe(Inbox);
     expect(icons["fleet-board"]).toBe(Columns3);
+    expect(icons["ask-stoa"]).toBe(Sparkles);
     expect(icons.notifications).toBe(Bell);
     expect(icons.guide).toBe(Compass);
     expect(icons["quick-switch"]).toBe(Command);
@@ -54,6 +57,7 @@ describe("FLEET_NAV", () => {
     expect(aria["fleet-board"]).toBe(
       "Fleet Board (the fleet by lifecycle stage)"
     );
+    expect(aria["ask-stoa"]).toBe("Ask Stoa (chat about your fleet)");
     expect(aria.notifications).toBe(
       "Notifications (sound, per-event toggles, push)"
     );
@@ -68,6 +72,7 @@ describe("FLEET_NAV", () => {
     expect(labels.workflows).toBe("Workflows");
     expect(labels["verdict-inbox"]).toBe("Verdict Inbox");
     expect(labels["fleet-board"]).toBe("Fleet Board");
+    expect(labels["ask-stoa"]).toBe("Ask Stoa");
     expect(labels.notifications).toBe("Notifications");
     expect(labels.guide).toBe("What Stoa can do");
     expect(labels["quick-switch"]).toBe("Quick switch");
