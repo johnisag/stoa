@@ -236,12 +236,14 @@ export function DesktopView({
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
-            {/* The five secondary fleet destinations. At `lg`+ they render as
-                the full icon row (today's behavior). Below `lg` they collapse
-                into the overflow "More" menu just after this — a pure Tailwind
-                reflow (`hidden lg:flex` / `flex lg:hidden`), no resize JS — so a
+            {/* The secondary fleet destinations. At `lg`+ they render as the full
+                icon row (today's behavior). Below `lg` they collapse into the
+                overflow "More" menu just after this — a pure Tailwind reflow
+                (`hidden lg:flex` / `flex lg:hidden`), no resize JS — so a
                 narrow/split-screen window stops squeezing the session name. The
-                onClick wiring stays here (it's surface-specific); labels/icons
+                two flagship destinations — Workflows + Ask Stoa — are NOT here;
+                they stay always-visible (below) so they never hide behind "More".
+                The onClick wiring stays here (it's surface-specific); labels/icons
                 come from the shared FLEET_NAV descriptor either way. */}
             {(() => {
               // One source of truth for the collapsible entries, shared by the
@@ -254,10 +256,6 @@ export function DesktopView({
                 {
                   id: "dispatch",
                   onClick: () => setShowDispatch(true),
-                },
-                {
-                  id: "workflows",
-                  onClick: () => setShowWorkflows(true),
                 },
                 {
                   id: "verdict-inbox",
@@ -345,11 +343,20 @@ export function DesktopView({
                 </>
               );
             })()}
-            {/* Ask Stoa, Guide, Quick switch stay always visible (not collapsed). */}
+            {/* The flagship destinations — Workflows + Ask Stoa — plus Guide and
+                Quick switch stay ALWAYS visible (never collapsed into "More"), so
+                the chatbox and pipelines are always one click away. */}
+            <NavIconButton
+              entry={fleetNavEntry("workflows")}
+              variant="header"
+              onClick={() => setShowWorkflows(true)}
+              showLabel
+            />
             <NavIconButton
               entry={fleetNavEntry("ask-stoa")}
               variant="header"
               onClick={() => setShowChat(true)}
+              showLabel
             />
             {onShowGuide && (
               <NavIconButton
