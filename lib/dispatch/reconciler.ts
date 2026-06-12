@@ -22,6 +22,7 @@ import { ciFixPass } from "./ci-fix";
 import { parseClaims, claimsConflict } from "./claims";
 import { captureLessons } from "./lessons";
 import { mergeTrainPass } from "./merge-train";
+import { reconcileStaleDispatches } from "./stale";
 import { verifyPass } from "./verify";
 import { sessionCeremonyPass } from "./session-ceremony";
 import { nextOccurrence, isRecurrenceDue } from "./recurrence";
@@ -263,6 +264,13 @@ export async function reconcileTick(): Promise<void> {
     // broadcast. guardEmptyList=false: 60s in, the backend is ready, so an empty
     // list genuinely means "no live sessions" and dead workers should be swept.
     await sweepActiveWorkers({ guardEmptyList: false });
+
+    // 4a. Stale reconcile: re-check every 'pr_open' row against GitHub so a PR
+    // merged or closed OUT OF BAND (a human merged/closed it on github.com) is
+    // resolved (→ merged / cancelled) instead of stranding the row on the board
+    // forever. Before the review/CI/verify/auto-merge passes so a just-resolved row
+    // is skipped by all of them this same tick.
+    await reconcileStaleDispatches();
 
     // 4b. Autonomous maintainer (opt-in per repo): on its cadence, run a survey
     // agent that proposes its OWN backlog; file ready proposals as pending local

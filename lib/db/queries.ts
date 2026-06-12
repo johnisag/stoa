@@ -789,6 +789,17 @@ export const queries = {
       `UPDATE issue_dispatches SET status = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // Stale reconcile: resolve a stuck open-PR row to a terminal status (merged from
+  // an out-of-band merge, cancelled from an out-of-band close) — but ONLY while it's
+  // still 'pr_open'. The guard makes it idempotent and race-safe: a concurrent
+  // auto-merge/sweep (or a second reconcile tap) that already moved the row wins,
+  // and this is a no-op (changes===0) rather than clobbering the newer status.
+  resolveStaleDispatch: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET status = ?, updated_at = datetime('now') WHERE id = ? AND status = 'pr_open'`
+    ),
+
   // ── Session ceremonies ("go to auto") — mirror the dispatch review/CI fields so
   // the reconciler drives them with the same pure decision functions. ──
   createSessionCeremony: (db: Database.Database) =>

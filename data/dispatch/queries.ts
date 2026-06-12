@@ -372,7 +372,8 @@ export function useDeleteRepo() {
   });
 }
 
-/** Approve (spawn now) or cancel a pending candidate. */
+/** Act on a dispatch row: approve/cancel a candidate, retry/dismiss a failed row,
+ * or reconcile an open-PR row against GitHub (resolve an out-of-band merge/close). */
 export function useDispatchAction() {
   const qc = useQueryClient();
   return useMutation({
@@ -381,7 +382,7 @@ export function useDispatchAction() {
       action,
     }: {
       id: string;
-      action: "approve" | "cancel" | "dismiss" | "retry";
+      action: "approve" | "cancel" | "dismiss" | "retry" | "reconcile";
     }) => {
       const res = await fetch(`/api/dispatch/dispatches/${id}`, {
         method: "POST",

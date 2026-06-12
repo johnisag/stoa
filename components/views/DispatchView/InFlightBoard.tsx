@@ -9,6 +9,7 @@ import {
   GitMerge,
   GitCompare,
   RotateCcw,
+  RefreshCw,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -70,6 +71,37 @@ function Card({
         onError: (e) => toast.error((e as Error).message),
       }
     );
+  // Re-check this PR against GitHub. If it was merged/closed out of band (someone
+  // landed it on github.com), the row resolves; if still open, a no-op. `probe`
+  // separates "still open" from "gh unreachable" so we don't claim a false truth.
+  const doReconcile = () =>
+    action.mutate(
+      { id: d.id, action: "reconcile" },
+      {
+        onSuccess: (data) => {
+          const { resolution, probe } = data as {
+            resolution?: string;
+            probe?: string;
+          };
+          if (resolution === "merged")
+            toast.success(
+              `PR #${d.pr_number} was merged on GitHub — moved to Merged`
+            );
+          else if (resolution === "cancelled")
+            toast.success(
+              `PR #${d.pr_number} was closed without merging — cleared from the board`
+            );
+          else if (probe === "error")
+            toast.error(
+              `Couldn't reach GitHub to check PR #${d.pr_number} — check gh auth/network. Stoa retries automatically.`
+            );
+          else toast.message(`PR #${d.pr_number} is still open on GitHub`);
+        },
+        onError: (e) => toast.error((e as Error).message),
+      }
+    );
+  const reconciling =
+    action.isPending && action.variables?.action === "reconcile";
   return (
     <div className="bg-card flex flex-col gap-1.5 rounded-md border p-3 text-sm">
       <div className="flex items-center gap-2">
@@ -261,6 +293,22 @@ function Card({
               onClick={() => setShowDiff(true)}
             >
               <GitCompare className="h-3.5 w-3.5" /> Review
+            </Button>
+          )}
+          {d.pr_number != null && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={action.isPending}
+              onClick={doReconcile}
+              title="Re-check this PR on GitHub — resolves the card if it was merged or closed elsewhere"
+            >
+              {reconciling ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Re-check
             </Button>
           )}
           {d.pr_number != null && (
