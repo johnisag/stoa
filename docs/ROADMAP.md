@@ -7,8 +7,10 @@ Linux.**
 **Status (2026-06-12):** the **UI/UX campaign is COMPLETE** — all **21** items
 from the multi-agent UI/UX research (#214) shipped across **7 waves, PRs
 #215–#221**, each built by parallel worktree agents and merged through the full
-ceremony (gate → multi-agent review → 3-OS CI). The **"Ask Stoa" chatbox Phase 1
-has now shipped** (#223); Phase 2 ("Command Stoa") is next.
+ceremony (gate → multi-agent review → 3-OS CI). The **"Ask / Command Stoa"
+chatbox is now shipped through Phase 2**: Ask (read-only, #223) + a Claude+Opus
+default model picker (#225) + **Command Stoa — the chatbox acts** (#226). Next:
+broaden the action set and seed-prompt the created session.
 
 ---
 
@@ -28,14 +30,31 @@ on the board (type or dictate one request).
   mobile footer, mobile Fleet launcher) via `FLEET_NAV`; provider choice persisted
   in localStorage. **Ships Claude + Codex** — Hermes deferred (its only one-shot
   mode was an argv `-z`, command-injectable under the Windows shell, and
-  unverified per the registry). _Follow-ups: re-add Hermes once `-z` one-shot is
-  verified + a stdin/temp-file path replaces argv; a Stop/abort button; Windows
-  tree-kill on timeout; optional how-to context (StoaGuide) so "how does X work"
-  is answerable; sync-test ASK_PROVIDERS ↔ CHAT_PROVIDER_OPTIONS._
-- **▶ Phase 2 — "Command Stoa" (act) — NEXT.** NL → Stoa ops (spawn / dispatch /
-  worktree) via the existing `stoa` MCP tool surface, always **propose → confirm
-  → execute**, fail-closed + audited. _e.g. "start 3 sessions on the-grid:
-  x1 hermes / x2 claude / x3 codex."_
+  unverified per the registry).
+- **✅ Model default — Claude + Opus, configurable — SHIPPED (#225).** The chatbox
+  defaults to the user's Claude-subscription model (Opus, overriding the agent's
+  own Sonnet default), with a model picker in the header. Persisted **per
+  provider** in localStorage; validated against the static catalog server-side so
+  the token is injection-safe in the argv `--model` flag (prompt still on stdin).
+- **✅ Phase 2 — "Command Stoa" (act) — SHIPPED (#226).** The chatbox now ACTS, on
+  the spine **propose → confirm → execute**, a **fail-closed allowlist**, fully
+  **audited**. `POST /api/command/propose` runs the agent (answers in prose OR
+  emits a strict-JSON action); the proposal is validated against the allowlist
+  (`lib/command/actions`) and rendered as a **confirm card**; `POST
+  /api/command/execute` re-validates server-side and creates the session
+  **in-process** (no self-fetch), directory derived from the server-resolved
+  project, `auto_approve` hard-off. Ships ONE action — `create_session` (same
+  capability as the New Session dialog). Audited to the `session_events` ledger
+  (shared `recordEvent`, synthetic key invisible to analytics). The 3-round Fable
+  security panel caught a real RCE: a free-text (hermes) `model` would ride
+  unescaped into the POSIX tmux launch — fixed by clamping `model` to the STATIC
+  catalog. _Follow-ups: seed the new session with an initial task prompt (needs a
+  persisted on-open delivery path — the instruction field was dropped from v1 as
+  undeliverable); broaden the action set (dispatch / spawn-worker / worktree);
+  re-add Hermes to the chatbox once its one-shot is verified; a Stop/abort button;
+  Windows tree-kill on the runAsk timeout; sync-test ASK_PROVIDERS ↔
+  CHAT_PROVIDER_OPTIONS; harden the operator-set `project.default_model` →
+  hermes-on-POSIX `-m` path (pre-existing, not chatbox-reachable)._
 
 ---
 
