@@ -10,8 +10,11 @@ import {
   Loader2,
   AlertCircle,
   XCircle,
+  Copy,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import { useConfirm } from "@/components/ConfirmProvider";
 
 interface WorkersSummary {
@@ -42,7 +45,17 @@ export function ConductorPanel({
   );
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
   const confirm = useConfirm();
+
+  const copyConductorId = useCallback(async () => {
+    // Reuses the shared clipboard helper (handles non-HTTPS LAN access from a
+    // phone, where navigator.clipboard is undefined or rejects).
+    if (await copyText(conductorSessionId)) {
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    }
+  }, [conductorSessionId]);
 
   const fetchWorkers = useCallback(async () => {
     try {
@@ -172,14 +185,36 @@ export function ConductorPanel({
 
   if (workers.length === 0) {
     return (
-      <div className="text-muted-foreground flex h-full flex-col items-center justify-center">
+      <div className="text-muted-foreground flex h-full flex-col items-center justify-center p-4">
         <Users className="mb-4 h-12 w-12 opacity-50" />
         <p className="text-lg font-medium">No workers yet</p>
         <p className="text-sm">This conductor hasn't spawned any workers.</p>
         <p className="mt-4 max-w-md text-center text-xs">
-          Use the MCP tools or API to spawn workers. The conductor can delegate
-          tasks to parallel worker sessions.
+          Ask this session&apos;s agent to delegate work with the{" "}
+          <code>spawn_worker</code> MCP tool — this conductor&apos;s ID is
+          already wired into the session, so it spawns parallel workers on its
+          own.
         </p>
+        <pre className="bg-muted text-muted-foreground mt-4 max-w-md overflow-x-auto rounded-md px-3 py-2 text-center font-mono text-xs">
+          spawn_worker(task, workingDirectory, …)
+        </pre>
+        <p className="text-muted-foreground/70 mt-4 max-w-md text-center text-[11px]">
+          Driving from an external MCP/API client instead? Copy the conductor ID
+          to pass it explicitly.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-2"
+          onClick={copyConductorId}
+        >
+          {copiedId ? (
+            <Check className="h-4 w-4 text-green-500" />
+          ) : (
+            <Copy className="h-4 w-4" />
+          )}
+          {copiedId ? "Copied" : "Copy conductor ID"}
+        </Button>
       </div>
     );
   }

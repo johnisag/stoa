@@ -5,6 +5,7 @@ import { SessionList } from "@/components/SessionList";
 import { NewSessionDialog } from "@/components/NewSessionDialog";
 import { StartServerDialog } from "@/components/DevServers/StartServerDialog";
 import { SidebarFooter } from "@/components/SidebarFooter";
+import { NotificationSettings } from "@/components/NotificationSettings";
 import { PaneLayout } from "@/components/PaneLayout";
 import { SwipeSidebar } from "@/components/mobile/SwipeSidebar";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
@@ -29,6 +30,12 @@ export function MobileView({
   setShowWorkflows,
   setShowVerdictInbox,
   setShowFleetBoard,
+  showNotificationSettings,
+  setShowNotificationSettings,
+  notificationSettings,
+  permissionGranted,
+  updateSettings,
+  requestPermission,
   onShowShortcuts,
   onShowGuide,
   attachToSession,
@@ -114,6 +121,10 @@ export function MobileView({
               setShowFleetBoard(true);
               setSidebarOpen(false);
             }}
+            onShowNotifications={() => {
+              setShowNotificationSettings(true);
+              setSidebarOpen(false);
+            }}
           />
         </div>
       </SwipeSidebar>
@@ -124,6 +135,25 @@ export function MobileView({
       </div>
 
       {/* Dialogs */}
+      {/* Notification settings — reachable on mobile via the SidebarFooter
+          Bell. hideTrigger presents the same controls as an overlay (the Bell
+          trigger lives in the footer, not here). */}
+      <NotificationSettings
+        hideTrigger
+        open={showNotificationSettings}
+        onOpenChange={setShowNotificationSettings}
+        settings={notificationSettings}
+        permissionGranted={permissionGranted}
+        waitingSessions={sessions
+          .filter((s) => sessionStatuses[s.id]?.status === "waiting")
+          .map((s) => ({ id: s.id, name: s.name }))}
+        onUpdateSettings={updateSettings}
+        onRequestPermission={requestPermission}
+        onSelectSession={(id) => {
+          const session = sessions.find((s) => s.id === id);
+          if (session) attachToSession(session);
+        }}
+      />
       <NewSessionDialog
         open={showNewSessionDialog}
         projects={projects}
@@ -138,6 +168,12 @@ export function MobileView({
         onOpenChange={setShowQuickSwitcher}
         currentSessionId={focusedActiveTab?.sessionId ?? undefined}
         activeSessionWorkingDir={activeSession?.working_directory ?? undefined}
+        onOpenDispatch={() => setShowDispatch(true)}
+        onOpenWorkflows={() => setShowWorkflows(true)}
+        onOpenVerdictInbox={() => setShowVerdictInbox(true)}
+        onOpenFleetBoard={() => setShowFleetBoard(true)}
+        onOpenInsight={() => setShowAnalytics(true)}
+        onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
           const session = sessions.find((s) => s.id === sessionId);
           if (session) attachToSession(session);

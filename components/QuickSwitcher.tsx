@@ -10,13 +10,28 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { baseName } from "@/lib/path-display";
-import { Terminal, GitBranch, Clock, Check } from "lucide-react";
+import {
+  Terminal,
+  GitBranch,
+  Clock,
+  Check,
+  Rocket,
+  Workflow,
+  Inbox,
+  Columns3,
+  BarChart3,
+  Plus,
+} from "lucide-react";
 import { statusGlyph } from "@/components/status-glyph";
 import type { Session } from "@/lib/db";
 import type { SessionStatus } from "@/components/views/types";
 import dynamic from "next/dynamic";
 import { useRipgrepAvailable } from "@/data/code-search";
 import { searchSessions } from "@/lib/session-search";
+import {
+  filterCommands,
+  type QuickCommand,
+} from "@/lib/quick-switcher-commands";
 import { useViewport } from "@/hooks/useViewport";
 
 // react-syntax-highlighter is heavy; load the code-search results lazily so it
@@ -47,6 +62,21 @@ interface QuickSwitcherProps {
   /** Live status per session id, so the switcher shows what each agent is doing
    * (glyph + a one-line preview) instead of being status-blind. */
   sessionStatuses?: Record<string, SessionStatus>;
+  // Command-lane callbacks. Each is OPTIONAL: a command is only offered when its
+  // callback is wired, so the palette never surfaces an action the page can't
+  // perform. These let Cmd+K reach views/actions that were otherwise mouse-only.
+  /** Open the Dispatch control plane. */
+  onOpenDispatch?: () => void;
+  /** Open the Workflows view. */
+  onOpenWorkflows?: () => void;
+  /** Open the Verdict Inbox (fleet review queue). */
+  onOpenVerdictInbox?: () => void;
+  /** Open the Fleet Board (fleet by lifecycle stage). */
+  onOpenFleetBoard?: () => void;
+  /** Open the Insight / analytics view. */
+  onOpenInsight?: () => void;
+  /** Start a new session. */
+  onNewSession?: () => void;
 }
 
 /**
@@ -62,6 +92,12 @@ export function QuickSwitcher({
   currentSessionId,
   activeSessionWorkingDir,
   sessionStatuses,
+  onOpenDispatch,
+  onOpenWorkflows,
+  onOpenVerdictInbox,
+  onOpenFleetBoard,
+  onOpenInsight,
+  onNewSession,
 }: QuickSwitcherProps) {
   const { isMobile } = useViewport();
   const [mode, setMode] = useState<"sessions" | "code">("sessions");
@@ -72,11 +108,90 @@ export function QuickSwitcher({
   // Check if ripgrep is available
   const { data: ripgrepAvailable } = useRipgrepAvailable();
 
+  // The command lane: built only from the callbacks the page actually wired, so
+  // a command never appears unless it can run. `icon` is presentational only —
+  // matching keys off label + keywords (see filterCommands).
+  const commands = useMemo<(QuickCommand & { icon: React.ReactNode })[]>(() => {
+    const list: (QuickCommand & { icon: React.ReactNode })[] = [];
+    const add = (
+      id: string,
+      label: string,
+      keywords: string[],
+      run: (() => void) | undefined,
+      icon: React.ReactNode
+    ) => {
+      if (run) list.push({ id, label, keywords, run, icon });
+    };
+    add(
+      "new-session",
+      "New Session",
+      ["create", "start", "agent"],
+      onNewSession,
+      <Plus className="h-4 w-4" />
+    );
+    add(
+      "open-dispatch",
+      "Open Dispatch",
+      ["fleet", "issues", "github", "agents", "control"],
+      onOpenDispatch,
+      <Rocket className="h-4 w-4" />
+    );
+    add(
+      "open-verdict-inbox",
+      "Open Verdict Inbox",
+      ["review", "queue", "verdict", "approve"],
+      onOpenVerdictInbox,
+      <Inbox className="h-4 w-4" />
+    );
+    add(
+      "open-fleet-board",
+      "Open Fleet Board",
+      ["kanban", "lifecycle", "board", "stages"],
+      onOpenFleetBoard,
+      <Columns3 className="h-4 w-4" />
+    );
+    add(
+      "open-insight",
+      "Open Insight",
+      ["analytics", "ledger", "metrics", "stats", "cost"],
+      onOpenInsight,
+      <BarChart3 className="h-4 w-4" />
+    );
+    add(
+      "open-workflows",
+      "Open Workflows",
+      ["pipeline", "template", "run"],
+      onOpenWorkflows,
+      <Workflow className="h-4 w-4" />
+    );
+    return list;
+  }, [
+    onNewSession,
+    onOpenDispatch,
+    onOpenVerdictInbox,
+    onOpenFleetBoard,
+    onOpenInsight,
+    onOpenWorkflows,
+  ]);
+
+  // Fuzzy-match + rank commands by the same query the session lane uses.
+  const filteredCommands = useMemo(
+    () =>
+      filterCommands(commands, query) as (QuickCommand & {
+        icon: React.ReactNode;
+      })[],
+    [commands, query]
+  );
+
   // Fuzzy-match + rank sessions by the query (name, path, agent, branch, group).
   const filteredSessions = useMemo(
     () => searchSessions(sessions, query),
     [sessions, query]
   );
+
+  // Sessions render first, then commands; keyboard nav / Enter index into this
+  // single ordered list so ↑↓ flows across both groups seamlessly.
+  const totalResults = filteredCommands.length + filteredSessions.length;
 
   // Reset state when dialog opens
   useEffect(() => {
@@ -104,10 +219,32 @@ export function QuickSwitcher({
   // refresh dropped a match — so the highlight and Enter never point past the
   // end. Keyed on length (not identity) so a mere re-rank keeps the position.
   useEffect(() => {
-    setSelectedIndex((i) =>
-      Math.min(i, Math.max(0, filteredSessions.length - 1))
-    );
-  }, [filteredSessions.length]);
+    setSelectedIndex((i) => Math.min(i, Math.max(0, totalResults - 1)));
+  }, [totalResults]);
+
+  // Fire the result at `selectedIndex` (sessions render first, then commands)
+  // and close the palette.
+  const activateSelected = useCallback(() => {
+    if (selectedIndex < filteredSessions.length) {
+      const session = filteredSessions[selectedIndex];
+      if (session) {
+        onSelectSession(session.id);
+        onOpenChange(false);
+      }
+      return;
+    }
+    const command = filteredCommands[selectedIndex - filteredSessions.length];
+    if (command) {
+      onOpenChange(false);
+      command.run();
+    }
+  }, [
+    selectedIndex,
+    filteredCommands,
+    filteredSessions,
+    onSelectSession,
+    onOpenChange,
+  ]);
 
   // Handle keyboard navigation
   const handleKeyDown = useCallback(
@@ -115,9 +252,7 @@ export function QuickSwitcher({
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          setSelectedIndex((prev) =>
-            Math.min(prev + 1, filteredSessions.length - 1)
-          );
+          setSelectedIndex((prev) => Math.min(prev + 1, totalResults - 1));
           break;
         case "ArrowUp":
           e.preventDefault();
@@ -125,10 +260,7 @@ export function QuickSwitcher({
           break;
         case "Enter":
           e.preventDefault();
-          if (filteredSessions[selectedIndex]) {
-            onSelectSession(filteredSessions[selectedIndex].id);
-            onOpenChange(false);
-          }
+          activateSelected();
           break;
         case "Escape":
           e.preventDefault();
@@ -136,7 +268,7 @@ export function QuickSwitcher({
           break;
       }
     },
-    [filteredSessions, selectedIndex, onSelectSession, onOpenChange]
+    [totalResults, activateSelected, onOpenChange]
   );
 
   // Format relative time
@@ -206,7 +338,7 @@ export function QuickSwitcher({
             ref={inputRef}
             placeholder={
               mode === "sessions" || !ripgrepAvailable
-                ? "Search sessions..."
+                ? "Search sessions & commands..."
                 : "Search code (min 3 chars)..."
             }
             value={query}
@@ -219,93 +351,143 @@ export function QuickSwitcher({
         {/* Content */}
         <div className="max-h-[300px] overflow-y-auto py-2">
           {mode === "sessions" ? (
-            filteredSessions.length === 0 ? (
+            totalResults === 0 ? (
               <div className="text-muted-foreground px-4 py-8 text-center text-sm">
-                No sessions found
+                No matches found
               </div>
             ) : (
-              filteredSessions.map((session, index) => {
-                const isCurrent = session.id === currentSessionId;
-                const st = sessionStatuses?.[session.id];
-                const preview =
-                  (st?.status === "running" || st?.status === "waiting") &&
-                  st.lastLine?.trim()
-                    ? st.lastLine.trim()
-                    : null;
-                return (
-                  <button
-                    key={session.id}
-                    onClick={() => {
-                      onSelectSession(session.id);
-                      onOpenChange(false);
-                    }}
-                    className={cn(
-                      "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
-                      index === selectedIndex
-                        ? "bg-accent"
-                        : "hover:bg-accent/50",
-                      isCurrent && "bg-primary/10"
-                    )}
-                  >
-                    {/* Icon */}
-                    <div
-                      className={cn(
-                        "flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md",
-                        session.worktree_path
-                          ? "bg-purple-500/20 text-purple-400"
-                          : "bg-emerald-500/20 text-emerald-400"
-                      )}
-                    >
-                      {session.worktree_path ? (
-                        <GitBranch className="h-4 w-4" />
-                      ) : (
-                        <Terminal className="h-4 w-4" />
-                      )}
-                    </div>
-
-                    {/* Content */}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="flex-shrink-0">
-                          {statusGlyph(st?.status)}
-                        </span>
-                        <span className="truncate font-medium">
-                          {session.name || "Unnamed Session"}
-                        </span>
-                        {isCurrent && (
-                          <Check className="text-primary h-3.5 w-3.5 flex-shrink-0" />
-                        )}
+              <>
+                {/* Sessions group — FIRST, so the palette's primary action
+                    (⌘K → Enter on an empty/short query) still lands on the top
+                    session, not a command. */}
+                {filteredSessions.length > 0 && (
+                  <>
+                    {filteredCommands.length > 0 && (
+                      <div className="text-muted-foreground px-4 pt-1 pb-1 text-xs font-medium tracking-wide uppercase">
+                        Sessions
                       </div>
-                      {preview ? (
-                        <div
-                          className="text-muted-foreground truncate text-xs"
-                          title={preview}
+                    )}
+                    {filteredSessions.map((session, index) => {
+                      const isCurrent = session.id === currentSessionId;
+                      const st = sessionStatuses?.[session.id];
+                      const preview =
+                        (st?.status === "running" ||
+                          st?.status === "waiting") &&
+                        st.lastLine?.trim()
+                          ? st.lastLine.trim()
+                          : null;
+                      return (
+                        <button
+                          key={session.id}
+                          onClick={() => {
+                            onSelectSession(session.id);
+                            onOpenChange(false);
+                          }}
+                          className={cn(
+                            "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
+                            index === selectedIndex
+                              ? "bg-accent"
+                              : "hover:bg-accent/50",
+                            isCurrent && "bg-primary/10"
+                          )}
                         >
-                          {preview}
-                        </div>
-                      ) : (
-                        <div className="text-muted-foreground flex items-center gap-2 text-xs">
-                          <span className="truncate">
-                            {session.working_directory
-                              ? baseName(session.working_directory)
-                              : "~"}
-                          </span>
-                          <span>•</span>
-                          <span className="capitalize">
-                            {session.agent_type || "claude"}
-                          </span>
-                        </div>
-                      )}
-                    </div>
+                          {/* Icon */}
+                          <div
+                            className={cn(
+                              "flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md",
+                              session.worktree_path
+                                ? "bg-purple-500/15 text-purple-600 dark:text-purple-400"
+                                : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                            )}
+                          >
+                            {session.worktree_path ? (
+                              <GitBranch className="h-4 w-4" />
+                            ) : (
+                              <Terminal className="h-4 w-4" />
+                            )}
+                          </div>
 
-                    {/* Time */}
-                    <div className="text-muted-foreground flex flex-shrink-0 items-center gap-1 text-xs">
-                      <Clock className="h-3 w-3" />
-                      <span>{formatTime(session.updated_at)}</span>
+                          {/* Content */}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="flex-shrink-0">
+                                {statusGlyph(st?.status)}
+                              </span>
+                              <span className="truncate font-medium">
+                                {session.name || "Unnamed Session"}
+                              </span>
+                              {isCurrent && (
+                                <Check className="text-primary h-3.5 w-3.5 flex-shrink-0" />
+                              )}
+                            </div>
+                            {preview ? (
+                              <div
+                                className="text-muted-foreground truncate text-xs"
+                                title={preview}
+                              >
+                                {preview}
+                              </div>
+                            ) : (
+                              <div className="text-muted-foreground flex items-center gap-2 text-xs">
+                                <span className="truncate">
+                                  {session.working_directory
+                                    ? baseName(session.working_directory)
+                                    : "~"}
+                                </span>
+                                <span>•</span>
+                                <span className="capitalize">
+                                  {session.agent_type || "claude"}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Time */}
+                          <div className="text-muted-foreground flex flex-shrink-0 items-center gap-1 text-xs">
+                            <Clock className="h-3 w-3" />
+                            <span>{formatTime(session.updated_at)}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+
+                {/* Commands group — AFTER sessions; a command's highlight index
+                    is offset by the session count so ↑↓ flows across both. */}
+                {filteredCommands.length > 0 && (
+                  <>
+                    <div className="text-muted-foreground px-4 pt-2 pb-1 text-xs font-medium tracking-wide uppercase">
+                      Commands
                     </div>
-                  </button>
-                );
-              })
+                    {filteredCommands.map((command, i) => {
+                      const index = filteredSessions.length + i;
+                      return (
+                        <button
+                          key={command.id}
+                          onClick={() => {
+                            onOpenChange(false);
+                            command.run();
+                          }}
+                          className={cn(
+                            "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
+                            index === selectedIndex
+                              ? "bg-accent"
+                              : "hover:bg-accent/50"
+                          )}
+                        >
+                          <div className="bg-primary/10 text-primary flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md">
+                            {command.icon}
+                          </div>
+                          <span className="truncate font-medium">
+                            {command.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+              </>
             )
           ) : (
             <CodeSearchResults

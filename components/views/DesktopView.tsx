@@ -358,6 +358,12 @@ export function DesktopView({
         sessionStatuses={sessionStatuses}
         currentSessionId={focusedActiveTab?.sessionId ?? undefined}
         activeSessionWorkingDir={activeSession?.working_directory ?? undefined}
+        onOpenDispatch={() => setShowDispatch(true)}
+        onOpenWorkflows={() => setShowWorkflows(true)}
+        onOpenVerdictInbox={() => setShowVerdictInbox(true)}
+        onOpenFleetBoard={() => setShowFleetBoard(true)}
+        onOpenInsight={() => setShowAnalytics(true)}
+        onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
           const session = sessions.find((s) => s.id === sessionId);
           if (session) attachToSession(session);

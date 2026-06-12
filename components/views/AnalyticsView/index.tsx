@@ -574,9 +574,9 @@ function IssueRow({
 }) {
   const tone =
     severity === "critical"
-      ? "border-red-500/40 bg-red-500/10 text-red-300"
+      ? "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400"
       : severity === "warning"
-        ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-200"
+        ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-600 dark:text-yellow-400"
         : "border-border bg-muted/40 text-muted-foreground";
   return (
     <div

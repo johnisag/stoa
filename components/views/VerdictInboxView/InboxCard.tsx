@@ -262,7 +262,7 @@ export function InboxCard({ item }: { item: InboxItem }) {
                 <span className="text-foreground text-[11px] font-medium">
                   Verification output
                 </span>
-                <pre className="text-muted-foreground max-h-48 overflow-auto rounded bg-black/20 p-2 text-[10px] leading-relaxed whitespace-pre-wrap">
+                <pre className="text-muted-foreground bg-muted/50 max-h-48 overflow-auto rounded p-2 text-[10px] leading-relaxed whitespace-pre-wrap">
                   {item.verifyOutput}
                 </pre>
               </div>

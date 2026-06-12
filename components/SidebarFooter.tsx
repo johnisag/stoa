@@ -7,6 +7,7 @@ import {
   Inbox,
   Columns3,
   Compass,
+  Bell,
 } from "lucide-react";
 import {
   Tooltip,
@@ -30,6 +31,8 @@ interface SidebarFooterProps {
   onShowVerdictInbox?: () => void;
   /** Opens the Fleet Board (the fleet by lifecycle stage). */
   onShowFleetBoard?: () => void;
+  /** Opens the notification settings (sound, per-event toggles, push). */
+  onShowNotifications?: () => void;
 }
 
 export function SidebarFooter({
@@ -40,6 +43,7 @@ export function SidebarFooter({
   onShowWorkflows,
   onShowVerdictInbox,
   onShowFleetBoard,
+  onShowNotifications,
 }: SidebarFooterProps = {}) {
   return (
     <div className="mt-auto px-3 pt-2 pb-3">
@@ -128,6 +132,23 @@ export function SidebarFooter({
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p>Fleet Board</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {onShowNotifications && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={onShowNotifications}
+                  aria-label="Notifications"
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
+                >
+                  <Bell className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Notifications</p>
               </TooltipContent>
             </Tooltip>
           )}

@@ -580,10 +580,12 @@ function SessionCardComponent({
           onClick={(e) => e.stopPropagation()}
           className={cn(
             "flex flex-shrink-0 items-center gap-0.5 rounded px-1 text-[10px]",
-            session.pr_status === "open" && "bg-green-500/20 text-green-400",
+            session.pr_status === "open" &&
+              "bg-green-500/15 text-green-600 dark:text-green-400",
             session.pr_status === "merged" &&
-              "bg-purple-500/20 text-purple-400",
-            session.pr_status === "closed" && "bg-red-500/20 text-red-400"
+              "bg-purple-500/15 text-purple-600 dark:text-purple-400",
+            session.pr_status === "closed" &&
+              "bg-red-500/15 text-red-600 dark:text-red-400"
           )}
           title={`PR #${session.pr_number}: ${session.pr_status}`}
           aria-label={`Pull request #${session.pr_number}, ${session.pr_status}`}

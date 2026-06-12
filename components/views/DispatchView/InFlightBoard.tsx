@@ -220,7 +220,7 @@ function Card({
                 <summary className="text-muted-foreground cursor-pointer">
                   output
                 </summary>
-                <pre className="text-muted-foreground mt-1 max-h-48 overflow-auto rounded bg-black/20 p-2 text-[10px] leading-relaxed whitespace-pre-wrap">
+                <pre className="text-muted-foreground bg-muted/50 mt-1 max-h-48 overflow-auto rounded p-2 text-[10px] leading-relaxed whitespace-pre-wrap">
                   {d.verify_output}
                 </pre>
               </details>

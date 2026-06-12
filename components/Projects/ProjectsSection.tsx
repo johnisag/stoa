@@ -3,7 +3,8 @@
 import { useMemo, useCallback, useState, useEffect } from "react";
 import { useSnapshot } from "valtio";
 import { useTheme } from "next-themes";
-import { ChevronRight, SquareTerminal } from "lucide-react";
+import { ChevronRight, Plus, SquareTerminal } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ProjectCard } from "./ProjectCard";
 import { SessionCard } from "@/components/SessionCard";
 import { MiniTerminal } from "@/components/MiniTerminal";
@@ -264,9 +265,22 @@ export function ProjectsSection({
                 {/* Project sessions */}
                 {projectSessions.length === 0 &&
                 projectDevServers.length === 0 ? (
-                  <p className="text-muted-foreground px-2 py-2 text-xs">
-                    No sessions yet
-                  </p>
+                  <div className="flex flex-col items-start gap-1.5 px-2 py-2">
+                    <p className="text-muted-foreground text-xs">
+                      No sessions yet
+                    </p>
+                    {onNewSession && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground hover:text-foreground -ml-1 h-7 px-2"
+                        onClick={() => onNewSession(project.id)}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        New session
+                      </Button>
+                    )}
+                  </div>
                 ) : projectSessions.length === 0 ? null : (
                   projectSessions.map((session) => {
                     const workers = workersByConduct[session.id] || [];
