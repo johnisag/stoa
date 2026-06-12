@@ -365,9 +365,14 @@ Lower-profile than the feature horizons but real.
 
 **Stability**
 
-- [ ] **Main-terminal WS `error` frame** _(P:med · E:S)_ — the mini-terminal handles
-  it (#80/#82) but the main terminal still leaves a dead "Switching…" overlay on a
-  failed attach. Add the `error` branch + a Relaunch toast.
+- [x] ✅ **Main-terminal WS `error` frame — SHIPPED (#211).** The handler now has an
+  `error` branch (writes the reason inline, mirroring MiniTerminal) wired to a new
+  `onError` → the existing Relaunch bar (shows the reason in place of "Session
+  ended", styled destructive) + a toast; it clears the stuck "Switching…" overlay
+  and cancels any armed auto-retry. No silent attach hang. _Deferred: a per-attach
+  generation guard in the hook to drop a superseded in-flight `error`/`exit` frame
+  from a rapid A→B→C switch (a sub-second race that predates this fix; both frames
+  share it)._
 - [ ] **M1 — Tier-2 per-subscription daemon slots** _(P:med · E:M)_ — the shared
   HostClient keys one slot per session key, so a worker open full-screen AND
   observed can evict the viewer's sizing slot (the freeze half is guarded via
