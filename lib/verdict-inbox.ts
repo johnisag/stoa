@@ -19,6 +19,11 @@ import type {
 } from "./dispatch/types";
 import { isLocalTask } from "./dispatch/task-label";
 
+// The pure "needs me" selectors live in a db-free module so client components can
+// import them without pulling better-sqlite3 into the browser bundle; re-export
+// them here so server callers + tests still get them from `lib/verdict-inbox`.
+export { beingFixed, needsMe, countNeedsMe } from "./verdict-inbox-selectors";
+
 export type InboxItemType = "dispatch" | "ceremony";
 
 export interface InboxItem {

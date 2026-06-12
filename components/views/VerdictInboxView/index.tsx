@@ -12,35 +12,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useInbox, type InboxItem } from "@/data/verdict-inbox/queries";
+import { needsMe } from "@/lib/verdict-inbox-selectors";
 import { InboxCard } from "./InboxCard";
 import { VerdictInboxHelp } from "./VerdictInboxHelp";
 
 type Filter = "all" | "needs-me" | "in-review" | "approved";
-
-/** A row a fixer is actively working (ceremony steps) — not on the human yet. */
-function beingFixed(i: InboxItem): boolean {
-  return (
-    i.type === "ceremony" &&
-    (i.state === "fixing" || i.state === "ci_fixing" || i.state === "merging")
-  );
-}
-
-/** A row needs the human now: changes requested, failed, stuck, or approved and
- * waiting on a human merge (ceremony awaiting_merge, or an approved non-auto
- * dispatch) — plus ungated dispatch PRs, which get no verdict and need a merge. */
-function needsMe(i: InboxItem): boolean {
-  if (beingFixed(i)) return false;
-  return (
-    i.reviewDecision === "CHANGES_REQUESTED" ||
-    i.state === "failed" ||
-    i.state === "stuck" ||
-    i.state === "awaiting_merge" ||
-    (i.type === "dispatch" &&
-      i.reviewDecision === "APPROVED" &&
-      !i.autoMerge) ||
-    (i.type === "dispatch" && !i.reviewGate && i.state === "pr_open")
-  );
-}
 
 /**
  * Verdict Inbox — a fleet-wide review queue (dispatch PRs + auto-mode sessions),

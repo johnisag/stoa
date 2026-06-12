@@ -8,15 +8,20 @@ import { inboxKeys } from "./keys";
 
 export type { InboxItem, ReviewerFinding };
 
+/** The shared inbox fetch — one definition for both the open-dialog poll
+ * (`useInbox`) and the always-on nav-badge count (`useAttentionCount`) so the two
+ * observers hit the SAME query key + endpoint and react-query dedupes the request. */
+export async function fetchInbox(): Promise<InboxItem[]> {
+  const res = await fetch("/api/verdict-inbox");
+  if (!res.ok) throw new Error("Failed to load the review queue");
+  return (await res.json()).items ?? [];
+}
+
 /** The fleet review queue. Polls every 6s while the inbox is open. */
 export function useInbox(enabled = true) {
   return useQuery({
     queryKey: inboxKeys.list(),
-    queryFn: async (): Promise<InboxItem[]> => {
-      const res = await fetch("/api/verdict-inbox");
-      if (!res.ok) throw new Error("Failed to load the review queue");
-      return (await res.json()).items ?? [];
-    },
+    queryFn: fetchInbox,
     enabled,
     staleTime: 4000,
     refetchInterval: enabled ? 6000 : false,
