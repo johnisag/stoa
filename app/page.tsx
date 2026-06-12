@@ -651,6 +651,7 @@ function HomeContent() {
         onRegisterTerminal={registerTerminalRef}
         onMenuClick={isMobile ? () => setSidebarOpen(true) : undefined}
         onDispatchClick={isMobile ? () => setShowDispatch(true) : undefined}
+        onWorkflowsClick={isMobile ? () => setShowWorkflows(true) : undefined}
         onSelectSession={handleSelectSession}
       />
     ),
