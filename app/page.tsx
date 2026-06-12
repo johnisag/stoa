@@ -138,6 +138,42 @@ const NAV_KEYBINDINGS: Keybinding[] = [
     action: "show-help",
     description: "Show keyboard shortcuts",
   },
+  // Top-level fleet views (the header icons). Same convention as the pane
+  // toggles above: mod+shift+letter (not alt+letter) to dodge the macOS
+  // Alt-glyph normalization, and no allowInInput so the .xterm guard lets the
+  // keystrokes reach a focused terminal while they still fire from the rest of
+  // the UI. Letters are vetted against browser-reserved chords — the obvious
+  // mnemonics ⌘⇧D (bookmark all tabs), ⌘⇧W (close window), ⌘⇧V (paste plain),
+  // ⌘⇧B (bookmarks bar) and ⌘⇧I (devtools) are all taken — and ⌘⇧F is the app's
+  // OWN terminal-search chord (useTerminalSearch) — so we use the nearest free
+  // letter for each view. (⌘⇧U also triggers IBus Unicode entry on some Linux
+  // desktops; it's the last free letter for Insight and degrades gracefully —
+  // don't "fix" it to a reserved one without re-vetting.)
+  {
+    chord: "mod+shift+x",
+    action: "open-dispatch",
+    description: "Open Dispatch",
+  },
+  {
+    chord: "mod+shift+z",
+    action: "open-workflows",
+    description: "Open Workflows",
+  },
+  {
+    chord: "mod+shift+y",
+    action: "open-verdict-inbox",
+    description: "Open the Verdict Inbox",
+  },
+  {
+    chord: "mod+shift+l",
+    action: "open-fleet-board",
+    description: "Open the Fleet Board",
+  },
+  {
+    chord: "mod+shift+u",
+    action: "open-insight",
+    description: "Open Insight",
+  },
 ];
 
 function HomeContent() {
@@ -638,6 +674,11 @@ function HomeContent() {
     else if (action === "pane-next-tab") paneCommandActions.send("next-tab");
     else if (action === "pane-prev-tab") paneCommandActions.send("prev-tab");
     else if (action === "show-help") setShowHelp(true);
+    else if (action === "open-dispatch") setShowDispatch(true);
+    else if (action === "open-workflows") setShowWorkflows(true);
+    else if (action === "open-verdict-inbox") setShowVerdictInbox(true);
+    else if (action === "open-fleet-board") setShowFleetBoard(true);
+    else if (action === "open-insight") setShowAnalytics(true);
   });
 
   // Pane renderer

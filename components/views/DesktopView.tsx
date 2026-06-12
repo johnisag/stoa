@@ -8,14 +8,31 @@ import { StartServerDialog } from "@/components/DevServers/StartServerDialog";
 import { SidebarFooter } from "@/components/SidebarFooter";
 import { SidebarRail } from "@/components/SidebarRail";
 import { Button } from "@/components/ui/button";
-import { PanelLeftClose, PanelLeft, Plus, Copy, Check } from "lucide-react";
+import {
+  PanelLeftClose,
+  PanelLeft,
+  Plus,
+  Copy,
+  Check,
+  MoreHorizontal,
+} from "lucide-react";
 import { PaneLayout } from "@/components/PaneLayout";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  CountBadge,
+  fleetNavEntry,
+  NavIconButton,
+} from "@/components/nav/fleet-nav";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import { useAttentionCount } from "@/data/verdict-inbox/useAttentionCount";
 import type { ViewProps } from "./types";
@@ -218,36 +235,116 @@ export function DesktopView({
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
-            {/* Fleet destinations — rendered from the shared FLEET_NAV
-                descriptor so this header stays in lockstep with the sidebar
-                footer. onClick wiring stays here (it's surface-specific). */}
-            <NavIconButton
-              entry={fleetNavEntry("insight")}
-              variant="header"
-              onClick={() => setShowAnalytics(true)}
-            />
-            <NavIconButton
-              entry={fleetNavEntry("dispatch")}
-              variant="header"
-              onClick={() => setShowDispatch(true)}
-            />
-            <NavIconButton
-              entry={fleetNavEntry("workflows")}
-              variant="header"
-              onClick={() => setShowWorkflows(true)}
-            />
-            <NavIconButton
-              entry={fleetNavEntry("verdict-inbox")}
-              variant="header"
-              onClick={() => setShowVerdictInbox(true)}
-              count={attentionCount}
-            />
-            <NavIconButton
-              entry={fleetNavEntry("fleet-board")}
-              variant="header"
-              onClick={() => setShowFleetBoard(true)}
-              count={attentionCount}
-            />
+            {/* The five secondary fleet destinations. At `lg`+ they render as
+                the full icon row (today's behavior). Below `lg` they collapse
+                into the overflow "More" menu just after this — a pure Tailwind
+                reflow (`hidden lg:flex` / `flex lg:hidden`), no resize JS — so a
+                narrow/split-screen window stops squeezing the session name. The
+                onClick wiring stays here (it's surface-specific); labels/icons
+                come from the shared FLEET_NAV descriptor either way. */}
+            {(() => {
+              // One source of truth for the collapsible entries, shared by the
+              // wide icon row and the narrow overflow menu so they can't drift.
+              const secondaryNav = [
+                {
+                  id: "insight",
+                  onClick: () => setShowAnalytics(true),
+                },
+                {
+                  id: "dispatch",
+                  onClick: () => setShowDispatch(true),
+                },
+                {
+                  id: "workflows",
+                  onClick: () => setShowWorkflows(true),
+                },
+                {
+                  id: "verdict-inbox",
+                  onClick: () => setShowVerdictInbox(true),
+                  count: attentionCount,
+                },
+                {
+                  id: "fleet-board",
+                  onClick: () => setShowFleetBoard(true),
+                  count: attentionCount,
+                },
+              ];
+              return (
+                <>
+                  {/* Wide: the full icon row, exactly as before. */}
+                  <div className="hidden items-center gap-2 lg:flex">
+                    {secondaryNav.map((item) => (
+                      <NavIconButton
+                        key={item.id}
+                        entry={fleetNavEntry(item.id)}
+                        variant="header"
+                        onClick={item.onClick}
+                        count={item.count}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Narrow: one overflow "More" menu. The needs-me signal
+                      survives the collapse as an amber CountBadge on the
+                      trigger (and per-item next to Verdict Inbox / Fleet
+                      Board). */}
+                  <DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={
+                              attentionCount > 0
+                                ? `More fleet destinations — ${attentionCount} ${attentionCount === 1 ? "needs" : "need"} you`
+                                : "More fleet destinations"
+                            }
+                            className="relative flex lg:hidden"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                            {attentionCount > 0 && (
+                              <CountBadge count={attentionCount} />
+                            )}
+                          </Button>
+                        </DropdownMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>More</p>
+                        {attentionCount > 0 && (
+                          <p className="font-medium text-amber-600 dark:text-amber-400">
+                            {attentionCount}{" "}
+                            {attentionCount === 1 ? "needs" : "need"} you
+                          </p>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                    <DropdownMenuContent align="end">
+                      {secondaryNav.map((item) => {
+                        const entry = fleetNavEntry(item.id);
+                        const Icon = entry.icon;
+                        const itemCount = item.count ?? 0;
+                        return (
+                          <DropdownMenuItem
+                            key={item.id}
+                            onClick={item.onClick}
+                          >
+                            <Icon className="h-4 w-4" />
+                            <span>{entry.label}</span>
+                            {itemCount > 0 && (
+                              <span className="ml-auto rounded-full bg-amber-500/15 px-1.5 text-[10px] leading-none font-medium text-amber-600 dark:text-amber-400">
+                                {itemCount > 9 ? "9+" : itemCount}
+                              </span>
+                            )}
+                          </DropdownMenuItem>
+                        );
+                      })}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              );
+            })()}
+            {/* Guide and Quick switch stay always visible (not collapsed). */}
             {onShowGuide && (
               <NavIconButton
                 entry={fleetNavEntry("guide")}
