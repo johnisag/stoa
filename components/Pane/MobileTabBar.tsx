@@ -12,6 +12,9 @@ import {
   Menu,
   Rocket,
   Workflow,
+  Inbox,
+  Columns3,
+  Boxes,
   PenLine,
   ChevronLeft,
   ChevronRight,
@@ -23,6 +26,8 @@ import {
   Circle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CountBadge } from "@/components/nav/fleet-nav";
+import { useAttentionCount } from "@/data/verdict-inbox/useAttentionCount";
 import { ContextMeter } from "@/components/ContextMeter";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
 import { getActiveBackend } from "@/lib/client/backend";
@@ -78,6 +83,10 @@ interface MobileTabBarProps {
   onDispatchClick?: () => void;
   /** Opens the Workflows view (run a multi-step agent pipeline from a template). */
   onWorkflowsClick?: () => void;
+  /** Opens the Verdict Inbox (the fleet review queue). */
+  onVerdictInboxClick?: () => void;
+  /** Opens the Fleet Board (the fleet by lifecycle stage). */
+  onFleetBoardClick?: () => void;
   /** Opens the full-screen prompt composer (sends straight to this terminal). */
   onComposeClick?: () => void;
   onViewModeChange: (mode: ViewMode) => void;
@@ -94,6 +103,8 @@ export function MobileTabBar({
   onMenuClick,
   onDispatchClick,
   onWorkflowsClick,
+  onVerdictInboxClick,
+  onFleetBoardClick,
   onComposeClick,
   onViewModeChange,
   onSelectSession,
@@ -112,6 +123,19 @@ export function MobileTabBar({
     : null;
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < order.length - 1;
+
+  // Any fleet destination wired? Gates the single "Fleet" launcher so the bar
+  // stays empty-handed when none of the callbacks are supplied (e.g. desktop).
+  const hasFleetNav =
+    onDispatchClick ||
+    onWorkflowsClick ||
+    onVerdictInboxClick ||
+    onFleetBoardClick;
+
+  // Ambient "needs me" count on the Fleet launcher — the only always-visible nav
+  // on this mobile-first surface, so the signal belongs here too (shares the
+  // header's 30s poll). Only run it when the launcher actually renders.
+  const attentionCount = useAttentionCount(!!hasFleetNav);
 
   // Debounce to prevent rapid clicking causing command interference
   const [isNavigating, setIsNavigating] = useState(false);
@@ -173,39 +197,62 @@ export function MobileTabBar({
         </Button>
       )}
 
-      {/* Dispatch (GitHub issues → agent fleet) — mobile's one-tap entry, since
-          the only other path is the rocket buried in the swipe-drawer footer. */}
-      {onDispatchClick && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Dispatch"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDispatchClick();
-          }}
-          className="h-8 w-8 shrink-0"
-        >
-          <Rocket className="h-4 w-4" />
-        </Button>
-      )}
-
-      {/* Workflows (run a pipeline template) — promoted to a one-tap entry for
-          the same reason as Dispatch: its only other path is the icon buried in
-          the swipe-drawer footer. */}
-      {onWorkflowsClick && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Workflows"
-          onClick={(e) => {
-            e.stopPropagation();
-            onWorkflowsClick();
-          }}
-          className="h-8 w-8 shrink-0"
-        >
-          <Workflow className="h-4 w-4" />
-        </Button>
+      {/* Fleet launcher — one button folding every fleet destination (Dispatch,
+          Workflows, Verdict Inbox, Fleet Board) into a single dropdown. This
+          replaces the former separate Dispatch + Workflows buttons: it makes the
+          two buried review surfaces (Verdict Inbox, Fleet Board) reachable in
+          ≤2 taps WITHOUT adding net always-on buttons — two fixed buttons become
+          one — which hands the min-w-0 session name back its width. */}
+      {hasFleetNav && (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={
+                attentionCount > 0
+                  ? `Fleet — ${attentionCount} ${attentionCount === 1 ? "needs" : "need"} you`
+                  : "Fleet"
+              }
+              onClick={(e) => e.stopPropagation()}
+              className="relative h-8 w-8 shrink-0"
+            >
+              <Boxes className="h-4 w-4" />
+              {attentionCount > 0 && <CountBadge count={attentionCount} />}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-[200px]">
+            {onDispatchClick && (
+              <DropdownMenuItem onSelect={() => onDispatchClick()}>
+                <Rocket className="mr-2 h-4 w-4" />
+                Dispatch
+              </DropdownMenuItem>
+            )}
+            {onWorkflowsClick && (
+              <DropdownMenuItem onSelect={() => onWorkflowsClick()}>
+                <Workflow className="mr-2 h-4 w-4" />
+                Workflows
+              </DropdownMenuItem>
+            )}
+            {onVerdictInboxClick && (
+              <DropdownMenuItem onSelect={() => onVerdictInboxClick()}>
+                <Inbox className="mr-2 h-4 w-4" />
+                Verdict Inbox
+                {attentionCount > 0 && (
+                  <span className="ml-auto rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                    {attentionCount > 9 ? "9+" : attentionCount}
+                  </span>
+                )}
+              </DropdownMenuItem>
+            )}
+            {onFleetBoardClick && (
+              <DropdownMenuItem onSelect={() => onFleetBoardClick()}>
+                <Columns3 className="mr-2 h-4 w-4" />
+                Fleet Board
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
 
       {/* Compose — a roomy full-screen prompt that sends straight to the active

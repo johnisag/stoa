@@ -652,6 +652,10 @@ function HomeContent() {
         onMenuClick={isMobile ? () => setSidebarOpen(true) : undefined}
         onDispatchClick={isMobile ? () => setShowDispatch(true) : undefined}
         onWorkflowsClick={isMobile ? () => setShowWorkflows(true) : undefined}
+        onVerdictInboxClick={
+          isMobile ? () => setShowVerdictInbox(true) : undefined
+        }
+        onFleetBoardClick={isMobile ? () => setShowFleetBoard(true) : undefined}
         onSelectSession={handleSelectSession}
       />
     ),

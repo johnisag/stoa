@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/tooltip";
 import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
+import { useAttentionCount } from "@/data/verdict-inbox/useAttentionCount";
 import type { ViewProps } from "./types";
 import { fileOpenActions } from "@/stores/fileOpen";
 
@@ -78,6 +79,11 @@ export function DesktopView({
     },
     [sessions, openSessionInNewTab]
   );
+
+  // Always-on "needs me" count for the Verdict Inbox / Fleet Board nav badges
+  // (a cheap 30s background poll — see useAttentionCount). Both destinations
+  // answer "what needs me?" off the one inbox count, so the badges agree.
+  const attentionCount = useAttentionCount();
 
   return (
     <div className="bg-background flex h-screen overflow-hidden">
@@ -234,11 +240,13 @@ export function DesktopView({
               entry={fleetNavEntry("verdict-inbox")}
               variant="header"
               onClick={() => setShowVerdictInbox(true)}
+              count={attentionCount}
             />
             <NavIconButton
               entry={fleetNavEntry("fleet-board")}
               variant="header"
               onClick={() => setShowFleetBoard(true)}
+              count={attentionCount}
             />
             {onShowGuide && (
               <NavIconButton

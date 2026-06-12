@@ -72,6 +72,8 @@ interface PaneProps {
   onMenuClick?: () => void;
   onDispatchClick?: () => void;
   onWorkflowsClick?: () => void;
+  onVerdictInboxClick?: () => void;
+  onFleetBoardClick?: () => void;
   onSelectSession?: (sessionId: string) => void;
 }
 
@@ -85,6 +87,8 @@ export const Pane = memo(function Pane({
   onMenuClick,
   onDispatchClick,
   onWorkflowsClick,
+  onVerdictInboxClick,
+  onFleetBoardClick,
   onSelectSession,
 }: PaneProps) {
   const { isMobile } = useViewport();
@@ -446,6 +450,8 @@ export const Pane = memo(function Pane({
           onMenuClick={onMenuClick}
           onDispatchClick={onDispatchClick}
           onWorkflowsClick={onWorkflowsClick}
+          onVerdictInboxClick={onVerdictInboxClick}
+          onFleetBoardClick={onFleetBoardClick}
           onComposeClick={session ? () => setShowCompose(true) : undefined}
           onViewModeChange={setViewMode}
           onSelectSession={onSelectSession}

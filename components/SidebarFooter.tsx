@@ -1,3 +1,5 @@
+"use client";
+
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Keyboard } from "lucide-react";
 import {
@@ -6,6 +8,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
+import { useAttentionCount } from "@/data/verdict-inbox/useAttentionCount";
 import { WorktreesButton } from "@/components/Worktrees/WorktreesButton";
 
 interface SidebarFooterProps {
@@ -37,6 +40,13 @@ export function SidebarFooter({
   onShowFleetBoard,
   onShowNotifications,
 }: SidebarFooterProps = {}) {
+  // "Needs me" count for the Verdict Inbox / Fleet Board nav badges — a cheap 30s
+  // background poll shared with the desktop header (same query key). Only run it
+  // when this footer actually renders the fleet nav (mobile); on desktop the
+  // footer omits those entries, so there's nothing to badge.
+  const attentionCount = useAttentionCount(
+    !!(onShowVerdictInbox || onShowFleetBoard)
+  );
   return (
     <div className="mt-auto px-3 pt-2 pb-3">
       <div className="flex items-center justify-between">
@@ -73,6 +83,7 @@ export function SidebarFooter({
               entry={fleetNavEntry("verdict-inbox")}
               variant="footer"
               onClick={onShowVerdictInbox}
+              count={attentionCount}
             />
           )}
           {onShowFleetBoard && (
@@ -80,6 +91,7 @@ export function SidebarFooter({
               entry={fleetNavEntry("fleet-board")}
               variant="footer"
               onClick={onShowFleetBoard}
+              count={attentionCount}
             />
           )}
           {onShowNotifications && (
