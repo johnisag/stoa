@@ -39,6 +39,7 @@ import {
   getProvider,
   buildAgentArgs,
   shellQuoteArg,
+  escapeForDoubleQuotes,
   buildTmuxFlags,
 } from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
@@ -237,6 +238,15 @@ function HomeContent() {
   // Helper to get init script command from API
   const getInitScriptCommand = useCallback(
     async (agentCommand: string): Promise<string> => {
+      // Fallback when the init-script POST is unavailable. The init-script path
+      // returns a bare `bash <path>` (metacharacter-free), but the raw
+      // agentCommand is not — and the tmux backend interpolates `command` into an
+      // OUTER double-quoted `"${command}"`. Escape it for that context (shared
+      // helper, same char-class shellQuoteArg uses) so a metacharacter-bearing
+      // token (e.g. a free-text model) can't break out of that wrapper; the agent
+      // CLI in the pane still receives the original command (buildFlags' per-token
+      // quoting keeps it safe there). Also preserves a literal `$` in the prompt.
+      const safeFallback = escapeForDoubleQuotes(agentCommand);
       try {
         const res = await fetch("/api/sessions/init-script", {
           method: "POST",
@@ -244,9 +254,9 @@ function HomeContent() {
           body: JSON.stringify({ agentCommand }),
         });
         const data = await res.json();
-        return data.command || agentCommand;
+        return data.command || safeFallback;
       } catch {
-        return agentCommand;
+        return safeFallback;
       }
     },
     []

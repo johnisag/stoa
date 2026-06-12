@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildAgentArgs, shellQuoteArg, buildTmuxFlags } from "@/lib/providers";
+import {
+  buildAgentArgs,
+  shellQuoteArg,
+  escapeForDoubleQuotes,
+  buildTmuxFlags,
+} from "@/lib/providers";
 
 describe("buildAgentArgs", () => {
   it("claude: plain launch has no args", () => {
@@ -126,6 +131,34 @@ describe("shellQuoteArg — tmux exec quoting for conductor tokens", () => {
   it("escapes shell-significant chars when quoting", () => {
     expect(shellQuoteArg('a"b')).toBe('"a\\"b"');
     expect(shellQuoteArg("a$b")).toBe('"a\\$b"');
+  });
+});
+
+describe("escapeForDoubleQuotes — containment inside an outer double-quoted shell string", () => {
+  // The single source for double-quote escaping (shellQuoteArg's inner escape AND
+  // the tmux init-script fallback in app/page.tsx). Locks the exact char-class so a
+  // future tweak can't silently re-open the tmux command-injection.
+  it('escapes ONLY the chars active inside double quotes (\\ " $ `)', () => {
+    expect(escapeForDoubleQuotes('a"b')).toBe('a\\"b');
+    expect(escapeForDoubleQuotes("a$b")).toBe("a\\$b");
+    expect(escapeForDoubleQuotes("a\\b")).toBe("a\\\\b");
+    expect(escapeForDoubleQuotes("a`b")).toBe("a\\`b");
+    // A command-substitution payload: $ is escaped so the outer shell can't run it.
+    expect(escapeForDoubleQuotes("$(touch /tmp/x)")).toBe("\\$(touch /tmp/x)");
+  });
+
+  it("leaves chars that are INERT inside double quotes untouched", () => {
+    // ; ~ | & * spaces ' are all literal inside double quotes — no escaping needed.
+    expect(escapeForDoubleQuotes("evil; rm -rf ~ | x & *")).toBe(
+      "evil; rm -rf ~ | x & *"
+    );
+    expect(escapeForDoubleQuotes("hermes -m opus 'fix the bug'")).toBe(
+      "hermes -m opus 'fix the bug'"
+    );
+    // `!` is deliberately NOT escaped: in double quotes `\!` keeps the backslash,
+    // so escaping it would corrupt benign prompts (non-interactive shells don't
+    // history-expand). Lock that invariant.
+    expect(escapeForDoubleQuotes("done!")).toBe("done!");
   });
 });
 

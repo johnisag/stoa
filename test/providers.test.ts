@@ -4,6 +4,7 @@ import {
   getAllProviders,
   isValidAgentType,
   buildAgentArgs,
+  shellQuoteArg,
 } from "@/lib/providers";
 import {
   PROVIDER_IDS,
@@ -267,5 +268,67 @@ describe("sessionKey() — centralized session-name construction", () => {
     expect(backendKeyForSession({ id: "x", agent_type: "bogus" })).toBe(
       "claude-x"
     );
+  });
+});
+
+describe("buildFlags shell-quotes value tokens (tmux command-injection guard)", () => {
+  // The tmux backend execs buildFlags' output in a shell, so an unquoted model or
+  // session id is command injection — most acutely a FREE-TEXT hermes model from
+  // an operator-set project default_model. buildFlags must route those value
+  // tokens through shellQuoteArg; the pty/argv path (buildAgentArgs) must NOT
+  // quote (it spawns argv directly, no shell). shellQuoteArg's own escaping is
+  // locked in build-agent-args.test.ts; here we lock that buildFlags USES it.
+  const EVIL = "evil; touch /tmp/pwned";
+
+  it("quotes a metacharacter-bearing free-text (hermes) model", () => {
+    expect(getProvider("hermes").buildFlags({ model: EVIL })).toEqual([
+      `-m ${shellQuoteArg(EVIL)}`,
+    ]);
+    // The dangerous form is contained in double quotes, not left bare.
+    expect(getProvider("hermes").buildFlags({ model: EVIL })[0]).toBe(
+      '-m "evil; touch /tmp/pwned"'
+    );
+  });
+
+  it("quotes the model for claude + codex too", () => {
+    expect(getProvider("claude").buildFlags({ model: EVIL })).toEqual([
+      `--model ${shellQuoteArg(EVIL)}`,
+    ]);
+    expect(getProvider("codex").buildFlags({ model: EVIL })).toEqual([
+      `--model ${shellQuoteArg(EVIL)}`,
+    ]);
+  });
+
+  it("quotes a metacharacter-bearing session id on the tmux resume path", () => {
+    expect(getProvider("hermes").buildFlags({ sessionId: EVIL })).toEqual([
+      `--resume ${shellQuoteArg(EVIL)}`,
+    ]);
+  });
+
+  it("quotes the session id on claude's resume AND fork (parentSessionId) branches", () => {
+    // claude_session_id / parent_session_id are writable DB columns, so both
+    // resume branches must quote — each is a distinct code path.
+    expect(getProvider("claude").buildFlags({ sessionId: EVIL })).toEqual([
+      `--resume ${shellQuoteArg(EVIL)}`,
+    ]);
+    expect(getProvider("claude").buildFlags({ parentSessionId: EVIL })).toEqual(
+      [`--resume ${shellQuoteArg(EVIL)}`, "--fork-session"]
+    );
+  });
+
+  it("leaves a normal model / session id byte-identical (safe tokens pass through)", () => {
+    expect(getProvider("claude").buildFlags({ model: "opus" })).toEqual([
+      "--model opus",
+    ]);
+    expect(
+      getProvider("hermes").buildFlags({ sessionId: "20260531_133925_98d9fc" })
+    ).toEqual(["--resume 20260531_133925_98d9fc"]);
+  });
+
+  it("does NOT quote on the pty/argv path — buildAgentArgs passes raw tokens", () => {
+    expect(buildAgentArgs("hermes", { model: EVIL }).args).toEqual([
+      "-m",
+      EVIL,
+    ]);
   });
 });
