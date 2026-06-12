@@ -50,5 +50,17 @@ export function useFleetBoard(open: boolean) {
     total,
     isLoading: inbox.isLoading || board.isLoading || pending.isLoading,
     isError: inbox.isError || board.isError || pending.isError,
+    isFetching:
+      inbox.isFetching ||
+      board.isFetching ||
+      pending.isFetching ||
+      repos.isFetching,
+    // Re-fetch every read model behind the board on a manual Retry.
+    refetch: () => {
+      void inbox.refetch();
+      void board.refetch();
+      void pending.refetch();
+      void repos.refetch();
+    },
   };
 }

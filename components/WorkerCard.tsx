@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import {
   Circle,
   Loader2,
@@ -15,6 +16,8 @@ import {
   ChevronDown,
   ChevronRight,
   GitBranch,
+  Copy,
+  Check,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -82,16 +85,32 @@ export function WorkerCard({
 }: WorkerCardProps) {
   const [message, setMessage] = useState("");
   const [showSendInput, setShowSendInput] = useState(false);
+  const [copiedBranch, setCopiedBranch] = useState(false);
 
   const config = statusConfig[worker.status];
   const StatusIcon = config.icon;
   const isActive = worker.status === "running" || worker.status === "waiting";
+  // A finished worker (completed/failed/dead) no longer offers Attach — its only
+  // produced artifact to hand off is its branch (the worker record carries no
+  // PR url/number, so there's nothing to "View PR" against). Let the operator
+  // copy the branch for a local checkout.
+  const isFinished =
+    worker.status === "completed" ||
+    worker.status === "failed" ||
+    worker.status === "dead";
 
   const handleSend = () => {
     if (message.trim() && onSendMessage) {
       onSendMessage(message.trim());
       setMessage("");
       setShowSendInput(false);
+    }
+  };
+
+  const handleCopyBranch = async () => {
+    if (worker.branchName && (await copyText(worker.branchName))) {
+      setCopiedBranch(true);
+      setTimeout(() => setCopiedBranch(false), 2000);
     }
   };
 
@@ -225,6 +244,20 @@ export function WorkerCard({
               >
                 <Send className="mr-1 h-3 w-3" />
                 Send input
+              </Button>
+            )}
+
+            {/* Handoff for a finished worker: copy its branch for a local
+                checkout. (No PR url/number on the worker record → no View PR;
+                a live worker is reached via Attach in the header instead.) */}
+            {isFinished && worker.branchName && (
+              <Button variant="outline" size="sm" onClick={handleCopyBranch}>
+                {copiedBranch ? (
+                  <Check className="mr-1 h-3 w-3 text-green-500" />
+                ) : (
+                  <Copy className="mr-1 h-3 w-3" />
+                )}
+                {copiedBranch ? "Copied" : "Copy branch"}
               </Button>
             )}
           </div>
