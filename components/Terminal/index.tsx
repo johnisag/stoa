@@ -121,6 +121,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       restoreScrollState,
       reconnect,
       sessionEnded,
+      attachError,
       relaunch,
       autoRetry,
       cancelAutoRetry,
@@ -504,9 +505,10 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           </div>
         )}
 
-        {/* Session-ended bar — the agent process exited. A bottom bar (not a
-            full overlay) keeps the final output readable; auto-reconnect won't
-            silently respawn, so relaunch is explicit. When the exit was a
+        {/* Session-ended bar — the agent process exited, OR an attach/spawn
+            failed (attachError, shown in place of "Session ended"). A bottom bar
+            (not a full overlay) keeps the final output readable; auto-reconnect
+            won't silently respawn, so relaunch is explicit. When the exit was a
             TRANSIENT failure (rate-limit / network), an auto-retry is armed: show
             a live countdown + Cancel (the user override) in place of the plain
             Relaunch — the backoff timer fires the relaunch on its own. */}
@@ -527,8 +529,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
               </>
             ) : (
               <>
-                <span className="text-muted-foreground text-sm">
-                  Session ended
+                <span
+                  className={cn(
+                    "text-sm",
+                    attachError ? "text-destructive" : "text-muted-foreground"
+                  )}
+                >
+                  {attachError ?? "Session ended"}
                 </span>
                 <button
                   onClick={relaunch}

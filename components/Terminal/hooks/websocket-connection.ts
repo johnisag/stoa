@@ -14,6 +14,10 @@ export interface WebSocketCallbacks {
   onOutput?: () => void;
   /** Fired when the agent process exits (server "exit" message). */
   onExit?: (code?: number) => void;
+  /** Fired on a server "error" frame (attach/spawn failed). The message is the
+   *  server's reason; in the native pty path the socket stays OPEN after it, so
+   *  the hook must surface it (and stop any "Switching…" overlay hanging). */
+  onError?: (message?: string) => void;
   /** Server "reset" frame — clear the screen+scrollback right before the
    *  snapshot replay that follows (prevents duplicated scrollback on reconnect). */
   onReset?: () => void;
@@ -163,6 +167,17 @@ export function createWebSocketConnection(
         term.write("\r\n\x1b[33m[Session ended]\x1b[0m\r\n", () =>
           callbacks.onExit?.(msg.code)
         );
+      } else if (msg.type === "error") {
+        // Attach/spawn failed. Print the reason inline (mirrors MiniTerminal),
+        // then let the hook mark the session ended so the Relaunch affordance
+        // shows and auto-reconnect won't silently respawn. Critically, in the
+        // native pty path the server does NOT close the socket after this frame,
+        // so without handling it the screen just hangs (a session-switch leaves
+        // the "Switching…" overlay stuck forever).
+        term.write(
+          `\r\n\x1b[31m[${msg.message || "Failed to start the session"}]\x1b[0m\r\n`
+        );
+        callbacks.onError?.(msg.message);
       }
     } catch {
       term.write(event.data);

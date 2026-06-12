@@ -52,8 +52,15 @@ export interface UseTerminalConnectionReturn {
   restoreScrollState: (state: TerminalScrollState) => void;
   triggerResize: () => void;
   reconnect: () => void;
-  /** True after the agent process exits; surfaces a Relaunch affordance. */
+  /** True after the agent process exits, or an attach/spawn fails (server
+   *  "error" frame — see `attachError`); surfaces a Relaunch affordance. */
   sessionEnded: boolean;
+  /**
+   * The reason an attach/spawn FAILED (server "error" frame), or null. Set
+   * alongside `sessionEnded`, so it shares the Relaunch bar — shown in place of
+   * "Session ended" because the session never actually started.
+   */
+  attachError: string | null;
   /** Explicitly respawn an exited session (the only path that respawns it). */
   relaunch: () => void;
   /**
