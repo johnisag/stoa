@@ -81,24 +81,37 @@ export interface PrReadiness {
   state: string | null;
 }
 
+/** Pure argv for reading a PR's state (testable). --repo makes the read
+ * independent of the cwd's git remote, so it can run from the stable main checkout
+ * rather than a per-task worktree that may have been reclaimed. */
+export function buildPrViewArgs(
+  prNumber: number,
+  repoSlug?: string | null
+): string[] {
+  const args = [
+    "pr",
+    "view",
+    String(prNumber),
+    "--json",
+    "mergeable,statusCheckRollup,headRefOid,state",
+  ];
+  if (repoSlug) args.push("--repo", repoSlug);
+  return args;
+}
+
 /** Read a PR's merge readiness via gh (conflicts + checks + head SHA + state; the
  * review verdict is Stoa's own cached panel decision, not GitHub's). On any
  * failure, returns a never-ready shape (mergeable null + checks "pending") so the
  * caller waits. headRefOid/state are additive (the dispatch passes ignore them). */
 export async function getPrReadiness(
   cwd: string,
-  prNumber: number
+  prNumber: number,
+  repoSlug?: string | null
 ): Promise<PrReadiness> {
   try {
     const { stdout } = await execFileAsync(
       gh,
-      [
-        "pr",
-        "view",
-        String(prNumber),
-        "--json",
-        "mergeable,statusCheckRollup,headRefOid,state",
-      ],
+      buildPrViewArgs(prNumber, repoSlug),
       { cwd, encoding: "utf-8", timeout: 15000, windowsHide: true }
     );
     const parsed = JSON.parse(stdout) as {
@@ -143,8 +156,16 @@ export async function autoMergePass(): Promise<void> {
       | undefined;
     if (!repo) continue;
 
+    // gh PR reads/merges run against the repo (--repo) from the STABLE main
+    // checkout — never the per-task worktree cwd, which may have been reclaimed
+    // (a gone worktree otherwise makes gh's spawn throw a misleading ENOENT).
+    const repoCwd = expandHome(repo.repo_path);
     const cwd = expandHome(d.worktree_path);
-    const readiness = await getPrReadiness(cwd, d.pr_number);
+    const readiness = await getPrReadiness(
+      repoCwd,
+      d.pr_number,
+      repo.repo_slug
+    );
     const action = nextAutoMergeAction({
       autoMerge: true,
       status: d.status,
@@ -169,7 +190,11 @@ export async function autoMergePass(): Promise<void> {
     if (action !== "merge") continue;
 
     try {
-      await mergePR({ cwd, prNumber: d.pr_number });
+      await mergePR({
+        cwd: repoCwd,
+        prNumber: d.pr_number,
+        repoSlug: repo.repo_slug,
+      });
       queries.updateDispatchStatus(db).run("merged", d.id);
       console.log(
         `dispatch: auto-merged PR #${d.pr_number} (${repo.repo_slug})`
@@ -177,9 +202,8 @@ export async function autoMergePass(): Promise<void> {
       // The PR is merged and the worker is long done — reclaim its worktree so
       // an autonomous (no-human) loop doesn't leak a directory per merged issue.
       // Background + best-effort: a cleanup failure must not fail the tick.
-      const repoPath = expandHome(repo.repo_path);
       runInBackground(
-        () => deleteWorktree(cwd, repoPath, false),
+        () => deleteWorktree(cwd, repoCwd, false),
         `automerge-cleanup-${d.id}`
       );
     } catch (err) {

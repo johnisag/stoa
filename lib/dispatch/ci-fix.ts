@@ -137,8 +137,9 @@ export async function ciFixPass(): Promise<void> {
     }
 
     const { checks } = await getPrReadiness(
-      expandHome(d.worktree_path),
-      d.pr_number
+      expandHome(repo.repo_path),
+      d.pr_number,
+      repo.repo_slug
     );
     const action = nextCiFixAction({
       ciAutofix: true,

@@ -33,18 +33,20 @@ export async function POST(
         { status: 409 }
       );
     }
-    // Merge from the worker's worktree (falls back to the tracked repo path).
+    // Merge repo-explicitly (--repo) from the stable main checkout; the worker's
+    // worktree is only a fallback when the repo row is gone (a reclaimed worktree
+    // cwd otherwise makes gh's spawn throw a misleading ENOENT).
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-      | { repo_path: string }
+      | { repo_path: string; repo_slug: string }
       | undefined;
-    const cwd = expandHome(d.worktree_path || repo?.repo_path || "");
+    const cwd = expandHome(repo?.repo_path || d.worktree_path || "");
     if (!cwd) {
       return NextResponse.json(
         { error: "No checkout to merge from" },
         { status: 409 }
       );
     }
-    await mergePR({ cwd, prNumber: d.pr_number });
+    await mergePR({ cwd, prNumber: d.pr_number, repoSlug: repo?.repo_slug });
     queries.updateDispatchStatus(db).run("merged", id);
     return NextResponse.json({
       dispatch: queries.getDispatch(db).get(id) as IssueDispatch,

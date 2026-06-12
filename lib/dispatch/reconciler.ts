@@ -344,7 +344,16 @@ export async function sweepActiveWorkers(opts: {
 
   for (const d of rows) {
     if (d.worktree_path && d.branch_name) {
-      const pr = await getPRForBranchAnyState(d.worktree_path, d.branch_name);
+      // Look up the PR repo-explicitly from the stable main checkout, not the
+      // worker's worktree (which may have been reclaimed → misleading gh ENOENT).
+      const repo = queries.getDispatchRepo(db).get(d.repo_id) as
+        | DispatchRepo
+        | undefined;
+      const pr = await getPRForBranchAnyState(
+        repo ? expandHome(repo.repo_path) : expandHome(d.worktree_path),
+        d.branch_name,
+        repo?.repo_slug
+      );
       // OPEN/MERGED → terminal-ish, frees the slot. A CLOSED (abandoned) PR falls
       // through to the dead-session check.
       if (pr && (pr.state === "OPEN" || pr.state === "MERGED")) {
@@ -534,9 +543,10 @@ export async function reviewGatePass(): Promise<void> {
       d.pr_number != null
     ) {
       const verdict = await aggregatePanelVerdict(
-        expandHome(d.worktree_path),
+        expandHome(repo.repo_path),
         d.pr_number,
-        d.fix_rounds
+        d.fix_rounds,
+        repo.repo_slug
       );
       if (
         verdict.complete &&

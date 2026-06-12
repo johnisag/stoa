@@ -7,12 +7,16 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const { state } = vi.hoisted(() => ({
   state: {
     rows: [] as Array<Record<string, unknown>>,
-    repo: { review_gate: 0, repo_path: "/repo" } as
-      | { review_gate: number; repo_path: string }
+    repo: { review_gate: 0, repo_path: "/repo", repo_slug: "owner/repo" } as
+      | { review_gate: number; repo_path: string; repo_slug: string }
       | undefined,
     ghJson: "{}",
     mergeThrows: false,
-    mergeCalls: [] as Array<{ cwd: string; prNumber: number }>,
+    mergeCalls: [] as Array<{
+      cwd: string;
+      prNumber: number;
+      repoSlug?: string;
+    }>,
     statusUpdates: [] as Array<unknown[]>,
     cleanupLabels: [] as string[],
   },
@@ -46,7 +50,11 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/dispatch/merge", () => ({
-  mergePR: async (opts: { cwd: string; prNumber: number }) => {
+  mergePR: async (opts: {
+    cwd: string;
+    prNumber: number;
+    repoSlug?: string;
+  }) => {
     state.mergeCalls.push(opts);
     if (state.mergeThrows) throw new Error("Pull request is not mergeable");
   },
@@ -66,7 +74,29 @@ import {
   summarizePrChecks,
   nextAutoMergeAction,
   autoMergePass,
+  buildPrViewArgs,
 } from "@/lib/dispatch/auto-merge";
+
+describe("buildPrViewArgs — repo-explicit PR-state read (worktree-independent)", () => {
+  it("appends --repo <slug> only when given", () => {
+    expect(buildPrViewArgs(7)).toEqual([
+      "pr",
+      "view",
+      "7",
+      "--json",
+      "mergeable,statusCheckRollup,headRefOid,state",
+    ]);
+    expect(buildPrViewArgs(7, "owner/repo")).toEqual([
+      "pr",
+      "view",
+      "7",
+      "--json",
+      "mergeable,statusCheckRollup,headRefOid,state",
+      "--repo",
+      "owner/repo",
+    ]);
+  });
+});
 
 describe("summarizePrChecks", () => {
   it("returns 'none' for an empty/absent rollup", () => {
@@ -203,7 +233,11 @@ describe("nextAutoMergeAction", () => {
 describe("autoMergePass", () => {
   beforeEach(() => {
     state.rows = [];
-    state.repo = { review_gate: 0, repo_path: "/repo" };
+    state.repo = {
+      review_gate: 0,
+      repo_path: "/repo",
+      repo_slug: "owner/repo",
+    };
     state.ghJson = JSON.stringify({
       mergeable: "MERGEABLE",
       reviewDecision: null,
@@ -228,7 +262,11 @@ describe("autoMergePass", () => {
   it("merges a ready opted-in PR, marks it merged, and reclaims the worktree", async () => {
     state.rows = [row()];
     await autoMergePass();
-    expect(state.mergeCalls).toEqual([{ cwd: "/wt", prNumber: 7 }]);
+    // Armored: gh runs from the STABLE main checkout (/repo) + --repo, not the
+    // worktree (/wt) — so a reclaimed worktree can't ENOENT the merge.
+    expect(state.mergeCalls).toEqual([
+      { cwd: "/repo", prNumber: 7, repoSlug: "owner/repo" },
+    ]);
     expect(state.statusUpdates).toContainEqual(["merged", "d1"]);
     expect(state.cleanupLabels).toContain("automerge-cleanup-d1");
   });
@@ -264,16 +302,28 @@ describe("autoMergePass", () => {
   // (d.review_decision), NOT GitHub's reviewDecision — the panel posts comments,
   // so GitHub's field is null and would otherwise wedge a gated PR forever.
   it("waits on a gated PR until the cached panel verdict is APPROVED", async () => {
-    state.repo = { review_gate: 1, repo_path: "/repo" };
+    state.repo = {
+      review_gate: 1,
+      repo_path: "/repo",
+      repo_slug: "owner/repo",
+    };
     state.rows = [row({ review_decision: null })];
     await autoMergePass();
     expect(state.mergeCalls).toHaveLength(0);
   });
 
   it("merges a gated PR once the cached panel verdict is APPROVED", async () => {
-    state.repo = { review_gate: 1, repo_path: "/repo" };
+    state.repo = {
+      review_gate: 1,
+      repo_path: "/repo",
+      repo_slug: "owner/repo",
+    };
     state.rows = [row({ review_decision: "APPROVED" })];
     await autoMergePass();
-    expect(state.mergeCalls).toEqual([{ cwd: "/wt", prNumber: 7 }]);
+    // Armored: gh runs from the STABLE main checkout (/repo) + --repo, not the
+    // worktree (/wt) — so a reclaimed worktree can't ENOENT the merge.
+    expect(state.mergeCalls).toEqual([
+      { cwd: "/repo", prNumber: 7, repoSlug: "owner/repo" },
+    ]);
   });
 });
