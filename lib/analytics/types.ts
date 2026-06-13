@@ -68,6 +68,21 @@ export interface AnalyticsSnapshot {
   windowDays: number;
 }
 
+// ── Session origins (where the work came from) ───────────────────────────────
+
+/**
+ * How the window's sessions were started. Insight already counts EVERY session —
+ * this split makes that visible so a user can confirm their own hand-started
+ * ("standalone") sessions are tracked, not just Dispatch's autonomous workers.
+ * A session is `dispatch` when it carries a dispatch outcome; everything else
+ * (interactive sessions you open yourself, workflow workers) is `standalone`.
+ */
+export interface SessionOriginCounts {
+  dispatch: number;
+  standalone: number;
+  total: number;
+}
+
 // ── Performance lens ────────────────────────────────────────────────────────
 
 export interface PerformanceMetrics {
@@ -177,6 +192,7 @@ export interface DetectedIssue {
 export interface AnalyticsReport {
   windowDays: number;
   generatedAt: number;
+  origins: SessionOriginCounts;
   performance: PerformanceMetrics;
   behavioural: BehaviouralMetrics;
   intelligence: ProviderIntelligence[];

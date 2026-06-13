@@ -10,7 +10,7 @@
  */
 
 import { useState } from "react";
-import { BarChart3, AlertTriangle, RefreshCw } from "lucide-react";
+import { BarChart3, AlertTriangle, RefreshCw, HelpCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
@@ -24,6 +24,7 @@ import {
 import { useAnalyticsQuery } from "@/data/analytics/queries";
 import type { AnalyticsReport } from "@/lib/analytics/types";
 import { StatCard, BarRow, Sparkline, fmt, fmtDuration } from "./primitives";
+import { AnalyticsHelp } from "./AnalyticsHelp";
 
 type Tab =
   | "overview"
@@ -62,6 +63,7 @@ export function AnalyticsView({
 }) {
   const [tab, setTab] = useState<Tab>("overview");
   const [windowDays, setWindowDays] = useState<number>(14);
+  const [showHelp, setShowHelp] = useState(false);
   const { data, isLoading, isError, refetch, isFetching } = useAnalyticsQuery(
     windowDays,
     open
@@ -147,6 +149,16 @@ export function AnalyticsView({
                 className={cn("h-4 w-4", isFetching && "animate-spin")}
               />
             </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="How Insight works"
+              title="How Insight works"
+              aria-pressed={showHelp}
+              onClick={() => setShowHelp((v) => !v)}
+            >
+              <HelpCircle className="h-4 w-4" />
+            </Button>
           </div>
         </div>
 
@@ -155,7 +167,9 @@ export function AnalyticsView({
           role="tabpanel"
           aria-label={`${tab} insights`}
         >
-          {isLoading ? (
+          {showHelp ? (
+            <AnalyticsHelp onClose={() => setShowHelp(false)} />
+          ) : isLoading ? (
             <Centered>Computing insight…</Centered>
           ) : isError ? (
             <Centered>Failed to load analytics. Try refresh.</Centered>
@@ -202,6 +216,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 function Overview({ report }: { report: AnalyticsReport }) {
   const p = report.performance;
   const t = report.trends;
+  const o = report.origins;
   return (
     <div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -237,6 +252,17 @@ function Overview({ report }: { report: AnalyticsReport }) {
           tone={reviewerTone(p.reviewerPassRate)}
         />
       </div>
+
+      {/* Origin split — proves standalone sessions (the ones you start yourself,
+          plus workflow runs) are counted too, not just Dispatch's autonomous
+          workers. Spells out the total so it reconciles with the Sessions card. */}
+      <p
+        className="text-muted-foreground mt-2 text-xs"
+        title="Standalone = sessions you open yourself (and workflow runs), not Dispatch's autonomous workers"
+      >
+        Of {o.total} sessions: {o.dispatch} from Dispatch · {o.standalone}{" "}
+        standalone
+      </p>
 
       <SectionTitle>Daily cost</SectionTitle>
       <div className="bg-card rounded-lg border p-3">

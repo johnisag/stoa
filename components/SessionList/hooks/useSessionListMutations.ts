@@ -74,7 +74,8 @@ export function useSessionListMutations({
         !(await confirm({
           title: "Delete session?",
           description:
-            "This permanently deletes the session. It cannot be undone.",
+            "This permanently deletes the session and, if it has one, its git " +
+            "worktree (the branch is kept). It cannot be undone.",
           confirmLabel: "Delete",
         }))
       )
