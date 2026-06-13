@@ -17,6 +17,8 @@ import {
   disconnect,
   removeStep,
   renameStep,
+  relayout,
+  docFromImportedJson,
   serializeBuilderDoc,
   parseBuilderDoc,
   CANVAS,
@@ -192,6 +194,50 @@ describe("removeStep", () => {
       "a"
     );
     expect(doc.nodes[0].step.dependsOn).toBeUndefined();
+  });
+});
+
+describe("relayout", () => {
+  it("re-snaps hand-moved nodes back to the topological layout", () => {
+    const base = docFromSpec(
+      spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })])
+    );
+    const messy = moveNode(base, "b", 999, 999);
+    const tidy = relayout(messy);
+    const a = tidy.nodes.find((n) => n.step.id === "a")!;
+    const b = tidy.nodes.find((n) => n.step.id === "b")!;
+    expect(a).toMatchObject({ x: CANVAS.PAD, y: CANVAS.PAD });
+    expect(b).toMatchObject({ x: CANVAS.PAD + CANVAS.COL_W, y: CANVAS.PAD });
+    // steps + edges preserved
+    expect(b.step.dependsOn).toEqual(["a"]);
+  });
+});
+
+describe("docFromImportedJson", () => {
+  it("imports a BuilderDoc JSON (positions preserved)", () => {
+    const d = moveNode(docFromSpec(spec([step({ id: "a" })])), "a", 120, 80);
+    expect(docFromImportedJson(serializeBuilderDoc(d))).toEqual(d);
+  });
+
+  it("imports a bare PipelineSpec JSON (positions seeded from layout)", () => {
+    const s = spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })]);
+    const imported = docFromImportedJson(JSON.stringify(s));
+    expect(imported?.nodes.map((n) => n.step.id)).toEqual(["a", "b"]);
+    expect(imported?.nodes[1]).toMatchObject({ x: CANVAS.PAD + CANVAS.COL_W });
+  });
+
+  it("returns null for JSON that is neither a doc nor a spec", () => {
+    expect(docFromImportedJson("not json")).toBeNull();
+    expect(docFromImportedJson(JSON.stringify({ foo: 1 }))).toBeNull();
+  });
+
+  it("returns null (never throws) on a non-string name/workingDirectory", () => {
+    // A near-valid spec/doc whose name isn't a string must not crash the import.
+    expect(() => docFromImportedJson('{"name":1,"steps":[]}')).not.toThrow();
+    expect(docFromImportedJson('{"name":1,"steps":[]}')).toBeNull();
+    expect(
+      docFromImportedJson('{"name":"x","workingDirectory":2,"steps":[]}')
+    ).toBeNull();
   });
 });
 

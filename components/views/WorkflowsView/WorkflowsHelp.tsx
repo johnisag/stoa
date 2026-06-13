@@ -60,9 +60,12 @@ export function WorkflowsHelp({ onClose }: { onClose: () => void }) {
           edge to remove it. It validates live and runs the same way; under the
           hood it&apos;s the same spec as Custom. Use the{" "}
           <span className="text-foreground">Saved</span> menu to save the current
-          canvas (its positions included), reload one later, save a copy, or
-          start a new/example workflow — saving over a loaded workflow overwrites
-          it, and changes aren&apos;t stored until you tap Save.
+          canvas (its positions included), reload one later, save a copy,{" "}
+          <span className="text-foreground">Tidy layout</span> to auto-arrange the
+          boxes, or <span className="text-foreground">Import/Export</span> a
+          workflow as a JSON file to share it. Saving over a loaded workflow
+          overwrites it; an amber dot on the Saved button means you have unsaved
+          changes.
         </li>
         <li>
           <span className="text-foreground font-medium">Or go Custom.</span> The{" "}
