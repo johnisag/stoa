@@ -146,6 +146,37 @@ export function isSafeOutputFile(file: string): boolean {
 export { isSafeModel };
 
 /**
+ * Parse + validate a hand-authored pipeline spec (the custom-spec editor). Returns
+ * the spec ONLY when the JSON parses AND validateSpec passes; otherwise a list of
+ * problems (a JSON syntax error, or each validation error). Pure — reused by the
+ * editor for instant feedback and safe to import client-side (no I/O).
+ */
+export function parsePipelineSpec(text: string): {
+  spec: PipelineSpec | null;
+  errors: PipelineValidationError[];
+} {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return {
+      spec: null,
+      errors: [
+        {
+          stepId: null,
+          message: `Invalid JSON: ${e instanceof Error ? e.message : "parse error"}`,
+        },
+      ],
+    };
+  }
+  const result = validateSpec(parsed as PipelineSpec);
+  return {
+    spec: result.valid ? (parsed as PipelineSpec) : null,
+    errors: result.errors,
+  };
+}
+
+/**
  * Validate a pipeline spec. Returns every problem found (not just the first) so
  * an author can fix them in one pass. Checks: pipeline name + workingDirectory,
  * non-empty steps, unique non-empty ids, a spawnable agent, a non-empty task,

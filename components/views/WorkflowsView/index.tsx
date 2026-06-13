@@ -16,19 +16,20 @@ import { useListRuns } from "@/data/pipelines/queries";
 import type { Session } from "@/lib/db";
 import { TemplatePicker } from "./TemplatePicker";
 import { ParamForm } from "./ParamForm";
+import { CustomSpecForm } from "./CustomSpecForm";
 import { ExamplesTab } from "./ExamplesTab";
 import { RunsList } from "./RunsList";
 import { RunDetail } from "./RunDetail";
 import { WorkflowsHelp } from "./WorkflowsHelp";
 
-type Tab = "templates" | "examples" | "runs";
+type Tab = "templates" | "custom" | "examples" | "runs";
 
 /**
  * Workflows control plane — a self-contained dialog (opened from the Desktop/
- * Mobile nav via setShowWorkflows). Three tabs: Templates (pick → fill params →
- * start a run), Examples (browse the pattern catalog), and Runs (recent runs'
- * live step states). Renders the templates/examples from lib/pipeline over the
- * existing /api/pipelines backend.
+ * Mobile nav via setShowWorkflows). Four tabs: Templates (pick → fill params →
+ * start a run), Custom (hand-author + validate a PipelineSpec, then run), Examples
+ * (browse the pattern catalog), and Runs (recent runs' live step states). Renders
+ * the templates/examples from lib/pipeline over the existing /api/pipelines backend.
  */
 export function WorkflowsView({
   open,
@@ -68,6 +69,7 @@ export function WorkflowsView({
 
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: "templates", label: "Templates" },
+    { key: "custom", label: "Custom" },
     { key: "examples", label: "Examples" },
     { key: "runs", label: "Runs", count: active },
   ];
@@ -110,7 +112,8 @@ export function WorkflowsView({
             Workflows
           </DialogTitle>
           <DialogDescription>
-            Run a multi-step agent pipeline from a template — each step spawns a
+            Run a multi-step agent pipeline from a template — or author your own
+            in <span className="font-medium">Custom</span> — each step spawns a
             worker (Claude, Codex, or Hermes) in its own git worktree. Tap{" "}
             <span className="font-medium">?</span> for a quick guide.
           </DialogDescription>
@@ -185,6 +188,12 @@ export function WorkflowsView({
             ) : (
               <TemplatePicker onPick={setPickedTemplate} />
             )
+          ) : tab === "custom" ? (
+            <CustomSpecForm
+              sessions={sessions}
+              defaultConductorId={activeSessionId}
+              onStarted={goToRun}
+            />
           ) : tab === "examples" ? (
             <ExamplesTab onRunTemplate={runFromExample} />
           ) : openRunId ? (

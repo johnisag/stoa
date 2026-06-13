@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 import {
   validateSpec,
+  parsePipelineSpec,
   initRun,
   readySteps,
   applyStepStarted,
@@ -53,6 +54,39 @@ function runStep(
   run = applyStepOutcome(run, id, outcome, now);
   return run;
 }
+
+describe("parsePipelineSpec — the custom-spec editor's parse+validate", () => {
+  it("returns the spec for valid JSON that passes validation", () => {
+    const text = JSON.stringify(spec([step({ id: "a" })]));
+    const r = parsePipelineSpec(text);
+    expect(r.errors).toEqual([]);
+    expect(r.spec?.steps.map((s) => s.id)).toEqual(["a"]);
+  });
+
+  it("reports a JSON syntax error (no spec)", () => {
+    const r = parsePipelineSpec("{ not json");
+    expect(r.spec).toBeNull();
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0].message).toMatch(/Invalid JSON/);
+  });
+
+  it("surfaces validation errors for well-formed JSON that's an invalid spec", () => {
+    // Valid JSON, but missing name + a cyclic dependency → no spec, real errors.
+    const bad = JSON.stringify({
+      workingDirectory: "/repo",
+      steps: [
+        { id: "a", agent: "claude", task: "x", dependsOn: ["b"] },
+        { id: "b", agent: "claude", task: "y", dependsOn: ["a"] },
+      ],
+    });
+    const r = parsePipelineSpec(bad);
+    expect(r.spec).toBeNull();
+    expect(r.errors.length).toBeGreaterThan(0);
+    expect(r.errors.some((e) => /name is required/i.test(e.message))).toBe(
+      true
+    );
+  });
+});
 
 describe("validateSpec", () => {
   it("accepts a minimal valid single-step pipeline", () => {

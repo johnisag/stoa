@@ -50,6 +50,19 @@ export function WorkflowsHelp({ onClose }: { onClose: () => void }) {
           step fails, its dependents are skipped rather than chasing a broken
           precondition.
         </li>
+        <li>
+          <span className="text-foreground font-medium">Or go Custom.</span> The{" "}
+          <span className="text-foreground">Custom</span> tab lets you author a
+          pipeline by hand — paste a spec (a name, a working directory, and a
+          list of steps each with an <code className="text-foreground">id</code>
+          , <code className="text-foreground">agent</code>,{" "}
+          <code className="text-foreground">task</code>, and optional{" "}
+          <code className="text-foreground">dependsOn</code>). It validates as
+          you type; tap <span className="text-foreground">Load example</span> to
+          start from a working one. A step reads an upstream step&apos;s result
+          with{" "}
+          <code className="text-foreground">{"{{steps.<id>.output}}"}</code>.
+        </li>
       </ol>
 
       <p className="text-muted-foreground text-xs leading-relaxed">
