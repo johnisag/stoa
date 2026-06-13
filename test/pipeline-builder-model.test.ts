@@ -13,6 +13,8 @@ import {
   moveNode,
   updateStep,
   setDependsOn,
+  connect,
+  disconnect,
   removeStep,
   renameStep,
   CANVAS,
@@ -134,6 +136,36 @@ describe("setDependsOn", () => {
       []
     );
     expect(doc.nodes[0].step.dependsOn).toBeUndefined();
+  });
+});
+
+describe("connect / disconnect", () => {
+  const base = () =>
+    docFromSpec(spec([step({ id: "a" }), step({ id: "b" })]));
+
+  it("connect adds from → to (to depends on from)", () => {
+    const doc = connect(base(), "a", "b");
+    expect(doc.nodes.find((n) => n.step.id === "b")!.step.dependsOn).toEqual([
+      "a",
+    ]);
+  });
+
+  it("connect is a no-op for self, unknown target, or duplicate edge", () => {
+    const b = base();
+    expect(connect(b, "a", "a")).toBe(b); // self
+    expect(connect(b, "a", "ghost")).toBe(b); // unknown target
+    const once = connect(b, "a", "b");
+    expect(connect(once, "a", "b")).toBe(once); // duplicate
+  });
+
+  it("disconnect removes the edge and clears an emptied dependsOn", () => {
+    const doc = disconnect(connect(base(), "a", "b"), "a", "b");
+    expect(doc.nodes.find((n) => n.step.id === "b")!.step.dependsOn).toBeUndefined();
+  });
+
+  it("disconnect is a no-op for an absent edge", () => {
+    const b = base();
+    expect(disconnect(b, "a", "b")).toBe(b);
   });
 });
 

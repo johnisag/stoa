@@ -1,6 +1,10 @@
 "use client";
 
-import { useRef, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { CANVAS, type BuilderDoc } from "@/lib/pipeline/builder-model";
 import { cn } from "@/lib/utils";
 
@@ -11,27 +15,42 @@ const { NODE_W, NODE_H, PAD } = CANVAS;
  * (the same 1-unit-per-px viewBox model as PipelineGraph, so client→SVG mapping is
  * a plain getBoundingClientRect subtraction with no CTM math). Nodes are moved with
  * Pointer Events + setPointerCapture, a single code path for mouse, touch, and pen.
- * `touch-action: none` lives ONLY on the node <g>: a finger-drag on a node moves the
- * box, while a finger-drag on empty canvas falls through to native scroll (the svg
- * must NOT carry touch-none or it would trap the page scroll on a phone). Controlled:
- * the parent owns the doc and applies onMoveNode/onSelectNode.
+ * `touch-action: none` lives ONLY on the node <g> and the output ports: a finger-drag
+ * on a node moves the box (and on a port wires a dependency), while a finger-drag on
+ * empty canvas falls through to native scroll (the svg must NOT carry touch-none or it
+ * would trap the page scroll on a phone). Each node has an output port on its right
+ * edge — drag it onto another node to add that dependency edge. Controlled: the parent
+ * owns the doc and applies onMoveNode/onSelectNode/onConnect.
  */
 export function PipelineCanvas({
   doc,
   selectedId,
   onSelectNode,
   onMoveNode,
+  onConnect,
+  onDisconnect,
 }: {
   doc: BuilderDoc;
   selectedId: string | null;
   onSelectNode: (id: string | null) => void;
   onMoveNode: (id: string, x: number, y: number) => void;
+  /** Create a dependency edge by dragging from a node's output port to another. */
+  onConnect: (from: string, to: string) => void;
+  /** Remove a dependency edge by tapping it. */
+  onDisconnect: (from: string, to: string) => void;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   // Active drag: which node, and the grab offset (pointer − node origin) so the
   // node doesn't jump its top-left to the cursor on grab. A ref, not state, so a
   // drag in flight doesn't re-render on every pointermove (only onMoveNode does).
   const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  // Active connection drag from a node's output port — needs state (not a ref)
+  // because the rubber-band line follows the pointer and must re-render each move.
+  const [connecting, setConnecting] = useState<{
+    from: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Pointer client coords → SVG user space. viewBox == width/height (1:1, no
   // transform), so subtracting the svg's rect is exact even while scrolled.
@@ -62,6 +81,52 @@ export function PipelineCanvas({
     }
     drag.current = null;
   }
+
+  // Output-port drag → connect. stopPropagation so it doesn't start a node move.
+  function onPortPointerDown(e: ReactPointerEvent, id: string) {
+    e.stopPropagation();
+    const node = doc.nodes.find((n) => n.step.id === id);
+    if (!node) return;
+    setConnecting({ from: id, x: node.x + NODE_W, y: node.y + NODE_H / 2 });
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onPortPointerMove(e: ReactPointerEvent) {
+    const p = toUser(e);
+    setConnecting((c) => (c ? { ...c, x: p.x, y: p.y } : c));
+  }
+
+  function onPortPointerUp(e: ReactPointerEvent) {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    if (connecting) {
+      const p = toUser(e);
+      const target = nodeAt(p.x, p.y, connecting.from);
+      if (target) onConnect(connecting.from, target.step.id);
+    }
+    setConnecting(null);
+  }
+
+  // Topmost node whose box contains (x, y), excluding `exclude`. Iterate in
+  // reverse so the hit matches paint order (nodes are drawn in array order, so
+  // the last one is on top) — dropping on an overlap wires the box you SEE.
+  function nodeAt(x: number, y: number, exclude?: string) {
+    for (let i = doc.nodes.length - 1; i >= 0; i--) {
+      const n = doc.nodes[i];
+      if (n.step.id === exclude) continue;
+      if (x >= n.x && x <= n.x + NODE_W && y >= n.y && y <= n.y + NODE_H) {
+        return n;
+      }
+    }
+    return null;
+  }
+
+  // While connecting, the node under the pointer is the prospective drop target —
+  // highlight it so a touch user (whose finger hides the box) gets a clear cue.
+  const hoverTargetId = connecting
+    ? (nodeAt(connecting.x, connecting.y, connecting.from)?.step.id ?? null)
+    : null;
 
   const byId = new Map(doc.nodes.map((n) => [n.step.id, n]));
   const width =
@@ -95,7 +160,8 @@ export function PipelineCanvas({
         </defs>
 
         {/* Edges from each step to the steps that depend on it. Free node
-            positions, so a horizontal-tangent Bézier between node mid-heights. */}
+            positions, so a horizontal-tangent Bézier between node mid-heights. A
+            wide transparent path under each edge makes it tappable to remove. */}
         {doc.nodes.flatMap((n) =>
           (n.step.dependsOn ?? []).map((depId) => {
             const a = byId.get(depId);
@@ -106,21 +172,37 @@ export function PipelineCanvas({
             const x2 = b.x - 4;
             const y2 = b.y + NODE_H / 2;
             const c = Math.max(40, Math.abs(x2 - x1) / 2);
+            const d = `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`;
             return (
-              <path
-                key={`${depId}->${n.step.id}`}
-                d={`M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`}
-                fill="none"
-                className="stroke-border"
-                strokeWidth={1.5}
-                markerEnd="url(#stoa-canvas-arrow)"
-              />
+              <g key={`${depId}->${n.step.id}`} className="cursor-pointer">
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth={14}
+                  pointerEvents="stroke"
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    onDisconnect(depId, n.step.id);
+                  }}
+                >
+                  <title>Tap to remove this dependency</title>
+                </path>
+                <path
+                  d={d}
+                  fill="none"
+                  strokeWidth={1.5}
+                  markerEnd="url(#stoa-canvas-arrow)"
+                  className="stroke-border pointer-events-none"
+                />
+              </g>
             );
           })
         )}
 
         {doc.nodes.map((n) => {
           const selected = n.step.id === selectedId;
+          const isDropTarget = n.step.id === hoverTargetId;
           const label = n.step.name || n.step.id;
           return (
             <g
@@ -139,10 +221,10 @@ export function PipelineCanvas({
                 width={NODE_W}
                 height={NODE_H}
                 rx={8}
-                strokeWidth={selected ? 2 : 1}
+                strokeWidth={selected || isDropTarget ? 2 : 1}
                 className={cn(
-                  "fill-card",
-                  selected ? "stroke-primary" : "stroke-border"
+                  isDropTarget ? "fill-primary/10" : "fill-card",
+                  selected || isDropTarget ? "stroke-primary" : "stroke-border"
                 )}
               />
               <text
@@ -166,6 +248,53 @@ export function PipelineCanvas({
             </g>
           );
         })}
+
+        {/* Rubber-band line while dragging a new connection, from the source
+            node's output port to the pointer. */}
+        {connecting &&
+          (() => {
+            const src = byId.get(connecting.from);
+            if (!src) return null;
+            return (
+              <path
+                d={`M ${src.x + NODE_W} ${src.y + NODE_H / 2} L ${connecting.x} ${connecting.y}`}
+                fill="none"
+                className="stroke-primary"
+                strokeWidth={1.5}
+                strokeDasharray="4 3"
+              />
+            );
+          })()}
+
+        {/* Output ports (drawn last, on top): drag one onto another node to wire a
+            dependency. The visible dot is small (so most of the node stays a
+            move-drag target), but a larger transparent circle gives it a ~28px
+            touch target on a phone. */}
+        {doc.nodes.map((n) => (
+          <g key={`port-${n.step.id}`}>
+            <circle
+              cx={n.x + NODE_W}
+              cy={n.y + NODE_H / 2}
+              r={14}
+              fill="transparent"
+              pointerEvents="all"
+              className="cursor-crosshair touch-none"
+              onPointerDown={(e) => onPortPointerDown(e, n.step.id)}
+              onPointerMove={onPortPointerMove}
+              onPointerUp={onPortPointerUp}
+              onPointerCancel={onPortPointerUp}
+            >
+              <title>Drag to a step to make it depend on “{n.step.id}”</title>
+            </circle>
+            <circle
+              cx={n.x + NODE_W}
+              cy={n.y + NODE_H / 2}
+              r={6}
+              strokeWidth={1.5}
+              className="fill-primary stroke-card pointer-events-none"
+            />
+          </g>
+        ))}
       </svg>
     </div>
   );
