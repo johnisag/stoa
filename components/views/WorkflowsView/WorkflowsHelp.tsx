@@ -51,6 +51,14 @@ export function WorkflowsHelp({ onClose }: { onClose: () => void }) {
           precondition.
         </li>
         <li>
+          <span className="text-foreground font-medium">Or build it.</span> The{" "}
+          <span className="text-foreground">Build</span> tab is a visual canvas —
+          tap <span className="text-foreground">Add step</span> to drop a node,
+          drag the boxes to arrange your DAG, and tap one to edit its agent,
+          task, dependencies, and exit criteria. It validates live and runs the
+          same way; under the hood it&apos;s the same spec as Custom.
+        </li>
+        <li>
           <span className="text-foreground font-medium">Or go Custom.</span> The{" "}
           <span className="text-foreground">Custom</span> tab lets you author a
           pipeline by hand — paste a spec (a name, a working directory, and a
