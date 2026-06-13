@@ -85,6 +85,13 @@ export interface ExistingWorktree {
   attached: boolean;
 }
 
+// A git repo discovered UNDER a non-git root (the multi-repo workspace case).
+export interface SubRepo {
+  path: string;
+  name: string;
+  depth: number;
+}
+
 // Git info from API
 export interface GitInfo {
   isGitRepo: boolean;
@@ -92,6 +99,8 @@ export interface GitInfo {
   defaultBranch: string | null;
   currentBranch: string | null;
   worktrees?: ExistingWorktree[];
+  /** Sibling git repos found ≤2 levels under a NON-git root — offer a workspace. */
+  subRepos?: SubRepo[];
 }
 
 // Agent type options

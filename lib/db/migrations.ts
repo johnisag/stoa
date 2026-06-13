@@ -665,6 +665,33 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 33,
+    name: "add_worktree_paths_to_sessions",
+    up: (db) => {
+      // Multi-repo "workspace" sessions: a JSON array of the child worktree paths
+      // this session created (one per picked sub-repo). NULL for ordinary
+      // single-worktree (or no-worktree) sessions. Drives multi-worktree teardown
+      // on delete. Guard the table existing (some migration tests run partial).
+      const hasSessions =
+        (
+          db
+            .prepare(
+              `SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'`
+            )
+            .all() as { name: string }[]
+        ).length > 0;
+      if (!hasSessions) return;
+      // Idempotent: skip if the column already exists (a bare ADD COLUMN would
+      // throw "duplicate column name" on a partial / re-applied DB).
+      const hasColumn = (
+        db.prepare(`PRAGMA table_info(sessions)`).all() as { name: string }[]
+      ).some((c) => c.name === "worktree_paths");
+      if (!hasColumn) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN worktree_paths TEXT`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

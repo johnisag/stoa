@@ -75,6 +75,16 @@ export function useNewSessionForm({
   };
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
   const [checkingGit, setCheckingGit] = useState(false);
+  // Multi-repo workspace: which discovered sub-repos (by path) to spin a worktree
+  // for. Active only when the chosen root is NOT a git repo but holds sub-repos.
+  const [selectedSubRepos, setSelectedSubRepos] = useState<string[]>([]);
+  const toggleSubRepo = useCallback((repoPath: string) => {
+    setSelectedSubRepos((prev) =>
+      prev.includes(repoPath)
+        ? prev.filter((p) => p !== repoPath)
+        : [...prev, repoPath]
+    );
+  }, []);
 
   // UI state
   const [showNewProject, setShowNewProject] = useState(false);
@@ -124,8 +134,14 @@ export function useNewSessionForm({
       if (data.defaultBranch) {
         setBaseBranch(data.defaultBranch);
       }
+      setSelectedSubRepos([]); // reset selection whenever the directory changes
       if (data.isGitRepo) {
         setUseWorktree(true);
+        setFeatureName(generateFeatureName());
+      } else if (Array.isArray(data.subRepos) && data.subRepos.length > 0) {
+        // A non-git root holding sibling repos → a multi-repo workspace. Seed a
+        // feature name (used for every repo's branch); the user picks the repos.
+        setUseWorktree(false);
         setFeatureName(generateFeatureName());
       } else {
         setUseWorktree(false);
@@ -135,6 +151,7 @@ export function useNewSessionForm({
       setGitInfo(null);
       setUseWorktree(false);
       setFeatureName("");
+      setSelectedSubRepos([]);
     } finally {
       setCheckingGit(false);
     }
@@ -252,11 +269,24 @@ export function useNewSessionForm({
     localStorage.setItem(USE_TMUX_KEY, String(checked));
   };
 
+  // Multi-repo workspace: a non-git root with sibling repos, and the user picked
+  // at least one. The chosen repos each get a worktree under one workspace dir.
+  const subRepos = gitInfo?.subRepos ?? [];
+  const isWorkspace =
+    !gitInfo?.isGitRepo && subRepos.length > 0 && selectedSubRepos.length > 0;
+  // Bulk select/clear — the motivating case is a folder of many (e.g. 16) repos.
+  const allSubReposSelected =
+    subRepos.length > 0 && selectedSubRepos.length === subRepos.length;
+  const toggleAllSubRepos = () =>
+    setSelectedSubRepos(allSubReposSelected ? [] : subRepos.map((r) => r.path));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     createSession.reset(); // Clear any previous errors
 
-    if (useWorktree) {
+    if (isWorkspace) {
+      if (!featureName.trim()) return; // need a feature name for the branch
+    } else if (useWorktree) {
       if (!gitInfo?.isGitRepo) {
         return;
       }
@@ -269,9 +299,9 @@ export function useNewSessionForm({
 
     setCreationStep("creating");
 
-    // For worktree sessions, show step progression
+    // Worktree + workspace sessions show step progression (worktrees are created).
     let stepTimer: NodeJS.Timeout | undefined;
-    if (useWorktree) {
+    if (useWorktree || isWorkspace) {
       setCreationStep("worktree");
       // Progress to "setup" step after 2s (worktree creation is usually fast)
       stepTimer = setTimeout(() => {
@@ -280,6 +310,12 @@ export function useNewSessionForm({
     }
 
     const resolvedModel = resolveModelForAgent(agentType, model);
+    // Resolve the picked repo paths to { path, name } for the workspace builder.
+    const workspaceRepos = isWorkspace
+      ? subRepos
+          .filter((r) => selectedSubRepos.includes(r.path))
+          .map((r) => ({ path: r.path, name: r.name }))
+      : null;
 
     createSession.mutate(
       {
@@ -288,9 +324,11 @@ export function useNewSessionForm({
         projectId,
         model: resolvedModel,
         agentType,
-        useWorktree,
+        useWorktree: isWorkspace ? false : useWorktree,
         featureName:
-          useWorktree && worktreeMode === "new" ? featureName.trim() : null,
+          isWorkspace || (useWorktree && worktreeMode === "new")
+            ? featureName.trim()
+            : null,
         baseBranch: useWorktree && worktreeMode === "new" ? baseBranch : null,
         existingWorktreePath:
           useWorktree && worktreeMode === "existing"
@@ -300,6 +338,7 @@ export function useNewSessionForm({
           useWorktree && worktreeMode === "existing"
             ? existingWorktreeBranch || null
             : null,
+        workspaceRepos,
         autoApprove: skipPermissions,
         enableOrchestration,
         useTmux,
@@ -359,6 +398,7 @@ export function useNewSessionForm({
     setUseWorktree(false);
     setWorktreeMode("new");
     setFeatureName("");
+    setSelectedSubRepos([]);
     setExistingWorktreePath("");
     setExistingWorktreeBranch("");
     setInitialPrompt("");
@@ -403,6 +443,13 @@ export function useNewSessionForm({
     setExistingWorktree,
     gitInfo,
     checkingGit,
+    // Multi-repo workspace
+    subRepos,
+    selectedSubRepos,
+    toggleSubRepo,
+    isWorkspace,
+    allSubReposSelected,
+    toggleAllSubRepos,
     // UI
     showNewProject,
     setShowNewProject,

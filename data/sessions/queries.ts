@@ -288,6 +288,9 @@ export interface CreateSessionInput {
   // session's work). When set, the route skips createWorktree.
   existingWorktreePath?: string | null;
   existingWorktreeBranch?: string | null;
+  // Multi-repo workspace: the picked sub-repos ({ path, name }) under a non-git
+  // root. When set, the route builds one worktree per repo under one workspace dir.
+  workspaceRepos?: { path: string; name: string }[] | null;
   autoApprove: boolean;
   enableOrchestration: boolean;
   useTmux: boolean;

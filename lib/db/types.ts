@@ -21,6 +21,10 @@ export interface Session {
   branch_name: string | null;
   base_branch: string | null;
   dev_server_port: number | null;
+  /** Multi-repo workspace session: JSON array of the child worktree paths this
+   * session created (one per picked sub-repo). NULL/absent for ordinary sessions.
+   * Optional so existing Session fixtures/builders don't all need the new column. */
+  worktree_paths?: string | null;
   // PR tracking
   pr_url: string | null;
   pr_number: number | null;

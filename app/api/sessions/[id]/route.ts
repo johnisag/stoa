@@ -7,6 +7,7 @@ import {
   isStoaWorktree,
   getMainRepoPath,
 } from "@/lib/worktrees";
+import { removeWorkspace } from "@/lib/multi-repo-worktree";
 import { releasePort } from "@/lib/ports";
 import { killWorker } from "@/lib/orchestration";
 import { generateBranchName, getCurrentBranch, renameBranch } from "@/lib/git";
@@ -214,6 +215,29 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     // Delete from database immediately for instant UI feedback
     queries.deleteSession(db).run(id);
     clearQueue(id);
+
+    // Multi-repo workspace session: tear down EVERY worktree this session created
+    // (one per picked sub-repo), unregistering each from its parent repo, then
+    // remove the workspace dir. Background + best-effort, like the single case.
+    if (existing.worktree_paths) {
+      let childPaths: string[] = [];
+      try {
+        const parsed = JSON.parse(existing.worktree_paths);
+        if (Array.isArray(parsed))
+          childPaths = parsed.filter((p): p is string => typeof p === "string");
+      } catch {
+        /* malformed — nothing to tear down */
+      }
+      // Only reclaim worktrees Stoa created (under ~/.stoa/worktrees).
+      const stoaChildren = childPaths.filter((p) => isStoaWorktree(p));
+      const workspaceDir = existing.working_directory;
+      if (stoaChildren.length > 0) {
+        runInBackground(
+          () => removeWorkspace(workspaceDir, stoaChildren),
+          `cleanup-workspace-${id}`
+        );
+      }
+    }
 
     // Clean up worktree in background (non-blocking). Fall back to the worktree's
     // parent dir when the owning repo can't be resolved (a broken worktree) so a

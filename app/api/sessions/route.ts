@@ -6,6 +6,7 @@ import { isValidAgentType, type AgentType } from "@/lib/providers";
 import { sessionKey, getProviderDefinition } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
 import { createWorktree, isStoaWorktree } from "@/lib/worktrees";
+import { createWorkspace } from "@/lib/multi-repo-worktree";
 import { setupWorktree, type SetupResult } from "@/lib/env-setup";
 import { findAvailablePort } from "@/lib/ports";
 import { runInBackground } from "@/lib/async-operations";
@@ -82,6 +83,9 @@ export async function POST(request: NextRequest) {
       // instead of creating a new one.
       existingWorktreePath = null,
       existingWorktreeBranch = null,
+      // Multi-repo workspace: when the chosen root holds several git repos, the
+      // picked ones ({ path, name }[]) each get a worktree under one workspace dir.
+      workspaceRepos = null,
       // Tmux option
       useTmux = true,
       // Initial prompt to send when session starts
@@ -115,8 +119,44 @@ export async function POST(request: NextRequest) {
     let actualWorkingDirectory = workingDirectory;
     let port: number | null = null;
     let setupResult: SetupResult | null = null;
+    // Multi-repo workspace: the child worktree paths (for teardown), the repo
+    // names + shared branch (for the boundary note), and any repos that failed.
+    // Set only in workspace mode.
+    let workspacePaths: string[] | null = null;
+    let workspaceRepoNames: string[] = [];
+    let workspaceBranch: string | null = null;
+    let workspaceErrors: { repoName: string; message: string }[] = [];
 
-    if (useWorktree && existingWorktreePath) {
+    if (
+      Array.isArray(workspaceRepos) &&
+      workspaceRepos.length > 0 &&
+      featureName
+    ) {
+      // Multi-repo workspace: one worktree per picked sub-repo under one workspace
+      // dir, which becomes the session's cwd. No single worktree_path/port — the
+      // agent works across the subfolders (one branch/PR per repo).
+      try {
+        const ws = await createWorkspace({
+          rootPath: workingDirectory,
+          repos: (
+            workspaceRepos as Array<{ path: unknown; name: unknown }>
+          ).map((r) => ({ path: String(r.path), name: String(r.name) })),
+          featureName,
+        });
+        actualWorkingDirectory = ws.workspacePath;
+        workspacePaths = ws.worktrees.map((w) => w.worktreePath);
+        workspaceRepoNames = ws.worktrees.map((w) => w.repoName);
+        workspaceBranch = ws.worktrees[0]?.branchName ?? null;
+        workspaceErrors = ws.errors;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown error";
+        return NextResponse.json(
+          { error: `Failed to create workspace: ${message}` },
+          { status: 400 }
+        );
+      }
+    } else if (useWorktree && existingWorktreePath) {
       // Attach to an existing worktree: it's already on disk (with its files +
       // branch + installed deps), so skip createWorktree and setupWorktree —
       // just point the session at it and allocate a dev-server port.
@@ -209,6 +249,14 @@ export async function POST(request: NextRequest) {
         .run(worktreePath, branchName, baseBranch, port, id);
     }
 
+    // Multi-repo workspace: record the child worktree paths so deleting the
+    // session tears every one of them down (see DELETE /api/sessions/[id]).
+    if (workspacePaths && workspacePaths.length > 0) {
+      queries
+        .setSessionWorktreePaths(db)
+        .run(JSON.stringify(workspacePaths), id);
+    }
+
     // Set claude_session_id if provided (for importing external sessions)
     if (claudeSessionId) {
       db.prepare("UPDATE sessions SET claude_session_id = ? WHERE id = ?").run(
@@ -292,6 +340,24 @@ export async function POST(request: NextRequest) {
         (branchName ? ` on branch "${branchName}"` : "") +
         `. Make ALL file edits inside this directory — do not edit the base ` +
         `checkout or any other branch.`;
+      combinedPrompt = combinedPrompt ? `${note}\n\n${combinedPrompt}` : note;
+    } else if (workspacePaths && workspacePaths.length > 0) {
+      // Multi-repo workspace: tell the agent each subfolder is a separate repo's
+      // worktree on its own branch — work per-repo, open a PR per repo, and that
+      // each worktree is a FRESH checkout (no installed deps yet).
+      const skipped =
+        workspaceErrors.length > 0
+          ? ` (skipped: ${workspaceErrors.map((e) => e.repoName).join(", ")})`
+          : "";
+      const note =
+        `[Stoa] You are in a MULTI-REPO workspace at ${actualWorkingDirectory}. ` +
+        `Each subfolder is a git worktree of a SEPARATE repo` +
+        (workspaceBranch ? ` on branch "${workspaceBranch}"` : "") +
+        `: ${workspaceRepoNames.join(", ")}${skipped}. cd into a repo's folder to ` +
+        `work on it; commit and open a PR per repo. A change can't span two git ` +
+        `repos — keep edits within each subfolder, and do NOT edit the original ` +
+        `checkouts. Each worktree is a fresh checkout, so run that repo's install ` +
+        `step (e.g. npm install) before building or testing it.`;
       combinedPrompt = combinedPrompt ? `${note}\n\n${combinedPrompt}` : note;
     }
 
