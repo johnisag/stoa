@@ -31,7 +31,8 @@ const EXAMPLE_SPEC = `{
       "id": "implement",
       "agent": "claude",
       "task": "Using these findings:\\n{{steps.research.output}}\\nimplement the fix.",
-      "dependsOn": ["research"]
+      "dependsOn": ["research"],
+      "exitCriteria": "The change MUST pass the test suite. Open a PR when done."
     }
   ]
 }`;

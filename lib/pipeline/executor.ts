@@ -118,7 +118,14 @@ export async function runPipeline(
 
   const pollIntervalMs = options.pollIntervalMs ?? 3000;
   const maxPollCycles = options.maxPollCycles ?? 4000;
-  const maxParallelism = Math.max(1, options.maxParallelism ?? 4);
+  // A run with ANY "shared" worktree step must run SERIALLY: shared steps edit one
+  // checkout + git index, so concurrent agents would race/corrupt it. Clamp to 1.
+  const sharedWorktreeMode = spec.steps.some(
+    (s) => s.worktreePolicy === "shared"
+  );
+  const maxParallelism = sharedWorktreeMode
+    ? 1
+    : Math.max(1, options.maxParallelism ?? 4);
   const runId = options.runId ?? fallbackRunId();
 
   let run = initRun(spec, { id: runId, now: deps.now() });
@@ -154,10 +161,13 @@ export async function runPipeline(
             // shell-injection vector. Validation already guarantees every ref is
             // an upstream dependency, so its output is present in outputsById.
             const resolvedTask = interpolateTask(step.task, outputsById);
+            // Fold the step's exit criteria onto the resolved task as unbreakable
+            // rules. Same direct-spawn (argv) path as any task — no shell vector.
+            const finalTask = step.exitCriteria
+              ? `${resolvedTask}\n\nUNBREAKABLE EXIT CRITERIA (these MUST hold):\n${step.exitCriteria}`
+              : resolvedTask;
             const launchStep =
-              resolvedTask === step.task
-                ? step
-                : { ...step, task: resolvedTask };
+              finalTask === step.task ? step : { ...step, task: finalTask };
             try {
               const result = await deps.spawn(launchStep, spec);
               return {

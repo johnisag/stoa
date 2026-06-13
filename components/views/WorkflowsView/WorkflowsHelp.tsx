@@ -62,6 +62,13 @@ export function WorkflowsHelp({ onClose }: { onClose: () => void }) {
           start from a working one. A step reads an upstream step&apos;s result
           with{" "}
           <code className="text-foreground">{"{{steps.<id>.output}}"}</code>.
+          Add <code className="text-foreground">exitCriteria</code> (unbreakable
+          rules folded into the worker&apos;s prompt) or{" "}
+          <code className="text-foreground">
+            {'"worktreePolicy": "shared"'}
+          </code>{" "}
+          to make steps reuse one workflow worktree (those steps run one at a
+          time).
         </li>
       </ol>
 
