@@ -42,34 +42,42 @@ export const AGENT_BADGE: Record<string, string> = {
   shell: "bg-slate-500/15 text-slate-600 dark:text-slate-400",
 };
 
+// `dot` is the bg-* class for an HTML dot; `swatch` is its fill-* twin for an SVG
+// node (PipelineGraph) — same palette, one source of truth, so the graph node and
+// the list row below it can't drift apart on a theme change.
 export const STEP_STATUS_META: Record<
   StepStatus,
-  { label: string; badge: string; dot: string }
+  { label: string; badge: string; dot: string; swatch: string }
 > = {
   pending: {
     label: "Pending",
     badge: "bg-muted text-muted-foreground",
     dot: "bg-muted-foreground/40",
+    swatch: "fill-muted-foreground/40",
   },
   running: {
     label: "Running",
     badge: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
     dot: "bg-blue-500",
+    swatch: "fill-blue-500",
   },
   succeeded: {
     label: "Succeeded",
     badge: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
     dot: "bg-emerald-500",
+    swatch: "fill-emerald-500",
   },
   failed: {
     label: "Failed",
     badge: "bg-red-500/15 text-red-600 dark:text-red-400",
     dot: "bg-red-500",
+    swatch: "fill-red-500",
   },
   skipped: {
     label: "Skipped",
     badge: "bg-muted text-muted-foreground",
     dot: "bg-muted-foreground/30",
+    swatch: "fill-muted-foreground/30",
   },
 };
 
