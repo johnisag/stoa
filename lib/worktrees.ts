@@ -93,33 +93,12 @@ export async function createWorktree(
   // Ensure worktrees directory exists
   await ensureWorktreesDir();
 
-  // Create the worktree with a new branch
-  // Try multiple ref formats to avoid "ambiguous refname" errors
-  const refFormats = [
-    `origin/${baseBranch}`, // Try remote first (most explicit)
-    `refs/heads/${baseBranch}`, // Then local branch
-    baseBranch, // Finally, bare name as fallback
-  ];
-
-  let lastError: Error | null = null;
-  for (const ref of refFormats) {
-    try {
-      await runGit(
-        resolvedProjectPath,
-        ["worktree", "add", "-b", branchName, worktreePath, ref],
-        30000
-      );
-      lastError = null;
-      break; // Success!
-    } catch (error: unknown) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      // Continue to next ref format
-    }
-  }
-
-  if (lastError) {
-    throw new Error(`Failed to create worktree: ${lastError.message}`);
-  }
+  await addWorktreeWithBranch(
+    resolvedProjectPath,
+    worktreePath,
+    branchName,
+    baseBranch
+  );
 
   return {
     worktreePath,
@@ -128,6 +107,43 @@ export async function createWorktree(
     projectPath: resolvedProjectPath,
     projectName,
   };
+}
+
+/**
+ * `git worktree add -b <branch> <path> <ref>` at a CALLER-CHOSEN path, trying
+ * remote→local→bare ref formats so an ambiguous/absent `origin/<base>` still
+ * resolves. Lower-level than createWorktree (no repo/branch/path pre-checks and no
+ * `~/.stoa/worktrees` path scheme) — used both by createWorktree and by the
+ * multi-repo workspace builder, which places each repo's worktree as a named
+ * subfolder of a shared workspace dir. Throws if every ref format fails.
+ */
+export async function addWorktreeWithBranch(
+  repoPath: string,
+  worktreePath: string,
+  branchName: string,
+  baseBranch: string
+): Promise<void> {
+  const refFormats = [
+    `origin/${baseBranch}`, // remote first (most explicit)
+    `refs/heads/${baseBranch}`, // then local branch
+    baseBranch, // bare name as fallback
+  ];
+  let lastError: Error | null = null;
+  for (const ref of refFormats) {
+    try {
+      await runGit(
+        resolvePath(repoPath),
+        ["worktree", "add", "-b", branchName, worktreePath, ref],
+        30000
+      );
+      return; // success
+    } catch (error: unknown) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  throw new Error(
+    `Failed to create worktree: ${lastError?.message ?? "unknown error"}`
+  );
 }
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));

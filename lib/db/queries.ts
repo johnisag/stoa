@@ -62,6 +62,14 @@ export const queries = {
       `UPDATE sessions SET worktree_path = ?, branch_name = ?, base_branch = ?, dev_server_port = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // Multi-repo workspace: store the JSON array of child worktree paths this
+  // session created, so deleting the session can tear all of them down.
+  setSessionWorktreePaths: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE sessions SET worktree_paths = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
   updateSessionMcpArgs: (db: Database.Database) =>
     getStmt(
       db,

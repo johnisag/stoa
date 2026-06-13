@@ -19,6 +19,7 @@ import { AgentSelector } from "./AgentSelector";
 import { ModelSelector } from "./ModelSelector";
 import { WorkingDirectoryInput } from "./WorkingDirectoryInput";
 import { WorktreeSection } from "./WorktreeSection";
+import { WorkspaceSection } from "./WorkspaceSection";
 import { ProjectSelector } from "./ProjectSelector";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { CreatingOverlay } from "./CreatingOverlay";
@@ -62,7 +63,7 @@ export function NewSessionDialog({
           {/* Loading overlay */}
           {form.isLoading && (
             <CreatingOverlay
-              isWorktree={form.useWorktree}
+              isWorktree={form.useWorktree || form.isWorkspace}
               step={form.creationStep}
             />
           )}
@@ -119,6 +120,20 @@ export function NewSessionDialog({
                 onExistingWorktreeChange={form.setExistingWorktree}
               />
             )}
+
+            {form.gitInfo &&
+              !form.gitInfo.isGitRepo &&
+              form.subRepos.length > 0 && (
+                <WorkspaceSection
+                  subRepos={form.subRepos}
+                  selectedSubRepos={form.selectedSubRepos}
+                  onToggleRepo={form.toggleSubRepo}
+                  allSelected={form.allSubReposSelected}
+                  onToggleAll={form.toggleAllSubRepos}
+                  featureName={form.featureName}
+                  onFeatureNameChange={form.setFeatureName}
+                />
+              )}
 
             <ProjectSelector
               projects={projects}
@@ -182,7 +197,8 @@ export function NewSessionDialog({
                 type="submit"
                 disabled={
                   form.isLoading ||
-                  (form.useWorktree && !form.featureName.trim())
+                  (form.useWorktree && !form.featureName.trim()) ||
+                  (form.isWorkspace && !form.featureName.trim())
                 }
               >
                 {form.isLoading ? "Creating..." : "Create"}

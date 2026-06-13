@@ -10,6 +10,7 @@ import {
   annotateWorktrees,
   type AnnotatedWorktree,
 } from "@/lib/worktrees";
+import { findGitReposUnder } from "@/lib/repo-scan";
 import { getDb, queries, type Session } from "@/lib/db";
 
 /**
@@ -29,11 +30,20 @@ export async function POST(request: NextRequest) {
     const isRepo = await isGitRepo(dirPath);
 
     if (!isRepo) {
+      // Not a git repo itself — but it may be a ROOT holding several sibling
+      // repos (≤2 deep), e.g. ~/my-projects/pocs. Surface them so the New Session
+      // dialog can offer a multi-repo "workspace" (one worktree per picked repo).
+      const subRepos = await findGitReposUnder(dirPath, 2);
       return NextResponse.json({
         isGitRepo: false,
         branches: [],
         defaultBranch: null,
         currentBranch: null,
+        subRepos: subRepos.map((r) => ({
+          path: r.path,
+          name: r.name,
+          depth: r.depth,
+        })),
       });
     }
 
