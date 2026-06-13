@@ -5,8 +5,9 @@ import { getSessionBackend } from "@/lib/session-backend";
 import { isRespondAction, applyResponse } from "@/lib/notification-actions";
 
 // POST /api/sessions/[id]/respond — act on a session straight from a push
-// notification's action button (approve → Enter, reject → Escape, stop → kill).
-// Same auth gate as every route (server.ts); the SW's fetch carries the cookie.
+// notification's action button. Attention-only: the one action is stop → kill
+// (the old approve/reject keystroke buttons are gone). Same auth gate as every
+// route (server.ts); the SW's fetch carries the cookie.
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

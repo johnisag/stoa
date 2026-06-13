@@ -5,16 +5,19 @@ import type { PushEventKind } from "./session-status";
 import type { SessionStatus } from "./status-detector";
 
 /**
- * Actionable Web Push: the button set a notification carries, and how each
- * button maps to a terminal operation. Pure (no DOM/SW/backend) so the whole
- * loop's decision logic is unit-testable — the service worker renders
- * `actionsForKind(...)`, and `/api/sessions/[id]/respond` runs `planResponse(...)`.
+ * Actionable notifications + per-card quick action: the button set a notification
+ * carries and how it maps to a terminal operation. Pure (no DOM/SW/backend) so the
+ * decision logic is unit-testable — the service worker renders `actionsForKind(...)`
+ * and `/api/sessions/[id]/respond` runs `applyResponse(...)`.
  *
- * The actions are best-effort conveniences for the common case (a Claude
- * permission prompt: a select menu with the safe one-time "Yes" highlighted):
- *   approve → Enter   (accept the highlighted/default option)
- *   reject  → Escape  (cancel the prompt)
- *   stop    → kill     (authoritative — always correct, any agent/state)
+ * ATTENTION-ONLY model: the job of a notification is to tell you a session is READY
+ * or NEEDS INPUT so you swap to it — NOT to drive the agent remotely. The old
+ * approve (Enter) / reject (Escape) keystroke buttons were noisy and fired on mere
+ * turn-ends; they're gone. The one action that's ALWAYS correct survives:
+ *   stop → kill   (authoritative for any agent/state)
+ * The "ready vs needs input" distinction lives in the notification COPY
+ * (hooks/useNotifications.ts + detectPushEvents, keyed on `hasPrompt`), and
+ * `hasPrompt` still flows for the auto-steer harness — only the buttons changed.
  */
 
 /** A notification action button (subset of the web NotificationAction shape). */
@@ -23,7 +26,7 @@ export interface NotificationActionButton {
   title: string;
 }
 
-export const RESPOND_ACTIONS = ["approve", "reject", "stop"] as const;
+export const RESPOND_ACTIONS = ["stop"] as const;
 export type RespondAction = (typeof RESPOND_ACTIONS)[number];
 
 export function isRespondAction(s: unknown): s is RespondAction {
@@ -32,25 +35,22 @@ export function isRespondAction(s: unknown): s is RespondAction {
   );
 }
 
-// Plain ASCII labels — emoji in Web Notification action buttons render as tofu
+// Plain ASCII label — emoji in Web Notification action buttons render as tofu
 // boxes / vertical bars on Windows (the Action Center toast), not the glyph.
 const BUTTONS: Record<RespondAction, NotificationActionButton> = {
-  approve: { action: "approve", title: "Approve" },
-  reject: { action: "reject", title: "Reject" },
   stop: { action: "stop", title: "Stop" },
 };
 
 /**
- * Which buttons a push of this kind carries. A "waiting" session is at a prompt
- * → offer the full decision (approve/reject) plus stop; an "error" session is
- * only worth stopping; a "done" session has nothing left to act on.
+ * Which buttons a push of this kind carries. A live session (waiting at a prompt
+ * OR errored) is worth a one-tap Stop from the lock screen; tapping the body opens
+ * the app to swap to it. A "done" session has nothing left to act on.
  */
 export function actionsForKind(
   kind: PushEventKind
 ): NotificationActionButton[] {
   switch (kind) {
     case "waiting":
-      return [BUTTONS.approve, BUTTONS.reject, BUTTONS.stop];
     case "error":
       return [BUTTONS.stop];
     case "done":
@@ -59,21 +59,15 @@ export function actionsForKind(
 }
 
 /**
- * The same respond actions surfaced as in-app per-card quick buttons, driven by
- * the session's live status: a session at an ACTUAL prompt gets the full decision
- * (approve/reject/stop), a running or errored one just gets stop, and a session
- * that's idle/dead — or merely "waiting" because it finished its turn with no
- * question on screen — has nothing to act on. `hasPrompt` distinguishes a real
- * prompt from a finished turn (both read as "waiting"); without it the buttons
- * flickered up every time an agent stopped generating.
+ * The respond action surfaced as an in-app per-card quick button, driven by the
+ * session's live status: a session whose agent is alive (running, errored, or
+ * waiting) gets a one-tap Stop; an idle/dead session has nothing to act on. (No
+ * approve/reject — you swap to the session and type, the terminal is the source of
+ * truth; the notification already told you it's ready / needs input.)
  */
-export function cardActionsForStatus(
-  status: SessionStatus,
-  hasPrompt = false
-): RespondAction[] {
+export function cardActionsForStatus(status: SessionStatus): RespondAction[] {
   switch (status) {
     case "waiting":
-      return hasPrompt ? ["approve", "reject", "stop"] : [];
     case "running":
     case "error":
       return ["stop"];
@@ -85,9 +79,9 @@ export function cardActionsForStatus(
 
 /**
  * Map a failed /respond HTTP status to a user message, or null if the failure is
- * benign. 404/409 mean the session is already gone or has moved past the prompt
- * — the desired end state for stop/approve/reject, and it absorbs a double-tap
- * (the second request 409s) so a successful action never shows an error.
+ * benign. 404/409 mean the session is already gone or no longer running — the
+ * desired end state for stop, and it absorbs a double-tap (the second request
+ * 409s) so a successful action never shows an error.
  */
 export function respondErrorMessage(status: number): string | null {
   if (status === 404 || status === 409) return null;
@@ -95,14 +89,10 @@ export function respondErrorMessage(status: number): string | null {
 }
 
 /** The terminal operation an action resolves to (backend-agnostic). */
-export type ResponseOp = "enter" | "escape" | "kill";
+export type ResponseOp = "kill";
 
 export function planResponse(action: RespondAction): ResponseOp {
   switch (action) {
-    case "approve":
-      return "enter";
-    case "reject":
-      return "escape";
     case "stop":
       return "kill";
   }
@@ -114,8 +104,6 @@ export function planResponse(action: RespondAction): ResponseOp {
  * action→op→call dispatch is unit-testable with a plain spy.
  */
 export interface ResponseTarget {
-  sendEnter(name: string): Promise<void>;
-  sendEscape(name: string): Promise<void>;
   kill(name: string): Promise<void>;
 }
 
@@ -126,10 +114,6 @@ export function applyResponse(
   action: RespondAction
 ): Promise<void> {
   switch (planResponse(action)) {
-    case "enter":
-      return target.sendEnter(name);
-    case "escape":
-      return target.sendEscape(name);
     case "kill":
       return target.kill(name);
   }

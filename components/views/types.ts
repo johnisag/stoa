@@ -11,8 +11,8 @@ export interface SessionStatus {
   claudeSessionId?: string | null;
   /** Provider rate-limit state (null/absent when not limited). */
   rateLimit?: RateLimitState | null;
-  /** True when an ACTUAL prompt is on screen — so a card shows approve/reject only
-   * when there's a real question, not just because the agent finished its turn. */
+  /** True when an ACTUAL prompt is on screen (vs a finished turn that also reads
+   * "waiting") — drives the "needs input" vs "ready" notification, not buttons. */
   hasPrompt?: boolean;
 }
 

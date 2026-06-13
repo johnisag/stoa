@@ -7,8 +7,8 @@ import { actionsForKind } from "@/lib/notification-actions";
  *
  * Lets a user reproduce/confirm notification rendering ON DEMAND (instead of
  * waiting for a session to hit "waiting"): the body is a fixed English string
- * and it carries the same approve/reject/stop action buttons a real prompt push
- * does, so a single screenshot shows exactly how the toast — text AND buttons —
+ * and it carries the same Stop action button a real prompt push does, so a single
+ * screenshot shows exactly how the toast — text AND buttons —
  * renders on the device. `test: true` tells the service worker to show it even
  * if a Stoa tab is open here.
  */
