@@ -192,9 +192,11 @@ describe("stoa CLI: command resolution", () => {
       const spec = commandSpec("fake-tool", ["a"]);
       if (process.platform === "win32") {
         expect(spec.file.toLowerCase()).toContain("cmd");
-        expect(spec.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-        expect(spec.args[3].toLowerCase()).toBe(fake.toLowerCase());
-        expect(spec.args.slice(4)).toEqual(["a"]);
+        // cmd.exe /c with the path + args as their OWN argv entries (Node quotes
+        // each; no /s, so the quotes survive). The shim path is one element.
+        expect(spec.args[0]).toBe("/c");
+        expect(spec.args[1].toLowerCase()).toBe(fake.toLowerCase());
+        expect(spec.args.slice(2)).toEqual(["a"]);
       } else {
         expect(spec).toEqual({ file: fake, args: ["a"] });
       }
@@ -203,6 +205,29 @@ describe("stoa CLI: command resolution", () => {
       else process.env.PATH = savedPath;
       if (savedPathext === undefined) delete process.env.PATHEXT;
       else process.env.PATHEXT = savedPathext;
+    }
+  });
+
+  // Regression: `stoa update`/`install` silently failed when npm/node lived under a
+  // spaced path (`C:\Program Files\...`). The old `/d /s /c` form let cmd strip
+  // Node's quotes and split the path → `'C:\Program' is not recognized`, and the
+  // update then restarted on the OLD build. The spaced path must stay a SINGLE argv
+  // element so Node quotes it and plain `/c` keeps it intact.
+  it("keeps a spaced .cmd path as one argv element (the 'C:\\Program Files' bug)", () => {
+    // An absolute, non-existent path resolves to itself (resolveCommand → null →
+    // fallback), so we control the spaces without needing the file on disk.
+    const npm = "C:\\Program Files\\nodejs\\npm.cmd";
+    const spec = commandSpec(npm, ["install", "--legacy-peer-deps"]);
+    if (process.platform === "win32") {
+      expect(spec.file.toLowerCase()).toContain("cmd");
+      // No /s, and the spaced path is its OWN element (not split or concatenated).
+      expect(spec.args).toEqual(["/c", npm, "install", "--legacy-peer-deps"]);
+    } else {
+      // POSIX never routes through cmd: a non-existent absolute path passes through.
+      expect(spec).toEqual({
+        file: npm,
+        args: ["install", "--legacy-peer-deps"],
+      });
     }
   });
 });

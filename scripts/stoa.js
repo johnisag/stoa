@@ -206,9 +206,17 @@ function resolveCommand(cmd) {
 function commandSpec(cmd, args = []) {
   const resolved = resolveCommand(cmd) || cmd;
   if (IS_WINDOWS && /\.(cmd|bat)$/i.test(resolved)) {
+    // npm/npx are .cmd shims on Windows; Node can't spawn them directly (since the
+    // CVE-2024-27980 hardening it throws), so route through cmd.exe. Pass the path +
+    // args as normal argv entries WITHOUT shell:true and WITHOUT `/s` — Node then
+    // quotes each entry and plain `/c` preserves those quotes, so a spaced path
+    // (npm/node under `C:\Program Files\...`) stays one token. (Adding `/s` makes cmd
+    // strip Node's quotes → the path splits → `'C:\Program' is not recognized`, which
+    // is what silently broke `stoa update`/`install`.) Mirrors the .cmd routing in
+    // lib/session-backend/pty/registry.ts and lib/claude/process-manager.ts.
     return {
       file: process.env.ComSpec || "cmd.exe",
-      args: ["/d", "/s", "/c", resolved, ...args],
+      args: ["/c", resolved, ...args],
     };
   }
   return { file: resolved, args };
@@ -549,9 +557,12 @@ function cmdUpdate() {
   // production build artifacts are still intact; never boot a partial build.
   const recover = (what) => {
     error(`Update failed (${what}).`);
+    // Be LOUD: the update did not apply, so the code is still the old version. The
+    // restart below boots that old build — without this line it reads like success.
+    error("Your code was NOT updated — still on the previous build.");
     if (wasRunning) {
       if (buildIsComplete()) {
-        info("Restarting the server with the current build...");
+        info("Restarting the server on the PREVIOUS build...");
         cmdStart();
       } else {
         warn("Server was not restarted because the build is incomplete.");
