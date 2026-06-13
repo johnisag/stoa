@@ -6,7 +6,38 @@ import {
   resolveModelForAgent,
   isFreeTextModelAgent,
   nextModelOnAgentChange,
+  isSafeModel,
 } from "@/lib/model-catalog";
+
+describe("isSafeModel — shell-safe model-id guard (POSIX tmux `-m` injection defense)", () => {
+  it("accepts catalog + provider-qualified model ids", () => {
+    for (const m of [
+      "sonnet",
+      "opus",
+      "gpt-5.4-mini",
+      "claude-opus-4-8",
+      "anthropic/claude-opus-4.8",
+    ]) {
+      expect(isSafeModel(m)).toBe(true);
+    }
+  });
+
+  it("rejects shell metacharacters that could break out of the `-m <model>` launch", () => {
+    for (const m of [
+      "a b",
+      "x; rm -rf /",
+      "a|b",
+      "$(whoami)",
+      "`id`",
+      'a"b',
+      "a'b",
+      "a&b",
+      "a\nb",
+    ]) {
+      expect(isSafeModel(m)).toBe(false);
+    }
+  });
+});
 
 describe("model catalog — static agents (claude/codex)", () => {
   it("claude: dropdown list + sonnet default + validates against the list", () => {

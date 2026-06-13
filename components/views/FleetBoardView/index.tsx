@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
 import { useFleetBoard } from "@/data/fleet-board/useFleetBoard";
-import { LANES, ATTENTION_LANES } from "@/lib/fleet-board/lanes";
+import { LANES, cardNeedsMe } from "@/lib/fleet-board/lanes";
 import { FleetCard } from "./FleetCard";
 import { FleetBoardHelp } from "./FleetBoardHelp";
 
@@ -43,11 +43,19 @@ export function FleetBoardView({
   onOpenVerdictInbox?: () => void;
 }) {
   const [showHelp, setShowHelp] = useState(false);
-  const { lanes, repoById, total, isLoading, isError, isFetching, refetch } =
-    useFleetBoard(open);
-  // The lanes that want the human — surfaced in the header so "what needs me?"
-  // is answered without scrolling to the right-hand columns.
-  const attentionCount = lanes.verified.length + lanes.failed.length;
+  const {
+    lanes,
+    repoById,
+    total,
+    needsMeCount,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useFleetBoard(open);
+  // Surfaced in the header so "what needs me?" is answered without scrolling. Same
+  // count as the nav badge (countNeedsMe over the shared inbox) — no drift.
+  const attentionCount = needsMeCount;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -160,8 +168,11 @@ export function FleetBoardView({
                 // The merged lane is the full (unbounded) history — cap it.
                 const cards = lane.id === "merged" ? all.slice(0, 12) : all;
                 const hidden = all.length - cards.length;
-                const attention =
-                  ATTENTION_LANES.has(lane.id) && all.length > 0;
+                // Highlight a lane iff it actually holds cards that need the human
+                // (the same predicate behind the header pill), so the amber lanes
+                // and the pill add up — a CHANGES_REQUESTED card in "In review"
+                // now highlights, instead of only the verified/failed columns.
+                const attention = all.some(cardNeedsMe);
                 return (
                   <div
                     key={lane.id}

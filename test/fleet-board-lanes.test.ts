@@ -9,7 +9,9 @@ import {
   laneForDispatch,
   composeFleetCards,
   bucketByLane,
+  cardNeedsMe,
 } from "@/lib/fleet-board/lanes";
+import { countNeedsMe } from "@/lib/verdict-inbox-selectors";
 import type { InboxItem } from "@/lib/verdict-inbox";
 import type { IssueDispatch } from "@/lib/dispatch/types";
 
@@ -24,6 +26,48 @@ const inbox = (o: Partial<InboxItem>): InboxItem =>
   }) as unknown as InboxItem;
 const disp = (o: Partial<IssueDispatch>): IssueDispatch =>
   ({ id: "d", status: "pending", ...o }) as unknown as IssueDispatch;
+
+describe("cardNeedsMe — board attention reuses the nav badge's needsMe predicate", () => {
+  it("the board's needs-me total equals the nav badge's countNeedsMe(inbox)", () => {
+    // The scout's repro: two CHANGES_REQUESTED (→ 'in_review' lane) + one stuck
+    // (→ 'failed'). The badge counts all 3; the OLD board pill (verified+failed
+    // lanes) counted only the stuck one → badge "3" opened a board reading "1".
+    const items = [
+      inbox({
+        type: "ceremony",
+        id: "a",
+        state: "reviewing",
+        reviewDecision: "CHANGES_REQUESTED",
+      }),
+      inbox({
+        type: "ceremony",
+        id: "b",
+        state: "reviewing",
+        reviewDecision: "CHANGES_REQUESTED",
+      }),
+      inbox({ type: "ceremony", id: "c", state: "stuck" }),
+    ];
+
+    const cards = composeFleetCards([], [], items);
+    const boardNeedsMe = cards.filter(cardNeedsMe).length;
+
+    expect(countNeedsMe(items)).toBe(3); // the nav badge
+    expect(boardNeedsMe).toBe(3); // the board — now agrees
+
+    // Regression guard: the OLD formula (verified + failed lanes) read 1.
+    const lanes = bucketByLane(cards);
+    expect(lanes.verified.length + lanes.failed.length).toBe(1);
+  });
+
+  it("a dispatch-source card (no verdict) is never counted — the inbox is the source of truth", () => {
+    const cards = composeFleetCards(
+      [disp({ id: "x", status: "failed" })],
+      [],
+      []
+    );
+    expect(cards.every((c) => !cardNeedsMe(c))).toBe(true);
+  });
+});
 
 describe("laneForInboxItem", () => {
   it("maps ceremony steps to lanes", () => {

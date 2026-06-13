@@ -19,7 +19,7 @@ import {
   type Session,
   type DevServerType,
 } from "./db";
-import { resolveModelForAgent } from "./model-catalog";
+import { resolveModelForAgent, isSafeModel } from "./model-catalog";
 import type { AgentType } from "./providers";
 import { expandHome } from "./platform";
 
@@ -79,6 +79,27 @@ function generateRepositoryId(): string {
   return `repo_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/** A rejected default_model (fails isSafeModel). Thrown by create/update so the
+ * API layer can map it to a 400 (bad input) instead of a generic 500. */
+export class InvalidModelError extends Error {}
+
+/**
+ * Reject a default_model that isn't shell-safe BEFORE it is stored. A free-text
+ * agent (Hermes) forwards its model verbatim into the POSIX tmux `-m <model>`
+ * launch; the downstream shell-quoting is the primary defense, and this is
+ * belt-and-suspenders at the write boundary so a metacharacter value (`;`, `|`,
+ * `$`, backticks, quotes…) never even persists. Static-agent models are already
+ * catalog-clamped by resolveModelForAgent, so this only bites a malicious
+ * free-text value.
+ */
+function assertSafeDefaultModel(model: string): void {
+  if (model && !isSafeModel(model)) {
+    throw new InvalidModelError(
+      `Invalid default model "${model}" — only letters, digits, and . _ - / : are allowed`
+    );
+  }
+}
+
 /**
  * Create a new project
  */
@@ -91,6 +112,12 @@ export function createProject(
   const projects = queries.getAllProjects(db).all() as Project[];
   const maxOrder = projects.reduce((max, p) => Math.max(max, p.sort_order), 0);
 
+  const resolvedModel = resolveModelForAgent(
+    opts.agentType || "claude",
+    opts.defaultModel
+  );
+  assertSafeDefaultModel(resolvedModel);
+
   queries
     .createProject(db)
     .run(
@@ -98,7 +125,7 @@ export function createProject(
       opts.name,
       opts.workingDirectory,
       opts.agentType || "claude",
-      resolveModelForAgent(opts.agentType || "claude", opts.defaultModel),
+      resolvedModel,
       opts.initialPrompt || null,
       maxOrder + 1
     );
@@ -243,16 +270,19 @@ export function updateProject(
   if (!project || project.is_uncategorized) return undefined;
   const agentType = updates.agent_type ?? project.agent_type;
 
+  const resolvedModel = resolveModelForAgent(
+    agentType,
+    updates.default_model ?? project.default_model
+  );
+  assertSafeDefaultModel(resolvedModel);
+
   queries
     .updateProject(db)
     .run(
       updates.name ?? project.name,
       updates.working_directory ?? project.working_directory,
       agentType,
-      resolveModelForAgent(
-        agentType,
-        updates.default_model ?? project.default_model
-      ),
+      resolvedModel,
       updates.initial_prompt !== undefined
         ? updates.initial_prompt
         : project.initial_prompt,

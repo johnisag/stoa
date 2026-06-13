@@ -10,9 +10,25 @@ vi.mock("@/lib/platform", async (importOriginal) => {
   return { ...actual, resolveBinary: () => null };
 });
 
-import { buildAskArgs, buildAskPrompt } from "@/lib/ask";
+import { buildAskArgs, buildAskPrompt, killTreeArgs } from "@/lib/ask";
 
 const PROMPT = "What is happening in my fleet?";
+
+describe("killTreeArgs — Windows process-tree teardown on the ask timeout", () => {
+  it("Windows: a `taskkill /T /F` argv so the cmd→shim→node→agent tree dies (not just cmd)", () => {
+    expect(killTreeArgs(4242, true)).toEqual([
+      "taskkill",
+      "/PID",
+      "4242",
+      "/T",
+      "/F",
+    ]);
+  });
+
+  it("POSIX: null — a plain child.kill() reaps the group", () => {
+    expect(killTreeArgs(4242, false)).toBeNull();
+  });
+});
 
 describe("buildAskArgs — per-provider non-interactive argv (cross-platform guard)", () => {
   it("claude: `claude -p`, prompt on stdin", () => {

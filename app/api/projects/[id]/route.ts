@@ -4,6 +4,7 @@ import {
   updateProject,
   deleteProject,
   toggleProjectExpanded,
+  InvalidModelError,
 } from "@/lib/projects";
 
 interface RouteParams {
@@ -76,6 +77,9 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     const updated = getProjectWithDevServers(id);
     return NextResponse.json({ project: updated });
   } catch (error) {
+    if (error instanceof InvalidModelError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error("Error updating project:", error);
     return NextResponse.json(
       { error: "Failed to update project" },

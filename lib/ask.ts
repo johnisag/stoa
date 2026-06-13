@@ -19,7 +19,7 @@
  * text (pure), and the spawn.
  */
 
-import { spawn } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { resolveBinary, isWindows } from "./platform";
 import { sanitizeDigest } from "./summarize";
 import { getAnalyticsReport } from "./analytics/queries";
@@ -213,6 +213,40 @@ export interface RunAskOptions {
 const DEFAULT_ASK_TIMEOUT_MS = 60_000;
 
 /**
+ * The argv to tear down a spawned process TREE, or null when a plain
+ * `child.kill()` suffices. On Windows the ask spawn uses `shell: true`, so the
+ * child is `cmd.exe` → it launches the `.cmd` shim → node → the agent; killing only
+ * cmd.exe orphans those descendants (they keep running and hold the request's
+ * resources). `taskkill /T` reaps the whole tree (mirrors scripts/stoa.js cmdStop).
+ * POSIX kills the process group via child.kill(), so it returns null. Pure → tested.
+ */
+export function killTreeArgs(pid: number, onWindows: boolean): string[] | null {
+  return onWindows ? ["taskkill", "/PID", String(pid), "/T", "/F"] : null;
+}
+
+/** Kill a spawned ask child — its whole tree on Windows, else child.kill(). */
+function killChildTree(child: ChildProcess): void {
+  const argv = child.pid ? killTreeArgs(child.pid, isWindows) : null;
+  if (!argv) {
+    child.kill();
+    return;
+  }
+  try {
+    const killer = spawn(argv[0], argv.slice(1), {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    // spawn reports a launch failure (e.g. taskkill not on PATH) via an ASYNC
+    // 'error' event, NOT a sync throw — and an unhandled 'error' on a ChildProcess
+    // crashes the process. Listen so we degrade to the parent-only kill instead.
+    killer.on("error", () => child.kill());
+    killer.unref(); // best-effort + short-lived; don't pin the event loop
+  } catch {
+    child.kill(); // synchronous spawn failure
+  }
+}
+
+/**
  * Spawn the selected agent per buildAskArgs, write `input` to stdin (when
  * non-null) then end stdin, accumulate stdout (+ stderr for errors), and resolve
  * sanitizeDigest(stdout) on a clean exit. Rejects on a non-zero exit, a spawn
@@ -242,7 +276,7 @@ export function runAsk(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill();
+      killChildTree(child);
       reject(new Error(`Ask timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
