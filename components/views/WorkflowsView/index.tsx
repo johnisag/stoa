@@ -21,8 +21,9 @@ import { ExamplesTab } from "./ExamplesTab";
 import { RunsList } from "./RunsList";
 import { RunDetail } from "./RunDetail";
 import { WorkflowsHelp } from "./WorkflowsHelp";
+import { WorkflowBuilder } from "./WorkflowBuilder";
 
-type Tab = "templates" | "custom" | "examples" | "runs";
+type Tab = "templates" | "build" | "custom" | "examples" | "runs";
 
 /**
  * Workflows control plane — a self-contained dialog (opened from the Desktop/
@@ -69,6 +70,7 @@ export function WorkflowsView({
 
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: "templates", label: "Templates" },
+    { key: "build", label: "Build" },
     { key: "custom", label: "Custom" },
     { key: "examples", label: "Examples" },
     { key: "runs", label: "Runs", count: active },
@@ -188,6 +190,12 @@ export function WorkflowsView({
             ) : (
               <TemplatePicker onPick={setPickedTemplate} />
             )
+          ) : tab === "build" ? (
+            <WorkflowBuilder
+              sessions={sessions}
+              defaultConductorId={activeSessionId}
+              onStarted={goToRun}
+            />
           ) : tab === "custom" ? (
             <CustomSpecForm
               sessions={sessions}
