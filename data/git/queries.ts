@@ -327,9 +327,13 @@ export function useCommitFileDiff(
 
 async function fetchMultiRepoGitStatus(
   projectId?: string,
-  fallbackPath?: string
+  fallbackPath?: string,
+  paths?: string[]
 ): Promise<MultiRepoGitStatus> {
   const params = new URLSearchParams();
+  // Explicit `paths` (a multi-repo workspace session's worktrees) take precedence
+  // server-side, so the panel shows the session's worktrees, not a project's repos.
+  if (paths && paths.length > 0) params.set("paths", JSON.stringify(paths));
   if (projectId) params.set("projectId", projectId);
   if (fallbackPath) params.set("fallbackPath", fallbackPath);
 
@@ -342,14 +346,17 @@ async function fetchMultiRepoGitStatus(
 export function useMultiRepoGitStatus(
   projectId?: string,
   fallbackPath?: string,
-  options?: { enabled?: boolean }
+  options?: { enabled?: boolean; paths?: string[] }
 ) {
+  const paths = options?.paths;
   return useQuery({
-    queryKey: gitKeys.multiStatus(projectId || "", fallbackPath),
-    queryFn: () => fetchMultiRepoGitStatus(projectId, fallbackPath),
+    queryKey: gitKeys.multiStatus(projectId || "", fallbackPath, paths),
+    queryFn: () => fetchMultiRepoGitStatus(projectId, fallbackPath, paths),
     staleTime: 10000, // Consider fresh for 10s
     refetchInterval: 15000, // Poll every 15s
-    enabled: (!!projectId || !!fallbackPath) && (options?.enabled ?? true),
+    enabled:
+      (!!projectId || !!fallbackPath || (paths?.length ?? 0) > 0) &&
+      (options?.enabled ?? true),
   });
 }
 

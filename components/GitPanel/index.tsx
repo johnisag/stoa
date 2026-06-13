@@ -50,6 +50,9 @@ interface GitPanelProps {
   workingDirectory: string;
   projectId?: string;
   repositories?: ProjectRepository[];
+  /** Explicit repo paths to aggregate (a multi-repo workspace session's worktrees)
+   * — drives the multi-status query so it shows THOSE, not the project's repos. */
+  repoPaths?: string[];
   onFileSelect?: (file: GitFile, diff: string) => void;
 }
 
@@ -63,6 +66,7 @@ export function GitPanel({
   workingDirectory,
   projectId,
   repositories = [],
+  repoPaths,
 }: GitPanelProps) {
   const { isMobile } = useViewport();
   const confirm = useConfirm();
@@ -81,6 +85,7 @@ export function GitPanel({
   // Multi-repo mode hooks
   const multiRepoQuery = useMultiRepoGitStatus(projectId, workingDirectory, {
     enabled: isMultiRepo,
+    paths: repoPaths,
   });
 
   // Unified status based on mode
