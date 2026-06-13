@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Loader2, Play, FileJson } from "lucide-react";
 import { parsePipelineSpec } from "@/lib/pipeline/engine";
 import { useStartRun } from "@/data/pipelines/queries";
+import { PipelineGraph } from "./PipelineGraph";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -119,10 +120,21 @@ export function CustomSpecForm({
       {/* Validation feedback — green when ready, the full error list otherwise. */}
       {text.trim() &&
         (spec ? (
-          <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
-            ✓ Valid — {spec.steps.length} step
-            {spec.steps.length === 1 ? "" : "s"}.
-          </p>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              ✓ Valid — {spec.steps.length} step
+              {spec.steps.length === 1 ? "" : "s"}.
+            </p>
+            {/* Live DAG preview of the authored spec — no statuses (it hasn't
+                run), just the topology so the author sees their wiring. */}
+            <div className="bg-card/40 flex flex-col gap-1 rounded-md border p-2">
+              <span className="text-muted-foreground text-[11px]">
+                Dependency graph — arrows point from a step to the steps that
+                depend on it
+              </span>
+              <PipelineGraph spec={spec} />
+            </div>
+          </div>
         ) : (
           <ul className="flex flex-col gap-1 rounded-md bg-red-500/10 p-2.5 text-xs text-red-600 dark:text-red-400">
             {errors.map((e, i) => (

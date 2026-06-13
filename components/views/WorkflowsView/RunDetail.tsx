@@ -4,6 +4,8 @@ import { ArrowLeft, Loader2, Terminal } from "lucide-react";
 import { usePollRun } from "@/data/pipelines/queries";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { StepStatus } from "@/lib/pipeline/types";
+import { PipelineGraph } from "./PipelineGraph";
 import {
   AGENT_BADGE,
   Centered,
@@ -85,6 +87,28 @@ export function RunDetail({
               started {timeAgoMs(run.createdAt)} · {run.spec.steps.length} steps
             </p>
           </div>
+
+          {/* DAG overview — the same steps as the list below, laid out by
+              dependency depth so the topology (fan-out/fan-in) reads at a glance,
+              colored live by each step's status. Collapsed by default so the
+              actionable step list (with its Open-session jumps) stays the first
+              thing on a phone; the list already shows each step's "depends on". */}
+          <details className="bg-card/40 rounded-md border">
+            <summary className="text-muted-foreground hover:text-foreground cursor-pointer px-3 py-2 text-xs font-medium select-none">
+              Dependency graph
+            </summary>
+            <div className="border-t p-2">
+              <PipelineGraph
+                spec={run.spec}
+                statusById={Object.fromEntries(
+                  run.spec.steps.map((s) => [
+                    s.id,
+                    run.steps[s.id]?.status as StepStatus | undefined,
+                  ])
+                )}
+              />
+            </div>
+          </details>
 
           <ol className="flex flex-col gap-2">
             {run.spec.steps.map((step) => {
