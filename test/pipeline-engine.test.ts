@@ -174,6 +174,31 @@ describe("validateSpec", () => {
     expect(r.valid).toBe(true);
   });
 
+  it("accepts the worktreePolicy enum (new / shared) and exitCriteria", () => {
+    const r = validateSpec(
+      spec([
+        step({ id: "a", worktreePolicy: "new", exitCriteria: "tests pass" }),
+        step({ id: "b", worktreePolicy: "shared" }),
+      ])
+    );
+    expect(r.valid).toBe(true);
+  });
+
+  it("rejects an invalid worktreePolicy", () => {
+    const r = validateSpec(
+      spec([
+        step({
+          id: "a",
+          worktreePolicy: "bogus" as unknown as PipelineStep["worktreePolicy"],
+        }),
+      ])
+    );
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => /invalid worktreePolicy/.test(e.message))).toBe(
+      true
+    );
+  });
+
   it("flags a dependency on an unknown step", () => {
     const r = validateSpec(spec([step({ id: "a", dependsOn: ["ghost"] })]));
     expect(r.valid).toBe(false);

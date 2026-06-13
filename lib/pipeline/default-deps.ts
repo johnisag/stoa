@@ -37,9 +37,32 @@ export function defaultExecutorDeps(conductorSessionId: string): ExecutorDeps {
   // accept `idle` as success AFTER work was seen (avoids the spawn-time
   // idle-at-prompt false positive). Scoped per deps instance = per run.
   const seenRunning = new Set<string>();
+  // The ONE workflow worktree shared by every `worktreePolicy:"shared"` step, and
+  // the session that OWNS it (created it). A run with any shared step is serialized
+  // (the executor clamps parallelism to 1), so the first shared step populates
+  // these and the rest reuse it — no race. (If the first shared step's worktree
+  // creation falls back to the source dir — worktree_path null — sharing silently
+  // degrades to per-step worktrees; the run is still serialized, just not literally
+  // one checkout. A rare misconfig, e.g. a non-git workingDirectory.)
+  let sharedWorktreePath: string | null = null;
+  let sharedWorktreeOwnerId: string | null = null;
 
   return {
     async spawn(step: PipelineStep, spec: PipelineSpec): Promise<SpawnResult> {
+      // "shared" step reusing the established workflow worktree: spawn straight in
+      // it (no new worktree), and carry that shared path so readOutput reads the
+      // step's output file from there.
+      if (step.worktreePolicy === "shared" && sharedWorktreePath) {
+        const session = await spawnWorker({
+          conductorSessionId,
+          task: step.task,
+          workingDirectory: sharedWorktreePath,
+          agentType: step.agent,
+          model: step.model,
+          useWorktree: false,
+        });
+        return { sessionId: session.id, worktreePath: sharedWorktreePath };
+      }
       const session = await spawnWorker({
         conductorSessionId,
         task: step.task,
@@ -48,6 +71,12 @@ export function defaultExecutorDeps(conductorSessionId: string): ExecutorDeps {
         model: step.model,
         useWorktree: true,
       });
+      // First "shared" step: remember its worktree + owner so later shared steps
+      // reuse it and so the reap never deletes it out from under them.
+      if (step.worktreePolicy === "shared" && session.worktree_path) {
+        sharedWorktreePath = session.worktree_path;
+        sharedWorktreeOwnerId = session.id;
+      }
       // Carry the worktree path so readOutput can read the step's output file
       // from it after the step succeeds. (DB row uses snake_case worktree_path;
       // it's null when the worktree fell back to the source dir.)
@@ -123,10 +152,17 @@ export function defaultExecutorDeps(conductorSessionId: string): ExecutorDeps {
       // failed) so a reaped-but-successful step isn't mislabeled "failed". Log on
       // failure so a silent leak is visible (killWorker itself swallows inner
       // errors, so this catch is belt-and-suspenders for an unexpected throw).
+      // The shared worktree's OWNER must NEVER have its worktree reaped, even if
+      // the owner step itself FAILED: other (independent) shared steps ran — and
+      // may have SUCCEEDED — in that same worktree, so deleting it on the owner's
+      // failure would destroy their work. Keep it (as a succeeded worktree is kept;
+      // a fully-failed shared run keeping its worktree for inspection is fine).
+      const cleanupWorktree =
+        sessionId === sharedWorktreeOwnerId ? false : opts.cleanupWorktree;
       try {
         await killWorker(
           sessionId,
-          opts.cleanupWorktree,
+          cleanupWorktree,
           opts.succeeded ? "completed" : "failed"
         );
       } catch (err) {

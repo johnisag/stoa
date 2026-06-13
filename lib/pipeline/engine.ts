@@ -266,6 +266,20 @@ export function validateSpec(spec: PipelineSpec): PipelineValidationResult {
         `step "${id}" has an invalid outputFile "${step.outputFile}" (must be a worktree-relative path with no ".." or absolute prefix)`
       );
     }
+    // worktreePolicy is a small enum; exitCriteria is free prompt text (like
+    // `task`, it reaches the worker via the direct-spawn argv path, so it gets no
+    // shell-metachar guard — only `model`/`workingDirectory`, which hit the tmux
+    // bash init script, need one).
+    if (
+      step.worktreePolicy != null &&
+      step.worktreePolicy !== "new" &&
+      step.worktreePolicy !== "shared"
+    ) {
+      err(
+        id,
+        `step "${id}" has an invalid worktreePolicy "${step.worktreePolicy}" (expected "new" or "shared")`
+      );
+    }
     for (const dep of step.dependsOn ?? []) {
       if (dep === id) {
         err(id, `step "${id}" depends on itself`);

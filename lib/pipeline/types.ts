@@ -45,6 +45,25 @@ export interface PipelineStep {
    * file yields an empty-string output (never an error).
    */
   outputFile?: string;
+  /**
+   * Extra rules appended to the worker's prompt as UNBREAKABLE exit criteria the
+   * step must satisfy (e.g. "the change MUST pass tests; open a PR"). Free text —
+   * it rides the same direct-spawn (argv) prompt path as `task`, so no shell guard.
+   */
+  exitCriteria?: string;
+  /**
+   * How this step's worker gets its git worktree:
+   *   "new" (default) — a fresh worktree per step, so steps stay isolated and the
+   *     pipeline's parallel fan-out is safe.
+   *   "shared" — every "shared" step in the run reuses ONE workflow worktree (the
+   *     "same checkout for all tasks" case). Because that means agents editing the
+   *     same checkout + git index, a run containing ANY shared step runs its steps
+   *     SERIALLY (parallelism 1) to avoid index races. NOTE: shared steps share one
+   *     directory, so if two of them pass outputs downstream, give each a distinct
+   *     `outputFile` — otherwise they collide on the default file and a later step
+   *     could read a stale upstream output.
+   */
+  worktreePolicy?: "new" | "shared";
 }
 
 /** A full declarative pipeline spec (the YAML/JSON the user authors). */

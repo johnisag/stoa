@@ -330,4 +330,104 @@ describe("runPipeline", () => {
     // a launched and reached terminal → reaped.
     expect(reaped).toEqual(["sess-a"]);
   });
+
+  // ── Workflows P1: per-node exitCriteria + worktreePolicy ──
+
+  it("folds a step's exitCriteria into the spawned task as unbreakable rules", async () => {
+    let spawnedTask = "";
+    const deps: ExecutorDeps = {
+      async spawn(s: PipelineStep) {
+        spawnedTask = s.task;
+        return { sessionId: `sess-${s.id}` };
+      },
+      async checkOutcome() {
+        return "succeeded";
+      },
+      now: () => Date.now(),
+      sleep: async () => {},
+    };
+    await runPipeline(
+      spec([
+        step({ id: "a", task: "build it", exitCriteria: "tests MUST pass" }),
+      ]),
+      deps
+    );
+    expect(spawnedTask).toContain("build it");
+    expect(spawnedTask).toContain("UNBREAKABLE EXIT CRITERIA");
+    expect(spawnedTask).toContain("tests MUST pass");
+  });
+
+  it("leaves the task unchanged when there is no exitCriteria", async () => {
+    let spawnedTask = "";
+    const deps: ExecutorDeps = {
+      async spawn(s: PipelineStep) {
+        spawnedTask = s.task;
+        return { sessionId: `sess-${s.id}` };
+      },
+      async checkOutcome() {
+        return "succeeded";
+      },
+      now: () => Date.now(),
+      sleep: async () => {},
+    };
+    await runPipeline(spec([step({ id: "a", task: "just do it" })]), deps);
+    expect(spawnedTask).toBe("just do it");
+  });
+
+  it("serializes a run with ANY shared-worktree step (parallelism clamped to 1)", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const deps: ExecutorDeps & { launched: string[] } = {
+      launched: [],
+      async spawn(s: PipelineStep) {
+        (deps.launched as string[]).push(s.id);
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await Promise.resolve(); // let any same-cycle siblings enter first
+        return { sessionId: `sess-${s.id}` };
+      },
+      async checkOutcome() {
+        inFlight = Math.max(0, inFlight - 1);
+        return "succeeded";
+      },
+      now: () => Date.now(),
+      sleep: async () => {},
+    };
+    // 3 independent roots; ONE marked shared → the whole run runs serially even
+    // though default parallelism would launch all three at once.
+    await runPipeline(
+      spec([
+        step({ id: "a", worktreePolicy: "shared" }),
+        step({ id: "b" }),
+        step({ id: "c" }),
+      ]),
+      deps
+    );
+    expect(peak).toBe(1);
+    expect(deps.launched.sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("still parallelizes when no step is shared (control)", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const deps: ExecutorDeps = {
+      async spawn(s: PipelineStep) {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await Promise.resolve();
+        return { sessionId: `sess-${s.id}` };
+      },
+      async checkOutcome() {
+        inFlight = Math.max(0, inFlight - 1);
+        return "succeeded";
+      },
+      now: () => Date.now(),
+      sleep: async () => {},
+    };
+    await runPipeline(
+      spec([step({ id: "a" }), step({ id: "b" }), step({ id: "c" })]),
+      deps
+    );
+    expect(peak).toBeGreaterThan(1);
+  });
 });

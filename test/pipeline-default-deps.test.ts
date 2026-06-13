@@ -11,11 +11,21 @@ const state = vi.hoisted(() => ({
   sessionExists: true,
 }));
 const spawnWorkerMock = vi.hoisted(() =>
-  vi.fn(async () => ({ id: "worker-1" }))
+  vi.fn(
+    async (): Promise<{ id: string; worktree_path?: string | null }> => ({
+      id: "worker-1",
+    })
+  )
 );
 const getStatusMock = vi.hoisted(() => vi.fn(async () => state.status));
+const killWorkerMock = vi.hoisted(() =>
+  vi.fn(async (_id: string, _cleanup: boolean, _status: string) => {})
+);
 
-vi.mock("@/lib/orchestration", () => ({ spawnWorker: spawnWorkerMock }));
+vi.mock("@/lib/orchestration", () => ({
+  spawnWorker: spawnWorkerMock,
+  killWorker: killWorkerMock,
+}));
 vi.mock("@/lib/status-detector", () => ({
   statusDetector: { getStatus: getStatusMock },
 }));
@@ -54,6 +64,7 @@ beforeEach(() => {
   state.sessionExists = true;
   spawnWorkerMock.mockClear();
   getStatusMock.mockClear();
+  killWorkerMock.mockClear();
 });
 
 describe("defaultExecutorDeps.spawn", () => {
@@ -82,6 +93,61 @@ describe("defaultExecutorDeps.spawn", () => {
     expect(spawnWorkerMock).toHaveBeenCalledWith(
       expect.objectContaining({ workingDirectory: "/repo" })
     );
+  });
+
+  it("shares ONE worktree across worktreePolicy:'shared' steps (create once, reuse)", async () => {
+    const deps = defaultExecutorDeps("conductor-1");
+    const shared = (id: string): PipelineStep => ({
+      id,
+      agent: "claude",
+      task: `t-${id}`,
+      worktreePolicy: "shared",
+    });
+
+    // First shared step creates a worktree; remember its path.
+    spawnWorkerMock.mockResolvedValueOnce({
+      id: "w1",
+      worktree_path: "/wt/shared",
+    });
+    const r1 = await deps.spawn(shared("s1"), spec);
+    expect(r1.worktreePath).toBe("/wt/shared");
+    expect(spawnWorkerMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ useWorktree: true })
+    );
+
+    // Second shared step REUSES it: no new worktree, runs in the shared path, and
+    // still carries that path so its output file is readable from there.
+    spawnWorkerMock.mockResolvedValueOnce({ id: "w2" });
+    const r2 = await deps.spawn(shared("s2"), spec);
+    expect(r2.worktreePath).toBe("/wt/shared");
+    expect(spawnWorkerMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        useWorktree: false,
+        workingDirectory: "/wt/shared",
+      })
+    );
+  });
+
+  it("NEVER reaps the shared worktree owner's worktree, even on owner failure", async () => {
+    const deps = defaultExecutorDeps("conductor-1");
+    spawnWorkerMock.mockResolvedValueOnce({
+      id: "owner",
+      worktree_path: "/wt/s",
+    });
+    await deps.spawn(
+      { id: "s1", agent: "claude", task: "t", worktreePolicy: "shared" },
+      spec
+    );
+    // The owner step FAILED → the executor passes cleanupWorktree:true, but the
+    // shared worktree must survive (sibling shared steps ran in it). Forced false.
+    await deps.terminate!("owner", { cleanupWorktree: true, succeeded: false });
+    expect(killWorkerMock).toHaveBeenCalledWith("owner", false, "failed");
+  });
+
+  it("reaps a NON-owner worker's worktree normally (cleanup honored)", async () => {
+    const deps = defaultExecutorDeps("conductor-1");
+    await deps.terminate!("other", { cleanupWorktree: true, succeeded: false });
+    expect(killWorkerMock).toHaveBeenCalledWith("other", true, "failed");
   });
 });
 
