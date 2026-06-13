@@ -205,10 +205,16 @@ export function validateSpec(spec: PipelineSpec): PipelineValidationResult {
       errors: [{ stepId: null, message: "spec is not an object" }],
     };
   }
-  if (!spec.name || !spec.name.trim()) {
+  // typeof guards keep validateSpec TOTAL on arbitrary parsed JSON (the Custom
+  // editor / an imported file) — a non-string name/workingDirectory must surface
+  // as an error, not throw `.trim()`.
+  if (typeof spec.name !== "string" || !spec.name.trim()) {
     err(null, "pipeline name is required");
   }
-  if (!spec.workingDirectory || !spec.workingDirectory.trim()) {
+  if (
+    typeof spec.workingDirectory !== "string" ||
+    !spec.workingDirectory.trim()
+  ) {
     err(null, "pipeline workingDirectory is required");
   }
   if (!Array.isArray(spec.steps) || spec.steps.length === 0) {

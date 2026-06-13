@@ -15,6 +15,7 @@
 import type { PipelineSpec, PipelineStep } from "./types";
 import type { AgentType } from "../providers";
 import { layoutDag } from "./graph-layout";
+import { parsePipelineSpec } from "./engine";
 
 /** Canvas geometry (1 SVG user-unit = 1 px, matching PipelineGraph). Roomier than
  * the read-only graph — these nodes are tap/drag targets, so mobile-first sizing. */
@@ -143,6 +144,30 @@ export function docToSpec(doc: BuilderDoc): PipelineSpec {
     workingDirectory: doc.workingDirectory,
     steps: doc.nodes.map((n) => n.step),
   };
+}
+
+/** Re-snap every node to the clean topological layout (columns by dependency
+ * depth, rows by spec order), preserving the steps + edges. Tidies a hand-arranged
+ * canvas — re-seeding positions from layoutDag exactly as a fresh load would. */
+export function relayout(doc: BuilderDoc): BuilderDoc {
+  return docFromSpec(docToSpec(doc));
+}
+
+/**
+ * Load an imported JSON string as a builder doc. Accepts EITHER a BuilderDoc
+ * (canvas positions preserved) OR a bare PipelineSpec (positions seeded from the
+ * layout) — so a workflow exported from the builder AND a spec authored in the
+ * Custom tab both import. Null if the text is neither.
+ */
+export function docFromImportedJson(text: string): BuilderDoc | null {
+  try {
+    const doc = parseBuilderDoc(text);
+    if (doc) return doc; // a BuilderDoc (has name + workingDirectory + nodes[])
+    const { spec } = parsePipelineSpec(text); // else a bare PipelineSpec?
+    return spec ? docFromSpec(spec) : null;
+  } catch {
+    return null; // never throw — a bad import file is a null, not a crash
+  }
 }
 
 /** A fresh step id not already used in the doc: `base`, then `base-2`, `base-3`… */

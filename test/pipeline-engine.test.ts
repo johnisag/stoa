@@ -224,6 +224,18 @@ describe("validateSpec", () => {
     expect(r!.valid).toBe(false);
   });
 
+  it("stays total on a non-string name/workingDirectory", () => {
+    // An imported file / hand-typed JSON can carry `"name": 1` — must report, not
+    // throw `.trim()`.
+    const bad = { name: 1, workingDirectory: 2, steps: [] };
+    let r: ReturnType<typeof validateSpec>;
+    expect(() => {
+      r = validateSpec(bad as unknown as PipelineSpec);
+    }).not.toThrow();
+    expect(r!.valid).toBe(false);
+    expect(r!.errors.some((e) => /name is required/.test(e.message))).toBe(true);
+  });
+
   it("flags a dependency on an unknown step", () => {
     const r = validateSpec(spec([step({ id: "a", dependsOn: ["ghost"] })]));
     expect(r.valid).toBe(false);

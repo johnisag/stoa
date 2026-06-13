@@ -1,10 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import { toast } from "sonner";
 import {
   Check,
   Copy,
+  Download,
   FileJson,
   FolderOpen,
   Loader2,
@@ -12,16 +19,21 @@ import {
   Plus,
   Save,
   Trash2,
+  Upload,
+  Wand2,
 } from "lucide-react";
 import {
   addStep,
   connect,
   disconnect,
+  docFromImportedJson,
   docFromSpec,
   docToSpec,
   moveNode,
+  relayout,
   removeStep,
   renameStep,
+  serializeBuilderDoc,
   setDependsOn,
   updateStep,
   CANVAS,
@@ -92,10 +104,12 @@ const EXAMPLE_DOC: BuilderDoc = docFromSpec({
  * Visual workflow builder (Phase 3): compose a pipeline by dragging nodes on a
  * canvas and editing the selected step in a form, instead of hand-writing JSON.
  * Dependencies are wired by dragging a node's output port onto another (or via the
- * edit-panel checklist), and an edge is removed by tapping it. A workflow can be
- * saved (its canvas positions included) and reloaded from the "Saved" menu. The doc
- * is the single source of truth; it projects to the SAME PipelineSpec the Custom
- * editor produces and rides the same validateSpec + run path — no new run backend.
+ * edit-panel checklist), and an edge is removed by tapping it. The "Saved" menu
+ * saves/reloads named workflows (canvas positions included), tidies the layout
+ * (re-snap to the topological columns), and imports/exports a workflow as a JSON
+ * file; an amber dot flags unsaved changes. The doc is the single source of truth;
+ * it projects to the SAME PipelineSpec the Custom editor produces and rides the
+ * same validateSpec + run path — no new run backend.
  */
 export function WorkflowBuilder({
   sessions,
@@ -123,6 +137,13 @@ export function WorkflowBuilder({
   // The saved-store id of the workflow currently loaded (null = an unsaved draft).
   // Drives Save-overwrites-vs-creates and which row a Delete removes.
   const [savedId, setSavedId] = useState<string | null>(null);
+  // Serialized doc at the last save/load/new — current doc differing from it means
+  // there are unsaved changes (the trigger shows a dot). Baseline = the empty doc.
+  const [savedSnapshot, setSavedSnapshot] = useState<string>(() =>
+    serializeBuilderDoc(EMPTY_DOC)
+  );
+  // Hidden <input type=file> for Import JSON, clicked from the menu item.
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const savedList = useSavedWorkflows();
   const createWf = useCreateSavedWorkflow();
@@ -134,6 +155,11 @@ export function WorkflowBuilder({
   const { valid, errors } = useMemo(() => validateSpec(spec), [spec]);
   const selected = doc.nodes.find((n) => n.step.id === selectedId) ?? null;
   const canStart = valid && !!conductorId && !start.isPending;
+  // Unsaved-changes signal: the current doc differs from the last save/load.
+  const dirty = useMemo(
+    () => doc.nodes.length > 0 && serializeBuilderDoc(doc) !== savedSnapshot,
+    [doc, savedSnapshot]
+  );
 
   function handleAdd() {
     // Cascade new nodes so they don't stack on top of each other; the user drags
@@ -150,6 +176,7 @@ export function WorkflowBuilder({
     setDoc(next);
     setSelectedId(null);
     setSavedId(savedWorkflowId);
+    setSavedSnapshot(serializeBuilderDoc(next)); // freshly loaded = no unsaved changes
   }
 
   // Returns false (after a toast) if the canvas isn't ready to save, so the menu
@@ -178,6 +205,7 @@ export function WorkflowBuilder({
         const created = await createWf.mutateAsync({ name, doc });
         setSavedId(created.id);
       }
+      setSavedSnapshot(serializeBuilderDoc(doc)); // now persisted = no unsaved changes
       toast.success(`Saved “${name}”`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save");
@@ -192,10 +220,55 @@ export function WorkflowBuilder({
     try {
       const created = await createWf.mutateAsync({ name, doc });
       setSavedId(created.id);
+      setSavedSnapshot(serializeBuilderDoc(doc));
       toast.success(`Saved a copy as “${name}”`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save");
     }
+  }
+
+  function handleTidy() {
+    if (doc.nodes.length === 0) return;
+    setDoc((d) => relayout(d));
+    toast.success("Tidied the layout");
+  }
+
+  // Download the workflow as JSON (the BuilderDoc — positions included, so it
+  // re-imports into the canvas exactly; it also imports as a bare spec elsewhere).
+  function handleExport() {
+    if (doc.nodes.length === 0) {
+      toast.error("Add a step first — nothing to export yet.");
+      return;
+    }
+    const safe = (doc.name || "workflow").replace(/[^a-z0-9._-]+/gi, "-");
+    const blob = new Blob([JSON.stringify(doc, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${safe}.stoa-workflow.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${safe}.stoa-workflow.json`);
+  }
+
+  function handleImportFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be picked again
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const next = docFromImportedJson(String(reader.result ?? ""));
+      if (!next) {
+        toast.error("That file isn’t a valid workflow JSON.");
+        return;
+      }
+      loadDoc(next, null); // imported = a fresh unsaved draft
+      toast.success("Imported workflow");
+    };
+    reader.onerror = () => toast.error("Couldn’t read that file.");
+    reader.readAsText(file);
   }
 
   async function handleDeleteSaved() {
@@ -271,6 +344,13 @@ export function WorkflowBuilder({
             <DropdownMenuTrigger asChild>
               <Button type="button" variant="outline" size="sm">
                 <FolderOpen className="mr-1.5 h-3.5 w-3.5" /> Saved
+                {dirty && (
+                  <span
+                    className="ml-1 inline-block h-2 w-2 rounded-full bg-amber-500"
+                    title="Unsaved changes"
+                    aria-label="Unsaved changes"
+                  />
+                )}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -302,11 +382,28 @@ export function WorkflowBuilder({
                   <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete current
                 </DropdownMenuItem>
               )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={handleTidy}
+                disabled={doc.nodes.length === 0}
+              >
+                <Wand2 className="mr-2 h-3.5 w-3.5" /> Tidy layout
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => loadDoc(EMPTY_DOC, null)}>
                 <Plus className="mr-2 h-3.5 w-3.5" /> New workflow
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => loadDoc(EXAMPLE_DOC, null)}>
                 <FileJson className="mr-2 h-3.5 w-3.5" /> Load example
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => fileRef.current?.click()}>
+                <Upload className="mr-2 h-3.5 w-3.5" /> Import workflow…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={handleExport}
+                disabled={doc.nodes.length === 0}
+              >
+                <Download className="mr-2 h-3.5 w-3.5" /> Export workflow
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Saved workflows</DropdownMenuLabel>
@@ -337,6 +434,13 @@ export function WorkflowBuilder({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={handleImportFile}
+          />
           <Button type="button" variant="outline" size="sm" onClick={handleAdd}>
             <Plus className="mr-1.5 h-3.5 w-3.5" /> Add step
           </Button>
