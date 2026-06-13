@@ -692,6 +692,26 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 34,
+    name: "add_saved_workflows",
+    up: (db) => {
+      // Saved visual-builder workflows: the BuilderDoc (spec + canvas positions)
+      // serialized as JSON. CREATE TABLE IF NOT EXISTS is inherently idempotent.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS saved_workflows (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          builder_doc TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_saved_workflows_updated ON saved_workflows(updated_at DESC)`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

@@ -299,6 +299,31 @@ export const queries = {
   deleteProjectRepositories: (db: Database.Database) =>
     getStmt(db, `DELETE FROM project_repositories WHERE project_id = ?`),
 
+  // Saved workflows (visual builder)
+  createSavedWorkflow: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO saved_workflows (id, name, builder_doc) VALUES (?, ?, ?)`
+    ),
+
+  getSavedWorkflow: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM saved_workflows WHERE id = ?`),
+
+  getAllSavedWorkflows: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM saved_workflows ORDER BY updated_at DESC, name ASC`
+    ),
+
+  updateSavedWorkflow: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE saved_workflows SET name = ?, builder_doc = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  deleteSavedWorkflow: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM saved_workflows WHERE id = ?`),
+
   // Dev servers
   createDevServer: (db: Database.Database) =>
     getStmt(

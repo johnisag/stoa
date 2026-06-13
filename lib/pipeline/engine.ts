@@ -182,6 +182,18 @@ export function parsePipelineSpec(text: string): {
  * non-empty steps, unique non-empty ids, a spawnable agent, a non-empty task,
  * dependsOn references that resolve, no self-dependency, and no cycles.
  */
+/**
+ * `dependsOn` as a clean string[] regardless of a malformed (non-array, or array
+ * with non-string entries) value — keeps validateSpec/findCycle TOTAL on hostile
+ * input. validateSpec runs on arbitrary parsed JSON (the Custom editor, a stored
+ * doc), so a non-array dependsOn must surface as an error, not throw `.map`/`for…of`.
+ */
+function safeDependsOn(step: { dependsOn?: unknown }): string[] {
+  return Array.isArray(step?.dependsOn)
+    ? step.dependsOn.filter((d): d is string => typeof d === "string")
+    : [];
+}
+
 export function validateSpec(spec: PipelineSpec): PipelineValidationResult {
   const errors: PipelineValidationError[] = [];
   const err = (stepId: string | null, message: string) =>
@@ -280,7 +292,17 @@ export function validateSpec(spec: PipelineSpec): PipelineValidationResult {
         `step "${id}" has an invalid worktreePolicy "${step.worktreePolicy}" (expected "new" or "shared")`
       );
     }
-    for (const dep of step.dependsOn ?? []) {
+    if (
+      (step as { dependsOn?: unknown }).dependsOn != null &&
+      (!Array.isArray(step.dependsOn) ||
+        step.dependsOn.some((d) => typeof d !== "string"))
+    ) {
+      err(
+        id,
+        `step "${id}" has an invalid dependsOn (expected an array of step ids)`
+      );
+    }
+    for (const dep of safeDependsOn(step)) {
       if (dep === id) {
         err(id, `step "${id}" depends on itself`);
       } else if (!ids.has(dep)) {
@@ -300,7 +322,7 @@ export function validateSpec(spec: PipelineSpec): PipelineValidationResult {
     if (id)
       depsById.set(
         id,
-        (step.dependsOn ?? []).map((d) => d.trim())
+        safeDependsOn(step).map((d) => d.trim())
       );
   }
   for (const step of spec.steps) {
@@ -355,7 +377,7 @@ function findCycle(steps: PipelineStep[]): string[] | null {
   for (const s of steps)
     deps.set(
       s.id,
-      (s.dependsOn ?? []).filter((d) => d !== s.id)
+      safeDependsOn(s).filter((d) => d !== s.id)
     );
 
   const WHITE = 0;

@@ -62,6 +62,16 @@ export interface Project {
   updated_at: string;
 }
 
+/** A saved visual-builder workflow. `builder_doc` is the JSON-serialized BuilderDoc
+ * (spec + canvas positions) — parsed by the service layer into a typed doc. */
+export interface SavedWorkflowRow {
+  id: string;
+  name: string;
+  builder_doc: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProjectDevServer {
   id: string;
   project_id: string;
