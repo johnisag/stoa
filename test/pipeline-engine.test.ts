@@ -199,6 +199,31 @@ describe("validateSpec", () => {
     );
   });
 
+  it("stays total on a non-array dependsOn (reports, does not throw)", () => {
+    // validateSpec runs on arbitrary parsed JSON (Custom editor / a stored doc),
+    // so a malformed dependsOn must surface as an error, not throw `.map`/`for…of`.
+    const bad = { id: "b", agent: "claude", task: "t", dependsOn: 42 };
+    let r: ReturnType<typeof validateSpec>;
+    expect(() => {
+      r = validateSpec(
+        spec([step({ id: "a" }), bad as unknown as PipelineStep])
+      );
+    }).not.toThrow();
+    expect(r!.valid).toBe(false);
+    expect(r!.errors.some((e) => /invalid dependsOn/.test(e.message))).toBe(
+      true
+    );
+  });
+
+  it("stays total on an array dependsOn with non-string entries", () => {
+    const bad = { id: "a", agent: "claude", task: "t", dependsOn: [1, 2] };
+    let r: ReturnType<typeof validateSpec>;
+    expect(() => {
+      r = validateSpec(spec([bad as unknown as PipelineStep]));
+    }).not.toThrow();
+    expect(r!.valid).toBe(false);
+  });
+
   it("flags a dependency on an unknown step", () => {
     const r = validateSpec(spec([step({ id: "a", dependsOn: ["ghost"] })]));
     expect(r.valid).toBe(false);

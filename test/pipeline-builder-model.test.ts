@@ -17,6 +17,8 @@ import {
   disconnect,
   removeStep,
   renameStep,
+  serializeBuilderDoc,
+  parseBuilderDoc,
   CANVAS,
   type BuilderDoc,
 } from "@/lib/pipeline/builder-model";
@@ -190,6 +192,99 @@ describe("removeStep", () => {
       "a"
     );
     expect(doc.nodes[0].step.dependsOn).toBeUndefined();
+  });
+});
+
+describe("serializeBuilderDoc / parseBuilderDoc", () => {
+  it("round-trips a doc with positions", () => {
+    const d = docFromSpec(
+      spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })])
+    );
+    expect(parseBuilderDoc(serializeBuilderDoc(d))).toEqual(d);
+  });
+
+  it("returns null on non-JSON or a non-doc shape", () => {
+    expect(parseBuilderDoc("{ not json")).toBeNull();
+    expect(parseBuilderDoc("42")).toBeNull();
+    expect(parseBuilderDoc(JSON.stringify({ name: "x" }))).toBeNull(); // no nodes
+    expect(
+      parseBuilderDoc(JSON.stringify({ name: "x", workingDirectory: 1, nodes: [] }))
+    ).toBeNull();
+  });
+
+  it("strips a malformed dependsOn but keeps the step (trust boundary)", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      nodes: [
+        // dependsOn is a number → must not ride into the stored step (it would
+        // later throw in validateSpec); the step itself is kept, deps dropped.
+        { step: { id: "a", agent: "claude", task: "t", dependsOn: 42 }, x: 0, y: 0 },
+        // array with a non-string entry → also dropped.
+        {
+          step: { id: "b", agent: "claude", task: "t", dependsOn: ["a", 7] },
+          x: 1,
+          y: 1,
+        },
+      ],
+    });
+    const parsed = parseBuilderDoc(raw);
+    expect(parsed?.nodes.map((n) => n.step.id)).toEqual(["a", "b"]);
+    expect(parsed?.nodes[0].step.dependsOn).toBeUndefined();
+    expect(parsed?.nodes[1].step.dependsOn).toBeUndefined();
+  });
+
+  it("preserves the known optional step fields", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      nodes: [
+        {
+          step: {
+            id: "a",
+            agent: "claude",
+            task: "t",
+            name: "A",
+            model: "opus",
+            dependsOn: [],
+            exitCriteria: "tests pass",
+            worktreePolicy: "shared",
+            outputFile: "out.md",
+            junk: "DROP ME",
+          },
+          x: 0,
+          y: 0,
+        },
+      ],
+    });
+    const step = parseBuilderDoc(raw)!.nodes[0].step as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(step).toMatchObject({
+      id: "a",
+      name: "A",
+      model: "opus",
+      exitCriteria: "tests pass",
+      worktreePolicy: "shared",
+      outputFile: "out.md",
+    });
+    expect(step.junk).toBeUndefined(); // unknown field dropped
+  });
+
+  it("drops malformed nodes but keeps the well-formed ones", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      nodes: [
+        { step: { id: "a", agent: "claude", task: "t" }, x: 1, y: 2 },
+        { step: { id: "bad" }, x: 0, y: 0 }, // missing agent/task
+        { x: 5, y: 5 }, // no step
+        { step: { id: "c", agent: "claude", task: "t" }, x: "nope", y: 0 }, // bad coord
+      ],
+    });
+    const parsed = parseBuilderDoc(raw);
+    expect(parsed?.nodes.map((n) => n.step.id)).toEqual(["a"]);
   });
 });
 

@@ -38,6 +38,85 @@ export interface BuilderDoc {
   nodes: BuilderNode[];
 }
 
+/** A persisted builder doc with its store identity + timestamps (the API shape). */
+export interface SavedWorkflow {
+  id: string;
+  name: string;
+  doc: BuilderDoc;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Serialize a doc for storage. */
+export function serializeBuilderDoc(doc: BuilderDoc): string {
+  return JSON.stringify(doc);
+}
+
+/**
+ * Parse a stored doc defensively — a hand-edited or legacy row must never crash a
+ * load. Returns null on anything that isn't a well-formed doc; drops malformed
+ * nodes rather than failing the whole doc (mirrors the snippets-store shape guard).
+ */
+export function parseBuilderDoc(raw: string): BuilderDoc | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.name !== "string" || typeof o.workingDirectory !== "string") {
+    return null;
+  }
+  if (!Array.isArray(o.nodes)) return null;
+  const nodes: BuilderNode[] = [];
+  for (const n of o.nodes) {
+    if (!n || typeof n !== "object") continue;
+    const node = n as Record<string, unknown>;
+    const raw = node.step as Record<string, unknown> | undefined;
+    if (
+      !raw ||
+      typeof raw.id !== "string" ||
+      typeof raw.task !== "string" ||
+      typeof raw.agent !== "string" ||
+      typeof node.x !== "number" ||
+      typeof node.y !== "number"
+    ) {
+      continue;
+    }
+    // Whitelist the known fields with per-field type checks rather than casting
+    // the raw object through — this is a trust boundary (the API stores whatever
+    // parses), so a malformed `dependsOn` (or any junk field) must NOT ride into a
+    // stored doc and later throw in validateSpec or reach a spawn.
+    const step: PipelineStep = {
+      id: raw.id,
+      agent: raw.agent as PipelineStep["agent"],
+      task: raw.task,
+    };
+    if (typeof raw.name === "string") step.name = raw.name;
+    if (typeof raw.model === "string") step.model = raw.model;
+    if (
+      Array.isArray(raw.dependsOn) &&
+      raw.dependsOn.every((d) => typeof d === "string")
+    ) {
+      step.dependsOn = raw.dependsOn as string[];
+    }
+    if (typeof raw.workingDirectory === "string") {
+      step.workingDirectory = raw.workingDirectory;
+    }
+    if (typeof raw.outputFile === "string") step.outputFile = raw.outputFile;
+    if (typeof raw.exitCriteria === "string") {
+      step.exitCriteria = raw.exitCriteria;
+    }
+    if (raw.worktreePolicy === "new" || raw.worktreePolicy === "shared") {
+      step.worktreePolicy = raw.worktreePolicy;
+    }
+    nodes.push({ step, x: node.x, y: node.y });
+  }
+  return { name: o.name, workingDirectory: o.workingDirectory, nodes };
+}
+
 /** Seed a builder doc from a spec, placing each node by its layout depth/row. */
 export function docFromSpec(spec: PipelineSpec): BuilderDoc {
   const layout = layoutDag(spec);

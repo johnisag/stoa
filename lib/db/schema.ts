@@ -243,8 +243,18 @@ export function createSchema(db: Database.Database): void {
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE
     );
 
+    -- Saved visual-builder workflows (spec + canvas positions, as JSON)
+    CREATE TABLE IF NOT EXISTS saved_workflows (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      builder_doc TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_repo_lessons_repo ON repo_lessons(repo_id);
+    CREATE INDEX IF NOT EXISTS idx_saved_workflows_updated ON saved_workflows(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_key ON session_events(session_key);
     CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_created ON session_events(created_at);

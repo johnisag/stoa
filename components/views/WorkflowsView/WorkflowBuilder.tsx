@@ -2,7 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { FileJson, Loader2, Play, Plus, Trash2 } from "lucide-react";
+import {
+  Check,
+  Copy,
+  FileJson,
+  FolderOpen,
+  Loader2,
+  Play,
+  Plus,
+  Save,
+  Trash2,
+} from "lucide-react";
 import {
   addStep,
   connect,
@@ -19,10 +29,26 @@ import {
 } from "@/lib/pipeline/builder-model";
 import { validateSpec } from "@/lib/pipeline/engine";
 import { useStartRun } from "@/data/pipelines/queries";
+import {
+  useSavedWorkflows,
+  useCreateSavedWorkflow,
+  useUpdateSavedWorkflow,
+  useDeleteSavedWorkflow,
+} from "@/data/saved-workflows/queries";
 import { AGENT_OPTIONS } from "@/components/NewSessionDialog/NewSessionDialog.types";
 import type { AgentType } from "@/lib/providers";
+import { useConfirm } from "@/components/ConfirmProvider";
+import { cn } from "@/lib/utils";
 import { PipelineCanvas } from "./PipelineCanvas";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -66,10 +92,10 @@ const EXAMPLE_DOC: BuilderDoc = docFromSpec({
  * Visual workflow builder (Phase 3): compose a pipeline by dragging nodes on a
  * canvas and editing the selected step in a form, instead of hand-writing JSON.
  * Dependencies are wired by dragging a node's output port onto another (or via the
- * edit-panel checklist), and an edge is removed by tapping it; position persistence
- * is the next follow-up. The doc is the single source of truth; it projects to the
- * SAME PipelineSpec the Custom editor produces and rides the same validateSpec + run
- * path — no new model or backend.
+ * edit-panel checklist), and an edge is removed by tapping it. A workflow can be
+ * saved (its canvas positions included) and reloaded from the "Saved" menu. The doc
+ * is the single source of truth; it projects to the SAME PipelineSpec the Custom
+ * editor produces and rides the same validateSpec + run path — no new run backend.
  */
 export function WorkflowBuilder({
   sessions,
@@ -94,6 +120,15 @@ export function WorkflowBuilder({
       ? defaultConductorId
       : (sessions[0]?.id ?? "")
   );
+  // The saved-store id of the workflow currently loaded (null = an unsaved draft).
+  // Drives Save-overwrites-vs-creates and which row a Delete removes.
+  const [savedId, setSavedId] = useState<string | null>(null);
+
+  const savedList = useSavedWorkflows();
+  const createWf = useCreateSavedWorkflow();
+  const updateWf = useUpdateSavedWorkflow();
+  const deleteWf = useDeleteSavedWorkflow();
+  const confirm = useConfirm();
 
   const spec = useMemo(() => docToSpec(doc), [doc]);
   const { valid, errors } = useMemo(() => validateSpec(spec), [spec]);
@@ -109,6 +144,78 @@ export function WorkflowBuilder({
     const next = addStep(doc, x, y);
     setDoc(next);
     setSelectedId(next.nodes[next.nodes.length - 1].step.id);
+  }
+
+  function loadDoc(next: BuilderDoc, savedWorkflowId: string | null) {
+    setDoc(next);
+    setSelectedId(null);
+    setSavedId(savedWorkflowId);
+  }
+
+  // Returns false (after a toast) if the canvas isn't ready to save, so the menu
+  // item can stay enabled and TEACH why — a disabled item gives a phone tap no
+  // feedback at all.
+  function saveGuard(): string | null {
+    const name = doc.name.trim();
+    if (doc.nodes.length === 0) {
+      toast.error("Add a step first.");
+      return null;
+    }
+    if (!name) {
+      toast.error("Give the workflow a name first (the “Workflow name” field).");
+      return null;
+    }
+    return name;
+  }
+
+  async function handleSave() {
+    const name = saveGuard();
+    if (!name) return;
+    try {
+      if (savedId) {
+        await updateWf.mutateAsync({ id: savedId, name, doc });
+      } else {
+        const created = await createWf.mutateAsync({ name, doc });
+        setSavedId(created.id);
+      }
+      toast.success(`Saved “${name}”`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save");
+    }
+  }
+
+  // Always creates a new row (forking a loaded workflow) — so renaming + Save
+  // doesn't silently overwrite the original under its old id.
+  async function handleSaveCopy() {
+    const name = saveGuard();
+    if (!name) return;
+    try {
+      const created = await createWf.mutateAsync({ name, doc });
+      setSavedId(created.id);
+      toast.success(`Saved a copy as “${name}”`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save");
+    }
+  }
+
+  async function handleDeleteSaved() {
+    if (!savedId) return;
+    const target = savedList.data?.find((w) => w.id === savedId);
+    if (
+      !(await confirm({
+        title: "Delete this saved workflow?",
+        description: `“${target?.name ?? doc.name}” will be removed. This can't be undone.`,
+      }))
+    ) {
+      return;
+    }
+    try {
+      await deleteWf.mutateAsync(savedId);
+      toast.success("Deleted saved workflow");
+      setSavedId(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete");
+    }
   }
 
   function patch(id: string, p: Parameters<typeof updateStep>[2]) {
@@ -160,17 +267,76 @@ export function WorkflowBuilder({
           </p>
         </div>
         <div className="flex flex-shrink-0 items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setDoc(EXAMPLE_DOC);
-              setSelectedId(null);
-            }}
-          >
-            <FileJson className="mr-1.5 h-3.5 w-3.5" /> Load example
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="sm">
+                <FolderOpen className="mr-1.5 h-3.5 w-3.5" /> Saved
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="max-h-80 w-56 overflow-y-auto"
+            >
+              {/* Save stays ENABLED even when not ready — handleSave's toast then
+                  teaches why (a disabled item gives a phone tap no feedback). */}
+              <DropdownMenuItem
+                onSelect={handleSave}
+                disabled={createWf.isPending || updateWf.isPending}
+              >
+                <Save className="mr-2 h-3.5 w-3.5" />
+                {savedId ? "Save" : "Save as new"}
+              </DropdownMenuItem>
+              {savedId && (
+                <DropdownMenuItem
+                  onSelect={handleSaveCopy}
+                  disabled={createWf.isPending}
+                >
+                  <Copy className="mr-2 h-3.5 w-3.5" /> Save a copy
+                </DropdownMenuItem>
+              )}
+              {savedId && (
+                <DropdownMenuItem
+                  onSelect={handleDeleteSaved}
+                  className="text-red-600 dark:text-red-400"
+                >
+                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete current
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={() => loadDoc(EMPTY_DOC, null)}>
+                <Plus className="mr-2 h-3.5 w-3.5" /> New workflow
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => loadDoc(EXAMPLE_DOC, null)}>
+                <FileJson className="mr-2 h-3.5 w-3.5" /> Load example
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Saved workflows</DropdownMenuLabel>
+              {savedList.data && savedList.data.length > 0 ? (
+                savedList.data.map((wf) => (
+                  <DropdownMenuItem
+                    key={wf.id}
+                    onSelect={() => loadDoc(wf.doc, wf.id)}
+                    className="flex items-center gap-2"
+                  >
+                    <Check
+                      className={cn(
+                        "h-3.5 w-3.5 flex-shrink-0",
+                        wf.id === savedId ? "opacity-100" : "opacity-0"
+                      )}
+                    />
+                    <span className="min-w-0 flex-1 truncate">{wf.name}</span>
+                    <span className="text-muted-foreground flex-shrink-0 text-[10px]">
+                      {wf.doc.nodes.length} step
+                      {wf.doc.nodes.length === 1 ? "" : "s"}
+                    </span>
+                  </DropdownMenuItem>
+                ))
+              ) : (
+                <DropdownMenuItem disabled>
+                  No saved workflows yet
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button type="button" variant="outline" size="sm" onClick={handleAdd}>
             <Plus className="mr-1.5 h-3.5 w-3.5" /> Add step
           </Button>
