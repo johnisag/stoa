@@ -77,8 +77,8 @@ async function focusOrOpen(url: string): Promise<void> {
   await self.clients.openWindow(url);
 }
 
-// Tapping an action button (approve/reject/stop) routes back to the session via
-// the respond endpoint; tapping the body (no action) focuses/opens the app. The
+// Tapping the Stop action button routes back to the session via the respond
+// endpoint; tapping the body (no action) focuses/opens the app. The
 // fetch is same-origin so the HttpOnly auth cookie rides along automatically. If
 // the action can't be delivered (e.g. tapped too late → 409), fall back to
 // opening the app so the tap isn't a silent no-op.

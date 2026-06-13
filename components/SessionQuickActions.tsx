@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, XCircle, Square, type LucideIcon } from "lucide-react";
+import { Square, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -15,16 +15,6 @@ const META: Record<
   RespondAction,
   { icon: LucideIcon; label: string; className: string }
 > = {
-  approve: {
-    icon: CheckCircle2,
-    label: "Approve",
-    className: "text-green-600 hover:bg-green-500/10 dark:text-green-400",
-  },
-  reject: {
-    icon: XCircle,
-    label: "Reject",
-    className: "text-orange-600 hover:bg-orange-500/10 dark:text-orange-400",
-  },
   stop: {
     icon: Square,
     label: "Stop",
@@ -33,12 +23,13 @@ const META: Record<
 };
 
 /**
- * Per-card quick actions — approve/reject/stop a session straight from the board,
- * the in-app twin of the lock-screen notification buttons (same /respond
+ * Per-card quick action — one-tap Stop a live session straight from the board, the
+ * in-app twin of the lock-screen notification's Stop button (same /respond
  * endpoint). Self-contained (reads its own mutation hook) so it doesn't thread a
- * callback through every list view and preserves the SessionCard memo. Labeled
- * (icon + word) so the choice is unambiguous on touch. Renders nothing for
- * statuses with no actionable choice (idle/dead).
+ * callback through every list view and preserves the SessionCard memo. Renders
+ * nothing for statuses with no actionable choice (idle/dead). (Attention-only: no
+ * approve/reject — you swap to the session and type; the notification already told
+ * you it's ready / needs input.)
  */
 export function SessionQuickActions({
   sessionId,
@@ -63,7 +54,7 @@ export function SessionQuickActions({
   // would; tracked as a follow-up — but the buttons return on the next status tick.)
   useEffect(() => setActed(false), [status, hasPrompt]);
 
-  const actions = cardActionsForStatus(status, hasPrompt);
+  const actions = cardActionsForStatus(status);
   if (actions.length === 0 || acted) return null;
 
   return (

@@ -119,9 +119,9 @@ export function useForkSession() {
 }
 
 /**
- * Act on a session in-place (approve / reject / stop) via the same /respond
- * endpoint the push-notification action buttons use. The live status stream
- * reflects the result; we also invalidate the list as a backstop.
+ * Stop a session in-place via the same /respond endpoint the push-notification
+ * Stop button uses. The live status stream reflects the result; we also
+ * invalidate the list as a backstop.
  */
 export function useRespondToSession() {
   const queryClient = useQueryClient();
