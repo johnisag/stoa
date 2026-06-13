@@ -55,8 +55,10 @@ export function WorkflowsHelp({ onClose }: { onClose: () => void }) {
           <span className="text-foreground">Build</span> tab is a visual canvas —
           tap <span className="text-foreground">Add step</span> to drop a node,
           drag the boxes to arrange your DAG, and tap one to edit its agent,
-          task, dependencies, and exit criteria. It validates live and runs the
-          same way; under the hood it&apos;s the same spec as Custom.
+          task, dependencies, and exit criteria. Drag the dot on a box&apos;s
+          right edge onto another box to make it depend on this one, and tap an
+          edge to remove it. It validates live and runs the same way; under the
+          hood it&apos;s the same spec as Custom.
         </li>
         <li>
           <span className="text-foreground font-medium">Or go Custom.</span> The{" "}

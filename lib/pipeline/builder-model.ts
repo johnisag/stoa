@@ -134,6 +134,37 @@ export function setDependsOn(
   });
 }
 
+/**
+ * Add a dependency edge `from → to` (i.e. `to` depends on `from`), as produced by
+ * dragging a connector between two nodes on the canvas. A no-op for a self-edge,
+ * an unknown target, or a duplicate. Permissive about cycles — validateSpec flags
+ * a cycle so the UI shows it red, matching how the dependsOn checklist behaves.
+ */
+export function connect(doc: BuilderDoc, from: string, to: string): BuilderDoc {
+  if (from === to) return doc;
+  const target = doc.nodes.find((n) => n.step.id === to);
+  if (!target) return doc;
+  const deps = target.step.dependsOn ?? [];
+  if (deps.includes(from)) return doc;
+  return setDependsOn(doc, to, [...deps, from]);
+}
+
+/** Remove the dependency edge `from → to`. No-op if the target or edge is absent. */
+export function disconnect(
+  doc: BuilderDoc,
+  from: string,
+  to: string
+): BuilderDoc {
+  const target = doc.nodes.find((n) => n.step.id === to);
+  const deps = target?.step.dependsOn ?? [];
+  if (!deps.includes(from)) return doc;
+  return setDependsOn(
+    doc,
+    to,
+    deps.filter((d) => d !== from)
+  );
+}
+
 /** Remove a step and strip its id from every other step's dependsOn. */
 export function removeStep(doc: BuilderDoc, id: string): BuilderDoc {
   return {

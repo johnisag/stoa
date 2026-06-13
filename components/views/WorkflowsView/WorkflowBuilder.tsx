@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { FileJson, Loader2, Play, Plus, Trash2 } from "lucide-react";
 import {
   addStep,
+  connect,
+  disconnect,
   docFromSpec,
   docToSpec,
   moveNode,
@@ -61,12 +63,13 @@ const EXAMPLE_DOC: BuilderDoc = docFromSpec({
 });
 
 /**
- * Visual workflow builder (Phase 3, slice 1): compose a pipeline by dragging nodes
- * on a canvas and editing the selected step in a form, instead of hand-writing
- * JSON. The doc is the single source of truth; it projects to the SAME PipelineSpec
- * the Custom editor produces and rides the same validateSpec + run path — no new
- * model or backend. Drag-to-connect ports and position persistence are follow-ups;
- * dependencies are edited here via the checklist.
+ * Visual workflow builder (Phase 3): compose a pipeline by dragging nodes on a
+ * canvas and editing the selected step in a form, instead of hand-writing JSON.
+ * Dependencies are wired by dragging a node's output port onto another (or via the
+ * edit-panel checklist), and an edge is removed by tapping it; position persistence
+ * is the next follow-up. The doc is the single source of truth; it projects to the
+ * SAME PipelineSpec the Custom editor produces and rides the same validateSpec + run
+ * path — no new model or backend.
  */
 export function WorkflowBuilder({
   sessions,
@@ -151,8 +154,9 @@ export function WorkflowBuilder({
         <div>
           <h3 className="text-sm font-medium">Visual builder</h3>
           <p className="text-muted-foreground text-xs leading-relaxed">
-            Drag the boxes to arrange your DAG; tap one to edit it. Steps with no
-            path between them run in parallel.
+            Drag the boxes to arrange your DAG; tap one to edit it. Drag a box’s
+            dot onto another box to connect them. Steps with no path between them
+            run in parallel.
           </p>
         </div>
         <div className="flex flex-shrink-0 items-center gap-2">
@@ -205,6 +209,8 @@ export function WorkflowBuilder({
           selectedId={selectedId}
           onSelectNode={setSelectedId}
           onMoveNode={(id, x, y) => setDoc((d) => moveNode(d, id, x, y))}
+          onConnect={(from, to) => setDoc((d) => connect(d, from, to))}
+          onDisconnect={(from, to) => setDoc((d) => disconnect(d, from, to))}
         />
       )}
 
@@ -300,7 +306,7 @@ export function WorkflowBuilder({
           </label>
 
           {/* dependsOn — a checklist of the other step ids (the house multi-select
-              idiom; drag-to-connect ports come in a follow-up). */}
+              idiom; the same edges you can draw by dragging a node's port). */}
           {doc.nodes.length > 1 && (
             <div className="flex flex-col gap-1 text-sm">
               <span className="text-muted-foreground text-xs">Depends on</span>
