@@ -16,6 +16,7 @@
  */
 
 import { PROVIDER_IDS } from "../providers/registry";
+import { isSafeModel } from "../model-catalog";
 import type {
   PipelineSpec,
   PipelineStep,
@@ -139,10 +140,10 @@ export function isSafeOutputFile(file: string): boolean {
   return !segments.includes("..");
 }
 
-/** A model id is safe if it's only letters, digits, and . _ - / : (provider/model). */
-export function isSafeModel(model: string): boolean {
-  return /^[A-Za-z0-9._/:-]+$/.test(model);
-}
+// `isSafeModel` now lives in lib/model-catalog.ts (the canonical model home, also
+// used by the project write-boundary guard). Re-exported so this module's existing
+// importers/tests keep their path.
+export { isSafeModel };
 
 /**
  * Validate a pipeline spec. Returns every problem found (not just the first) so

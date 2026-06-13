@@ -3,6 +3,7 @@ import {
   getAllProjectsWithDevServers,
   createProject,
   validateWorkingDirectory,
+  InvalidModelError,
 } from "@/lib/projects";
 
 // GET /api/projects - List all projects with dev server configs
@@ -50,6 +51,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ project }, { status: 201 });
   } catch (error) {
+    if (error instanceof InvalidModelError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error("Error creating project:", error);
     return NextResponse.json(
       { error: "Failed to create project" },

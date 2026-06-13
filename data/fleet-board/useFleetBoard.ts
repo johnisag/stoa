@@ -8,6 +8,7 @@ import {
   useDispatchReposQuery,
 } from "@/data/dispatch/queries";
 import { composeFleetCards, bucketByLane } from "@/lib/fleet-board/lanes";
+import { countNeedsMe } from "@/lib/verdict-inbox-selectors";
 
 /**
  * The fleet board's data: composes the three EXISTING read models (verdict inbox +
@@ -44,10 +45,19 @@ export function useFleetBoard(open: boolean) {
     [lanes]
   );
 
+  // The board's "needs me" count, derived from the SAME inbox + `needsMe` selector
+  // the nav badge uses — so the ambient badge and the board's header pill always
+  // agree (the badge can't say "3" while the board it opens reads "1").
+  const needsMeCount = useMemo(
+    () => countNeedsMe(inbox.data ?? []),
+    [inbox.data]
+  );
+
   return {
     lanes,
     repoById,
     total,
+    needsMeCount,
     isLoading: inbox.isLoading || board.isLoading || pending.isLoading,
     isError: inbox.isError || board.isError || pending.isError,
     isFetching:

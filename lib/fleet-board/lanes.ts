@@ -7,6 +7,7 @@
  * to map and live in the sidebar already), no scheduled rows (future-dated).
  */
 import type { InboxItem } from "@/lib/verdict-inbox";
+import { needsMe } from "@/lib/verdict-inbox-selectors";
 import type { IssueDispatch } from "@/lib/dispatch/types";
 
 export type LaneId =
@@ -27,13 +28,6 @@ export const LANES: { id: LaneId; label: string }[] = [
   { id: "merged", label: "Merged" },
   { id: "failed", label: "Failed" },
 ];
-
-/** Lanes that want the human (badged as attention): a verified PR awaiting a merge,
- * and anything that failed/stuck. */
-export const ATTENTION_LANES: ReadonlySet<LaneId> = new Set<LaneId>([
-  "verified",
-  "failed",
-]);
 
 export interface FleetCard {
   /** `${type}:${id}` — react key + dedupe key. */
@@ -131,6 +125,18 @@ export function composeFleetCards(
     map.set(key, { key, lane: laneForInboxItem(i), source: "inbox", inbox: i });
   }
   return [...map.values()];
+}
+
+/**
+ * Does this card need the human NOW? Reuses the Verdict Inbox's `needsMe` predicate
+ * — the SAME source of truth the nav "needs me" badge counts — so the board's
+ * attention count can't drift from the badge. A card only "needs me" via its inbox
+ * item (dispatch-only cards carry no verdict); since composeFleetCards maps each
+ * inbox item to exactly one card, the board's needs-me total equals the badge's
+ * `countNeedsMe(inbox)` by construction. Pure → unit-tested.
+ */
+export function cardNeedsMe(c: FleetCard): boolean {
+  return c.source === "inbox" && !!c.inbox && needsMe(c.inbox);
 }
 
 /** Bucket composed cards into the six lanes (always all keys present). */

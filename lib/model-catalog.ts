@@ -79,6 +79,18 @@ export function getDefaultModelForAgent(agentType: AgentType): string {
   return getModelOptions(agentType)[0]?.value ?? "sonnet";
 }
 
+/**
+ * A model id is "shell-safe": only letters, digits, and `. _ - / :` (enough for a
+ * provider-qualified name like `anthropic/claude-opus-4.8`). The single source of
+ * truth for "could this model string break out of the POSIX tmux `-m <model>`
+ * launch?" — a FREE-TEXT agent (Hermes) forwards its model verbatim, so anything
+ * outside this set (`;`, `|`, `$`, backticks, quotes, spaces…) is rejected at the
+ * write boundary as defense-in-depth, on top of the downstream shell-quoting.
+ */
+export function isSafeModel(model: string): boolean {
+  return /^[A-Za-z0-9._/:-]+$/.test(model);
+}
+
 export function isSupportedModelForAgent(
   agentType: AgentType,
   model: string | null | undefined
