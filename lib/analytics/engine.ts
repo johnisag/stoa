@@ -25,6 +25,7 @@ import type {
   TrendSummary,
   DetectedIssue,
   EventTypeCount,
+  SessionOriginCounts,
   AnalyticsReport,
 } from "./types";
 
@@ -132,6 +133,23 @@ function deriveFacts(snapshot: AnalyticsSnapshot): SessionFacts[] {
 }
 
 // ── 1. Performance lens ──────────────────────────────────────────────────────
+
+/**
+ * Split the window's sessions by origin. A session is `dispatch` when it carries a
+ * dispatch outcome (dispatchStatus set); everything else — interactive sessions you
+ * open yourself, workflow workers — is `standalone`. Pure + unit-tested.
+ */
+export function computeSessionOrigins(
+  sessions: AnalyticsSession[]
+): SessionOriginCounts {
+  let dispatch = 0;
+  for (const s of sessions) if (s.dispatchStatus != null) dispatch++;
+  return {
+    dispatch,
+    standalone: sessions.length - dispatch,
+    total: sessions.length,
+  };
+}
 
 export function computePerformance(facts: SessionFacts[]): PerformanceMetrics {
   const active = facts.filter((f) => f.events.length > 0);
@@ -549,6 +567,7 @@ export function buildReport(snapshot: AnalyticsSnapshot): AnalyticsReport {
   return {
     windowDays: snapshot.windowDays,
     generatedAt: snapshot.now,
+    origins: computeSessionOrigins(snapshot.sessions),
     performance: computePerformance(facts),
     behavioural: computeBehavioural(facts),
     intelligence: computeIntelligence(facts),

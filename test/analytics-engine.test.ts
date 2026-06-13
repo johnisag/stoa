@@ -10,6 +10,7 @@ import {
   computeBehavioural,
   computeIntelligence,
   computeTrends,
+  computeSessionOrigins,
   detectIssues,
   utcDay,
   ISSUE_THRESHOLDS,
@@ -66,6 +67,43 @@ describe("utcDay", () => {
   it("formats an epoch-ms instant as a UTC calendar day", () => {
     expect(utcDay(Date.parse("2026-06-15T23:30:00Z"))).toBe("2026-06-15");
     expect(utcDay(Date.parse("2026-01-01T00:00:00Z"))).toBe("2026-01-01");
+  });
+});
+
+describe("computeSessionOrigins", () => {
+  it("splits dispatch (has a dispatch outcome) from standalone, total = all", () => {
+    const sessions = [
+      session({ dispatchStatus: "merged" }),
+      session({ dispatchStatus: "pr_open" }),
+      session({ dispatchStatus: null }), // hand-started / standalone
+      session({ dispatchStatus: null }),
+      session({ dispatchStatus: null }),
+    ];
+    expect(computeSessionOrigins(sessions)).toEqual({
+      dispatch: 2,
+      standalone: 3,
+      total: 5,
+    });
+  });
+
+  it("is all-standalone when nothing was dispatched, and zeroes on empty", () => {
+    expect(computeSessionOrigins([session(), session()])).toEqual({
+      dispatch: 0,
+      standalone: 2,
+      total: 2,
+    });
+    expect(computeSessionOrigins([])).toEqual({
+      dispatch: 0,
+      standalone: 0,
+      total: 0,
+    });
+  });
+
+  it("buildReport surfaces origins on the report", () => {
+    const report = buildReport(
+      snap([session({ dispatchStatus: "merged" }), session()], [])
+    );
+    expect(report.origins).toEqual({ dispatch: 1, standalone: 1, total: 2 });
   });
 });
 

@@ -137,8 +137,9 @@ export function SelectionToolbar({
               Delete {selectedCount} session{selectedCount > 1 ? "s" : ""}?
             </DialogTitle>
             <DialogDescription>
-              This will permanently delete the selected sessions and their tmux
-              sessions. This action cannot be undone.
+              This will permanently delete the selected sessions, their
+              terminals, and any git worktrees they created (branches are kept).
+              This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
