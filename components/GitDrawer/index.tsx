@@ -63,6 +63,9 @@ interface GitDrawerProps {
   workingDirectory: string;
   projectId?: string;
   repositories?: ProjectRepository[];
+  /** Explicit repo paths to aggregate (a multi-repo workspace session's worktrees)
+   * — drives the multi-status query so it shows THOSE, not the project's repos. */
+  repoPaths?: string[];
 }
 
 export function GitDrawer({
@@ -71,6 +74,7 @@ export function GitDrawer({
   workingDirectory,
   projectId,
   repositories = [],
+  repoPaths,
 }: GitDrawerProps) {
   const queryClient = useQueryClient();
 
@@ -85,6 +89,7 @@ export function GitDrawer({
   // Multi-repo mode hooks
   const multiRepoQuery = useMultiRepoGitStatus(projectId, workingDirectory, {
     enabled: open && isMultiRepo,
+    paths: repoPaths,
   });
 
   // Unified status based on mode

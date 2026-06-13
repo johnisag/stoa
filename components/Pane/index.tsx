@@ -30,6 +30,10 @@ import {
   Separator as ResizablePanelHandle,
 } from "react-resizable-panels";
 import { GitDrawer } from "@/components/GitDrawer";
+import {
+  parseWorktreePaths,
+  worktreePathsToRepositories,
+} from "@/lib/workspace-session";
 import { ShellDrawer } from "@/components/ShellDrawer";
 import { PromptQueueModal } from "@/components/PromptQueueModal";
 import { useSnapshot } from "valtio";
@@ -164,6 +168,21 @@ export const Pane = memo(function Pane({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (currentProject as any).repositories || [];
   }, [currentProject]);
+
+  // A multi-repo "workspace" session: its working_directory holds one git worktree
+  // per picked sub-repo (paths in worktree_paths). Show THOSE in the Git panel (the
+  // session's actual edits live there), not the project's original checkouts.
+  const workspacePaths = useMemo(
+    () => parseWorktreePaths(session?.worktree_paths),
+    [session?.worktree_paths]
+  );
+  const effectiveRepositories = useMemo(
+    () =>
+      workspacePaths.length > 0
+        ? worktreePathsToRepositories(workspacePaths, session?.project_id ?? "")
+        : projectRepositories,
+    [workspacePaths, session?.project_id, projectRepositories]
+  );
 
   // Watch for file open requests
   const { request: fileOpenRequest } = useSnapshot(fileOpenStore);
@@ -573,7 +592,10 @@ export const Pane = memo(function Pane({
               <GitPanel
                 workingDirectory={session.working_directory}
                 projectId={currentProject?.id}
-                repositories={projectRepositories}
+                repositories={effectiveRepositories}
+                repoPaths={
+                  workspacePaths.length > 0 ? workspacePaths : undefined
+                }
               />
             </div>
           )}
@@ -701,7 +723,10 @@ export const Pane = memo(function Pane({
                     onOpenChange={(o) => !o && setRightDrawer(null)}
                     workingDirectory={session.working_directory}
                     projectId={currentProject?.id}
-                    repositories={projectRepositories}
+                    repositories={effectiveRepositories}
+                    repoPaths={
+                      workspacePaths.length > 0 ? workspacePaths : undefined
+                    }
                   />
                 ) : (
                   <FileExplorerDrawer
