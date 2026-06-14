@@ -812,8 +812,8 @@ function HomeContent() {
     ? (projects.find((p) => p.id === startDevServerProjectId) ?? null)
     : null;
 
-  // Open a worker session referenced from the workflows tab: attach it to the
-  // focused pane's active tab (replacing the workflows tab with the session).
+  // Open a worker session referenced from the workflows tab in a new terminal
+  // tab so the workflows tab stays open and the worker gets a proper attach.
   const handleWorkflowsOpenSession = useCallback(
     (sessionId: string) => {
       const session = sessions.find((s) => s.id === sessionId);
@@ -821,16 +821,9 @@ function HomeContent() {
         toast.error("Session not found — it may have been deleted.");
         return;
       }
-      const name =
-        session.tmux_name ||
-        sessionKey({
-          kind: "agent",
-          provider: session.agent_type,
-          id: session.id,
-        });
-      attachSession(focusedPaneId, session.id, name);
+      openSessionInNewTab(session);
     },
-    [sessions, focusedPaneId, attachSession]
+    [sessions, openSessionInNewTab]
   );
 
   // Close a fleet dialog and open a workflows tab in the focused pane.
