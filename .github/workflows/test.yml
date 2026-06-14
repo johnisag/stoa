@@ -106,8 +106,28 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      # The fast, reliable suite (everything except the real-pty integration
+      # tests) runs once — a genuine failure here fails the job immediately.
       - name: Unit + integration tests
-        run: npm test
+        run: npx vitest run --project unit
+
+      # The real-pty integration tests are serialized into their own project (see
+      # vitest.config.ts) so they never run concurrent ConPTY. A residual native
+      # crash is still possible — node-pty/ConPTY occasionally segfaults the worker
+      # on the Windows runner ("worker exited unexpectedly", no JS stack). It's
+      # flaky infra, not a real test failure, so retry the project (the tests must
+      # still PASS within the attempts — a genuinely broken pty test fails all 3).
+      - name: PTY integration tests
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            echo "pty tests attempt $attempt/3"
+            if npx vitest run --project pty; then exit 0; fi
+            echo "::warning::pty tests crashed (attempt $attempt/3) — retrying"
+            sleep 5
+          done
+          echo "::error::pty tests failed after 3 attempts"
+          exit 1
 
       - name: Production build
         run: npm run build
