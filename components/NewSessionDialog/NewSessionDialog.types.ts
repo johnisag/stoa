@@ -116,6 +116,16 @@ export const AGENT_OPTIONS: {
     label: "Hermes Agent",
     description: "Nous Research harness",
   },
+  {
+    value: "kilo",
+    label: "Kilo Code",
+    description: "Kilo Code — open-source agentic CLI",
+  },
+  {
+    value: "kimi",
+    label: "Kimi Code",
+    description: "Kimi Code — Moonshot AI's coding agent",
+  },
 ];
 
 // Props for main dialog

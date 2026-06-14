@@ -3,9 +3,9 @@
 Guidance for any AI agent (or human) working in this repo. Read before changing
 code. Keep changes surgical and match surrounding style.
 
-Stoa is a mobile-first web UI for running AI coding agents in real terminals.
-It runs **natively on Windows, macOS, and Linux** — preserving that is a hard
-requirement, not a nice-to-have.
+Stoa is a mobile-first web UI for running AI coding agents (Claude Code, Codex,
+Hermes, Kilo Code, Kimi Code) in real terminals. It runs **natively on Windows,
+macOS, and Linux** — preserving that is a hard requirement, not a nice-to-have.
 
 ## Workflow & verification gate
 
@@ -59,12 +59,17 @@ requirement, not a nice-to-have.
 1. **Discover the CLI with `<cli> --help`** — do not guess flags.
 2. Wire it in three places: `lib/providers/registry.ts` (`PROVIDER_IDS` + `PROVIDERS`),
    `lib/providers.ts` (provider object + the `providers` map), and
-   `components/NewSessionDialog/NewSessionDialog.types.ts` (`AGENT_OPTIONS`).
+   `components/NewSessionDialog/NewSessionDialog.types.ts` (`AGENT_OPTIONS`). A
+   FREE-TEXT / dynamic-model provider needs a FOURTH place too —
+   `lib/model-catalog.ts` (`FREE_TEXT_MODEL_AGENTS`).
 3. argv comes from `buildAgentArgs` — **clean tokens, no shell quoting** (it runs
    through a direct spawn). Only wire a flag you've verified.
-4. **Don't impose a static model list** if the agent's models are dynamic
-   (e.g. Hermes live-fetches `/v1/models`); leave `modelFlag` unset and let the
-   agent use its own default.
+4. **Don't impose a static model list** if the agent's models are dynamic. A
+   free-text / dynamic-model provider DOES set `modelFlag` (so its typed model is
+   passed) and additionally joins `FREE_TEXT_MODEL_AGENTS` — that makes the UI
+   show a free-text model field and drops any foreign static model so it can't
+   leak in. This is what Hermes (live-fetches `/v1/models`), Kilo Code, and Kimi
+   Code do; an empty model leaves the agent on its own configured default.
 5. Add coverage in `test/providers.test.ts` (the integrity sweep already guards
    that every id has a provider object, definition, and picker entry).
 

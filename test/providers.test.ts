@@ -18,6 +18,7 @@ import {
   backendKeyForSession,
 } from "@/lib/providers/registry";
 import { AGENT_OPTIONS } from "@/components/NewSessionDialog/NewSessionDialog.types";
+import { isFreeTextModelAgent, getModelOptions } from "@/lib/model-catalog";
 
 describe("Hermes provider wiring", () => {
   it("has the expected registry definition", () => {
@@ -123,6 +124,102 @@ describe("Claude provider wiring", () => {
     expect(
       getProvider("hermes").buildFlags({ model: "anthropic/x", sessionId: id })
     ).toEqual([`--resume ${id}`, "-m anthropic/x"]);
+  });
+});
+
+describe("Kilo provider wiring", () => {
+  it("has the expected registry definition (free-text model, no auto-approve on the TUI)", () => {
+    const def = getProviderDefinition("kilo");
+    expect(def.cli).toBe("kilo");
+    // The bare TUI has no auto-approve flag (`--auto` is a `kilo run` flag).
+    expect(def.autoApproveFlag).toBeUndefined();
+    expect(def.resumeFlag).toBe("--session");
+    expect(def.supportsResume).toBe(false); // fresh-launch-only (id-capture is a follow-up)
+    expect(def.supportsFork).toBe(false);
+    expect(def.modelFlag).toBe("--model"); // free-text provider/model via --model
+    // Free-text agent → no static model catalog leaks in (drops foreign models).
+    expect(isFreeTextModelAgent("kilo")).toBe(true);
+    expect(getModelOptions("kilo")).toEqual([]);
+  });
+
+  it("has a provider object whose buildFlags emits nothing without options (no auto-approve)", () => {
+    const p = getProvider("kilo");
+    expect(p.command).toBe("kilo");
+    expect(p.supportsResume).toBe(false); // lockstep with the registry definition
+    // No autoApproveFlag, so even skipPermissions/autoApprove emit nothing.
+    expect(p.buildFlags({})).toEqual([]);
+    expect(p.buildFlags({ autoApprove: true })).toEqual([]);
+    expect(p.buildFlags({ skipPermissions: true })).toEqual([]);
+  });
+
+  // The picker must work on BOTH backends — the pty path (buildAgentArgs) and the
+  // tmux path (buildFlags) have to emit the free-text model identically.
+  it("emits the free-text model on a fresh launch on BOTH the pty and tmux paths", () => {
+    const { binary, args } = buildAgentArgs("kilo", {
+      model: "anthropic/claude-opus-4.8",
+    });
+    expect(binary).toBe("kilo");
+    expect(args).toEqual(["--model", "anthropic/claude-opus-4.8"]);
+    expect(
+      getProvider("kilo").buildFlags({ model: "anthropic/claude-opus-4.8" })
+    ).toEqual(["--model anthropic/claude-opus-4.8"]);
+  });
+
+  it("is fresh-launch-only for now (resume/fork off until session-id capture is wired)", () => {
+    expect(getProviderDefinition("kilo").supportsResume).toBe(false);
+    expect(getProviderDefinition("kilo").supportsFork).toBe(false);
+  });
+
+  it("is a valid agent type and appears in the New Session picker", () => {
+    expect(isValidProviderId("kilo")).toBe(true);
+    expect(isValidAgentType("kilo")).toBe(true);
+    expect(AGENT_OPTIONS.some((o) => o.value === "kilo")).toBe(true);
+  });
+});
+
+describe("Kimi provider wiring", () => {
+  it("has the expected registry definition (free-text model, --yolo auto-approve)", () => {
+    const def = getProviderDefinition("kimi");
+    expect(def.cli).toBe("kimi");
+    expect(def.autoApproveFlag).toBe("--yolo");
+    expect(def.resumeFlag).toBe("--session");
+    expect(def.supportsResume).toBe(false); // fresh-launch-only (id-capture is a follow-up)
+    expect(def.supportsFork).toBe(false); // no fork on the bare TUI
+    expect(def.modelFlag).toBe("-m"); // free-text model alias via -m
+    expect(isFreeTextModelAgent("kimi")).toBe(true);
+    expect(getModelOptions("kimi")).toEqual([]);
+  });
+
+  it("has a provider object whose buildFlags emits --yolo only on auto-approve", () => {
+    const p = getProvider("kimi");
+    expect(p.command).toBe("kimi");
+    expect(p.supportsResume).toBe(false); // lockstep with the registry definition
+    expect(p.buildFlags({})).toEqual([]);
+    expect(p.buildFlags({ autoApprove: true })).toEqual(["--yolo"]);
+    expect(p.buildFlags({ skipPermissions: true })).toEqual(["--yolo"]);
+  });
+
+  it("emits --yolo + the free-text model on a fresh launch on BOTH the pty and tmux paths", () => {
+    const { binary, args } = buildAgentArgs("kimi", {
+      autoApprove: true,
+      model: "kimi-k2",
+      initialPrompt: "hi", // still ignored (initialPromptFlag unset)
+    });
+    expect(binary).toBe("kimi");
+    expect(args).toEqual(["--yolo", "-m", "kimi-k2"]);
+    expect(
+      getProvider("kimi").buildFlags({ autoApprove: true, model: "kimi-k2" })
+    ).toEqual(["--yolo", "-m kimi-k2"]);
+  });
+
+  it("is fresh-launch-only for now (resume off until session-id capture is wired)", () => {
+    expect(getProviderDefinition("kimi").supportsResume).toBe(false);
+  });
+
+  it("is a valid agent type and appears in the New Session picker", () => {
+    expect(isValidProviderId("kimi")).toBe(true);
+    expect(isValidAgentType("kimi")).toBe(true);
+    expect(AGENT_OPTIONS.some((o) => o.value === "kimi")).toBe(true);
   });
 });
 
@@ -297,6 +394,31 @@ describe("buildFlags shell-quotes value tokens (tmux command-injection guard)", 
     expect(getProvider("codex").buildFlags({ model: EVIL })).toEqual([
       `--model ${shellQuoteArg(EVIL)}`,
     ]);
+  });
+
+  it("quotes a metacharacter-bearing free-text (kilo + kimi) model", () => {
+    // Both take a FREE-TEXT model from an operator-set default — the most acute
+    // injection vector. Each must route the value through shellQuoteArg.
+    expect(getProvider("kilo").buildFlags({ model: EVIL })).toEqual([
+      `--model ${shellQuoteArg(EVIL)}`,
+    ]);
+    expect(getProvider("kilo").buildFlags({ model: EVIL })[0]).toBe(
+      '--model "evil; touch /tmp/pwned"'
+    );
+    expect(getProvider("kimi").buildFlags({ model: EVIL })).toEqual([
+      `-m ${shellQuoteArg(EVIL)}`,
+    ]);
+    expect(getProvider("kimi").buildFlags({ model: EVIL })[0]).toBe(
+      '-m "evil; touch /tmp/pwned"'
+    );
+  });
+
+  it("does NOT quote kilo/kimi on the pty/argv path — buildAgentArgs passes raw tokens", () => {
+    expect(buildAgentArgs("kilo", { model: EVIL }).args).toEqual([
+      "--model",
+      EVIL,
+    ]);
+    expect(buildAgentArgs("kimi", { model: EVIL }).args).toEqual(["-m", EVIL]);
   });
 
   it("quotes a metacharacter-bearing session id on the tmux resume path", () => {

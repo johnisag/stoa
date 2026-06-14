@@ -313,6 +313,143 @@ export const hermesProvider: AgentProvider = {
 };
 
 /**
+ * Kilo Code (open-source agentic CLI; @kilocode/cli, an OpenCode fork) — a
+ * Claude-Code-style TUI agent that self-authenticates and runs natively on
+ * Windows/macOS/Linux. Spawned via the pty/tmux backends like any other CLI.
+ * Free-text "provider/model" models (no static catalog); see the registry note.
+ * Mirrors the Hermes shape: resume re-asserts the (free-text) model and the
+ * model token is shell-quoted on the tmux path. No auto-approve on the bare TUI
+ * (that flag lives on `kilo run`), and no positional prompt (the positional is a
+ * directory) — so neither branch fires here.
+ */
+export const kiloProvider: AgentProvider = {
+  id: "kilo",
+  name: "Kilo Code",
+  description: "open-source agentic CLI",
+  command: "kilo",
+  configDir: "~/.config/kilo",
+
+  // Fresh-launch-only for now (lockstep with the registry def): kilo has
+  // --session/--fork, but Stoa doesn't yet capture its TUI session id.
+  supportsResume: false,
+  supportsFork: false,
+
+  buildFlags(options: BuildFlagsOptions): string[] {
+    const def = getProviderDefinition("kilo");
+    const flags: string[] = [];
+    if (
+      (options.skipPermissions || options.autoApprove) &&
+      def.autoApproveFlag
+    ) {
+      flags.push(def.autoApproveFlag);
+    }
+    if (options.sessionId && def.resumeFlag) {
+      flags.push(`${def.resumeFlag} ${shellQuoteArg(options.sessionId)}`);
+    }
+    if (shouldPassModel(def, options)) {
+      // Shell-quoted — Kilo models are FREE-TEXT, so an unquoted value would be
+      // shell injection into the tmux launch on the POSIX backend.
+      flags.push(`${def.modelFlag} ${shellQuoteArg(options.model!)}`);
+    }
+    if (options.initialPrompt?.trim() && def.initialPromptFlag !== undefined) {
+      const prompt = options.initialPrompt.trim().replace(/'/g, "'\\''");
+      flags.push(
+        def.initialPromptFlag === ""
+          ? `'${prompt}'`
+          : `${def.initialPromptFlag} '${prompt}'`
+      );
+    }
+    return flags;
+  },
+
+  // Shared TUI conventions; tune once we observe Kilo busy/waiting output.
+  waitingPatterns: [
+    /\[Y\/n\]/i,
+    /\[y\/N\]/i,
+    /Allow\?/i,
+    /Approve\?/i,
+    /Continue\?/i,
+    /Press Enter/i,
+    /Do you want to/i,
+  ],
+  runningPatterns: [SPINNER_CHARS, /esc to interrupt/i, /tokens/i],
+  idlePatterns: [],
+
+  // Ready/trust cues are TODO from a live `kilo` spawn; until filled, the wait
+  // loop falls back to sending after the timeout (works, just not instant).
+  readyPatterns: [],
+  trustPromptPatterns: [],
+};
+
+/**
+ * Kimi Code (Moonshot AI) — a terminal coding agent used exactly like Claude
+ * Code. Binary `kimi` (at ~/.kimi-code/bin), self-authenticates via `kimi login`
+ * (config under ~/.kimi-code), and runs natively on all three OSes. Spawned via
+ * the pty/tmux backends like any other CLI. Free-text/config-defined model (no
+ * static catalog; the default comes from config.toml). Mirrors the Hermes shape:
+ * --yolo auto-approve, resume re-asserts the (free-text) model, and the model
+ * token is shell-quoted on the tmux path.
+ */
+export const kimiProvider: AgentProvider = {
+  id: "kimi",
+  name: "Kimi Code",
+  description: "Moonshot AI's coding agent",
+  command: "kimi",
+  configDir: "~/.kimi-code",
+
+  // Fresh-launch-only for now (lockstep with the registry def): kimi has
+  // --session, but Stoa doesn't yet capture its TUI session id.
+  supportsResume: false,
+  supportsFork: false,
+
+  buildFlags(options: BuildFlagsOptions): string[] {
+    const def = getProviderDefinition("kimi");
+    const flags: string[] = [];
+    if (
+      (options.skipPermissions || options.autoApprove) &&
+      def.autoApproveFlag
+    ) {
+      flags.push(def.autoApproveFlag);
+    }
+    if (options.sessionId && def.resumeFlag) {
+      flags.push(`${def.resumeFlag} ${shellQuoteArg(options.sessionId)}`);
+    }
+    if (shouldPassModel(def, options)) {
+      // Shell-quoted — Kimi models are FREE-TEXT, so an unquoted value would be
+      // shell injection into the tmux launch on the POSIX backend.
+      flags.push(`${def.modelFlag} ${shellQuoteArg(options.model!)}`);
+    }
+    if (options.initialPrompt?.trim() && def.initialPromptFlag !== undefined) {
+      const prompt = options.initialPrompt.trim().replace(/'/g, "'\\''");
+      flags.push(
+        def.initialPromptFlag === ""
+          ? `'${prompt}'`
+          : `${def.initialPromptFlag} '${prompt}'`
+      );
+    }
+    return flags;
+  },
+
+  // Shared TUI conventions; tune once we observe Kimi busy/waiting output.
+  waitingPatterns: [
+    /\[Y\/n\]/i,
+    /\[y\/N\]/i,
+    /Allow\?/i,
+    /Approve\?/i,
+    /Continue\?/i,
+    /Press Enter/i,
+    /Do you want to/i,
+  ],
+  runningPatterns: [SPINNER_CHARS, /esc to interrupt/i, /tokens/i],
+  idlePatterns: [],
+
+  // Ready/trust cues are TODO from a live `kimi` spawn; --yolo means no trust
+  // prompt to accept. Falls back to sending after the timeout until filled.
+  readyPatterns: [],
+  trustPromptPatterns: [],
+};
+
+/**
  * Shell Provider
  * Plain terminal without any AI CLI
  */
@@ -342,6 +479,8 @@ export const providers: Record<AgentType, AgentProvider> = {
   claude: claudeProvider,
   codex: codexProvider,
   hermes: hermesProvider,
+  kilo: kiloProvider,
+  kimi: kimiProvider,
   shell: shellProvider,
 };
 
