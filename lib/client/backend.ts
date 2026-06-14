@@ -19,11 +19,14 @@ export async function getActiveBackend(): Promise<"pty" | "tmux"> {
   try {
     const res = await fetch("/api/backend");
     const data = await res.json();
+    // Only cache on a successful probe; a transient failure must not lock the
+    // client to the fallback for the page lifetime.
     cached = data.backend === "pty" ? "pty" : "tmux";
+    return cached;
   } catch {
-    cached = "tmux";
+    // One-shot fallback — do NOT write `cached`, so the next call re-probes.
+    return "tmux";
   }
-  return cached;
 }
 
 export interface SessionSpawn {

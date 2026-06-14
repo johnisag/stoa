@@ -15,6 +15,25 @@ interface ManagedSession {
 export class ClaudeProcessManager {
   private sessions: Map<string, ManagedSession> = new Map();
 
+  // Wire the "event" and "parse_error" handlers onto a parser. Used by both
+  // registerClient (initial parser) and sendPrompt (reset parser per turn) so
+  // parse-error broadcasting survives every conversation turn.
+  private wireParser(sessionId: string, parser: StreamParser): void {
+    parser.on("event", (event: ClientEvent) => {
+      this.broadcastToSession(sessionId, event);
+      this.handleEvent(sessionId, event);
+    });
+
+    parser.on("parse_error", (error) => {
+      this.broadcastToSession(sessionId, {
+        type: "error",
+        sessionId,
+        timestamp: new Date().toISOString(),
+        data: { error: `Parse error: ${error.error}` },
+      });
+    });
+  }
+
   // Register a WebSocket client for a session
   registerClient(sessionId: string, ws: WebSocket): void {
     let session = this.sessions.get(sessionId);
@@ -28,19 +47,7 @@ export class ClaudeProcessManager {
       };
 
       // Set up parser event handlers
-      session.parser.on("event", (event: ClientEvent) => {
-        this.broadcastToSession(sessionId, event);
-        this.handleEvent(sessionId, event);
-      });
-
-      session.parser.on("parse_error", (error) => {
-        this.broadcastToSession(sessionId, {
-          type: "error",
-          sessionId,
-          timestamp: new Date().toISOString(),
-          data: { error: `Parse error: ${error.error}` },
-        });
-      });
+      this.wireParser(sessionId, session.parser);
 
       this.sessions.set(sessionId, session);
     }
@@ -134,17 +141,11 @@ export class ClaudeProcessManager {
     console.log(`Spawning Claude for session ${sessionId}:`, args.join(" "));
     console.log(`CWD: ${cwd}`);
 
-    // Reset parser for new conversation turn
+    // Reset parser for new conversation turn. Re-wire BOTH "event" and
+    // "parse_error" handlers (registerClient attaches both on the initial
+    // parser) so parse errors keep broadcasting on subsequent turns.
     session.parser = new StreamParser(sessionId);
-    session.parser.on("event", (event: ClientEvent) => {
-      console.log(
-        `Parser event [${sessionId}]:`,
-        event.type,
-        JSON.stringify(event.data).substring(0, 100)
-      );
-      this.broadcastToSession(sessionId, event);
-      this.handleEvent(sessionId, event);
-    });
+    this.wireParser(sessionId, session.parser);
 
     // Find claude binary path (resolves claude.cmd on Windows)
     const claudePath = resolveBinary("claude") || "claude";

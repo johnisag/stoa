@@ -28,6 +28,23 @@ interface DevServerCardProps {
   onViewLogs: (id: string) => void;
 }
 
+/**
+ * Safely parse the JSON-encoded `ports` column into a numeric array.
+ * The value comes from the DB and can be malformed ("null", partial JSON,
+ * a non-array), so we must never let it throw during render. Returns only
+ * finite numbers; anything unexpected yields [].
+ */
+export function parsePorts(raw: string | null | undefined): number[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((p): p is number => typeof p === "number");
+  } catch {
+    return [];
+  }
+}
+
 const statusConfig: Record<
   DevServerStatus,
   { color: string; bgColor: string; label: string }
@@ -64,7 +81,7 @@ export function DevServerCard({
   const { copied, copy } = useCopyToClipboard();
 
   const status = statusConfig[server.status] || statusConfig.stopped;
-  const ports: number[] = JSON.parse(server.ports || "[]");
+  const ports = parsePorts(server.ports);
   const primaryPort = ports[0];
   const isRunning = server.status === "running";
   const isStopped = server.status === "stopped";

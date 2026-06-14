@@ -180,6 +180,48 @@ export async function getServersByProject(
   return servers;
 }
 
+// Build the environment for a spawned dev server.
+//
+// POSIX: a deliberately MINIMAL env (PATH/HOME/USER/SHELL/TERM/LANG) so the
+// child (Next.js/Vite/etc) loads its .env.local without interference from the
+// parent process env. This branch must stay byte-identical to the original.
+//
+// Windows: `shell: true` launches cmd.exe, which needs SystemRoot/ComSpec just
+// to start, PATHEXT to resolve `.cmd` shims (npm/npx/next), and USERPROFILE/
+// APPDATA/TEMP/TMP/windir for normal tooling. USER/SHELL are POSIX concepts and
+// are undefined on Windows. So we spread the parent env and override only the
+// bits we control (HOME + PORT), keeping the cmd.exe startup contract intact.
+export function buildServerEnv(opts: {
+  windows: boolean;
+  home: string;
+  parentEnv: NodeJS.ProcessEnv;
+  port?: number;
+}): NodeJS.ProcessEnv {
+  const { windows, home, parentEnv, port } = opts;
+
+  const env: Record<string, string | undefined> = windows
+    ? {
+        // Full env so cmd.exe can start and resolve .cmd shims.
+        ...parentEnv,
+        HOME: home,
+      }
+    : {
+        // Minimal env — keep byte-identical to the historical POSIX path.
+        PATH: parentEnv.PATH,
+        HOME: home,
+        USER: parentEnv.USER,
+        SHELL: parentEnv.SHELL,
+        TERM: parentEnv.TERM || "xterm-256color",
+        LANG: parentEnv.LANG || "en_US.UTF-8",
+      };
+
+  if (port !== undefined) {
+    env.PORT = String(port);
+  }
+
+  return env as NodeJS.ProcessEnv;
+}
+
 // Start a Node.js server
 async function spawnNodeServer(
   id: string,
@@ -194,27 +236,18 @@ async function spawnNodeServer(
   // Expand ~ to absolute path - Node.js spawn doesn't handle tilde
   const cwd = expandHome(workingDirectory);
 
-  // Build minimal env - only essentials for shell to work
-  // This lets Next.js/Vite/etc load .env.local without interference from parent process env
-  const env: Record<string, string | undefined> = {
-    PATH: process.env.PATH,
-    HOME: homeDir(),
-    USER: process.env.USER,
-    SHELL: process.env.SHELL,
-    TERM: process.env.TERM || "xterm-256color",
-    LANG: process.env.LANG || "en_US.UTF-8",
-  };
-
-  // Add port if specified
-  if (ports.length > 0) {
-    env.PORT = String(ports[0]);
-  }
+  const env = buildServerEnv({
+    windows: isWindows,
+    home: homeDir(),
+    parentEnv: process.env,
+    port: ports.length > 0 ? ports[0] : undefined,
+  });
 
   // Run the command directly with cwd set via the spawn option; no `cd` prefix
   // so we avoid cmd/PowerShell `cd &&` quoting issues on Windows.
   const child = spawn(command, [], {
     cwd,
-    env: env as NodeJS.ProcessEnv,
+    env,
     shell: true,
     detached: true,
     stdio: ["ignore", logFd, logFd],

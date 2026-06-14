@@ -48,11 +48,15 @@ export interface FormattedMatch {
   lineText: string;
 }
 
-export function searchCode(
-  workingDir: string,
+/**
+ * Build the ripgrep argv from a query + options. Extracted as a pure function
+ * so the flag handling (case sensitivity, file globbing) can be unit-tested
+ * without spawning a process.
+ */
+export function buildSearchArgs(
   query: string,
   options: SearchOptions = {}
-): SearchMatch[] {
+): string[] {
   const {
     maxResults = 100,
     contextLines = 2,
@@ -60,18 +64,44 @@ export function searchCode(
     caseSensitive = false,
   } = options;
 
+  const args = [
+    "--json",
+    `--max-count=${Math.ceil(maxResults / 10)}`,
+    `--context=${contextLines}`,
+  ];
+
+  // Honor case sensitivity: only force case-insensitive matching when the
+  // caller didn't ask for a case-sensitive search.
+  if (!caseSensitive) {
+    args.push("--ignore-case");
+  }
+
+  // Honor a file-scoped request: a non-default pattern restricts the search.
+  if (filePattern && filePattern !== "*") {
+    args.push(`--glob=${filePattern}`);
+  }
+
+  args.push(
+    "--", // option terminator: a query starting with "-" must not be parsed as a flag
+    query,
+    "." // CRITICAL: Tell ripgrep to search current directory explicitly
+  );
+
+  return args;
+}
+
+export function searchCode(
+  workingDir: string,
+  query: string,
+  options: SearchOptions = {}
+): SearchMatch[] {
+  const { maxResults = 100 } = options;
+
   try {
     // Use spawn instead of execSync for better control
     const { spawnSync } = require("child_process");
 
-    const args = [
-      "--json",
-      `--max-count=${Math.ceil(maxResults / 10)}`,
-      `--context=${contextLines}`,
-      "--ignore-case",
-      query,
-      ".", // CRITICAL: Tell ripgrep to search current directory explicitly
-    ];
+    const args = buildSearchArgs(query, options);
 
     const rgPath = getRgPath();
     const result = spawnSync(rgPath, args, {

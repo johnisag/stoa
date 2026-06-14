@@ -51,6 +51,15 @@ const CodeSearchResults = dynamic(
   }
 );
 
+// SQLite's datetime("now") yields a naive UTC string ("YYYY-MM-DD HH:MM:SS")
+// with no zone. `new Date()` would parse the space-separated, offset-less form
+// as LOCAL time, skewing "Xm ago" by the viewer's TZ offset. Mirror
+// SessionCard.getTimeAgo: treat a zone-less value as UTC by appending "Z".
+export function parseDbTimestamp(dateStr: string): Date {
+  const hasZone = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(dateStr);
+  return new Date(hasZone ? dateStr : `${dateStr.replace(" ", "T")}Z`);
+}
+
 interface QuickSwitcherProps {
   sessions: Session[];
   open: boolean;
@@ -275,7 +284,7 @@ export function QuickSwitcher({
   const formatTime = (dateStr: string | null) => {
     if (!dateStr) return "";
     const now = new Date();
-    const date = new Date(dateStr);
+    const date = parseDbTimestamp(dateStr);
     const diff = now.getTime() - date.getTime();
     const mins = Math.floor(diff / 60000);
     if (mins < 1) return "just now";

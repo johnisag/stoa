@@ -21,6 +21,21 @@ interface PRInfo {
 }
 
 /**
+ * Parse the PR number + URL from `gh pr create` stdout. `gh pr create` prints
+ * the PR URL on success (it does NOT support `--json`), so we extract it the
+ * same way lib/pr.ts createPR does. Host-agnostic: matches any https URL ending
+ * in `/pull/<digits>` so GitHub Enterprise hosts (e.g. https://ghe.corp/...)
+ * parse too. Returns null when no URL is present.
+ */
+export function parsePRCreateOutput(
+  stdout: string
+): { number: number; url: string } | null {
+  const match = stdout.match(/https?:\/\/\S+?\/pull\/(\d+)/);
+  if (!match) return null;
+  return { url: match[0], number: parseInt(match[1], 10) };
+}
+
+/**
  * Check if gh CLI is installed and authenticated
  */
 async function checkGhCli(): Promise<boolean> {
@@ -85,6 +100,9 @@ async function createPR(
     // Branch might already be pushed, continue
   }
 
+  // `gh pr create` prints the PR URL on success — it does NOT support `--json`
+  // (passing it makes gh exit non-zero with "unknown flag: --json"). Parse the
+  // URL from stdout, mirroring lib/pr.ts createPR.
   const { stdout } = await execFileAsync(
     "gh",
     [
@@ -96,12 +114,26 @@ async function createPR(
       baseBranch,
       "--body",
       body ?? "",
-      "--json",
-      "number,url,state,title",
     ],
     { cwd: projectPath, timeout: 30000, windowsHide: true }
   );
-  return JSON.parse(stdout);
+
+  const created = parsePRCreateOutput(stdout);
+  if (!created) {
+    throw new Error("Failed to parse PR URL from output");
+  }
+
+  // Prefer the structured fields gh exposes via `pr list --json`; fall back to
+  // the freshly-created URL/number if the list query hasn't caught up yet.
+  const listed = await getPRForBranch(projectPath, branchName);
+  return (
+    listed ?? {
+      number: created.number,
+      url: created.url,
+      state: "open",
+      title,
+    }
+  );
 }
 
 // GET /api/sessions/[id]/pr - Get PR info for session

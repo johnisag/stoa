@@ -25,11 +25,36 @@ import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
 
 type AnyGitFile = GitFile | MultiRepoGitFile;
 
+/**
+ * Whether `file` is the currently-selected row. In multi-repo mode a bare path
+ * match highlights same-named files across every repo, so when the file carries
+ * a repoPath we also require the selected file's repoPath to match (mirroring
+ * the repo-qualified fileKey used for the React key). Pure for unit testing.
+ */
+export function isFileSelected(
+  file: AnyGitFile,
+  selectedPath: string | undefined,
+  selectedRepoPath: string | undefined
+): boolean {
+  if (selectedPath === undefined) return false;
+  if (file.path !== selectedPath) return false;
+  // Single-repo files (no repoPath) match on path alone. For multi-repo files,
+  // require the repo to match too — but only when the caller supplied one, so a
+  // legacy caller that passes just selectedPath still highlights something.
+  if ("repoPath" in file && selectedRepoPath !== undefined) {
+    return file.repoPath === selectedRepoPath;
+  }
+  return true;
+}
+
 interface FileChangesProps {
   files: AnyGitFile[];
   title: string;
   emptyMessage: string;
   selectedPath?: string;
+  /** Repo of the selected file — disambiguates same-named files across repos
+   * in multi-repo mode (without it, every "src/index.ts" highlights together). */
+  selectedRepoPath?: string;
   onFileClick: (file: AnyGitFile) => void;
   onStage?: (file: AnyGitFile) => void;
   onUnstage?: (file: AnyGitFile) => void;
@@ -47,6 +72,7 @@ export function FileChanges({
   title,
   emptyMessage,
   selectedPath,
+  selectedRepoPath,
   onFileClick,
   onStage,
   onUnstage,
@@ -132,7 +158,11 @@ export function FileChanges({
                   <FileItem
                     key={fileKey}
                     file={file}
-                    isSelected={file.path === selectedPath}
+                    isSelected={isFileSelected(
+                      file,
+                      selectedPath,
+                      selectedRepoPath
+                    )}
                     onClick={() => onFileClick(file)}
                     onStage={onStage ? () => onStage(file) : undefined}
                     onUnstage={onUnstage ? () => onUnstage(file) : undefined}

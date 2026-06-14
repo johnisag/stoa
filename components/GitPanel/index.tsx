@@ -36,7 +36,12 @@ import {
   gitKeys,
 } from "@/data/git/queries";
 import type { GitStatus, GitFile } from "@/lib/git-status";
-import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
+import { stageAllAcrossRepos } from "@/lib/multi-repo-stage";
+import { toast } from "sonner";
+import type {
+  MultiRepoGitFile,
+  MultiRepoGitStatus,
+} from "@/lib/multi-repo-git";
 import type { ProjectRepository } from "@/lib/db";
 import { cn } from "@/lib/utils";
 import {
@@ -45,6 +50,46 @@ import {
   type ReviewDecision,
   type CheckSummary,
 } from "@/lib/pr-badge";
+
+/**
+ * Where a commit should land in multi-repo mode. The workspace root is a
+ * non-git directory, so committing against it 400s — we target the first repo
+ * that actually has staged changes (mirroring GitDrawer), falling back to the
+ * primary repo path/branch when nothing is staged yet. Pure so it's unit-tested.
+ */
+export function multiRepoCommitTarget(
+  data: MultiRepoGitStatus | null | undefined,
+  fallbackRepoPath: string,
+  fallbackBranch: string
+): {
+  path: string;
+  name?: string;
+  branch: string;
+  multipleReposStaged: boolean;
+} {
+  const reposWithStagedChanges = data
+    ? data.repositories.filter((repo) =>
+        data.staged.some((f) => f.repoId === repo.id)
+      )
+    : [];
+
+  if (reposWithStagedChanges.length > 0) {
+    const target = reposWithStagedChanges[0];
+    return {
+      path: target.path,
+      name: target.name,
+      branch: target.branch,
+      multipleReposStaged: reposWithStagedChanges.length > 1,
+    };
+  }
+
+  return {
+    path: fallbackRepoPath,
+    name: undefined,
+    branch: fallbackBranch,
+    multipleReposStaged: false,
+  };
+}
 
 interface GitPanelProps {
   workingDirectory: string;
@@ -141,6 +186,21 @@ export function GitPanel({
   const createPRMutation = useCreatePR(primaryRepoPath);
   const stageMutation = useStageFiles(primaryRepoPath);
   const unstageMutation = useUnstageFiles(primaryRepoPath);
+
+  // In multi-repo mode the workspace root isn't a git repo, so the commit must
+  // target the repo that holds the staged changes (the worktree root 400s).
+  const commitTarget = isMultiRepo
+    ? multiRepoCommitTarget(
+        multiRepoQuery.data,
+        primaryRepoPath,
+        status?.branch ?? ""
+      )
+    : {
+        path: workingDirectory,
+        name: undefined,
+        branch: "",
+        multipleReposStaged: false,
+      };
 
   // Selected file for diff view
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
@@ -263,11 +323,47 @@ export function GitPanel({
     }
   };
 
+  // Stage/unstage every change. Single-repo mode hits the mutation bound to the
+  // one repo. Multi-repo mode must fan out per repo (with explicit file lists
+  // grouped by repoPath via the shared helper) — a single mutate(undefined)
+  // would only touch the primary repo — then invalidate gitKeys.all so the
+  // multiStatus query refetches.
+  const stageAllMultiRepo = async (
+    files: MultiRepoGitFile[],
+    endpoint: "stage" | "unstage"
+  ) => {
+    try {
+      await stageAllAcrossRepos(files, endpoint);
+    } catch (e) {
+      // stageAllAcrossRepos throws an aggregated error if any per-repo POST
+      // failed; surface it (consuming the rejection here so the void callers
+      // don't produce an unhandled rejection). The finally still refetches, so
+      // the list re-shows the true post-failure state.
+      toast.error(
+        e instanceof Error ? e.message : `Failed to ${endpoint} all repos`
+      );
+    } finally {
+      queryClient.invalidateQueries({ queryKey: gitKeys.all });
+    }
+  };
+
   const handleStageAll = () => {
+    if (isMultiRepo) {
+      const files = [
+        ...(multiRepoQuery.data?.unstaged ?? []),
+        ...(multiRepoQuery.data?.untracked ?? []),
+      ];
+      void stageAllMultiRepo(files, "stage");
+      return;
+    }
     stageMutation.mutate(undefined);
   };
 
   const handleUnstageAll = () => {
+    if (isMultiRepo) {
+      void stageAllMultiRepo(multiRepoQuery.data?.staged ?? [], "unstage");
+      return;
+    }
     unstageMutation.mutate(undefined);
   };
 
@@ -355,6 +451,12 @@ export function GitPanel({
         refreshing={isRefetching}
         showPRModal={showPRModal}
         workingDirectory={workingDirectory}
+        commitDirectory={isMultiRepo ? commitTarget.path : workingDirectory}
+        commitBranch={isMultiRepo ? commitTarget.branch : status.branch}
+        commitRepoName={isMultiRepo ? commitTarget.name : undefined}
+        multipleReposStaged={
+          isMultiRepo ? commitTarget.multipleReposStaged : false
+        }
         activeTab={activeTab}
         existingPR={existingPR}
         creatingPR={createPRMutation.isPending}
@@ -368,12 +470,9 @@ export function GitPanel({
         onDiscard={handleDiscard}
         onBack={() => setSelectedFile(null)}
         onCommit={() => {
-          queryClient.invalidateQueries({
-            queryKey: gitKeys.status(workingDirectory),
-          });
-          queryClient.invalidateQueries({
-            queryKey: gitKeys.pr(workingDirectory),
-          });
+          // multi-repo reads gitKeys.multiStatus(...); invalidate gitKeys.all so
+          // the changes list AND the PR badge refresh after a commit.
+          queryClient.invalidateQueries({ queryKey: gitKeys.all });
         }}
         onShowPRModal={() => setShowPRModal(true)}
         onClosePRModal={() => setShowPRModal(false)}
@@ -450,6 +549,7 @@ export function GitPanel({
                     title="Staged Changes"
                     emptyMessage="No staged changes"
                     selectedPath={selectedFile?.file.path}
+                    selectedRepoPath={selectedFile?.repoPath}
                     onFileClick={handleFileClick}
                     onUnstage={handleUnstage}
                     onUnstageAll={handleUnstageAll}
@@ -464,6 +564,7 @@ export function GitPanel({
                     title="Changes"
                     emptyMessage="No changes"
                     selectedPath={selectedFile?.file.path}
+                    selectedRepoPath={selectedFile?.repoPath}
                     onFileClick={handleFileClick}
                     onStage={handleStage}
                     onStageAll={handleStageAll}
@@ -479,6 +580,7 @@ export function GitPanel({
                     title="Untracked Files"
                     emptyMessage="No untracked files"
                     selectedPath={selectedFile?.file.path}
+                    selectedRepoPath={selectedFile?.repoPath}
                     onFileClick={handleFileClick}
                     onStage={handleStage}
                     onDiscard={handleDiscard}
@@ -491,16 +593,19 @@ export function GitPanel({
 
           {/* Commit form */}
           <CommitForm
-            workingDirectory={workingDirectory}
+            workingDirectory={
+              isMultiRepo ? commitTarget.path : workingDirectory
+            }
             stagedCount={status.staged.length}
-            branch={status.branch}
+            branch={isMultiRepo ? commitTarget.branch : status.branch}
+            repoName={isMultiRepo ? commitTarget.name : undefined}
+            multipleReposWarning={
+              isMultiRepo ? commitTarget.multipleReposStaged : undefined
+            }
             onCommit={() => {
-              queryClient.invalidateQueries({
-                queryKey: gitKeys.status(workingDirectory),
-              });
-              queryClient.invalidateQueries({
-                queryKey: gitKeys.pr(workingDirectory),
-              });
+              // multi-repo reads gitKeys.multiStatus(...); invalidate gitKeys.all
+              // so the changes list AND the PR badge refresh after a commit.
+              queryClient.invalidateQueries({ queryKey: gitKeys.all });
             }}
           />
         </div>
@@ -584,6 +689,11 @@ interface MobileGitPanelProps {
   refreshing: boolean;
   showPRModal: boolean;
   workingDirectory: string;
+  /** Commit target — equals workingDirectory in single-repo, else the staged repo. */
+  commitDirectory: string;
+  commitBranch: string;
+  commitRepoName?: string;
+  multipleReposStaged: boolean;
   activeTab: GitTab;
   existingPR: {
     number: number;
@@ -618,6 +728,10 @@ function MobileGitPanel({
   refreshing,
   showPRModal,
   workingDirectory,
+  commitDirectory,
+  commitBranch,
+  commitRepoName,
+  multipleReposStaged,
   activeTab,
   existingPR,
   creatingPR,
@@ -780,9 +894,11 @@ function MobileGitPanel({
 
       {/* Commit form */}
       <CommitForm
-        workingDirectory={workingDirectory}
+        workingDirectory={commitDirectory}
         stagedCount={status.staged.length}
-        branch={status.branch}
+        branch={commitBranch}
+        repoName={commitRepoName}
+        multipleReposWarning={multipleReposStaged}
         onCommit={onCommit}
       />
 

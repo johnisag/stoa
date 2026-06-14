@@ -19,12 +19,47 @@ interface DisplayMessage {
   content: string;
   timestamp: string;
   isStreaming?: boolean;
-  toolCalls?: Array<{
-    name: string;
-    input: Record<string, unknown>;
-    output?: string;
-    status: "pending" | "running" | "completed" | "error";
-  }>;
+  toolCalls?: ToolCall[];
+}
+
+type ToolCall = {
+  name: string;
+  input: Record<string, unknown>;
+  output?: string;
+  status: "pending" | "running" | "completed" | "error";
+};
+
+// Finalize a single tool call on tool_end. The wire protocol carries no
+// tool-use id, so we correlate by name — but only the FIRST still-running
+// entry with that name, so two concurrent same-named calls don't both
+// collapse onto the same output.
+export function applyToolEnd(
+  calls: ToolCall[] | undefined,
+  toolName: string,
+  output: string,
+  status: string
+): ToolCall[] {
+  const list = calls ?? [];
+  const idx = list.findIndex(
+    (tc) => tc.name === toolName && tc.status === "running"
+  );
+  if (idx === -1) return list;
+  // The wire status from a successful tool is the literal "success" (or
+  // sometimes "completed"); coerce any non-error status to the display
+  // union's "completed" rather than blindly casting an unknown string —
+  // an off-union value makes ToolCallDisplay's status map return undefined
+  // and crash on render.
+  const nextStatus: "completed" | "error" =
+    status === "error" ? "error" : "completed";
+  return list.map((tc, i) =>
+    i === idx
+      ? {
+          ...tc,
+          output,
+          status: nextStatus,
+        }
+      : tc
+  );
 }
 
 export function ChatView({ sessionId, initialMessages = [] }: ChatViewProps) {
@@ -159,14 +194,11 @@ export function ChatView({ sessionId, initialMessages = [] }: ChatViewProps) {
             status: string;
           };
           setCurrentToolCalls((prev) => {
-            const newCalls = prev?.map((tc) =>
-              tc.name === toolEndData.toolName && tc.status === "running"
-                ? {
-                    ...tc,
-                    output: toolEndData.output,
-                    status: toolEndData.status as "completed" | "error",
-                  }
-                : tc
+            const newCalls = applyToolEnd(
+              prev,
+              toolEndData.toolName,
+              toolEndData.output,
+              toolEndData.status
             );
             currentToolCallsRef.current = newCalls;
             return newCalls;

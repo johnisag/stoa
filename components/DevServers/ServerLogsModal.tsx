@@ -20,7 +20,14 @@ export function ServerLogsModal({
   const [refreshing, setRefreshing] = useState(false);
   const logsRef = useRef<HTMLDivElement>(null);
 
-  const fetchLogs = async (isRefresh = false) => {
+  // `token` guards against out-of-order responses: the 3s auto-refresh and the
+  // per-serverId initial fetch can overlap, so a slow/stale response could
+  // otherwise write the previous server's logs after serverId changes. Each
+  // effect run owns a token and cancels it on unmount/serverId change.
+  const fetchLogs = async (
+    isRefresh = false,
+    token?: { cancelled: boolean }
+  ) => {
     if (isRefresh) {
       setRefreshing(true);
     } else {
@@ -29,21 +36,33 @@ export function ServerLogsModal({
 
     try {
       const res = await fetch(`/api/dev-servers/${serverId}/logs?lines=200`);
+      if (token?.cancelled) return;
       if (res.ok) {
         const data = await res.json();
+        if (token?.cancelled) return;
         setLogs(data.logs || []);
       }
     } catch (err) {
-      console.error("Failed to fetch logs:", err);
+      if (!token?.cancelled) console.error("Failed to fetch logs:", err);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!token?.cancelled) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
   // Initial fetch
   useEffect(() => {
-    fetchLogs();
+    // Clear any refresh spinner left stuck by an in-flight auto-refresh whose
+    // token was cancelled by the previous serverId change (its finally skipped
+    // setRefreshing(false)). The stale-write guard stays intact.
+    setRefreshing(false);
+    const token = { cancelled: false };
+    fetchLogs(false, token);
+    return () => {
+      token.cancelled = true;
+    };
   }, [serverId]);
 
   // Auto-scroll to bottom when logs update
@@ -55,10 +74,14 @@ export function ServerLogsModal({
 
   // Auto-refresh every 3 seconds
   useEffect(() => {
+    const token = { cancelled: false };
     const interval = setInterval(() => {
-      fetchLogs(true);
+      fetchLogs(true, token);
     }, 3000);
-    return () => clearInterval(interval);
+    return () => {
+      token.cancelled = true;
+      clearInterval(interval);
+    };
   }, [serverId]);
 
   return (

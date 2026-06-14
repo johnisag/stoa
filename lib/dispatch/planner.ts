@@ -131,6 +131,10 @@ interface PlanRun {
   sessionId: string | null;
   worktreePath: string;
   projectPath: string;
+  /** Set to a terminal failure reason when the worker never spawned (or otherwise
+   * died before recording its session id). Makes readPlanRun report "failed" instead
+   * of spinning forever on a null sessionId. */
+  failed?: string;
 }
 const planRuns = new Map<string, PlanRun>();
 
@@ -160,7 +164,13 @@ export async function spawnPlanner(
     projectPath: expandHome(repo.repo_path),
   };
   planRuns.set(planId, run);
-  await spawnWorktreeWorker(
+  // spawnWorktreeWorker swallows its own errors and returns null (never throws) —
+  // so we must check the return. On a failed spawn the onSpawn callback never fires,
+  // leaving run.sessionId null forever; record a TERMINAL failure (so readPlanRun
+  // reports "failed" instead of spinning) and reclaim the worktree. Mirrors
+  // maintainer.spawnSurvey (which throws instead — but a planId is already promised
+  // to the polling UI here, so we surface the failure through the poll, not a throw).
+  const sessionId = await spawnWorktreeWorker(
     {
       agentType: repo.agent_type as DispatchRepo["agent_type"],
       projectId: repo.project_id,
@@ -171,10 +181,18 @@ export async function spawnPlanner(
     },
     sessionName,
     buildPlannerPrompt(repo, spec, taskCap),
-    (sessionId) => {
-      run.sessionId = sessionId;
+    (id) => {
+      run.sessionId = id;
     }
   );
+  if (!sessionId) {
+    run.failed = "the planner worker failed to start";
+    try {
+      await deleteWorktree(worktreePath, run.projectPath, true);
+    } catch {
+      // best effort — a leaked worktree is recoverable
+    }
+  }
   return planId;
 }
 
@@ -183,12 +201,29 @@ export type PlanRunStatus =
   | { status: "ready"; tasks: PlanTask[] }
   | { status: "failed"; error: string };
 
+/**
+ * Is the planner's session still alive? Liveness must be resolved via the session's
+ * BACKEND key (`tmux_name`), NOT the human display name (`sessionName`), which
+ * `backend.list()` never returns — comparing against `sessionName` would reap every
+ * planner the tick it spawns. Mirrors maintainer.readSurveyRun. Pure (so it's
+ * unit-locked against the always-false regression). */
+export function isPlanSessionAlive(
+  backendNames: Set<string>,
+  session: Session | undefined
+): boolean {
+  return !!session && backendNames.has(session.tmux_name);
+}
+
 /** Poll a plan run: read PLAN.md from the worktree and parse it. While it's missing
  * we report "running"; once it parses we report "ready". If the planner session has
  * DIED without a valid plan, we report "failed" (so the UI doesn't spin forever). */
 export async function readPlanRun(planId: string): Promise<PlanRunStatus> {
   const run = planRuns.get(planId);
   if (!run) return { status: "failed", error: "unknown plan run" };
+  // A spawn that failed before recording a session id is TERMINAL — report it
+  // (the worktree is already reclaimed) rather than reading PLAN.md / treating the
+  // null sessionId as a mid-spawn race and spinning forever.
+  if (run.failed) return { status: "failed", error: run.failed };
   let text = "";
   try {
     text = await readFile(join(run.worktreePath, "PLAN.md"), "utf-8");
@@ -198,12 +233,20 @@ export async function readPlanRun(planId: string): Promise<PlanRunStatus> {
   const parsed = text ? parsePlan(text) : { ok: false as const, error: "" };
   if (parsed.ok) return { status: "ready", tasks: parsed.tasks };
 
-  // No valid plan yet — running, unless the planner session is gone.
+  // No valid plan yet — is the worker still alive? Resolve liveness via the
+  // session's BACKEND key (tmux_name), NOT the display name (sessionName) which
+  // backend.list() never returns — that comparison was always false and reaped a
+  // just-spawned planner whenever PLAN.md wasn't readable yet.
+  if (!run.sessionId) return { status: "running" }; // mid-spawn (id not recorded yet)
   let alive = false;
   try {
-    alive = (await getSessionBackend().list()).includes(run.sessionName);
+    const names = new Set(await getSessionBackend().list());
+    const session = queries.getSession(getDb()).get(run.sessionId) as
+      | Session
+      | undefined;
+    alive = isPlanSessionAlive(names, session);
   } catch {
-    alive = false;
+    return { status: "running" }; // can't enumerate → never risk a false reap
   }
   if (alive) return { status: "running" };
   return {

@@ -29,6 +29,27 @@ export function relativePath(absPath: string, basePath: string): string {
 }
 
 /**
+ * Join a base directory and a relative path, browser-safe (no node builtins).
+ * The separator is detected FROM the base: a Windows base (contains a backslash
+ * or starts with a drive letter like "C:") joins with "\\", otherwise "/". A
+ * leading "./" on the relative part is stripped, and a trailing separator on the
+ * base is collapsed so we never double it. Display/open-file only — not a shell
+ * argv. If the base is empty the relative path is returned unchanged.
+ */
+export function joinPath(base: string, rel: string): string {
+  const cleanRel = rel.replace(/^\.[\\/]/, "");
+  if (!base) return cleanRel;
+  const isWindowsBase = base.includes("\\") || /^[A-Za-z]:/.test(base);
+  const sep = isWindowsBase ? "\\" : "/";
+  // Normalize BOTH the base and the relative segment's separators to the
+  // detected one, so a forward-slash Windows base (e.g. "C:/Users/foo") joined
+  // with a forward-slash rel yields a fully native path (no mixing).
+  const cleanBase = base.replace(/[\\/]+$/, "").replace(/[\\/]/g, sep);
+  const normalizedRel = cleanRel.replace(/[\\/]/g, sep);
+  return cleanBase + sep + normalizedRel;
+}
+
+/**
  * Format one or more paths for injection into an agent's prompt. Normalizes to
  * forward slashes (the form agents/repos expect, cross-platform), double-quotes
  * any path containing whitespace so the agent reads it as a single token, joins

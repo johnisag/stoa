@@ -11,6 +11,7 @@ import { SwipeSidebar } from "@/components/mobile/SwipeSidebar";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import type { ViewProps } from "./types";
 import { fileOpenActions } from "@/stores/fileOpen";
+import { joinPath } from "@/lib/path-display";
 
 export function MobileView({
   sessions,
@@ -184,9 +185,10 @@ export function MobileView({
           if (session) attachToSession(session);
         }}
         onSelectFile={(file, line) => {
-          // Convert relative path to absolute by prepending working directory
+          // Convert relative path to absolute by prepending working directory,
+          // using the separator native to the base (backslash on Windows).
           const absolutePath = activeSession?.working_directory
-            ? `${activeSession.working_directory}/${file.replace(/^\.\//, "")}`
+            ? joinPath(activeSession.working_directory, file)
             : file;
           fileOpenActions.requestOpen(absolutePath, line);
         }}

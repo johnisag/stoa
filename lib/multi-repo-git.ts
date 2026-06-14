@@ -2,13 +2,8 @@
  * Multi-repository git status aggregation
  */
 
-import {
-  getGitStatus,
-  isGitRepo,
-  expandPath,
-  type GitFile,
-  type GitStatus,
-} from "./git-status";
+import { getGitStatus, isGitRepo, expandPath } from "./git-status";
+import type { GitFile } from "./git-status";
 import type { ProjectRepository } from "./db";
 
 /**

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import os from "os";
 import { getDb, queries, type Session } from "@/lib/db";
-import { sessionKey } from "@/lib/providers/registry";
+import { backendKeyForSession } from "@/lib/providers/registry";
 import { getSessionBackend } from "@/lib/session-backend";
 import { appendFileSync } from "fs";
 
@@ -43,11 +43,9 @@ export async function POST(
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
-    const tmuxSessionName = sessionKey({
-      kind: "agent",
-      provider: session.agent_type,
-      id,
-    });
+    // Authoritative backend key (honors a renamed session's tmux_name), same as
+    // the DELETE/respond routes — sessionKey() alone would 400 after a rename.
+    const tmuxSessionName = backendKeyForSession(session);
     log(`Tmux session name: ${tmuxSessionName}`);
 
     const backend = getSessionBackend();

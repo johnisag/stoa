@@ -52,6 +52,13 @@ export function CodeSearchResults({
 
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  // Reset the highlighted row when the query changes — otherwise a stale index
+  // from a longer previous result set can point past a new, shorter list (no row
+  // selected, Enter targets nothing/the wrong row).
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [query]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!data?.results.length) return;
