@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import * as fs from "fs";
 import * as path from "path";
 import { db, queries, type Session } from "@/lib/db";
-import { sessionKey } from "@/lib/providers/registry";
+import { backendKeyForSession } from "@/lib/providers/registry";
 import { getSessionBackend } from "@/lib/session-backend";
 import { expandHome, findClaudeProjectDir } from "@/lib/platform";
 
@@ -50,9 +50,17 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const tmuxSession = sessionKey({ kind: "agent", provider: "claude", id });
 
   try {
+    const session = queries.getSession(db).get(id) as Session | undefined;
+
+    // Authoritative backend key (honors a renamed session's tmux_name), same as
+    // the send-keys/summarize routes — a bare {provider}-{id} key would address
+    // the dead key after a rename and never read the live CLAUDE_SESSION_ID.
+    const tmuxSession = session
+      ? backendKeyForSession(session)
+      : `claude-${id}`;
+
     // Check tmux environment for CLAUDE_SESSION_ID
     const backend = getSessionBackend();
     const envId = await backend.getEnv(tmuxSession, "CLAUDE_SESSION_ID");
@@ -61,11 +69,8 @@ export async function GET(
 
     // Fallback: getEnv is always null on the pty/host backend (can't read child
     // env), so resolve the most recent session id from on-disk JSONL files.
-    if (!sessionId) {
-      const session = queries.getSession(db).get(id) as Session | undefined;
-      if (session?.working_directory) {
-        sessionId = getClaudeSessionIdFromFiles(session.working_directory);
-      }
+    if (!sessionId && session?.working_directory) {
+      sessionId = getClaudeSessionIdFromFiles(session.working_directory);
     }
 
     if (sessionId) {

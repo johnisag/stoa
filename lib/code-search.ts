@@ -82,6 +82,7 @@ export function buildSearchArgs(
   }
 
   args.push(
+    "--", // option terminator: a query starting with "-" must not be parsed as a flag
     query,
     "." // CRITICAL: Tell ripgrep to search current directory explicitly
   );

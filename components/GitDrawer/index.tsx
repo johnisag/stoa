@@ -40,6 +40,7 @@ import {
   gitKeys,
 } from "@/data/git/queries";
 import type { GitFile } from "@/lib/git-status";
+import { stageAllAcrossRepos } from "@/lib/multi-repo-stage";
 import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
 import type { ProjectRepository } from "@/lib/db";
 
@@ -211,11 +212,34 @@ export function GitDrawer({
     }
   };
 
+  // Stage/unstage every change. Single-repo mode hits the mutation bound to the
+  // one repo. Multi-repo mode must fan out per repo (explicit file lists grouped
+  // by repoPath via the shared helper) — a single mutate(undefined) would only
+  // touch the primary repo — then invalidate gitKeys.all to refetch.
   const handleStageAll = () => {
+    if (isMultiRepo) {
+      const files = [
+        ...(multiRepoQuery.data?.unstaged ?? []),
+        ...(multiRepoQuery.data?.untracked ?? []),
+      ];
+      void stageAllAcrossRepos(files, "stage").finally(() => {
+        queryClient.invalidateQueries({ queryKey: gitKeys.all });
+      });
+      return;
+    }
     stageMutation.mutate(undefined);
   };
 
   const handleUnstageAll = () => {
+    if (isMultiRepo) {
+      void stageAllAcrossRepos(
+        multiRepoQuery.data?.staged ?? [],
+        "unstage"
+      ).finally(() => {
+        queryClient.invalidateQueries({ queryKey: gitKeys.all });
+      });
+      return;
+    }
     unstageMutation.mutate(undefined);
   };
 

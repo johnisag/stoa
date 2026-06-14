@@ -30,6 +30,18 @@ describe("B025 — parsePRCreateOutput (gh pr create prints a URL, not JSON)", (
     });
   });
 
+  it("extracts number + url from a non-github.com (GitHub Enterprise) host", () => {
+    // R2 regression: the parser used to hardcode `https://github.com/...`, so on
+    // a GitHub Enterprise / custom remote `gh pr create` prints an enterprise
+    // URL the regex couldn't match — createPR threw and the route 500'd even
+    // though the PR was created. The host-agnostic regex handles any host.
+    const stdout = "https://ghe.corp/owner/repo/pull/42\n";
+    expect(parsePRCreateOutput(stdout)).toEqual({
+      url: "https://ghe.corp/owner/repo/pull/42",
+      number: 42,
+    });
+  });
+
   it("finds the URL even amid surrounding gh chatter", () => {
     const stdout = [
       "Warning: 3 uncommitted changes",

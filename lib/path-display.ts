@@ -41,9 +41,10 @@ export function joinPath(base: string, rel: string): string {
   if (!base) return cleanRel;
   const isWindowsBase = base.includes("\\") || /^[A-Za-z]:/.test(base);
   const sep = isWindowsBase ? "\\" : "/";
-  const cleanBase = base.replace(/[\\/]+$/, "");
-  // Normalize the relative segment's separators to the base's, so a Windows base
-  // joined with a forward-slash rel yields a fully native path (no mixing).
+  // Normalize BOTH the base and the relative segment's separators to the
+  // detected one, so a forward-slash Windows base (e.g. "C:/Users/foo") joined
+  // with a forward-slash rel yields a fully native path (no mixing).
+  const cleanBase = base.replace(/[\\/]+$/, "").replace(/[\\/]/g, sep);
   const normalizedRel = cleanRel.replace(/[\\/]/g, sep);
   return cleanBase + sep + normalizedRel;
 }

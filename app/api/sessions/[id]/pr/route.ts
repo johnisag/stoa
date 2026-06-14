@@ -23,12 +23,14 @@ interface PRInfo {
 /**
  * Parse the PR number + URL from `gh pr create` stdout. `gh pr create` prints
  * the PR URL on success (it does NOT support `--json`), so we extract it the
- * same way lib/pr.ts createPR does. Returns null when no URL is present.
+ * same way lib/pr.ts createPR does. Host-agnostic: matches any https URL ending
+ * in `/pull/<digits>` so GitHub Enterprise hosts (e.g. https://ghe.corp/...)
+ * parse too. Returns null when no URL is present.
  */
 export function parsePRCreateOutput(
   stdout: string
 ): { number: number; url: string } | null {
-  const match = stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/);
+  const match = stdout.match(/https?:\/\/\S+?\/pull\/(\d+)/);
   if (!match) return null;
   return { url: match[0], number: parseInt(match[1], 10) };
 }

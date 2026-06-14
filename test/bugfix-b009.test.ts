@@ -25,6 +25,14 @@ describe("joinPath", () => {
     expect(result).not.toContain("/");
   });
 
+  it("normalizes a forward-slash Windows base to backslashes (no mixing)", () => {
+    // A Windows base can arrive with forward slashes (e.g. from a config value);
+    // the base interior must be normalized too, not just the relative segment.
+    const result = joinPath("C:/Users/foo", "src/index.ts");
+    expect(result).toBe("C:\\Users\\foo\\src\\index.ts");
+    expect(result).not.toContain("/");
+  });
+
   it("strips a leading ./ from the relative path", () => {
     expect(joinPath("/home/u/repo", "./src/db.ts")).toBe(
       "/home/u/repo/src/db.ts"

@@ -56,7 +56,7 @@ const CodeSearchResults = dynamic(
 // as LOCAL time, skewing "Xm ago" by the viewer's TZ offset. Mirror
 // SessionCard.getTimeAgo: treat a zone-less value as UTC by appending "Z".
 export function parseDbTimestamp(dateStr: string): Date {
-  const hasZone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(dateStr);
+  const hasZone = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(dateStr);
   return new Date(hasZone ? dateStr : `${dateStr.replace(" ", "T")}Z`);
 }
 

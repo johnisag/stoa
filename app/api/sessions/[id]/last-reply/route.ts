@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
-import { sessionKey } from "@/lib/providers/registry";
+import { backendKeyForSession } from "@/lib/providers/registry";
 import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -117,11 +117,10 @@ export async function GET(
       );
     }
 
-    const tmuxSessionName = sessionKey({
-      kind: "agent",
-      provider: session.agent_type,
-      id,
-    });
+    // Authoritative backend key (honors a renamed session's tmux_name), same as
+    // the send-keys/summarize routes — sessionKey() alone would miss the live
+    // pane after a rename and fall back to a stale working_directory.
+    const tmuxSessionName = backendKeyForSession(session);
 
     const cwd =
       (await backend.getPanePath(tmuxSessionName)) || session.working_directory;

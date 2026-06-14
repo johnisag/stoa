@@ -36,6 +36,7 @@ import {
   gitKeys,
 } from "@/data/git/queries";
 import type { GitStatus, GitFile } from "@/lib/git-status";
+import { stageAllAcrossRepos } from "@/lib/multi-repo-stage";
 import type {
   MultiRepoGitFile,
   MultiRepoGitStatus,
@@ -323,28 +324,15 @@ export function GitPanel({
 
   // Stage/unstage every change. Single-repo mode hits the mutation bound to the
   // one repo. Multi-repo mode must fan out per repo (with explicit file lists
-  // grouped by repoPath) — a single mutate(undefined) would only touch the
-  // primary repo — then invalidate gitKeys.all so the multiStatus query refetches.
+  // grouped by repoPath via the shared helper) — a single mutate(undefined)
+  // would only touch the primary repo — then invalidate gitKeys.all so the
+  // multiStatus query refetches.
   const stageAllMultiRepo = async (
     files: MultiRepoGitFile[],
     endpoint: "stage" | "unstage"
   ) => {
-    const byRepo = new Map<string, string[]>();
-    for (const f of files) {
-      const existing = byRepo.get(f.repoPath) ?? [];
-      existing.push(f.path);
-      byRepo.set(f.repoPath, existing);
-    }
     try {
-      await Promise.all(
-        Array.from(byRepo.entries()).map(([path, repoFiles]) =>
-          fetch(`/api/git/${endpoint}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path, files: repoFiles }),
-          })
-        )
-      );
+      await stageAllAcrossRepos(files, endpoint);
     } finally {
       queryClient.invalidateQueries({ queryKey: gitKeys.all });
     }

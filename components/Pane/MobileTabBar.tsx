@@ -147,6 +147,10 @@ export function MobileTabBar({
   // Debounce to prevent rapid clicking causing command interference
   const [isNavigating, setIsNavigating] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  // Tracks mount state so the async getActiveBackend().then() below never
+  // schedules a timer (or sets state) after the component has unmounted — the
+  // fetch can still be in flight when we tear down.
+  const mountedRef = useRef(true);
 
   const handleNavigate = useCallback(
     (sessionId: string) => {
@@ -159,6 +163,7 @@ export function MobileTabBar({
       // needs its detach/attach ceremony, so keep the longer guard there.
       if (debounceRef.current) clearTimeout(debounceRef.current);
       void getActiveBackend().then((backend) => {
+        if (!mountedRef.current) return;
         const delay = backend === "pty" ? 150 : 500;
         debounceRef.current = setTimeout(() => setIsNavigating(false), delay);
       });
@@ -166,10 +171,12 @@ export function MobileTabBar({
     [isNavigating, onSelectSession]
   );
 
-  // Clear any pending debounce on unmount so we never fire setIsNavigating on an
-  // unmounted component (and don't leak the timer mid-navigation).
+  // Mark unmounted and clear any pending debounce on unmount so we never fire
+  // setIsNavigating on an unmounted component (and don't leak the timer
+  // mid-navigation).
   useEffect(
     () => () => {
+      mountedRef.current = false;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     },
     []

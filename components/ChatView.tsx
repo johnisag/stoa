@@ -44,12 +44,19 @@ export function applyToolEnd(
     (tc) => tc.name === toolName && tc.status === "running"
   );
   if (idx === -1) return list;
+  // The wire status from a successful tool is the literal "success" (or
+  // sometimes "completed"); coerce any non-error status to the display
+  // union's "completed" rather than blindly casting an unknown string —
+  // an off-union value makes ToolCallDisplay's status map return undefined
+  // and crash on render.
+  const nextStatus: "completed" | "error" =
+    status === "error" ? "error" : "completed";
   return list.map((tc, i) =>
     i === idx
       ? {
           ...tc,
           output,
-          status: status as "completed" | "error",
+          status: nextStatus,
         }
       : tc
   );

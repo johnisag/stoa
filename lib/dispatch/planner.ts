@@ -131,6 +131,10 @@ interface PlanRun {
   sessionId: string | null;
   worktreePath: string;
   projectPath: string;
+  /** Set to a terminal failure reason when the worker never spawned (or otherwise
+   * died before recording its session id). Makes readPlanRun report "failed" instead
+   * of spinning forever on a null sessionId. */
+  failed?: string;
 }
 const planRuns = new Map<string, PlanRun>();
 
@@ -160,7 +164,13 @@ export async function spawnPlanner(
     projectPath: expandHome(repo.repo_path),
   };
   planRuns.set(planId, run);
-  await spawnWorktreeWorker(
+  // spawnWorktreeWorker swallows its own errors and returns null (never throws) —
+  // so we must check the return. On a failed spawn the onSpawn callback never fires,
+  // leaving run.sessionId null forever; record a TERMINAL failure (so readPlanRun
+  // reports "failed" instead of spinning) and reclaim the worktree. Mirrors
+  // maintainer.spawnSurvey (which throws instead — but a planId is already promised
+  // to the polling UI here, so we surface the failure through the poll, not a throw).
+  const sessionId = await spawnWorktreeWorker(
     {
       agentType: repo.agent_type as DispatchRepo["agent_type"],
       projectId: repo.project_id,
@@ -171,10 +181,18 @@ export async function spawnPlanner(
     },
     sessionName,
     buildPlannerPrompt(repo, spec, taskCap),
-    (sessionId) => {
-      run.sessionId = sessionId;
+    (id) => {
+      run.sessionId = id;
     }
   );
+  if (!sessionId) {
+    run.failed = "the planner worker failed to start";
+    try {
+      await deleteWorktree(worktreePath, run.projectPath, true);
+    } catch {
+      // best effort — a leaked worktree is recoverable
+    }
+  }
   return planId;
 }
 
@@ -202,6 +220,10 @@ export function isPlanSessionAlive(
 export async function readPlanRun(planId: string): Promise<PlanRunStatus> {
   const run = planRuns.get(planId);
   if (!run) return { status: "failed", error: "unknown plan run" };
+  // A spawn that failed before recording a session id is TERMINAL — report it
+  // (the worktree is already reclaimed) rather than reading PLAN.md / treating the
+  // null sessionId as a mid-spawn race and spinning forever.
+  if (run.failed) return { status: "failed", error: run.failed };
   let text = "";
   try {
     text = await readFile(join(run.worktreePath, "PLAN.md"), "utf-8");

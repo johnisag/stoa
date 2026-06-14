@@ -54,6 +54,10 @@ export function ServerLogsModal({
 
   // Initial fetch
   useEffect(() => {
+    // Clear any refresh spinner left stuck by an in-flight auto-refresh whose
+    // token was cancelled by the previous serverId change (its finally skipped
+    // setRefreshing(false)). The stale-write guard stays intact.
+    setRefreshing(false);
     const token = { cancelled: false };
     fetchLogs(false, token);
     return () => {
