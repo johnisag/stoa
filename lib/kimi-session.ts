@@ -17,11 +17,14 @@ import { normalizePathForCompare } from "./platform";
  * id from its on-disk project files. The captured id is passed back as
  * `--session <id>` when the session is respawned.
  *
- * LIMITATION: the index is keyed only by `workDir` — Kimi Code exposes no
- * per-session id (no env var, no per-session marker), so two PLAIN Stoa sessions
- * sharing an *exact* working_directory can resolve to the same (newest) id after
- * a server restart clears the in-memory cache. Worktree / distinct-cwd sessions
- * (the multi-repo workspace path) each have their own cwd and are unaffected.
+ * This on-disk index is the FALLBACK source. The PRIMARY source is Kimi Code's
+ * per-session startup banner ("Session: session_<uuid>"), captured from the
+ * rendered screen by the status detector (see KIMI_SESSION_ID_RE) — being
+ * per-session, the banner disambiguates two sessions sharing a cwd. This index
+ * (keyed only by `workDir`) is consulted only when the banner already scrolled
+ * off (e.g. attaching to an already-running session); in that fallback case two
+ * PLAIN sessions sharing an *exact* working_directory could resolve to the same
+ * (newest) id. Worktree / distinct-cwd sessions are unaffected either way.
  */
 
 /**

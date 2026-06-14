@@ -157,6 +157,13 @@ const WAITING_PATTERNS = [
 // until a clean exit, so the on-screen banner is the reliable capture source.
 export const HERMES_SESSION_ID_RE = /Session:\s*(\d{8}_\d{6}_[0-9a-fA-F]+)/;
 
+// Kimi Code prints its session id in the startup banner too, e.g.
+// "Session: session_670b0345-ec99-4395-ac2a-c78fc4ca3291" (a "session_" + uuid).
+// Same capture-from-screen approach as Hermes — and per-session, so two sessions
+// in the same cwd get distinct ids (unlike the cwd-keyed on-disk index fallback).
+export const KIMI_SESSION_ID_RE =
+  /Session:\s*(session_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
 export type SessionStatus = "running" | "waiting" | "idle" | "error" | "dead";
 
 // Markers that the SESSION/agent itself failed (provider/auth/usage), NOT
@@ -236,6 +243,10 @@ class SessionStatusDetector {
   // route to persist for resume.
   private hermesSessionIds = new Map<string, string>();
 
+  // Kimi Code session ids captured from its rendered startup banner, memoized
+  // per session (the banner prints once and may scroll off). Same as Hermes.
+  private kimiSessionIds = new Map<string, string>();
+
   // Cache management
   async refreshCache(): Promise<void> {
     if (Date.now() - this.cache.updatedAt < CONFIG.CACHE_VALIDITY_MS) return;
@@ -271,12 +282,23 @@ class SessionStatusDetector {
       const m = trimmed.match(HERMES_SESSION_ID_RE);
       if (m) this.hermesSessionIds.set(name, m[1]);
     }
+    // Likewise capture Kimi Code's banner session id (distinct regex — only a
+    // Kimi banner matches). Per-session, so it disambiguates same-cwd sessions.
+    if (!this.kimiSessionIds.has(name)) {
+      const m = trimmed.match(KIMI_SESSION_ID_RE);
+      if (m) this.kimiSessionIds.set(name, m[1]);
+    }
     return trimmed;
   }
 
   /** Hermes session id captured from the startup banner, or null if not seen yet. */
   getHermesSessionId(name: string): string | null {
     return this.hermesSessionIds.get(name) ?? null;
+  }
+
+  /** Kimi Code session id captured from the startup banner, or null if not seen yet. */
+  getKimiSessionId(name: string): string | null {
+    return this.kimiSessionIds.get(name) ?? null;
   }
 
   private getTracker(name: string, timestamp: number): StateTracker {
@@ -461,6 +483,9 @@ class SessionStatusDetector {
     }
     for (const [name] of this.hermesSessionIds) {
       if (!this.sessionExists(name)) this.hermesSessionIds.delete(name);
+    }
+    for (const [name] of this.kimiSessionIds) {
+      if (!this.sessionExists(name)) this.kimiSessionIds.delete(name);
     }
   }
 }

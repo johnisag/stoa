@@ -91,10 +91,10 @@ capability. **Auto-Approve** is the flag Stoa passes when you enable "skip
 permissions". Hermes resume works by capturing its session id from the startup
 banner. Codex resume/fork (its CLI exposes `codex resume`/`codex fork`
 subcommands) is planned — see [docs/ROADMAP.md](docs/ROADMAP.md). **Kimi Code**
-resume works by capturing its session id from its on-disk session index
-(`~/.kimi-code/session_index.jsonl`) — the same capture-then-resume pattern as
-Claude/Hermes. **Kilo Code** launches as a real terminal session like any other
-agent; its per-session resume capture is a follow-up._
+resume works by capturing its session id from its startup banner (like Hermes),
+falling back to its on-disk session index (`~/.kimi-code/session_index.jsonl`).
+**Kilo Code** launches as a real terminal session like any other agent; its
+per-session resume capture is a follow-up._
 
 ## CLI Commands
 

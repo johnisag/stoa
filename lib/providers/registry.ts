@@ -179,10 +179,10 @@ export const PROVIDERS: ProviderDefinition[] = [
     //    FREE-TEXT model field. An empty model leaves Kimi Code on its own
     //    configured default (no -m passed).
     //  - resume is ON: kimi HAS `-S, --session [id]` (resumeFlag "--session").
-    //    Kimi Code writes its sessions to ~/.kimi-code/session_index.jsonl keyed
-    //    by workDir, so Stoa captures the resume id from disk (getProviderSessionId
-    //    -> lib/kimi-session) and passes `--session <id>` on respawn — the same
-    //    capture-then-resume pattern as Hermes/Claude. supportsFork: no fork.
+    //    Stoa captures the resume id from Kimi Code's startup banner ("Session:
+    //    session_<uuid>", like Hermes) with its on-disk session_index.jsonl as a
+    //    per-cwd fallback (getProviderSessionId), and passes `--session <id>` on
+    //    respawn — the same capture-then-resume pattern as Hermes. No fork.
     //  - auto-approve: `-y, --yolo` ("auto-approve all actions"). --yolo wired
     //    here. (The -p/--prompt headless path is a one-shot, not a persistent
     //    session — not used.)
