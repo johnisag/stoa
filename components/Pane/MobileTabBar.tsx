@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -164,6 +164,15 @@ export function MobileTabBar({
       });
     },
     [isNavigating, onSelectSession]
+  );
+
+  // Clear any pending debounce on unmount so we never fire setIsNavigating on an
+  // unmounted component (and don't leak the timer mid-navigation).
+  useEffect(
+    () => () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    },
+    []
   );
 
   const handlePrev = (e: React.MouseEvent) => {

@@ -8,7 +8,7 @@
 import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import {
   db,
@@ -21,9 +21,21 @@ import {
 } from "./db";
 import { resolveModelForAgent, isSafeModel } from "./model-catalog";
 import type { AgentType } from "./providers";
-import { expandHome } from "./platform";
+import { expandHome, isWindows, resolveBinary } from "./platform";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Parse the newline-separated service list emitted by
+ * `docker compose config --services` into clean service names.
+ * Splits on CRLF/LF and drops empty entries (no phantom "" service).
+ */
+export function parseDockerComposeServices(stdout: string): string[] {
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
 
 export interface CreateProjectOptions {
   name: string;
@@ -488,11 +500,16 @@ export async function detectDockerServices(
     const composePath = path.join(expandedDir, file);
     if (fs.existsSync(composePath)) {
       try {
-        const { stdout } = await execAsync(
-          `docker compose -f "${file}" config --services 2>/dev/null || echo ""`,
-          { cwd: expandedDir }
+        // execFile (no shell) with an argv array: cmd.exe mangles
+        // `2>/dev/null || echo ""`, contaminating stdout with a phantom "".
+        // The surrounding try/catch already returns [] on failure, so the
+        // shell `|| echo ""` fallback is unnecessary.
+        const { stdout } = await execFileAsync(
+          resolveBinary("docker") || "docker",
+          ["compose", "-f", file, "config", "--services"],
+          { cwd: expandedDir, windowsHide: isWindows }
         );
-        const services = stdout.trim().split("\n").filter(Boolean);
+        const services = parseDockerComposeServices(stdout);
 
         return services.map((service) => ({
           name: service,

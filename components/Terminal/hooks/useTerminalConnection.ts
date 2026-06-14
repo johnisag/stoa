@@ -269,8 +269,12 @@ export function useTerminalConnection({
       const payload = attachPayloadRef.current;
       const ws = wsRef.current;
       if (ws?.readyState === WebSocket.OPEN && payload) {
-        // Keep the existing scrollback (no reset): the respawned agent's output
-        // appends below the prior history + [Session ended] marker.
+        // Keep the existing scrollback: tell onReset to skip the server's reset
+        // frame once so the respawned agent's output appends below the prior
+        // history + [Session ended] marker (the else branch sets this too for the
+        // reconnect path). onReset consumes the flag, so a later legitimate reset
+        // still clears the buffer.
+        preserveOnReattachRef.current = true;
         ws.send(
           JSON.stringify({
             type: "attach",

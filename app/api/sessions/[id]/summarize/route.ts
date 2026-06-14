@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { spawn } from "child_process";
 import { getDb, queries, type Session } from "@/lib/db";
-import { sessionKey } from "@/lib/providers/registry";
+import { sessionKey, backendKeyForSession } from "@/lib/providers/registry";
 import { randomUUID } from "crypto";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -192,11 +192,10 @@ export async function GET(
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
-    const tmuxSessionName = sessionKey({
-      kind: "agent",
-      provider: session.agent_type,
-      id,
-    });
+    // Use the session's live backend key (its tmux_name) so a renamed session
+    // still resolves to the running pty/tmux — a bare {provider}-{id} key would
+    // miss it after a rename and degrade the digest to working_directory-only.
+    const tmuxSessionName = backendKeyForSession(session);
 
     const cwd =
       (await getTmuxCwd(tmuxSessionName)) || session.working_directory;
@@ -242,12 +241,10 @@ export async function POST(
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
-    // Get tmux session name (pattern: {agent_type}-{id})
-    const tmuxSessionName = sessionKey({
-      kind: "agent",
-      provider: session.agent_type,
-      id,
-    });
+    // Use the session's live backend key (its tmux_name) so a renamed session
+    // still resolves to the running pty/tmux. A bare {provider}-{id} key would
+    // miss the live session after a rename.
+    const tmuxSessionName = backendKeyForSession(session);
 
     // Get actual working directory from tmux
     const cwd =

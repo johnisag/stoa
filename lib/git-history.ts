@@ -48,6 +48,112 @@ function getRelativeTime(timestamp: number): string {
   return "just now";
 }
 
+// Field separator (NUL) splits the 7 fields inside one record; the record
+// separator (ASCII RS, 0x1e) frames each commit so an embedded newline in the
+// commit body never confuses record boundaries.
+const FIELD_SEP = "\x00";
+const RECORD_SEP = "\x1e";
+
+// %H<NUL>%h<NUL>%s<NUL>%b<NUL>%an<NUL>%ae<NUL>%at then a record-separator so the
+// whole `git log` output can be split on RS first, then on NUL into 7 fields.
+// `git log --shortstat` emits the shortstat line(s) AFTER the format expansion,
+// i.e. just after the RS, so a commit's shortstat lands at the head of the next
+// RS-delimited segment (and the last commit's shortstat is the final segment).
+const HISTORY_FORMAT = "%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%at%x1e";
+
+/**
+ * Pull the file/insertion/deletion counts out of a --shortstat fragment such as
+ * "3 files changed, 10 insertions(+), 5 deletions(-)" (any field may be absent).
+ */
+function parseShortstat(text: string): {
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+} {
+  const filesMatch = text.match(/(\d+) files? changed/);
+  const addMatch = text.match(/(\d+) insertions?\(\+\)/);
+  const delMatch = text.match(/(\d+) deletions?\(-\)/);
+  return {
+    filesChanged: filesMatch ? parseInt(filesMatch[1], 10) : 0,
+    additions: addMatch ? parseInt(addMatch[1], 10) : 0,
+    deletions: delMatch ? parseInt(delMatch[1], 10) : 0,
+  };
+}
+
+/**
+ * Parse the raw `git log --format=… --shortstat` output into commit summaries.
+ *
+ * Records are framed by RECORD_SEP (0x1e) so a multi-line commit body never
+ * breaks record boundaries. Because --shortstat prints after the format, a
+ * commit's shortstat sits at the front of the *next* RS segment; we therefore
+ * carry the field block of one record and attach the shortstat that follows it.
+ *
+ * Pure and side-effect free so it can be unit-tested with a fixture.
+ */
+export function parseCommitHistory(output: string): CommitSummary[] {
+  const commits: CommitSummary[] = [];
+  const segments = output.split(RECORD_SEP);
+
+  // Pending field block whose shortstat appears at the head of the next segment.
+  let pendingFields: string[] | null = null;
+
+  const flush = (shortstatText: string) => {
+    if (!pendingFields) return;
+    const [hash, shortHash, subject, body, author, authorEmail, timestampStr] =
+      pendingFields;
+    const timestamp = parseInt(timestampStr, 10);
+    const { filesChanged, additions, deletions } =
+      parseShortstat(shortstatText);
+    commits.push({
+      hash,
+      shortHash,
+      subject,
+      body: body.trim(),
+      author,
+      authorEmail,
+      timestamp,
+      relativeTime: getRelativeTime(timestamp),
+      filesChanged,
+      additions,
+      deletions,
+    });
+    pendingFields = null;
+  };
+
+  for (const segment of segments) {
+    const nulIdx = segment.indexOf(FIELD_SEP);
+    if (nulIdx === -1) {
+      // No field block: this whole segment is the trailing shortstat for the
+      // previously buffered commit (e.g. the final commit's stats).
+      flush(segment);
+      continue;
+    }
+
+    // The head of the segment (everything before the first NUL) is
+    // "<previous commit's shortstat>\n<this commit's hash>". The hash never
+    // contains a newline, so the boundary is the last newline before that NUL;
+    // anything after it is the hash, anything before it is the prior shortstat.
+    const head = segment.slice(0, nulIdx);
+    const lastNl = head.lastIndexOf("\n");
+    const leadingShortstat = lastNl === -1 ? "" : head.slice(0, lastNl);
+    const hash = lastNl === -1 ? head : head.slice(lastNl + 1);
+
+    flush(leadingShortstat);
+
+    const fields = [hash, ...segment.slice(nulIdx + 1).split(FIELD_SEP)];
+    if (fields.length < 7) {
+      pendingFields = null;
+      continue;
+    }
+    pendingFields = fields;
+  }
+
+  // Last buffered commit had no following shortstat segment.
+  flush("");
+
+  return commits;
+}
+
 /**
  * Get commit history
  */
@@ -58,90 +164,13 @@ export function getCommitHistory(
   const cwd = expandPath(workingDir);
 
   try {
-    // Format: hash|shortHash|subject|body|author|email|timestamp
-    // Using %x00 as separator to handle commit messages with |
-    const format = "%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%at";
     const output = execFileSync(
       "git",
-      ["log", `--format=${format}`, "-n", String(limit), "--shortstat"],
+      ["log", `--format=${HISTORY_FORMAT}`, "-n", String(limit), "--shortstat"],
       { cwd, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, windowsHide: true }
     );
 
-    const commits: CommitSummary[] = [];
-    const lines = output.split("\n");
-
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-      if (!line || !line.includes("\x00")) {
-        i++;
-        continue;
-      }
-
-      const parts = line.split("\x00");
-      if (parts.length < 7) {
-        i++;
-        continue;
-      }
-
-      const [
-        hash,
-        shortHash,
-        subject,
-        body,
-        author,
-        authorEmail,
-        timestampStr,
-      ] = parts;
-      const timestamp = parseInt(timestampStr, 10);
-
-      // Look for shortstat line (next non-empty line)
-      let filesChanged = 0;
-      let additions = 0;
-      let deletions = 0;
-
-      i++;
-      while (i < lines.length) {
-        const statLine = lines[i].trim();
-        if (!statLine) {
-          i++;
-          continue;
-        }
-        // Parse shortstat: "3 files changed, 10 insertions(+), 5 deletions(-)"
-        const filesMatch = statLine.match(/(\d+) files? changed/);
-        const addMatch = statLine.match(/(\d+) insertions?\(\+\)/);
-        const delMatch = statLine.match(/(\d+) deletions?\(-\)/);
-
-        if (filesMatch || addMatch || delMatch) {
-          filesChanged = filesMatch ? parseInt(filesMatch[1], 10) : 0;
-          additions = addMatch ? parseInt(addMatch[1], 10) : 0;
-          deletions = delMatch ? parseInt(delMatch[1], 10) : 0;
-          i++;
-          break;
-        }
-        // If line contains separator, it's a new commit
-        if (statLine.includes("\x00")) {
-          break;
-        }
-        i++;
-      }
-
-      commits.push({
-        hash,
-        shortHash,
-        subject,
-        body: body.trim(),
-        author,
-        authorEmail,
-        timestamp,
-        relativeTime: getRelativeTime(timestamp),
-        filesChanged,
-        additions,
-        deletions,
-      });
-    }
-
-    return commits;
+    return parseCommitHistory(output);
   } catch (error) {
     console.error("Failed to get commit history:", error);
     return [];

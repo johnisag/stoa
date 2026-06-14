@@ -353,7 +353,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         const result = await apiCall(
-          `/api/orchestrate/workers?conductorId=${conductorId}`
+          `/api/orchestrate/workers?conductorId=${encodeURIComponent(conductorId)}`
         );
         if (result.error) {
           return {
@@ -389,7 +389,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "get_worker_output": {
         const result = await apiCall(
-          `/api/orchestrate/workers/${args?.workerId}?lines=${args?.lines || 50}`
+          `/api/orchestrate/workers/${encodeURIComponent(String(args?.workerId))}?lines=${args?.lines || 50}`
         );
         return {
           content: [
@@ -405,7 +405,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "send_to_worker": {
         const result = await apiCall(
-          `/api/orchestrate/workers/${args?.workerId}`,
+          `/api/orchestrate/workers/${encodeURIComponent(String(args?.workerId))}`,
           {
             method: "POST",
             body: JSON.stringify({
@@ -428,7 +428,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "complete_worker": {
         const result = await apiCall(
-          `/api/orchestrate/workers/${args?.workerId}`,
+          `/api/orchestrate/workers/${encodeURIComponent(String(args?.workerId))}`,
           {
             method: "POST",
             body: JSON.stringify({ action: "complete" }),
@@ -449,7 +449,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "kill_worker": {
         const cleanup = args?.cleanupWorktree ? "?cleanup=true" : "";
         const result = await apiCall(
-          `/api/orchestrate/workers/${args?.workerId}${cleanup}`,
+          `/api/orchestrate/workers/${encodeURIComponent(String(args?.workerId))}${cleanup}`,
           { method: "DELETE" }
         );
         return {
@@ -557,7 +557,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         const result = await apiCall(
-          `/api/orchestrate/workers?conductorId=${conductorId}&summary=true`
+          `/api/orchestrate/workers?conductorId=${encodeURIComponent(conductorId)}&summary=true`
         );
         if (result.error) {
           return {

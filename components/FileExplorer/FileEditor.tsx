@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView, keymap } from "@codemirror/view";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -177,34 +177,36 @@ export function FileEditor({
   const isHtml = language === "html";
   const hasPreview = isMarkdown || isHtml;
 
+  // Keep the latest onSave in a ref so the extensions effect doesn't re-run
+  // (and recreate the keymap) when the parent passes a fresh arrow each render.
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
+
   useEffect(() => {
     const langExt = getLanguageExtension(language);
     const baseExtensions: Extension[] = [
       editorTheme,
       syntaxHighlighting(highlightStyle),
       EditorView.lineWrapping,
-    ];
-
-    if (onSave) {
-      baseExtensions.push(
-        keymap.of([
-          {
-            key: "Mod-s",
-            run: () => {
-              onSave();
-              return true;
-            },
+      keymap.of([
+        {
+          key: "Mod-s",
+          run: () => {
+            const save = onSaveRef.current;
+            if (!save) return false;
+            save();
+            return true;
           },
-        ])
-      );
-    }
+        },
+      ]),
+    ];
 
     if (langExt) {
       baseExtensions.push(langExt);
     }
 
     setExtensions(baseExtensions);
-  }, [language, onSave]);
+  }, [language]);
 
   useEffect(() => {
     if (!hasPreview) setPreviewMode(false);

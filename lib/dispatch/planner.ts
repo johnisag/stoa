@@ -183,6 +183,19 @@ export type PlanRunStatus =
   | { status: "ready"; tasks: PlanTask[] }
   | { status: "failed"; error: string };
 
+/**
+ * Is the planner's session still alive? Liveness must be resolved via the session's
+ * BACKEND key (`tmux_name`), NOT the human display name (`sessionName`), which
+ * `backend.list()` never returns — comparing against `sessionName` would reap every
+ * planner the tick it spawns. Mirrors maintainer.readSurveyRun. Pure (so it's
+ * unit-locked against the always-false regression). */
+export function isPlanSessionAlive(
+  backendNames: Set<string>,
+  session: Session | undefined
+): boolean {
+  return !!session && backendNames.has(session.tmux_name);
+}
+
 /** Poll a plan run: read PLAN.md from the worktree and parse it. While it's missing
  * we report "running"; once it parses we report "ready". If the planner session has
  * DIED without a valid plan, we report "failed" (so the UI doesn't spin forever). */
@@ -198,12 +211,20 @@ export async function readPlanRun(planId: string): Promise<PlanRunStatus> {
   const parsed = text ? parsePlan(text) : { ok: false as const, error: "" };
   if (parsed.ok) return { status: "ready", tasks: parsed.tasks };
 
-  // No valid plan yet — running, unless the planner session is gone.
+  // No valid plan yet — is the worker still alive? Resolve liveness via the
+  // session's BACKEND key (tmux_name), NOT the display name (sessionName) which
+  // backend.list() never returns — that comparison was always false and reaped a
+  // just-spawned planner whenever PLAN.md wasn't readable yet.
+  if (!run.sessionId) return { status: "running" }; // mid-spawn (id not recorded yet)
   let alive = false;
   try {
-    alive = (await getSessionBackend().list()).includes(run.sessionName);
+    const names = new Set(await getSessionBackend().list());
+    const session = queries.getSession(getDb()).get(run.sessionId) as
+      | Session
+      | undefined;
+    alive = isPlanSessionAlive(names, session);
   } catch {
-    alive = false;
+    return { status: "running" }; // can't enumerate → never risk a false reap
   }
   if (alive) return { status: "running" };
   return {

@@ -203,11 +203,7 @@ export function DirectoryPicker({
   const handleConfirm = () => {
     if (selectedPath) {
       // Convert absolute path back to ~ format if it's in home directory
-      let finalPath = selectedPath;
-      if (homePath && selectedPath.startsWith(homePath)) {
-        finalPath = "~" + selectedPath.slice(homePath.length);
-      }
-      onSelect(finalPath);
+      onSelect(toTildePath(selectedPath, homePath));
       onClose();
     }
   };
@@ -215,11 +211,7 @@ export function DirectoryPicker({
   // Select current directory
   const selectCurrentDirectory = () => {
     // Convert to ~ format if in home directory
-    let finalPath = currentPath;
-    if (homePath && currentPath.startsWith(homePath)) {
-      finalPath = "~" + currentPath.slice(homePath.length);
-    }
-    onSelect(finalPath);
+    onSelect(toTildePath(currentPath, homePath));
     onClose();
   };
 
@@ -390,6 +382,23 @@ function DirectoryTree({
       })}
     </div>
   );
+}
+
+// Convert an absolute path back to "~"-relative form when it is the home
+// directory itself or strictly inside it. The boundary check (path === home,
+// or path starts with home + separator) prevents sibling prefixes like
+// "/home/johnson" from being mangled to "~son" when home is "/home/john".
+// Client-safe: separator is derived from the home path, not lib/platform.
+export function toTildePath(path: string, homePath: string | null): string {
+  if (!homePath) return path;
+  // Trailing separators on home would defeat the boundary test; strip them.
+  const home = homePath.replace(/[\\/]+$/, "");
+  if (path === home) return "~";
+  const sep = home.includes("\\") ? "\\" : "/";
+  if (path.startsWith(home + sep)) {
+    return "~" + path.slice(home.length);
+  }
+  return path;
 }
 
 // Helper to update node children in tree

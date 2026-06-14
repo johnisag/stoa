@@ -173,7 +173,7 @@ function PasteModal({
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Focus input when modal opens
-  useCallback(() => {
+  useEffect(() => {
     if (open && inputRef.current) {
       inputRef.current.focus();
     }
