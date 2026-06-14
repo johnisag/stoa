@@ -206,10 +206,14 @@ export async function autoMergePass(): Promise<void> {
         cwd: repoCwd,
         prNumber: d.pr_number,
         repoSlug: repo.repo_slug,
-        // SHA pin: if a review verdict was cached, gh refuses the merge unless the
-        // PR head still equals that SHA. This closes the race where a fixer/CI
-        // fixer/manual push slips commits in after approval.
-        matchHeadCommit: d.review_sha,
+        // SHA pin: gh refuses the merge unless the PR head still equals this SHA,
+        // closing the race where a fixer/CI/manual push slips commits in after the
+        // gate passed. Pin to whichever head the gates VALIDATED: the reviewed head
+        // (review gate), else the verified head (verify gate — equals the current
+        // head here, since verifyStatus is null unless verify_sha === headRefOid),
+        // else the head we just read mergeable/checks on. A verify-only repo had
+        // review_sha === null and so was merging UNPINNED — the bug this closes.
+        matchHeadCommit: d.review_sha ?? d.verify_sha ?? readiness.headRefOid,
       });
       queries.updateDispatchStatus(db).run("merged", d.id);
       console.log(

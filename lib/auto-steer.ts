@@ -252,6 +252,33 @@ export function promptSignature(p: PromptState): string {
   return `${p.kind}|${p.line.replace(/\d+/g, "#")}`;
 }
 
+/**
+ * Whether to RE-ARM auto-answer's once-per-prompt guard for a session this tick.
+ * ONLY when the turn has genuinely settled (idle) or the session is gone (dead) —
+ * NOT on a transient "running"/spinner flap. The status detector gives busy
+ * indicators top priority, so a live prompt that shows any animated element for a
+ * single capture reads as "running"; clearing the guard then would let the SAME
+ * prompt be answered a SECOND time when it re-reads as "waiting" next tick (a
+ * second unattended Enter into a menu the agent may have already advanced).
+ */
+export function shouldRearmAutoAnswer(status: string): boolean {
+  return status === "idle" || status === "dead";
+}
+
+/**
+ * Whether the queue dispatcher may acknowledge a waiting session (which promotes a
+ * SETTLED turn to "idle" so its queued task can dispatch). Never when a real prompt
+ * is detected: a finished turn and a permission prompt are both "waiting", and
+ * acknowledging a borderline prompt that intermittently fails the waiting-pattern
+ * check would flip it to "idle" and paste the queued task into the open dialog.
+ */
+export function shouldAcknowledgeQueued(
+  status: string,
+  hasPrompt: boolean
+): boolean {
+  return status === "waiting" && !hasPrompt;
+}
+
 /** Is unattended auto-answer armed? Off by default (STOA_AUTO_ANSWER=1 enables).
  * Read ONCE at startup (server.ts captures it in a const), like autoResumeEnabled. */
 export function autoAnswerEnabled(): boolean {

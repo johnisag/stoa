@@ -35,6 +35,8 @@ import {
   nextAutoAnswerAction,
   autoAnswerEnabled,
   promptSignature,
+  shouldRearmAutoAnswer,
+  shouldAcknowledgeQueued,
 } from "./lib/auto-steer";
 import {
   nextErrorLoopAction,
@@ -458,9 +460,14 @@ app.prepare().then(() => {
           continue;
         }
         if (s.status === "waiting") {
-          // Promote a settled turn to "idle" next tick; a real permission prompt
-          // stays "waiting" and is left for the user to answer.
-          statusDetector.acknowledge(s.name);
+          // Promote a SETTLED turn to "idle" next tick so its queued task can
+          // dispatch — but NOT when a real prompt is detected. Acknowledging a
+          // borderline permission dialog (one that intermittently fails the
+          // waiting-pattern check) would flip it to "idle" and paste the queued
+          // task straight into the open prompt. Leave a prompt for the human.
+          if (shouldAcknowledgeQueued(s.status, !!s.prompt)) {
+            statusDetector.acknowledge(s.name);
+          }
           continue;
         }
         // idle → ready for the next instruction.
@@ -502,8 +509,12 @@ app.prepare().then(() => {
           detected: true,
           resetAtMs: s.rateLimit.resetAt,
           nowMs: Date.now(),
+          // Never nudge a session that's showing a real prompt — the resume Enter /
+          // queued task would answer the open dialog instead of re-triggering the
+          // counted-down turn. Wait until the prompt clears.
+          hasPrompt: !!s.prompt,
         });
-        if (action !== "resume") continue; // still counting down (or no reset)
+        if (action !== "resume") continue; // still counting down / prompt up / no reset
         // If the queue loop above already sent this session's queued prompt this
         // idle period, that IS the resume — don't also nudge (would double-send).
         if (queueDispatched.has(s.id)) {
@@ -539,10 +550,15 @@ app.prepare().then(() => {
       // handled by the loop above, never here (its prompt, if any, isn't routine).
       if (AUTO_ANSWER_ENABLED) {
         for (const s of curr) {
-          // Re-arm when the prompt clears, the session leaves "waiting", or it
-          // becomes rate-limited (the resume loop above owns that case).
+          // Don't answer unless actively waiting on a prompt and not rate-limited
+          // (the resume loop owns the rate-limited case).
           if (!s.prompt || s.rateLimit || s.status !== "waiting") {
-            autoAnswered.delete(s.id);
+            // Re-arm the once-per-prompt guard ONLY when the turn truly settled
+            // (idle/dead) — NOT on a transient "running"/spinner flap, which would
+            // clear the guard and let the SAME prompt be answered a second time
+            // when it re-reads as "waiting" next tick. The guard is keyed by the
+            // prompt signature, so a genuinely NEW prompt is still answered.
+            if (shouldRearmAutoAnswer(s.status)) autoAnswered.delete(s.id);
             continue;
           }
           const action = nextAutoAnswerAction({

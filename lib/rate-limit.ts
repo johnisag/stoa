@@ -198,8 +198,14 @@ export function nextRateLimitAction(input: {
   detected: boolean;
   resetAtMs: number | null;
   nowMs: number;
+  /** A real prompt is on the rendered screen. Resume re-triggers a counted-down
+   * TURN by injecting Enter/a queued task; firing that into an open permission
+   * dialog would answer it. So never resume while a prompt is up — keep waiting
+   * until the user (or auto-answer) clears it. */
+  hasPrompt?: boolean;
 }): RateLimitAction {
   if (!input.detected) return "idle";
+  if (input.hasPrompt) return "wait";
   if (input.resetAtMs == null) return "wait";
   return input.nowMs >= input.resetAtMs ? "resume" : "wait";
 }
