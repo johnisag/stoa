@@ -712,6 +712,24 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 35,
+    name: "add_history_to_saved_workflows",
+    up: (db) => {
+      // Version-history snapshots for saved workflows. Guarded so it is idempotent
+      // under re-runs and concurrent init.
+      const hasColumn = (
+        db.prepare(`PRAGMA table_info(saved_workflows)`).all() as {
+          name: string;
+        }[]
+      ).some((c) => c.name === "history");
+      if (!hasColumn) {
+        db.exec(
+          `ALTER TABLE saved_workflows ADD COLUMN history TEXT NOT NULL DEFAULT '[]'`
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

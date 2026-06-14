@@ -2,7 +2,7 @@
  * Saved workflows service: schema + queries round-trip over a real in-memory
  * SQLite (real schema + migrations + queries, getDb() mocked to point at it).
  * Locks create/list/get/update/delete, the BuilderDoc (incl. canvas positions)
- * JSON round-trip, ordering, and the corrupt-row fallback.
+ * JSON round-trip, ordering, history snapshots, and the corrupt-row fallback.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import Database from "better-sqlite3";
@@ -49,6 +49,7 @@ const doc = (over: Partial<BuilderDoc> = {}): BuilderDoc => ({
       y: 16,
     },
   ],
+  notes: [],
   ...over,
 });
 
@@ -103,7 +104,9 @@ describe("saved-workflows service", () => {
   });
 
   it("update returns undefined for a missing id", () => {
-    expect(updateSavedWorkflow("ghost", { name: "x", doc: doc() })).toBeUndefined();
+    expect(
+      updateSavedWorkflow("ghost", { name: "x", doc: doc() })
+    ).toBeUndefined();
   });
 
   it("deletes and reports whether a row was removed", () => {
@@ -122,5 +125,100 @@ describe("saved-workflows service", () => {
     const got = getSavedWorkflow("corrupt");
     expect(got?.name).toBe("Broken");
     expect(got?.doc.nodes).toEqual([]);
+  });
+  it("creates a workflow with an empty history", () => {
+    const created = createSavedWorkflow({ name: "fresh", doc: doc() });
+    expect(created.history).toEqual([]);
+    expect(getSavedWorkflow(created.id)?.history).toEqual([]);
+  });
+
+  it("appends a history snapshot on update", () => {
+    const created = createSavedWorkflow({
+      name: "v1",
+      doc: doc({ name: "v1" }),
+    });
+    const updated = updateSavedWorkflow(created.id, {
+      name: "v2",
+      doc: doc({ name: "v2" }),
+    });
+    expect(updated?.history).toHaveLength(1);
+    expect(updated?.history[0].doc.name).toBe("v1");
+    // Snapshot is labelled with the shape it captured (default doc = 2 steps).
+    expect(updated?.history[0].name).toBe("2 steps");
+    expect(updated?.history[0].id).toBeTruthy();
+    expect(updated?.history[0].createdAt).toBeTruthy();
+
+    const updated2 = updateSavedWorkflow(created.id, {
+      name: "v3",
+      doc: doc({ name: "v3" }),
+    });
+    expect(updated2?.history).toHaveLength(2);
+    expect(updated2?.history[0].doc.name).toBe("v2");
+    expect(updated2?.history[1].doc.name).toBe("v1");
+  });
+
+  it("caps history at 10 snapshots (newest first)", () => {
+    const created = createSavedWorkflow({
+      name: "base",
+      doc: doc({ name: "base" }),
+    });
+    for (let i = 1; i <= 11; i++) {
+      updateSavedWorkflow(created.id, {
+        name: `v${i}`,
+        doc: doc({ name: `v${i}` }),
+      });
+    }
+    const got = getSavedWorkflow(created.id);
+    expect(got?.history).toHaveLength(10);
+    // 11 updates produce snapshots of v10 down to v1 (the base doc is evicted).
+    expect(got?.history[0].doc.name).toBe("v10");
+    expect(got?.history[9].doc.name).toBe("v1");
+  });
+
+  it("tolerates corrupt history JSON and falls back to an empty history", () => {
+    const created = createSavedWorkflow({ name: "clean", doc: doc() });
+    db()
+      .prepare(`UPDATE saved_workflows SET history = ? WHERE id = ?`)
+      .run("{ not json", created.id);
+    const got = getSavedWorkflow(created.id);
+    expect(got?.history).toEqual([]);
+  });
+
+  it("tolerates a malformed history entry and falls back to an empty history", () => {
+    const created = createSavedWorkflow({ name: "clean", doc: doc() });
+    db()
+      .prepare(`UPDATE saved_workflows SET history = ? WHERE id = ?`)
+      .run(
+        JSON.stringify([
+          { id: "only-id", name: 123, createdAt: "now", doc: doc() },
+        ]),
+        created.id
+      );
+    const got = getSavedWorkflow(created.id);
+    expect(got?.history).toEqual([]);
+  });
+
+  it("labels a history snapshot with its step (and note) count", () => {
+    const created = createSavedWorkflow({
+      name: "v1",
+      doc: doc({
+        name: "v1",
+        nodes: [{ step: { id: "a", agent: "claude", task: "t" }, x: 0, y: 0 }],
+        notes: [{ id: "n1", text: "hi", x: 0, y: 0 }],
+      }),
+    });
+    const updated = updateSavedWorkflow(created.id, {
+      name: "v2",
+      doc: doc({ name: "v2" }),
+    });
+    expect(updated?.history[0].name).toBe("1 step, 1 note");
+  });
+
+  it("tolerates a valid-JSON non-array history and falls back to empty", () => {
+    const created = createSavedWorkflow({ name: "clean", doc: doc() });
+    db()
+      .prepare(`UPDATE saved_workflows SET history = ? WHERE id = ?`)
+      .run(JSON.stringify({ not: "an array" }), created.id);
+    expect(getSavedWorkflow(created.id)?.history).toEqual([]);
   });
 });

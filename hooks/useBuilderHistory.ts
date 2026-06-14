@@ -19,6 +19,12 @@ export interface SetDocOptions {
 export interface BuilderHistory {
   /** Current document (committed frame + any transient changes). */
   doc: BuilderDoc;
+  /**
+   * The last committed frame, ignoring any in-flight transient change. Use this
+   * (not `doc`) for work that should only react to committed edits — e.g. the
+   * unsaved-changes check — so a drag doesn't re-run it on every pointer frame.
+   */
+  committedDoc: BuilderDoc;
   /** Apply a new document or updater. Commits by default; pass `{ transient: true }` for drag previews. */
   setDoc: (
     updater: BuilderDoc | ((prev: BuilderDoc) => BuilderDoc),
@@ -112,6 +118,7 @@ export function useBuilderHistory(
 
   return {
     doc: state.working,
+    committedDoc: state.stack[state.index],
     setDoc,
     reset,
     undo,

@@ -198,4 +198,29 @@ describe("useBuilderHistory", () => {
     expect(result.current.doc.nodes.map((n) => n.step.id)).toEqual(["a", "b"]);
     expect(result.current.canUndo).toBe(false);
   });
+
+  it("committedDoc tracks the last committed frame, not transient edits", () => {
+    const { result } = renderHook(() => useBuilderHistory(EMPTY));
+    act(() => {
+      result.current.setDoc((d) => addNode(d, "a"));
+    });
+    const committedAfterAdd = result.current.committedDoc;
+    expect(committedAfterAdd.nodes).toHaveLength(1);
+    expect(committedAfterAdd.nodes[0].x).toBe(10);
+
+    // A transient edit moves the working doc but must NOT touch committedDoc —
+    // this is what lets the dirty check skip work during a drag.
+    act(() => {
+      result.current.setDoc(
+        (d) => ({
+          ...d,
+          nodes: d.nodes.map((n) => (n.step.id === "a" ? { ...n, x: 99 } : n)),
+        }),
+        { transient: true }
+      );
+    });
+    expect(result.current.doc.nodes[0].x).toBe(99);
+    expect(result.current.committedDoc).toBe(committedAfterAdd); // same frame ref
+    expect(result.current.committedDoc.nodes[0].x).toBe(10);
+  });
 });

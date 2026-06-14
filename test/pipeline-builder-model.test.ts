@@ -9,10 +9,15 @@ import {
   docFromSpec,
   docToSpec,
   uniqueStepId,
+  uniqueNoteId,
   nextAutoPosition,
   dedupeStepIds,
   addStep,
   addPresetStep,
+  addNote,
+  moveNote,
+  updateNote,
+  removeNote,
   moveNode,
   updateStep,
   setDependsOn,
@@ -21,13 +26,17 @@ import {
   removeStep,
   renameStep,
   duplicateStep,
+  duplicateNodes,
+  deleteNodes,
   DUPLICATE_OFFSET,
   relayout,
   docFromImportedJson,
   serializeBuilderDoc,
   parseBuilderDoc,
+  wrapNoteText,
   CANVAS,
   type BuilderDoc,
+  type BuilderNote,
 } from "@/lib/pipeline/builder-model";
 import type { PipelineSpec, PipelineStep } from "@/lib/pipeline/types";
 
@@ -41,6 +50,10 @@ function spec(steps: PipelineStep[]): PipelineSpec {
 
 function ids(doc: BuilderDoc) {
   return doc.nodes.map((n) => n.step.id);
+}
+
+function note(over: Partial<BuilderNote> & { id: string }): BuilderNote {
+  return { text: `note ${over.id}`, x: 0, y: 0, ...over };
 }
 
 describe("docFromSpec / docToSpec", () => {
@@ -512,5 +525,341 @@ describe("renameStep", () => {
     expect(renameStep(base, "a", "")).toBe(base);
     expect(renameStep(base, "a", "a")).toBe(base);
     expect(ids(renameStep(base, "a", "b"))).toEqual(["a", "b"]); // collision ignored
+  });
+});
+
+describe("uniqueNoteId", () => {
+  it("returns the base when free, else suffixes -2, -3…", () => {
+    const doc = {
+      ...docFromSpec(spec([])),
+      notes: [note({ id: "note" })],
+    };
+    expect(uniqueNoteId(doc)).toBe("note-2");
+    expect(uniqueNoteId({ ...doc, notes: [] })).toBe("note");
+  });
+
+  it("avoids colliding with step ids", () => {
+    const doc = docFromSpec(spec([step({ id: "note" })]));
+    expect(uniqueNoteId(doc)).toBe("note-2");
+  });
+
+  it("avoids colliding with both step ids and existing note ids", () => {
+    const doc = {
+      ...docFromSpec(spec([step({ id: "note" }), step({ id: "note-2" })])),
+      notes: [note({ id: "note-3" })],
+    };
+    expect(uniqueNoteId(doc)).toBe("note-4");
+  });
+});
+
+describe("addNote", () => {
+  it("appends a note with a unique id at the given position", () => {
+    const doc = addNote(docFromSpec(spec([])), 120, 80, "hello");
+    expect(doc.notes.length).toBe(1);
+    expect(doc.notes[0]).toMatchObject({
+      id: "note",
+      x: 120,
+      y: 80,
+      text: "hello",
+    });
+  });
+
+  it("derives a unique id when the base is taken", () => {
+    let doc = addNote(docFromSpec(spec([])), 0, 0);
+    doc = addNote(doc, 10, 10);
+    expect(doc.notes.map((n) => n.id)).toEqual(["note", "note-2"]);
+  });
+});
+
+describe("moveNote", () => {
+  it("moves only the target note and clamps negatives to 0", () => {
+    const doc = moveNote(
+      {
+        ...docFromSpec(spec([])),
+        notes: [note({ id: "a", x: 10, y: 10 }), note({ id: "b" })],
+      },
+      "a",
+      -50,
+      80
+    );
+    const a = doc.notes.find((n) => n.id === "a")!;
+    expect(a).toMatchObject({ x: 0, y: 80 });
+    expect(doc.notes.find((n) => n.id === "b")!.x).toBe(0);
+  });
+});
+
+describe("updateNote", () => {
+  it("updates the note text without touching others", () => {
+    const doc = updateNote(
+      {
+        ...docFromSpec(spec([])),
+        notes: [note({ id: "a", text: "old" }), note({ id: "b" })],
+      },
+      "a",
+      "new"
+    );
+    expect(doc.notes.find((n) => n.id === "a")!.text).toBe("new");
+    expect(doc.notes.find((n) => n.id === "b")!.text).toBe("note b");
+  });
+});
+
+describe("removeNote", () => {
+  it("removes only the target note", () => {
+    const doc = removeNote(
+      {
+        ...docFromSpec(spec([])),
+        notes: [note({ id: "a" }), note({ id: "b" })],
+      },
+      "a"
+    );
+    expect(doc.notes.map((n) => n.id)).toEqual(["b"]);
+  });
+});
+
+describe("deleteNodes", () => {
+  it("removes multiple steps and notes in one call", () => {
+    const doc = deleteNodes(
+      {
+        ...docFromSpec(
+          spec([
+            step({ id: "a" }),
+            step({ id: "b", dependsOn: ["a"] }),
+            step({ id: "c" }),
+          ])
+        ),
+        notes: [note({ id: "n1" }), note({ id: "n2" })],
+      },
+      ["a", "c", "n1"]
+    );
+    expect(ids(doc)).toEqual(["b"]);
+    expect(doc.nodes[0].step.dependsOn).toBeUndefined();
+    expect(doc.notes.map((n) => n.id)).toEqual(["n2"]);
+  });
+
+  it("ignores unknown ids", () => {
+    const base = docFromSpec(spec([step({ id: "a" })]));
+    expect(deleteNodes(base, ["ghost"])).toEqual(base);
+  });
+});
+
+describe("duplicateNodes", () => {
+  it("duplicates every selected step", () => {
+    const doc = duplicateNodes(
+      docFromSpec(
+        spec([
+          step({ id: "a", name: "Research" }),
+          step({ id: "b", dependsOn: ["a"] }),
+          step({ id: "c" }),
+        ])
+      ),
+      ["a", "c"]
+    );
+    expect(ids(doc)).toEqual(["a", "b", "c", "a-2", "c-2"]);
+    const a2 = doc.nodes.find((n) => n.step.id === "a-2")!;
+    expect(a2.step.name).toBe("Research");
+    expect(a2.step.dependsOn).toBeUndefined();
+  });
+
+  it("does not duplicate notes", () => {
+    const doc = duplicateNodes(
+      {
+        ...docFromSpec(spec([step({ id: "a" })])),
+        notes: [note({ id: "n1" })],
+      },
+      ["a", "n1"]
+    );
+    expect(ids(doc)).toEqual(["a", "a-2"]);
+    expect(doc.notes.map((n) => n.id)).toEqual(["n1"]);
+  });
+
+  it("ignores unknown ids", () => {
+    const base = docFromSpec(spec([step({ id: "a" })]));
+    expect(duplicateNodes(base, ["ghost"])).toEqual(base);
+  });
+});
+
+describe("parseBuilderDoc / serializeBuilderDoc notes", () => {
+  it("round-trips notes", () => {
+    const d = {
+      ...docFromSpec(spec([step({ id: "a" })])),
+      notes: [
+        { id: "n1", text: "hello", x: 10, y: 20, color: "yellow" as const },
+        { id: "n2", text: "world", x: 30, y: 40 },
+      ],
+    };
+    expect(parseBuilderDoc(serializeBuilderDoc(d))).toEqual(d);
+  });
+
+  it("defaults missing notes to an empty array", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      nodes: [{ step: { id: "a", agent: "claude", task: "t" }, x: 0, y: 0 }],
+    });
+    expect(parseBuilderDoc(raw)!.notes).toEqual([]);
+  });
+
+  it("drops malformed notes but keeps well-formed ones", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      nodes: [],
+      notes: [
+        { id: "good", text: "ok", x: 1, y: 2 },
+        { id: "bad", text: "missing coords" },
+        { id: "also-bad", text: 123, x: 0, y: 0 },
+        { text: "no id", x: 0, y: 0 },
+      ],
+    });
+    const parsed = parseBuilderDoc(raw);
+    expect(parsed!.notes.map((n) => n.id)).toEqual(["good"]);
+  });
+
+  it("preserves the yellow color only", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      nodes: [],
+      notes: [
+        { id: "a", text: "t", x: 0, y: 0, color: "yellow" },
+        { id: "b", text: "t", x: 0, y: 0, color: "red" },
+      ],
+    });
+    const parsed = parseBuilderDoc(raw)!;
+    expect(parsed.notes[0].color).toBe("yellow");
+    expect(parsed.notes[1].color).toBeUndefined();
+  });
+});
+
+describe("docFromImportedJson notes", () => {
+  it("defaults notes to an empty array when importing a BuilderDoc without notes", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      nodes: [{ step: { id: "a", agent: "claude", task: "t" }, x: 0, y: 0 }],
+    });
+    expect(docFromImportedJson(raw)!.notes).toEqual([]);
+  });
+
+  it("preserves notes when importing a BuilderDoc that has them", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      nodes: [],
+      notes: [{ id: "n1", text: "hello", x: 10, y: 20 }],
+    });
+    expect(docFromImportedJson(raw)!.notes).toEqual([
+      { id: "n1", text: "hello", x: 10, y: 20 },
+    ]);
+  });
+});
+
+describe("step/note id isolation", () => {
+  it("uniqueStepId avoids note ids", () => {
+    const doc = {
+      ...docFromSpec(spec([step({ id: "step" })])),
+      notes: [note({ id: "step-2" })],
+    };
+    expect(uniqueStepId(doc)).toBe("step-3");
+  });
+
+  it("renameStep rejects a note id collision", () => {
+    const base = {
+      ...docFromSpec(spec([step({ id: "a" }), step({ id: "b" })])),
+      notes: [note({ id: "b" })],
+    };
+    expect(ids(renameStep(base, "a", "b"))).toEqual(["a", "b"]);
+  });
+
+  it("duplicateStep nudges away from sticky notes", () => {
+    const base = {
+      ...docFromSpec(spec([step({ id: "a" })])),
+      notes: [
+        {
+          id: "n1",
+          text: "t",
+          x: 16 + DUPLICATE_OFFSET,
+          y: 16 + DUPLICATE_OFFSET,
+        },
+      ],
+    };
+    const dup = duplicateStep(base, "a");
+    const copy = dup.nodes.find((n) => n.step.id !== "a")!;
+    expect(copy.x).toBeGreaterThan(DUPLICATE_OFFSET);
+    expect(copy.y).toBeGreaterThan(DUPLICATE_OFFSET);
+  });
+
+  it("nextAutoPosition counts notes as well as nodes", () => {
+    const doc = {
+      ...docFromSpec(spec([])),
+      notes: [note({ id: "n1" })],
+    };
+    const pos = nextAutoPosition(doc);
+    expect(pos.x).toBe(CANVAS.PAD + (CANVAS.NODE_W + 24));
+    expect(pos.y).toBe(CANVAS.PAD);
+  });
+});
+
+describe("dedupeStepIds note collision", () => {
+  it("renames a step that collides with a note id", () => {
+    const doc = {
+      ...docFromSpec(spec([step({ id: "note-1" }), step({ id: "note-1" })])),
+      notes: [note({ id: "note-1" })],
+    };
+    const fixed = dedupeStepIds(doc);
+    expect(ids(fixed)).not.toContain("note-1");
+    expect(ids(fixed).every((id) => id !== "note-1")).toBe(true);
+    expect(fixed.notes[0].id).toBe("note-1");
+  });
+});
+
+describe("uniqueNoteId", () => {
+  it("avoids ids already taken by either a node step or a note", () => {
+    const doc = {
+      ...docFromSpec(spec([step({ id: "note" })])),
+      notes: [note({ id: "note-2" })],
+    };
+    // "note" is taken by a step, "note-2" by a note → next free is "note-3".
+    expect(uniqueNoteId(doc)).toBe("note-3");
+  });
+
+  it("delegates to the shared allocator (same result as uniqueStepId)", () => {
+    const doc = {
+      ...docFromSpec(spec([step({ id: "x" })])),
+      notes: [note({ id: "x-2" })],
+    };
+    expect(uniqueNoteId(doc, "x")).toBe(uniqueStepId(doc, "x"));
+  });
+});
+
+describe("wrapNoteText", () => {
+  it("returns no lines for empty text", () => {
+    expect(wrapNoteText("")).toEqual([]);
+  });
+
+  it("keeps short single-line text as one line", () => {
+    expect(wrapNoteText("hello")).toEqual(["hello"]);
+  });
+
+  it("preserves explicit newlines as separate lines", () => {
+    expect(wrapNoteText("a\nb\nc")).toEqual(["a", "b", "c"]);
+  });
+
+  it("soft-wraps on spaces to fit the line width", () => {
+    const lines = wrapNoteText("one two three four five", 9, 10);
+    expect(lines.every((l) => l.length <= 9)).toBe(true);
+    expect(lines.join(" ")).toBe("one two three four five");
+  });
+
+  it("hard-breaks a word longer than a line", () => {
+    const lines = wrapNoteText("supercalifragilistic", 6, 10);
+    expect(lines[0]).toBe("superc");
+    expect(lines.every((l) => l.length <= 6)).toBe(true);
+  });
+
+  it("caps the number of lines and ellipsizes the last visible one", () => {
+    const lines = wrapNoteText("a\nb\nc\nd\ne\nf", 24, 4);
+    expect(lines).toHaveLength(4);
+    expect(lines[3].endsWith("…")).toBe(true);
   });
 });

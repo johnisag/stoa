@@ -10,36 +10,44 @@ import {
   FileJson,
   FolderOpen,
   Fullscreen,
+  GitBranch,
   HelpCircle,
   Loader2,
   Play,
   Plus,
   Redo2,
   Save,
+  StickyNote,
   Trash2,
   Undo2,
   Upload,
   Wand2,
+  X,
 } from "lucide-react";
 import {
+  addNote,
   addPresetStep,
   addStep,
   connect,
+  deleteNodes,
   disconnect,
   docFromImportedJson,
   docFromSpec,
   docToSpec,
+  duplicateNodes,
   duplicateStep,
   moveNode,
+  moveNote,
   nextAutoPosition,
   relayout,
-  removeStep,
   renameStep,
   serializeBuilderDoc,
   setDependsOn,
+  updateNote,
   updateStep,
   CANVAS,
   type BuilderDoc,
+  type HistorySnapshot,
 } from "@/lib/pipeline/builder-model";
 import { WORKFLOW_SNIPPETS } from "@/lib/pipeline/snippets";
 import { validateSpec } from "@/lib/pipeline/engine";
@@ -56,6 +64,7 @@ import { useConfirm } from "@/components/ConfirmProvider";
 import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { PipelineCanvas } from "./PipelineCanvas";
+import { Minimap } from "./Minimap";
 import { WorkflowsShortcuts } from "./WorkflowsShortcuts";
 import { SnippetsPanel } from "./SnippetsPanel";
 import { Button } from "@/components/ui/button";
@@ -92,7 +101,15 @@ const EMPTY_DOC: BuilderDoc = {
   name: "My workflow",
   workingDirectory: "~/my-project",
   nodes: [],
+  notes: [],
 };
+
+/** Format a stored ISO timestamp for display, falling back to the raw string
+ * (rather than "Invalid Date") if a hand-edited/legacy row holds garbage. */
+function formatSnapshotTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
 
 // A wired 2-node DAG so a first-time user lands on something runnable to edit,
 // rather than a blank canvas — mirrors the Custom tab's "Load example" (same spec).
@@ -136,9 +153,10 @@ export function WorkflowBuilder({
   onStarted: (runId: string) => void;
 }) {
   const start = useStartRun();
-  const { doc, setDoc, reset, undo, redo, canUndo, canRedo } =
+  const { doc, committedDoc, setDoc, reset, undo, redo, canUndo, canRedo } =
     useBuilderHistory(EMPTY_DOC);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [primaryId, setPrimaryId] = useState<string | null>(null);
   const canvasScrollRef = useRef<HTMLDivElement | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
@@ -147,8 +165,8 @@ export function WorkflowBuilder({
   // below a tall canvas, so tapping a node would otherwise open a form off-screen.
   const editRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (selectedId) editRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selectedId]);
+    if (primaryId) editRef.current?.scrollIntoView({ block: "nearest" });
+  }, [primaryId]);
   const [conductorId, setConductorId] = useState<string>(
     defaultConductorId && sessions.some((s) => s.id === defaultConductorId)
       ? defaultConductorId
@@ -177,50 +195,191 @@ export function WorkflowBuilder({
     () => new Set(errors.filter((e) => e.stepId).map((e) => e.stepId!)),
     [errors]
   );
-  const selected = doc.nodes.find((n) => n.step.id === selectedId) ?? null;
-  const canStart = valid && !!conductorId && !start.isPending;
-  // Unsaved-changes signal: the current doc differs from the last save/load.
-  const dirty = useMemo(
-    () => doc.nodes.length > 0 && serializeBuilderDoc(doc) !== savedSnapshot,
-    [doc, savedSnapshot]
+  const primaryNode = useMemo(
+    () => doc.nodes.find((n) => n.step.id === primaryId) ?? null,
+    [doc, primaryId]
   );
+  const primaryNote = useMemo(
+    () => doc.notes.find((n) => n.id === primaryId) ?? null,
+    [doc, primaryId]
+  );
+  const canStart = valid && !!conductorId && !start.isPending;
+  // Unsaved-changes signal: the last committed doc differs from the last
+  // save/load. Keyed off the committed frame (not the live `doc`) so an
+  // in-flight drag doesn't re-serialize the whole doc on every pointer frame.
+  const dirty = useMemo(
+    () => serializeBuilderDoc(committedDoc) !== savedSnapshot,
+    [committedDoc, savedSnapshot]
+  );
+  const currentSaved = useMemo(
+    () => savedList.data?.find((w) => w.id === savedId) ?? null,
+    [savedList.data, savedId]
+  );
+
+  async function loadSnapshot(snapshot: HistorySnapshot) {
+    if (
+      dirty &&
+      !(await confirm({
+        title: "Load earlier version?",
+        description: "Unsaved changes in the current draft will be lost.",
+      }))
+    ) {
+      return;
+    }
+    reset(snapshot.doc);
+    clearSelection();
+    toast.success("Loaded earlier version");
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+    setPrimaryId(null);
+  }
+
+  function handleSelectNode(
+    id: string | null,
+    opts?: {
+      shiftKey?: boolean;
+      addToSelection?: boolean;
+      keepSelection?: boolean;
+    }
+  ) {
+    if (id === null) {
+      clearSelection();
+      return;
+    }
+    if (opts?.keepSelection) {
+      setPrimaryId(id);
+      return;
+    }
+    const shift = opts?.shiftKey ?? opts?.addToSelection ?? false;
+    if (shift) {
+      const next = new Set(selectedIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setSelectedIds(next);
+      setPrimaryId(next.has(id) ? id : next.size > 0 ? [...next][0] : null);
+    } else {
+      setSelectedIds(new Set([id]));
+      setPrimaryId(id);
+    }
+  }
 
   function handleUndo() {
     undo();
-    setSelectedId(null);
+    clearSelection();
   }
 
   function handleRedo() {
     redo();
-    setSelectedId(null);
+    clearSelection();
   }
 
   function handleDuplicate(id?: string) {
-    const sourceId = id ?? selectedId;
-    if (!sourceId) return;
-    const next = duplicateStep(doc, sourceId);
+    if (id) {
+      const next = duplicateStep(doc, id);
+      if (next === doc) return;
+      setDoc(next);
+      const copy = next.nodes[next.nodes.length - 1];
+      setSelectedIds(new Set([copy.step.id]));
+      setPrimaryId(copy.step.id);
+      return;
+    }
+    const stepIds = [...selectedIds].filter((sid) =>
+      doc.nodes.some((n) => n.step.id === sid)
+    );
+    if (stepIds.length === 0) return;
+    const beforeIds = new Set(doc.nodes.map((n) => n.step.id));
+    const next = duplicateNodes(doc, stepIds);
     if (next === doc) return;
     setDoc(next);
-    const copy = next.nodes[next.nodes.length - 1];
-    setSelectedId(copy.step.id);
+    const newIds = next.nodes
+      .filter((n) => !beforeIds.has(n.step.id))
+      .map((n) => n.step.id);
+    setSelectedIds(new Set(newIds));
+    setPrimaryId(newIds[0] ?? null);
   }
 
-  function handleMoveNode(id: string, x: number, y: number) {
-    setDoc((d) => moveNode(d, id, x, y), { transient: true });
+  function handleMoveItems(updates: { id: string; x: number; y: number }[]) {
+    setDoc(
+      (d) =>
+        updates.reduce((acc, { id, x, y }) => {
+          if (acc.nodes.some((n) => n.step.id === id))
+            return moveNode(acc, id, x, y);
+          if (acc.notes.some((n) => n.id === id))
+            return moveNote(acc, id, x, y);
+          return acc;
+        }, d),
+      { transient: true }
+    );
   }
 
   function handleMoveEnd() {
     setDoc((d) => d);
   }
 
+  function handleDeleteItem(id: string) {
+    const next = deleteNodes(doc, [id]);
+    setDoc(next);
+    const remaining = new Set(selectedIds);
+    remaining.delete(id);
+    setSelectedIds(remaining);
+    if (primaryId === id) {
+      setPrimaryId(remaining.size > 0 ? [...remaining][0] : null);
+    }
+  }
+
+  async function handleConfirmDeleteItem(id: string) {
+    if (
+      !(await confirm({
+        title: "Delete this item?",
+        description: "This can’t be undone.",
+      }))
+    ) {
+      return;
+    }
+    handleDeleteItem(id);
+  }
+
+  async function handleDeleteSelected() {
+    // Snapshot the selection BEFORE the await so we delete exactly what the user
+    // confirmed against, even if selection state changes during the dialog.
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (
+      !(await confirm({
+        title: "Delete selected items?",
+        description: `Delete ${ids.length} selected item${ids.length === 1 ? "" : "s"}? This can’t be undone.`,
+      }))
+    ) {
+      return;
+    }
+    setDoc((d) => deleteNodes(d, ids));
+    clearSelection();
+  }
+
   function handleFitAll() {
+    if (doc.nodes.length === 0 && doc.notes.length === 0) return;
     const container = canvasScrollRef.current;
-    if (!container || doc.nodes.length === 0) return;
-    const minX = Math.min(...doc.nodes.map((n) => n.x));
-    const minY = Math.min(...doc.nodes.map((n) => n.y));
-    const maxX = Math.max(...doc.nodes.map((n) => n.x + CANVAS.NODE_W));
-    const maxY = Math.max(...doc.nodes.map((n) => n.y + CANVAS.NODE_H));
-    const pad = CANVAS.PAD;
+    if (!container) return;
+    const { NODE_W, NODE_H, NOTE_W, NOTE_H, PAD } = CANVAS;
+    const minX = Math.min(
+      ...doc.nodes.map((n) => n.x),
+      ...doc.notes.map((n) => n.x)
+    );
+    const minY = Math.min(
+      ...doc.nodes.map((n) => n.y),
+      ...doc.notes.map((n) => n.y)
+    );
+    const maxX = Math.max(
+      ...doc.nodes.map((n) => n.x + NODE_W),
+      ...doc.notes.map((n) => n.x + NOTE_W)
+    );
+    const maxY = Math.max(
+      ...doc.nodes.map((n) => n.y + NODE_H),
+      ...doc.notes.map((n) => n.y + NOTE_H)
+    );
+    const pad = PAD;
     const contentWidth = maxX - minX + pad * 2;
     const contentHeight = maxY - minY + pad * 2;
     const visibleWidth = container.clientWidth;
@@ -233,8 +392,8 @@ export function WorkflowBuilder({
   }
 
   async function handleCopyJson() {
-    if (doc.nodes.length === 0) {
-      toast.error("Add a step first — nothing to copy yet.");
+    if (doc.nodes.length === 0 && doc.notes.length === 0) {
+      toast.error("Add a step or note first — nothing to copy yet.");
       return;
     }
     const text = JSON.stringify(spec, null, 2);
@@ -296,6 +455,17 @@ export function WorkflowBuilder({
         action: "duplicate",
         description: "Duplicate selected step",
       },
+      { chord: "mod+a", action: "selectAll", description: "Select all items" },
+      {
+        chord: "Delete",
+        action: "deleteSelected",
+        description: "Delete selected item(s)",
+      },
+      {
+        chord: "Escape",
+        action: "clearSelection",
+        description: "Clear selection",
+      },
       {
         chord: "mod+shift+l",
         action: "shortcuts",
@@ -311,7 +481,18 @@ export function WorkflowBuilder({
       if (action === "undo") handleUndo();
       else if (action === "redo") handleRedo();
       else if (action === "duplicate") handleDuplicate();
-      else if (action === "shortcuts") setShortcutsOpen(true);
+      else if (action === "selectAll") {
+        const allIds = new Set([
+          ...doc.nodes.map((n) => n.step.id),
+          ...doc.notes.map((n) => n.id),
+        ]);
+        setSelectedIds(allIds);
+        setPrimaryId(doc.nodes[0]?.step.id ?? doc.notes[0]?.id ?? null);
+      } else if (action === "deleteSelected") {
+        void handleDeleteSelected();
+      } else if (action === "clearSelection") {
+        clearSelection();
+      } else if (action === "shortcuts") setShortcutsOpen(true);
     },
     { capture: true, stopPropagation: true }
   );
@@ -322,12 +503,27 @@ export function WorkflowBuilder({
     const { x, y } = nextAutoPosition(doc);
     const next = addStep(doc, x, y);
     setDoc(next);
-    setSelectedId(next.nodes[next.nodes.length - 1].step.id);
+    const id = next.nodes[next.nodes.length - 1].step.id;
+    setSelectedIds(new Set([id]));
+    setPrimaryId(id);
+  }
+
+  function handleAddNote() {
+    const { x, y } = nextAutoPosition(doc);
+    const next = addNote(doc, x + 16, y + 16, "New note");
+    setDoc(next);
+    const id = next.notes[next.notes.length - 1].id;
+    setSelectedIds(new Set([id]));
+    setPrimaryId(id);
+  }
+
+  function patchNote(id: string, text: string) {
+    setDoc((d) => updateNote(d, id, text), { transient: true });
   }
 
   function loadDoc(next: BuilderDoc, savedWorkflowId: string | null) {
     reset(next);
-    setSelectedId(null);
+    clearSelection();
     setSavedId(savedWorkflowId);
     setSavedSnapshot(serializeBuilderDoc(next)); // freshly loaded = no unsaved changes
   }
@@ -337,8 +533,8 @@ export function WorkflowBuilder({
   // feedback at all.
   function saveGuard(): string | null {
     const name = doc.name.trim();
-    if (doc.nodes.length === 0) {
-      toast.error("Add a step first.");
+    if (doc.nodes.length === 0 && doc.notes.length === 0) {
+      toast.error("Add a step or note first.");
       return null;
     }
     if (!name) {
@@ -353,6 +549,7 @@ export function WorkflowBuilder({
   async function handleSave() {
     const name = saveGuard();
     if (!name) return;
+    const snapshot = serializeBuilderDoc(doc);
     try {
       if (savedId) {
         await updateWf.mutateAsync({ id: savedId, name, doc });
@@ -360,7 +557,7 @@ export function WorkflowBuilder({
         const created = await createWf.mutateAsync({ name, doc });
         setSavedId(created.id);
       }
-      setSavedSnapshot(serializeBuilderDoc(doc)); // now persisted = no unsaved changes
+      setSavedSnapshot(snapshot); // now persisted = no unsaved changes
       toast.success(`Saved “${name}”`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save");
@@ -372,10 +569,11 @@ export function WorkflowBuilder({
   async function handleSaveCopy() {
     const name = saveGuard();
     if (!name) return;
+    const snapshot = serializeBuilderDoc(doc);
     try {
       const created = await createWf.mutateAsync({ name, doc });
       setSavedId(created.id);
-      setSavedSnapshot(serializeBuilderDoc(doc));
+      setSavedSnapshot(snapshot);
       toast.success(`Saved a copy as “${name}”`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save");
@@ -391,8 +589,8 @@ export function WorkflowBuilder({
   // Download the workflow as JSON (the BuilderDoc — positions included, so it
   // re-imports into the canvas exactly; it also imports as a bare spec elsewhere).
   function handleExport() {
-    if (doc.nodes.length === 0) {
-      toast.error("Add a step first — nothing to export yet.");
+    if (doc.nodes.length === 0 && doc.notes.length === 0) {
+      toast.error("Add a step or note first — nothing to export yet.");
       return;
     }
     const safe = (doc.name || "workflow").replace(/[^a-z0-9._-]+/gi, "-");
@@ -406,6 +604,11 @@ export function WorkflowBuilder({
     a.click();
     URL.revokeObjectURL(url);
     toast.success(`Exported ${safe}.stoa-workflow.json`);
+    toast.message("Git export tip", {
+      description:
+        "Commit exported .stoa-workflow.json files to git to version workflows alongside code.",
+      icon: <GitBranch className="h-4 w-4" />,
+    });
   }
 
   function handleImportFile(e: ChangeEvent<HTMLInputElement>) {
@@ -476,17 +679,13 @@ export function WorkflowBuilder({
       return;
     }
     setDoc(next);
-    setSelectedId(newId);
-  }
-
-  function handleDelete(id: string) {
-    setDoc((d) => removeStep(d, id));
-    setSelectedId(null);
+    setSelectedIds(new Set([newId]));
+    setPrimaryId(newId);
   }
 
   async function handleContextCopyId(id: string) {
     if (await copyText(id)) {
-      toast.success(`Copied step id “${id}”`);
+      toast.success(`Copied id “${id}”`);
     } else {
       toast.error("Could not copy to clipboard");
     }
@@ -497,7 +696,9 @@ export function WorkflowBuilder({
     if (!snippet) return;
     const next = addPresetStep(doc, snippet);
     setDoc(next);
-    setSelectedId(next.nodes[next.nodes.length - 1].step.id);
+    const id = next.nodes[next.nodes.length - 1].step.id;
+    setSelectedIds(new Set([id]));
+    setPrimaryId(id);
   }
 
   async function handleStart() {
@@ -522,9 +723,9 @@ export function WorkflowBuilder({
         <div>
           <h3 className="text-sm font-medium">Visual builder</h3>
           <p className="text-muted-foreground text-xs leading-relaxed">
-            Drag the boxes to arrange your DAG; tap one to edit it. Drag a box’s
-            dot onto another box to connect them. Right-click or long-press a
-            step for more options. Steps with no path between them run in
+            Drag steps and sticky notes to arrange the canvas; tap one to edit
+            it. Drag a step’s dot onto another to connect them. Right-click or
+            long-press for more options. Steps with no path between them run in
             parallel.
           </p>
         </div>
@@ -555,9 +756,9 @@ export function WorkflowBuilder({
             type="button"
             variant="outline"
             size="icon-sm"
-            aria-label="Center all steps"
-            title="Center all steps"
-            disabled={doc.nodes.length === 0}
+            aria-label="Center all items"
+            title="Center all items"
+            disabled={doc.nodes.length === 0 && doc.notes.length === 0}
             onClick={handleFitAll}
           >
             <Fullscreen className="h-3.5 w-3.5" />
@@ -636,13 +837,13 @@ export function WorkflowBuilder({
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={handleExport}
-                disabled={doc.nodes.length === 0}
+                disabled={doc.nodes.length === 0 && doc.notes.length === 0}
               >
                 <Download className="mr-2 h-3.5 w-3.5" /> Export workflow
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={handleCopyJson}
-                disabled={doc.nodes.length === 0}
+                disabled={doc.nodes.length === 0 && doc.notes.length === 0}
               >
                 <Copy className="mr-2 h-3.5 w-3.5" /> Copy JSON
               </DropdownMenuItem>
@@ -673,6 +874,24 @@ export function WorkflowBuilder({
                   No saved workflows yet
                 </DropdownMenuItem>
               )}
+              {currentSaved && currentSaved.history.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>History</DropdownMenuLabel>
+                  {currentSaved.history.map((snapshot) => (
+                    <DropdownMenuItem
+                      key={snapshot.id}
+                      onSelect={() => loadSnapshot(snapshot)}
+                      className="flex flex-col items-start gap-0.5"
+                    >
+                      <span className="truncate text-xs">{snapshot.name}</span>
+                      <span className="text-muted-foreground text-[10px]">
+                        {formatSnapshotTime(snapshot.createdAt)}
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
           <input
@@ -684,6 +903,14 @@ export function WorkflowBuilder({
           />
           <Button type="button" variant="outline" size="sm" onClick={handleAdd}>
             <Plus className="mr-1.5 h-3.5 w-3.5" /> Add step
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleAddNote}
+          >
+            <StickyNote className="mr-1.5 h-3.5 w-3.5" /> Add note
           </Button>
         </div>
       </div>
@@ -717,34 +944,72 @@ export function WorkflowBuilder({
         </label>
       </div>
 
-      {doc.nodes.length === 0 ? (
+      {doc.nodes.length === 0 && doc.notes.length === 0 ? (
         <div className="text-muted-foreground rounded-md border border-dashed px-3 py-8 text-center text-xs">
           No steps yet — tap <span className="font-medium">Add step</span> to
           add your first node.
         </div>
       ) : (
-        <PipelineCanvas
-          doc={doc}
-          selectedId={selectedId}
-          errorIds={errorIds}
-          onSelectNode={setSelectedId}
-          onMoveNode={handleMoveNode}
-          onMoveEnd={handleMoveEnd}
-          onConnect={(from, to) => setDoc((d) => connect(d, from, to))}
-          onDisconnect={(from, to) => setDoc((d) => disconnect(d, from, to))}
-          onDuplicateNode={handleDuplicate}
-          onDeleteNode={handleDelete}
-          onCopyId={handleContextCopyId}
-          scrollRef={canvasScrollRef}
-        />
+        <div className="relative">
+          <PipelineCanvas
+            doc={doc}
+            selectedIds={selectedIds}
+            errorIds={errorIds}
+            onSelectNode={handleSelectNode}
+            onMoveItems={handleMoveItems}
+            onMoveEnd={handleMoveEnd}
+            onConnect={(from, to) => setDoc((d) => connect(d, from, to))}
+            onDisconnect={(from, to) => setDoc((d) => disconnect(d, from, to))}
+            onDuplicateNode={handleDuplicate}
+            onDeleteItem={handleConfirmDeleteItem}
+            onCopyId={handleContextCopyId}
+            scrollRef={canvasScrollRef}
+          />
+          <Minimap
+            doc={doc}
+            selectedIds={selectedIds}
+            scrollRef={canvasScrollRef}
+            className="absolute top-2 right-2 z-10"
+          />
+        </div>
+      )}
+
+      {selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-muted-foreground text-xs">
+            {selectedIds.size} selected
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={
+              ![...selectedIds].some((id) =>
+                doc.nodes.some((n) => n.step.id === id)
+              )
+            }
+            onClick={() => handleDuplicate()}
+          >
+            <Copy className="mr-1.5 h-3.5 w-3.5" /> Duplicate
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleDeleteSelected}
+          >
+            <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
+          </Button>
+        </div>
       )}
 
       <SnippetsPanel onSelectSnippet={handleSnippetSelect} />
 
-      {/* Edit panel for the selected node. */}
-      {selected && (
+      {/* Edit panel for the selected item (node or note). */}
+      {primaryNode && (
         <div
           ref={editRef}
+          key={primaryNode.step.id}
           className="bg-card flex flex-col gap-3 rounded-md border p-3"
         >
           <div className="flex items-center justify-between gap-2">
@@ -764,7 +1029,7 @@ export function WorkflowBuilder({
                 variant="ghost"
                 size="sm"
                 className="text-red-600 hover:text-red-600 dark:text-red-400"
-                onClick={() => handleDelete(selected.step.id)}
+                onClick={() => handleConfirmDeleteItem(primaryNode.step.id)}
               >
                 <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
               </Button>
@@ -777,8 +1042,8 @@ export function WorkflowBuilder({
                 Step id <span className="text-red-500">*</span>
               </span>
               <Input
-                key={selected.step.id}
-                defaultValue={selected.step.id}
+                key={primaryNode.step.id}
+                defaultValue={primaryNode.step.id}
                 spellCheck={false}
                 // Commit on blur (so we don't rename on every keystroke) — and on
                 // Enter, which blurs, so a phone user who taps straight to Start
@@ -786,7 +1051,9 @@ export function WorkflowBuilder({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") e.currentTarget.blur();
                 }}
-                onBlur={(e) => commitRename(selected.step.id, e.target.value)}
+                onBlur={(e) =>
+                  commitRename(primaryNode.step.id, e.target.value)
+                }
               />
             </label>
             <label className="flex flex-col gap-1 text-sm">
@@ -794,9 +1061,9 @@ export function WorkflowBuilder({
                 Name (optional)
               </span>
               <Input
-                value={selected.step.name ?? ""}
+                value={primaryNode.step.name ?? ""}
                 onChange={(e) =>
-                  patchTransient(selected.step.id, {
+                  patchTransient(primaryNode.step.id, {
                     name: e.target.value || undefined,
                   })
                 }
@@ -808,9 +1075,9 @@ export function WorkflowBuilder({
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-muted-foreground text-xs">Agent</span>
             <Select
-              value={selected.step.agent}
+              value={primaryNode.step.agent}
               onValueChange={(v) =>
-                patch(selected.step.id, { agent: v as AgentType })
+                patch(primaryNode.step.id, { agent: v as AgentType })
               }
             >
               <SelectTrigger>
@@ -834,11 +1101,11 @@ export function WorkflowBuilder({
               Task <span className="text-red-500">*</span>
             </span>
             <Textarea
-              value={selected.step.task}
+              value={primaryNode.step.task}
               spellCheck={false}
               placeholder="What this agent should do. Reference an upstream step's output with {{steps.<id>.output}}."
               onChange={(e) =>
-                patchTransient(selected.step.id, { task: e.target.value })
+                patchTransient(primaryNode.step.id, { task: e.target.value })
               }
               onBlur={commit}
               className="min-h-[80px]"
@@ -852,30 +1119,48 @@ export function WorkflowBuilder({
               <span className="text-muted-foreground text-xs">Depends on</span>
               <div className="flex flex-col gap-1 rounded-md border p-2">
                 {doc.nodes
-                  .filter((n) => n.step.id !== selected.step.id)
+                  .filter((n) => n.step.id !== primaryNode.step.id)
                   .map((n) => {
                     const checked =
-                      selected.step.dependsOn?.includes(n.step.id) ?? false;
+                      primaryNode.step.dependsOn?.includes(n.step.id) ?? false;
                     return (
-                      <label
+                      <div
                         key={n.step.id}
-                        className="flex cursor-pointer items-center gap-2 text-xs"
+                        className="flex items-center justify-between gap-2 text-xs"
                       >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) => {
-                            const cur = selected.step.dependsOn ?? [];
-                            const next = e.target.checked
-                              ? [...cur, n.step.id]
-                              : cur.filter((d) => d !== n.step.id);
-                            setDoc((d) =>
-                              setDependsOn(d, selected.step.id, next)
-                            );
-                          }}
-                        />
-                        {n.step.name || n.step.id}
-                      </label>
+                        <label className="flex flex-1 cursor-pointer items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const cur = primaryNode.step.dependsOn ?? [];
+                              const next = e.target.checked
+                                ? [...cur, n.step.id]
+                                : cur.filter((d) => d !== n.step.id);
+                              setDoc((d) =>
+                                setDependsOn(d, primaryNode.step.id, next)
+                              );
+                            }}
+                          />
+                          {n.step.name || n.step.id}
+                        </label>
+                        {checked && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Remove dependency on ${n.step.name || n.step.id}`}
+                            title="Remove dependency"
+                            onClick={() =>
+                              setDoc((d) =>
+                                disconnect(d, n.step.id, primaryNode.step.id)
+                              )
+                            }
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </div>
                     );
                   })}
               </div>
@@ -887,11 +1172,11 @@ export function WorkflowBuilder({
               Exit criteria (optional)
             </span>
             <Textarea
-              value={selected.step.exitCriteria ?? ""}
+              value={primaryNode.step.exitCriteria ?? ""}
               spellCheck={false}
               placeholder="Unbreakable rules the step must satisfy, e.g. “must pass tests; open a PR”."
               onChange={(e) =>
-                patchTransient(selected.step.id, {
+                patchTransient(primaryNode.step.id, {
                   exitCriteria: e.target.value || undefined,
                 })
               }
@@ -908,14 +1193,43 @@ export function WorkflowBuilder({
               </span>
             </span>
             <Switch
-              checked={selected.step.worktreePolicy === "shared"}
+              checked={primaryNode.step.worktreePolicy === "shared"}
               onCheckedChange={(c) =>
-                patch(selected.step.id, {
+                patch(primaryNode.step.id, {
                   worktreePolicy: c ? "shared" : undefined,
                 })
               }
             />
           </label>
+        </div>
+      )}
+
+      {primaryNote && (
+        <div
+          ref={editRef}
+          key={primaryNote.id}
+          className="bg-card flex flex-col gap-3 rounded-md border p-3"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium">Edit note</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-red-600 hover:text-red-600 dark:text-red-400"
+              onClick={() => handleConfirmDeleteItem(primaryNote.id)}
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
+            </Button>
+          </div>
+          <Textarea
+            value={primaryNote.text}
+            spellCheck={false}
+            placeholder="Write a note…"
+            onChange={(e) => patchNote(primaryNote.id, e.target.value)}
+            onBlur={commit}
+            className="min-h-[80px]"
+          />
         </div>
       )}
 

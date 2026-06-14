@@ -22,6 +22,8 @@ import { parsePipelineSpec } from "./engine";
 export const CANVAS = {
   NODE_W: 160,
   NODE_H: 48,
+  NOTE_W: 160,
+  NOTE_H: 80,
   COL_W: 210, // column pitch when seeding from layout depth
   ROW_H: 96, // row pitch
   PAD: 16,
@@ -33,10 +35,26 @@ export interface BuilderNode {
   y: number;
 }
 
+export interface BuilderNote {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  color?: "yellow";
+}
+
 export interface BuilderDoc {
   name: string;
   workingDirectory: string;
   nodes: BuilderNode[];
+  notes: BuilderNote[];
+}
+
+export interface HistorySnapshot {
+  id: string;
+  name: string;
+  doc: BuilderDoc;
+  createdAt: string;
 }
 
 /** A persisted builder doc with its store identity + timestamps (the API shape). */
@@ -44,6 +62,7 @@ export interface SavedWorkflow {
   id: string;
   name: string;
   doc: BuilderDoc;
+  history: HistorySnapshot[];
   createdAt: string;
   updatedAt: string;
 }
@@ -56,7 +75,7 @@ export function serializeBuilderDoc(doc: BuilderDoc): string {
 /**
  * Parse a stored doc defensively — a hand-edited or legacy row must never crash a
  * load. Returns null on anything that isn't a well-formed doc; drops malformed
- * nodes rather than failing the whole doc (mirrors the snippets-store shape guard).
+ * nodes/notes rather than failing the whole doc (mirrors the snippets-store shape guard).
  */
 export function parseBuilderDoc(raw: string): BuilderDoc | null {
   let v: unknown;
@@ -115,7 +134,32 @@ export function parseBuilderDoc(raw: string): BuilderDoc | null {
     }
     nodes.push({ step, x: node.x, y: node.y });
   }
-  return { name: o.name, workingDirectory: o.workingDirectory, nodes };
+
+  const notes: BuilderNote[] = [];
+  if (Array.isArray(o.notes)) {
+    for (const n of o.notes) {
+      if (!n || typeof n !== "object") continue;
+      const note = n as Record<string, unknown>;
+      if (
+        typeof note.id !== "string" ||
+        typeof note.text !== "string" ||
+        typeof note.x !== "number" ||
+        typeof note.y !== "number"
+      ) {
+        continue;
+      }
+      const built: BuilderNote = {
+        id: note.id,
+        text: note.text,
+        x: note.x,
+        y: note.y,
+      };
+      if (note.color === "yellow") built.color = note.color;
+      notes.push(built);
+    }
+  }
+
+  return { name: o.name, workingDirectory: o.workingDirectory, nodes, notes };
 }
 
 /** Seed a builder doc from a spec, placing each node by its layout depth/row. */
@@ -133,6 +177,7 @@ export function docFromSpec(spec: PipelineSpec): BuilderDoc {
         y: CANVAS.PAD + (p?.row ?? 0) * CANVAS.ROW_H,
       };
     }),
+    notes: [],
   };
 }
 
@@ -150,7 +195,7 @@ export function docToSpec(doc: BuilderDoc): PipelineSpec {
  * depth, rows by spec order), preserving the steps + edges. Tidies a hand-arranged
  * canvas — re-seeding positions from layoutDag exactly as a fresh load would. */
 export function relayout(doc: BuilderDoc): BuilderDoc {
-  return docFromSpec(docToSpec(doc));
+  return { ...docFromSpec(docToSpec(doc)), notes: doc.notes };
 }
 
 /**
@@ -181,7 +226,10 @@ export function dedupeStepIds(doc: BuilderDoc): BuilderDoc {
   const nodes: BuilderNode[] = [];
   for (const n of doc.nodes) {
     let id = n.step.id;
-    if (nodes.some((existing) => existing.step.id === id)) {
+    if (
+      nodes.some((existing) => existing.step.id === id) ||
+      doc.notes.some((note) => note.id === id)
+    ) {
       id = uniqueStepId({ ...doc, nodes }, id);
       renames.set(n.step.id, id);
     }
@@ -205,9 +253,12 @@ export function dedupeStepIds(doc: BuilderDoc): BuilderDoc {
   };
 }
 
-/** A fresh step id not already used in the doc: `base`, then `base-2`, `base-3`… */
+/** A fresh step id not already used by any node step or note. */
 export function uniqueStepId(doc: BuilderDoc, base = "step"): string {
-  const used = new Set(doc.nodes.map((n) => n.step.id));
+  const used = new Set([
+    ...doc.nodes.map((n) => n.step.id),
+    ...doc.notes.map((note) => note.id),
+  ]);
   if (!used.has(base)) return base;
   for (let i = 2; ; i++) {
     const candidate = `${base}-${i}`;
@@ -215,10 +266,17 @@ export function uniqueStepId(doc: BuilderDoc, base = "step"): string {
   }
 }
 
+/** A fresh note id not already used by any node step or note. Delegates to
+ * uniqueStepId, which already spans both nodes and notes — the two id spaces
+ * share a namespace, so there is one allocator with two default bases. */
+export function uniqueNoteId(doc: BuilderDoc, base = "note"): string {
+  return uniqueStepId(doc, base);
+}
+
 /** The next grid slot used when auto-placing a new node (cascades so repeated
  * adds don't stack exactly on top of each other). */
 export function nextAutoPosition(doc: BuilderDoc): { x: number; y: number } {
-  const i = doc.nodes.length;
+  const i = doc.nodes.length + doc.notes.length;
   return {
     x: CANVAS.PAD + (i % 4) * (CANVAS.NODE_W + 24),
     y: CANVAS.PAD + Math.floor(i / 4) * (CANVAS.NODE_H + 40),
@@ -361,6 +419,7 @@ export function renameStep(
 ): BuilderDoc {
   if (!newId || newId === oldId) return doc;
   if (doc.nodes.some((n) => n.step.id === newId)) return doc;
+  if (doc.notes.some((note) => note.id === newId)) return doc;
   return {
     ...doc,
     nodes: doc.nodes.map((n) => ({
@@ -395,16 +454,22 @@ export function duplicateStep(doc: BuilderDoc, id: string): BuilderDoc {
   let y = node.y + DUPLICATE_OFFSET;
   let guard = 0;
   const MAX_NUDGE = 100;
-  while (
-    guard++ < MAX_NUDGE &&
-    doc.nodes.some(
+  while (guard++ < MAX_NUDGE) {
+    const hitsNode = doc.nodes.some(
       (n) =>
         x < n.x + CANVAS.NODE_W &&
         x + CANVAS.NODE_W > n.x &&
         y < n.y + CANVAS.NODE_H &&
         y + CANVAS.NODE_H > n.y
-    )
-  ) {
+    );
+    const hitsNote = doc.notes.some(
+      (note) =>
+        x < note.x + CANVAS.NOTE_W &&
+        x + CANVAS.NODE_W > note.x &&
+        y < note.y + CANVAS.NOTE_H &&
+        y + CANVAS.NODE_H > note.y
+    );
+    if (!hitsNode && !hitsNote) break;
     x += DUPLICATE_OFFSET;
     y += DUPLICATE_OFFSET;
   }
@@ -420,4 +485,128 @@ export function duplicateStep(doc: BuilderDoc, id: string): BuilderDoc {
       },
     ],
   };
+}
+
+/** Duplicate every selected node whose step id is in `ids`. Notes are not
+ * duplicated here — the caller handles note selection separately. */
+export function duplicateNodes(doc: BuilderDoc, ids: string[]): BuilderDoc {
+  let result = doc;
+  for (const id of ids) {
+    if (result.nodes.some((n) => n.step.id === id)) {
+      result = duplicateStep(result, id);
+    }
+  }
+  return result;
+}
+
+/** Remove every id in `ids`, treating each as either a step or a note. Steps are
+ * removed with their dependency cascade; notes are removed with no cascade. */
+export function deleteNodes(doc: BuilderDoc, ids: string[]): BuilderDoc {
+  let result = doc;
+  for (const id of ids) {
+    if (result.nodes.some((n) => n.step.id === id)) {
+      result = removeStep(result, id);
+    } else if (result.notes.some((note) => note.id === id)) {
+      result = removeNote(result, id);
+    }
+  }
+  return result;
+}
+
+/** Append a new note at (x, y) with a unique id. */
+export function addNote(
+  doc: BuilderDoc,
+  x: number,
+  y: number,
+  text = ""
+): BuilderDoc {
+  const id = uniqueNoteId(doc);
+  return {
+    ...doc,
+    notes: [...doc.notes, { id, text, x, y }],
+  };
+}
+
+/** Move a note to (x, y), clamped to non-negative coordinates. */
+export function moveNote(
+  doc: BuilderDoc,
+  id: string,
+  x: number,
+  y: number
+): BuilderDoc {
+  return {
+    ...doc,
+    notes: doc.notes.map((note) =>
+      note.id === id ? { ...note, x: Math.max(0, x), y: Math.max(0, y) } : note
+    ),
+  };
+}
+
+/** Update a note's text. */
+export function updateNote(
+  doc: BuilderDoc,
+  id: string,
+  text: string
+): BuilderDoc {
+  return {
+    ...doc,
+    notes: doc.notes.map((note) => (note.id === id ? { ...note, text } : note)),
+  };
+}
+
+/** Remove a note by id. */
+export function removeNote(doc: BuilderDoc, id: string): BuilderDoc {
+  return {
+    ...doc,
+    notes: doc.notes.filter((note) => note.id !== id),
+  };
+}
+
+/**
+ * Wrap a sticky note's text into display lines that fit the note box (NOTE_W
+ * wide, NOTE_H tall). Respects explicit newlines, soft-wraps on spaces,
+ * hard-breaks a word longer than a line, and caps the line count — the last
+ * shown line gets an ellipsis when content is clipped. Pure (no DOM/canvas
+ * measurement) so the SVG renderer stays declarative and this stays testable.
+ * `maxChars`/`maxLines` are tuned to NOTE_W=160 / NOTE_H=80 at fontSize 12.
+ */
+export function wrapNoteText(
+  text: string,
+  maxChars = 24,
+  maxLines = 4
+): string[] {
+  if (!text) return [];
+  const lines: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    if (paragraph.trim() === "") {
+      lines.push("");
+      continue;
+    }
+    let current = "";
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      let w = word;
+      // Hard-break a single word that can't fit on one line.
+      while (w.length > maxChars) {
+        if (current) {
+          lines.push(current);
+          current = "";
+        }
+        lines.push(w.slice(0, maxChars));
+        w = w.slice(maxChars);
+      }
+      if (!current) current = w;
+      else if (current.length + 1 + w.length <= maxChars) current += ` ${w}`;
+      else {
+        lines.push(current);
+        current = w;
+      }
+    }
+    if (current) lines.push(current);
+  }
+  if (lines.length <= maxLines) return lines;
+  const shown = lines.slice(0, maxLines);
+  const last = shown[maxLines - 1];
+  shown[maxLines - 1] =
+    last.length >= maxChars ? `${last.slice(0, maxChars - 1)}…` : `${last}…`;
+  return shown;
 }

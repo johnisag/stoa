@@ -13,7 +13,10 @@ interface Shortcut {
 const BUILDER_SHORTCUTS: Shortcut[] = [
   { chord: "mod+z", description: "Undo the last edit" },
   { chord: "mod+shift+z", description: "Redo an undone edit" },
-  { chord: "mod+d", description: "Duplicate the selected step" },
+  { chord: "mod+a", description: "Select all items" },
+  { chord: "mod+d", description: "Duplicate the selected step(s)" },
+  { chord: "Delete", description: "Delete selected item(s)" },
+  { chord: "Escape", description: "Clear selection" },
   { chord: "mod+shift+l", description: "Show this shortcut legend" },
 ];
 
@@ -51,10 +54,12 @@ export function WorkflowsShortcuts({ onClose }: { onClose: () => void }) {
       </dl>
 
       <p className="text-muted-foreground text-xs leading-relaxed">
-        Shortcuts are disabled while typing in a field. Tap a node to edit it,
-        drag a node&apos;s right-hand dot onto another to connect them, and tap
-        an edge to remove it. Right-click (or long-press on touch) a step for
-        Duplicate, Copy id, and Delete.
+        Shortcuts are disabled while typing in a field. Mouse: click an item to
+        edit it, Shift+click (or drag a lasso) to multi-select, drag a
+        node&apos;s right-hand dot onto another to connect them, and click an
+        edge to remove it. Touch: long-press a step for Duplicate, Copy id, and
+        Delete, or a note for Delete. Edges can also be removed from the
+        selected step&apos;s Depends on list.
       </p>
     </div>
   );

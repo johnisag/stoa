@@ -248,6 +248,7 @@ export function createSchema(db: Database.Database): void {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       builder_doc TEXT NOT NULL DEFAULT '{}',
+      history TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );

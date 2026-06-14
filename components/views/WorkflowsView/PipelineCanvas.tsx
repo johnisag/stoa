@@ -8,7 +8,11 @@ import {
   type RefObject,
 } from "react";
 import { Copy, Trash2 } from "lucide-react";
-import { CANVAS, type BuilderDoc } from "@/lib/pipeline/builder-model";
+import {
+  CANVAS,
+  wrapNoteText,
+  type BuilderDoc,
+} from "@/lib/pipeline/builder-model";
 import { cn } from "@/lib/utils";
 import {
   ContextMenu,
@@ -18,7 +22,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 
-const { NODE_W, NODE_H, PAD } = CANVAS;
+const { NODE_W, NODE_H, NOTE_W, NOTE_H, PAD } = CANVAS;
 
 /**
  * Interactive workflow canvas — draggable SVG nodes over a dependency-free render
@@ -30,29 +34,37 @@ const { NODE_W, NODE_H, PAD } = CANVAS;
  * empty canvas falls through to native scroll (the svg must NOT carry touch-none or it
  * would trap the page scroll on a phone). Each node has an output port on its right
  * edge — drag it onto another node to add that dependency edge. Controlled: the parent
- * owns the doc and applies onMoveNode/onSelectNode/onConnect.
+ * owns the doc and applies onMoveItems/onSelectNode/onConnect.
  */
 export function PipelineCanvas({
   doc,
-  selectedId,
+  selectedIds,
   errorIds,
   onSelectNode,
-  onMoveNode,
+  onMoveItems,
   onMoveEnd,
   onConnect,
   onDisconnect,
   onDuplicateNode,
-  onDeleteNode,
+  onDeleteItem,
   onCopyId,
   scrollRef,
 }: {
   doc: BuilderDoc;
-  selectedId: string | null;
+  selectedIds: Set<string>;
   /** Step ids that have validation errors — shown as a red badge on the node. */
   errorIds?: Set<string>;
-  onSelectNode: (id: string | null) => void;
-  onMoveNode: (id: string, x: number, y: number) => void;
-  /** Called when a node drag ends, so the parent can commit the move to history. */
+  onSelectNode: (
+    id: string | null,
+    opts?: {
+      shiftKey?: boolean;
+      addToSelection?: boolean;
+      keepSelection?: boolean;
+    }
+  ) => void;
+  /** Move many items at once during a multi-selection drag. */
+  onMoveItems: (updates: { id: string; x: number; y: number }[]) => void;
+  /** Called when a drag ends, so the parent can commit the move to history. */
   onMoveEnd?: () => void;
   /** Create a dependency edge by dragging from a node's output port to another. */
   onConnect: (from: string, to: string) => void;
@@ -60,22 +72,33 @@ export function PipelineCanvas({
   onDisconnect: (from: string, to: string) => void;
   /** Context-menu actions surfaced on a node. */
   onDuplicateNode: (id: string) => void;
-  onDeleteNode: (id: string) => void;
+  onDeleteItem: (id: string) => void;
   onCopyId: (id: string) => void;
   /** Ref to the scrollable container, used by the parent to recenter/fit-all. */
   scrollRef?: RefObject<HTMLDivElement | null>;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
-  // Active drag: which node, and the grab offset (pointer − node origin) so the
-  // node doesn't jump its top-left to the cursor on grab. A ref, not state, so a
-  // drag in flight doesn't re-render on every pointermove (only onMoveNode does).
-  const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  // Active drag: pointer start in SVG user space, plus the original position of
+  // every selected item (steps + notes). A ref, not state, so a drag in flight
+  // doesn't re-render on every pointermove (only onMoveItems does).
+  const drag = useRef<{
+    start: { x: number; y: number };
+    origins: Map<string, { x: number; y: number; isNote: boolean }>;
+    moved: boolean;
+  } | null>(null);
   // Active connection drag from a node's output port — needs state (not a ref)
   // because the rubber-band line follows the pointer and must re-render each move.
   const [connecting, setConnecting] = useState<{
     from: string;
     x: number;
     y: number;
+  } | null>(null);
+  // Lasso selection rectangle.
+  const [lasso, setLasso] = useState<{
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
   } | null>(null);
   // Long-press state: fire a synthetic context-menu event on touch after 500ms.
   const longPress = useRef<{
@@ -105,15 +128,116 @@ export function PipelineCanvas({
     return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
   }
 
+  function onSvgPointerDown(e: ReactPointerEvent) {
+    if (e.button !== 0) return;
+    if (e.pointerType !== "mouse") return;
+    if (e.target !== svgRef.current) return;
+    const p = toUser(e);
+    setLasso({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+    svgRef.current?.setPointerCapture(e.pointerId);
+    if (!e.shiftKey) onSelectNode(null);
+  }
+
+  function onSvgPointerMove(e: ReactPointerEvent) {
+    if (!lasso) return;
+    const p = toUser(e);
+    setLasso({ ...lasso, x1: p.x, y1: p.y });
+  }
+
+  function rectsOverlap(
+    ax1: number,
+    ay1: number,
+    ax2: number,
+    ay2: number,
+    bx1: number,
+    by1: number,
+    bx2: number,
+    by2: number
+  ) {
+    return ax1 < bx2 && ax2 > bx1 && ay1 < by2 && ay2 > by1;
+  }
+
+  function onSvgPointerUp(e: ReactPointerEvent) {
+    if (!lasso) return;
+    const l = Math.min(lasso.x0, lasso.x1);
+    const r = Math.max(lasso.x0, lasso.x1);
+    const t = Math.min(lasso.y0, lasso.y1);
+    const b = Math.max(lasso.y0, lasso.y1);
+
+    const hits: string[] = [];
+    for (const n of doc.nodes) {
+      if (rectsOverlap(l, t, r, b, n.x, n.y, n.x + NODE_W, n.y + NODE_H)) {
+        hits.push(n.step.id);
+      }
+    }
+    for (const note of doc.notes) {
+      if (
+        rectsOverlap(
+          l,
+          t,
+          r,
+          b,
+          note.x,
+          note.y,
+          note.x + NOTE_W,
+          note.y + NOTE_H
+        )
+      ) {
+        hits.push(note.id);
+      }
+    }
+
+    if (svgRef.current?.hasPointerCapture(e.pointerId)) {
+      svgRef.current.releasePointerCapture(e.pointerId);
+    }
+    setLasso(null);
+
+    if (!e.shiftKey) onSelectNode(null);
+    for (const id of hits) {
+      onSelectNode(id, { addToSelection: true });
+    }
+    if (hits.length > 0) {
+      onSelectNode(hits[0], { keepSelection: true });
+    }
+  }
+
+  function itemPosition(id: string) {
+    const node = doc.nodes.find((n) => n.step.id === id);
+    if (node) return { x: node.x, y: node.y, isNote: false };
+    const note = doc.notes.find((n) => n.id === id);
+    if (note) return { x: note.x, y: note.y, isNote: true };
+    return null;
+  }
+
   function onNodePointerDown(e: ReactPointerEvent, id: string) {
     // Only the primary button starts a drag / long-press.
     if (e.button !== 0) return;
     e.stopPropagation();
-    onSelectNode(id);
-    const node = doc.nodes.find((n) => n.step.id === id);
-    if (!node) return;
+
+    if (e.shiftKey) {
+      onSelectNode(id, { shiftKey: true });
+      return;
+    }
+
+    if (!selectedIds.has(id)) {
+      onSelectNode(id);
+    } else {
+      onSelectNode(id, { keepSelection: true });
+    }
+
+    // The parent may not have batched the selection update yet, so drag the
+    // clicked id along with any already-selected items.
+    const toDrag = selectedIds.has(id) ? selectedIds : new Set([id]);
     const p = toUser(e);
-    drag.current = { id, dx: p.x - node.x, dy: p.y - node.y };
+    const origins = new Map<
+      string,
+      { x: number; y: number; isNote: boolean }
+    >();
+    for (const itemId of toDrag) {
+      const pos = itemPosition(itemId);
+      if (pos) origins.set(itemId, pos);
+    }
+    drag.current = { start: p, origins, moved: false };
     e.currentTarget.setPointerCapture(e.pointerId);
 
     // Start a 500ms long-press timer to open the context menu on touch.
@@ -131,7 +255,7 @@ export function PipelineCanvas({
       clientY: e.clientY,
       timer: setTimeout(() => {
         // Cancel any in-flight drag and release capture before opening the menu.
-        if (drag.current?.id === id) {
+        if (drag.current) {
           try {
             longPress.current?.target.releasePointerCapture(
               longPress.current.pointerId
@@ -157,6 +281,7 @@ export function PipelineCanvas({
   }
 
   function onNodePointerMove(e: ReactPointerEvent) {
+    e.stopPropagation();
     if (longPress.current) {
       const p = toUser(e);
       const dx = p.x - longPress.current.x;
@@ -168,15 +293,24 @@ export function PipelineCanvas({
     }
     if (!drag.current) return;
     const p = toUser(e);
-    onMoveNode(drag.current.id, p.x - drag.current.dx, p.y - drag.current.dy);
+    const dx = p.x - drag.current.start.x;
+    const dy = p.y - drag.current.start.y;
+    drag.current.moved = true;
+
+    const updates: { id: string; x: number; y: number }[] = [];
+    for (const [id, origin] of drag.current.origins) {
+      updates.push({ id, x: origin.x + dx, y: origin.y + dy });
+    }
+    onMoveItems(updates);
   }
 
   function onNodePointerUp(e: ReactPointerEvent) {
+    e.stopPropagation();
     if (longPress.current) {
       clearTimeout(longPress.current.timer);
       longPress.current = null;
     }
-    const didDrag = !!drag.current;
+    const didDrag = drag.current?.moved ?? false;
     if (drag.current && e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
@@ -194,11 +328,13 @@ export function PipelineCanvas({
   }
 
   function onPortPointerMove(e: ReactPointerEvent) {
+    e.stopPropagation();
     const p = toUser(e);
     setConnecting((c) => (c ? { ...c, x: p.x, y: p.y } : c));
   }
 
   function onPortPointerUp(e: ReactPointerEvent) {
+    e.stopPropagation();
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
@@ -232,9 +368,23 @@ export function PipelineCanvas({
 
   const byId = new Map(doc.nodes.map((n) => [n.step.id, n]));
   const width =
-    PAD + Math.max(NODE_W, ...doc.nodes.map((n) => n.x + NODE_W)) + PAD;
+    PAD +
+    Math.max(
+      NODE_W,
+      NOTE_W,
+      ...doc.nodes.map((n) => n.x + NODE_W),
+      ...doc.notes.map((n) => n.x + NOTE_W)
+    ) +
+    PAD;
   const height =
-    PAD + Math.max(NODE_H, ...doc.nodes.map((n) => n.y + NODE_H)) + PAD;
+    PAD +
+    Math.max(
+      NODE_H,
+      NOTE_H,
+      ...doc.nodes.map((n) => n.y + NODE_H),
+      ...doc.notes.map((n) => n.y + NOTE_H)
+    ) +
+    PAD;
 
   return (
     <div
@@ -248,8 +398,10 @@ export function PipelineCanvas({
         height={height}
         viewBox={`0 0 ${width} ${height}`}
         className="text-foreground"
-        // Pointer-down on the empty canvas (not a node) clears the selection.
-        onPointerDown={() => onSelectNode(null)}
+        onPointerDown={onSvgPointerDown}
+        onPointerMove={onSvgPointerMove}
+        onPointerUp={onSvgPointerUp}
+        onPointerCancel={onSvgPointerUp}
       >
         <defs>
           <marker
@@ -285,7 +437,7 @@ export function PipelineCanvas({
                   d={d}
                   fill="none"
                   stroke="transparent"
-                  strokeWidth={14}
+                  strokeWidth={22}
                   pointerEvents="stroke"
                   onPointerDown={(e) => {
                     e.stopPropagation();
@@ -306,8 +458,86 @@ export function PipelineCanvas({
           })
         )}
 
+        {/* Lasso selection rectangle. */}
+        {lasso && (
+          <rect
+            x={Math.min(lasso.x0, lasso.x1)}
+            y={Math.min(lasso.y0, lasso.y1)}
+            width={Math.abs(lasso.x1 - lasso.x0)}
+            height={Math.abs(lasso.y1 - lasso.y0)}
+            className="fill-primary stroke-primary pointer-events-none"
+            fillOpacity={0.1}
+            strokeWidth={1}
+            strokeDasharray="4 3"
+          />
+        )}
+
+        {/* Sticky notes. */}
+        {doc.notes.map((note) => {
+          const selected = selectedIds.has(note.id);
+          const lines = wrapNoteText(note.text || "");
+          return (
+            <ContextMenu key={note.id}>
+              <ContextMenuTrigger asChild>
+                <g
+                  transform={`translate(${note.x}, ${note.y})`}
+                  tabIndex={0}
+                  role="button"
+                  aria-pressed={selected}
+                  aria-label={note.text || "Note"}
+                  className="group cursor-grab touch-none outline-none active:cursor-grabbing"
+                  onPointerDown={(e) => onNodePointerDown(e, note.id)}
+                  onPointerMove={onNodePointerMove}
+                  onPointerUp={onNodePointerUp}
+                  onPointerCancel={onNodePointerUp}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectNode(note.id);
+                    }
+                  }}
+                >
+                  <title>{note.text || "Note"}</title>
+                  <rect
+                    width={NOTE_W}
+                    height={NOTE_H}
+                    rx={4}
+                    strokeWidth={selected ? 2 : 1}
+                    className={cn(
+                      "fill-yellow-100 stroke-yellow-300 dark:fill-yellow-900 dark:stroke-yellow-700",
+                      selected && "stroke-primary dark:stroke-primary",
+                      "group-focus:stroke-primary"
+                    )}
+                  />
+                  <text
+                    x={10}
+                    y={16}
+                    fill="currentColor"
+                    fontSize={12}
+                    fontWeight={500}
+                  >
+                    {lines.map((line, i) => (
+                      <tspan key={i} x={10} dy={i === 0 ? 0 : 15}>
+                        {line}
+                      </tspan>
+                    ))}
+                  </text>
+                </g>
+              </ContextMenuTrigger>
+              <ContextMenuContent collisionPadding={8}>
+                <ContextMenuItem
+                  className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+                  onSelect={() => onDeleteItem(note.id)}
+                >
+                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          );
+        })}
+
         {doc.nodes.map((n) => {
-          const selected = n.step.id === selectedId;
+          const selected = selectedIds.has(n.step.id);
           const isDropTarget = n.step.id === hoverTargetId;
           const hasError = errorIds?.has(n.step.id) ?? false;
           const label = n.step.name || n.step.id;
@@ -317,6 +547,9 @@ export function PipelineCanvas({
                 <g
                   transform={`translate(${n.x}, ${n.y})`}
                   tabIndex={0}
+                  role="button"
+                  aria-pressed={selected}
+                  aria-label={label}
                   className="group cursor-grab touch-none outline-none active:cursor-grabbing"
                   onPointerDown={(e) => onNodePointerDown(e, n.step.id)}
                   onPointerMove={onNodePointerMove}
@@ -391,7 +624,7 @@ export function PipelineCanvas({
                 <ContextMenuSeparator />
                 <ContextMenuItem
                   className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
-                  onSelect={() => onDeleteNode(n.step.id)}
+                  onSelect={() => onDeleteItem(n.step.id)}
                 >
                   <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
                 </ContextMenuItem>
@@ -419,14 +652,14 @@ export function PipelineCanvas({
 
         {/* Output ports (drawn last, on top): drag one onto another node to wire a
             dependency. The visible dot is small (so most of the node stays a
-            move-drag target), but a larger transparent circle gives it a ~28px
+            move-drag target), but a larger transparent circle gives it a ~44px
             touch target on a phone. */}
         {doc.nodes.map((n) => (
           <g key={`port-${n.step.id}`}>
             <circle
               cx={n.x + NODE_W}
               cy={n.y + NODE_H / 2}
-              r={14}
+              r={22}
               fill="transparent"
               pointerEvents="all"
               className="cursor-crosshair touch-none"
