@@ -1,16 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { HelpCircle, Workflow } from "lucide-react";
+import { HelpCircle, Workflow, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
 import { useListRuns } from "@/data/pipelines/queries";
 import type { Session } from "@/lib/db";
@@ -26,36 +19,35 @@ import { WorkflowBuilder } from "./WorkflowBuilder";
 type Tab = "templates" | "build" | "custom" | "examples" | "runs";
 
 /**
- * Workflows control plane — a self-contained dialog (opened from the Desktop/
- * Mobile nav via setShowWorkflows). Four tabs: Templates (pick → fill params →
- * start a run), Custom (hand-author + validate a PipelineSpec, then run), Examples
- * (browse the pattern catalog), and Runs (recent runs' live step states). Renders
- * the templates/examples from lib/pipeline over the existing /api/pipelines backend.
+ * Workflows control plane — now a pane tab rather than a dialog. Four tabs:
+ * Templates (pick → fill params → start a run), Build (visual builder),
+ * Custom (hand-author + validate a PipelineSpec), Examples (browse the pattern
+ * catalog), and Runs (recent runs' live step states). Renders the
+ * templates/examples from lib/pipeline over the existing /api/pipelines backend.
  */
 export function WorkflowsView({
-  open,
-  onOpenChange,
   sessions,
   activeSessionId,
   onOpenSession,
   onOpenDispatch,
   onOpenVerdictInbox,
   onOpenFleetBoard,
+  onClose,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
   sessions: Session[];
   activeSessionId?: string;
   /**
    * Jump to a finished step's spawned worker by its Stoa session id. Optional —
-   * threaded down to RunDetail; supplied from app/page.tsx (attach machinery).
+   * threaded down to RunDetail; supplied from the pane (attach machinery).
    */
   onOpenSession?: (sessionId: string) => void;
-  /** Jump to a sibling fleet dialog (closes this one, opens the target).
-   * Optional — each renders an icon in the header; wired in app/page.tsx. */
+  /** Jump to a sibling fleet dialog (opens the target while this tab stays open).
+   * Optional — each renders an icon in the header; wired in the pane. */
   onOpenDispatch?: () => void;
   onOpenVerdictInbox?: () => void;
   onOpenFleetBoard?: () => void;
+  /** Optional close affordance, used on mobile where the tab strip is hidden. */
+  onClose?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("templates");
   const [pickedTemplate, setPickedTemplate] = useState<string | null>(null);
@@ -63,7 +55,7 @@ export function WorkflowsView({
   const [showHelp, setShowHelp] = useState(false);
 
   // Drives the "Runs" tab's active-count badge (deduped with RunsList's query).
-  const { data: runs = [] } = useListRuns(open);
+  const { data: runs = [] } = useListRuns(true);
   const active = runs.filter(
     (r) => r.status === "running" || r.status === "pending"
   ).length;
@@ -92,130 +84,127 @@ export function WorkflowsView({
     setTab("templates");
   }
 
-  // Reset the drill-down on close so reopening lands on a clean Templates tab —
-  // not a half-filled ParamForm (whose field state is gone) the user forgot
-  // they'd opened, nor a stale run detail.
-  function handleOpenChange(next: boolean) {
-    if (!next) {
-      setPickedTemplate(null);
-      setOpenRunId(null);
-      setShowHelp(false);
-      setTab("templates");
-    }
-    onOpenChange(next);
-  }
-
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="flex h-[85vh] w-[calc(100%-2rem)] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
-        <DialogHeader className="space-y-1 px-6 pt-6 pb-3 text-left">
-          <DialogTitle className="flex items-center gap-2">
-            <Workflow className="h-5 w-5" />
-            Workflows
-          </DialogTitle>
-          <DialogDescription>
-            Run a multi-step agent pipeline from a template — or author your own
-            in <span className="font-medium">Custom</span> — each step spawns a
-            worker (Claude, Codex, or Hermes) in its own git worktree. Tap{" "}
-            <span className="font-medium">?</span> for a quick guide.
-          </DialogDescription>
-        </DialogHeader>
-
-        {/* segmented control + help */}
-        <div className="flex flex-wrap items-center justify-between gap-2 px-6 pb-3">
-          <SegmentedTabs
-            ariaLabel="Workflows sections"
-            value={tab}
-            onChange={(key) => {
-              setTab(key);
-              setShowHelp(false);
-            }}
-            tabs={tabs.map((t) => ({
-              key: t.key,
-              label: t.label,
-              badge: t.count != null ? { count: t.count } : undefined,
-            }))}
-          />
-          <div className="flex items-center gap-0.5">
-            {/* Jump to a sibling fleet view without closing + reopening. */}
-            {onOpenDispatch && (
-              <NavIconButton
-                entry={fleetNavEntry("dispatch")}
-                onClick={onOpenDispatch}
-                variant="header"
-                tooltipSide="bottom"
-              />
-            )}
-            {onOpenVerdictInbox && (
-              <NavIconButton
-                entry={fleetNavEntry("verdict-inbox")}
-                onClick={onOpenVerdictInbox}
-                variant="header"
-                tooltipSide="bottom"
-              />
-            )}
-            {onOpenFleetBoard && (
-              <NavIconButton
-                entry={fleetNavEntry("fleet-board")}
-                onClick={onOpenFleetBoard}
-                variant="header"
-                tooltipSide="bottom"
-              />
-            )}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="How Workflows work"
-              title="How Workflows work"
-              aria-pressed={showHelp}
-              onClick={() => setShowHelp((v) => !v)}
-            >
-              <HelpCircle className="h-4 w-4" />
-            </Button>
+    <div className="bg-background flex h-full w-full flex-col gap-0 overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Workflow className="h-5 w-5" />
+          <div>
+            <h2 className="text-base font-semibold">Workflows</h2>
+            <p className="text-muted-foreground text-xs">
+              Run a multi-step agent pipeline from a template — or author your
+              own in <span className="font-medium">Custom</span>.
+            </p>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 pb-6">
-          {showHelp ? (
-            <WorkflowsHelp onClose={() => setShowHelp(false)} />
-          ) : tab === "templates" ? (
-            pickedTemplate ? (
-              <ParamForm
-                templateId={pickedTemplate}
-                sessions={sessions}
-                defaultConductorId={activeSessionId}
-                onBack={() => setPickedTemplate(null)}
-                onStarted={goToRun}
-              />
-            ) : (
-              <TemplatePicker onPick={setPickedTemplate} />
-            )
-          ) : tab === "build" ? (
-            <WorkflowBuilder
-              sessions={sessions}
-              defaultConductorId={activeSessionId}
-              onStarted={goToRun}
+        <div className="flex items-center gap-0.5">
+          {/* Jump to a sibling fleet view. */}
+          {onOpenDispatch && (
+            <NavIconButton
+              entry={fleetNavEntry("dispatch")}
+              onClick={onOpenDispatch}
+              variant="header"
+              tooltipSide="bottom"
             />
-          ) : tab === "custom" ? (
-            <CustomSpecForm
-              sessions={sessions}
-              defaultConductorId={activeSessionId}
-              onStarted={goToRun}
+          )}
+          {onOpenVerdictInbox && (
+            <NavIconButton
+              entry={fleetNavEntry("verdict-inbox")}
+              onClick={onOpenVerdictInbox}
+              variant="header"
+              tooltipSide="bottom"
             />
-          ) : tab === "examples" ? (
-            <ExamplesTab onRunTemplate={runFromExample} />
-          ) : openRunId ? (
-            <RunDetail
-              runId={openRunId}
-              open={open}
-              onBack={() => setOpenRunId(null)}
-              onOpenSession={onOpenSession}
+          )}
+          {onOpenFleetBoard && (
+            <NavIconButton
+              entry={fleetNavEntry("fleet-board")}
+              onClick={onOpenFleetBoard}
+              variant="header"
+              tooltipSide="bottom"
             />
-          ) : (
-            <RunsList open={open} onOpen={setOpenRunId} />
+          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="How Workflows work"
+            title="How Workflows work"
+            aria-pressed={showHelp}
+            onClick={() => setShowHelp((v) => !v)}
+          >
+            <HelpCircle className="h-4 w-4" />
+          </Button>
+          {onClose && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Close workflows"
+              title="Close workflows"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </Button>
           )}
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+
+      {/* segmented control */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-3">
+        <SegmentedTabs
+          ariaLabel="Workflows sections"
+          value={tab}
+          onChange={(key) => {
+            setTab(key);
+            setShowHelp(false);
+          }}
+          tabs={tabs.map((t) => ({
+            key: t.key,
+            label: t.label,
+            badge: t.count != null ? { count: t.count } : undefined,
+          }))}
+        />
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 pb-4">
+        {showHelp ? (
+          <WorkflowsHelp onClose={() => setShowHelp(false)} />
+        ) : tab === "templates" ? (
+          pickedTemplate ? (
+            <ParamForm
+              templateId={pickedTemplate}
+              sessions={sessions}
+              defaultConductorId={activeSessionId}
+              onBack={() => setPickedTemplate(null)}
+              onStarted={goToRun}
+            />
+          ) : (
+            <TemplatePicker onPick={setPickedTemplate} />
+          )
+        ) : tab === "build" ? (
+          <WorkflowBuilder
+            sessions={sessions}
+            defaultConductorId={activeSessionId}
+            onStarted={goToRun}
+          />
+        ) : tab === "custom" ? (
+          <CustomSpecForm
+            sessions={sessions}
+            defaultConductorId={activeSessionId}
+            onStarted={goToRun}
+          />
+        ) : tab === "examples" ? (
+          <ExamplesTab onRunTemplate={runFromExample} />
+        ) : openRunId ? (
+          <RunDetail
+            runId={openRunId}
+            open={true}
+            onBack={() => setOpenRunId(null)}
+            onOpenSession={onOpenSession}
+          />
+        ) : (
+          <RunsList open={true} onOpen={setOpenRunId} />
+        )}
+      </div>
+    </div>
   );
 }

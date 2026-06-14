@@ -39,8 +39,7 @@ export interface ViewProps {
   setShowDispatch: (show: boolean) => void;
   showAnalytics: boolean;
   setShowAnalytics: (show: boolean) => void;
-  showWorkflows: boolean;
-  setShowWorkflows: (show: boolean) => void;
+  onOpenWorkflows: () => void;
   showVerdictInbox: boolean;
   setShowVerdictInbox: (show: boolean) => void;
   showFleetBoard: boolean;

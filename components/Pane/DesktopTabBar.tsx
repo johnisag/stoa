@@ -17,6 +17,7 @@ import {
   PenLine,
   MessageSquarePlus,
   FileText,
+  Workflow,
 } from "lucide-react";
 import {
   Tooltip,
@@ -29,17 +30,12 @@ import { AutoApproveBadge } from "@/components/AutoApproveBadge";
 import { SnippetsModal } from "@/components/Terminal/SnippetsModal";
 import { useState, type ReactNode } from "react";
 import type { Session } from "@/lib/db";
+import type { TabData } from "@/lib/panes";
 
 type ViewMode = "terminal" | "files" | "git" | "workers";
 
-interface Tab {
-  id: string;
-  sessionId: string | null;
-  attachedTmux: string | null;
-}
-
 interface DesktopTabBarProps {
-  tabs: Tab[];
+  tabs: TabData[];
   activeTabId: string;
   session: Session | null | undefined;
   sessions: Session[];
@@ -158,7 +154,8 @@ export function DesktopTabBar({
 }: DesktopTabBarProps) {
   const [showSnippets, setShowSnippets] = useState(false);
 
-  const getTabName = (tab: Tab) => {
+  const getTabName = (tab: TabData) => {
+    if (tab.view === "workflows") return "Workflows";
     if (tab.sessionId) {
       const s = sessions.find((sess) => sess.id === tab.sessionId);
       return s?.name || tab.attachedTmux || "Session";
@@ -196,6 +193,7 @@ export function DesktopTabBar({
                   : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/50"
               )}
             >
+              {tab.view === "workflows" && <Workflow className="h-3.5 w-3.5" />}
               <span className="max-w-[120px] truncate">{getTabName(tab)}</span>
               {tabs.length > 1 && (
                 <button

@@ -28,7 +28,7 @@ export function MobileView({
   setShowQuickSwitcher,
   setShowDispatch,
   setShowAnalytics,
-  setShowWorkflows,
+  onOpenWorkflows,
   setShowVerdictInbox,
   setShowFleetBoard,
   setShowChat,
@@ -112,7 +112,7 @@ export function MobileView({
               setSidebarOpen(false);
             }}
             onShowWorkflows={() => {
-              setShowWorkflows(true);
+              onOpenWorkflows();
               setSidebarOpen(false);
             }}
             onShowVerdictInbox={() => {
@@ -175,7 +175,7 @@ export function MobileView({
         currentSessionId={focusedActiveTab?.sessionId ?? undefined}
         activeSessionWorkingDir={activeSession?.working_directory ?? undefined}
         onOpenDispatch={() => setShowDispatch(true)}
-        onOpenWorkflows={() => setShowWorkflows(true)}
+        onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={() => setShowVerdictInbox(true)}
         onOpenFleetBoard={() => setShowFleetBoard(true)}
         onOpenInsight={() => setShowAnalytics(true)}

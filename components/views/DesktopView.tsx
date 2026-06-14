@@ -58,7 +58,7 @@ export function DesktopView({
   setShowQuickSwitcher,
   setShowDispatch,
   setShowAnalytics,
-  setShowWorkflows,
+  onOpenWorkflows,
   setShowVerdictInbox,
   setShowFleetBoard,
   setShowChat,
@@ -366,7 +366,7 @@ export function DesktopView({
             <NavIconButton
               entry={fleetNavEntry("workflows")}
               variant="header"
-              onClick={() => setShowWorkflows(true)}
+              onClick={onOpenWorkflows}
               showLabel
             />
             <NavIconButton
@@ -432,7 +432,7 @@ export function DesktopView({
         currentSessionId={focusedActiveTab?.sessionId ?? undefined}
         activeSessionWorkingDir={activeSession?.working_directory ?? undefined}
         onOpenDispatch={() => setShowDispatch(true)}
-        onOpenWorkflows={() => setShowWorkflows(true)}
+        onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={() => setShowVerdictInbox(true)}
         onOpenFleetBoard={() => setShowFleetBoard(true)}
         onOpenInsight={() => setShowAnalytics(true)}

@@ -262,6 +262,15 @@ export function WorkflowBuilder({
     setPrimaryId(null);
   }
 
+  function handleGoToDefinitions(id: string) {
+    handleSelectNode(id);
+    // The useEffect keyed on primaryId scrolls automatically on a new selection,
+    // but only when the value changes. Force a scroll for repeated menu clicks.
+    requestAnimationFrame(() => {
+      editRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }
+
   function handleSelectNode(
     id: string | null,
     opts?: {
@@ -1044,6 +1053,7 @@ export function WorkflowBuilder({
             onDuplicateNode={handleDuplicate}
             onDeleteItem={handleConfirmDeleteItem}
             onCopyId={handleContextCopyId}
+            onGoToDefinitions={handleGoToDefinitions}
             scrollRef={canvasScrollRef}
           />
           <Minimap
