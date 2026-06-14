@@ -22,28 +22,42 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 function hostFromHeader(host: string | null): string | null {
   if (!host) return null;
-  // IPv6 bracket form ([::1]:3011) — strip brackets and any port.
+  // IPv6 bracket form ([::1] or [::1]:3011) — return the address inside brackets.
   if (host.startsWith("[")) {
     const end = host.indexOf("]");
     if (end > 0) return host.slice(1, end) || null;
     return null;
   }
   const colons = host.split(":").length - 1;
-  // IPv4 with port (e.g. 127.0.0.1:3011) — strip the port.
-  if (/^\d/.test(host) && colons === 4) {
-    return host.split(":")[0] || null;
-  }
-  // Plain IPv6 (no brackets, no port) has more than one colon.
+  // A single colon is host:port (IPv4 or a hostname) — strip the port.
+  if (colons === 1) return host.split(":")[0] || null;
+  // Bare IPv6 (no brackets, no port) has more than one colon — return as-is.
   if (colons > 1) return host;
-  // Hostname with optional port — strip the port.
-  return host.split(":")[0] || null;
+  // No colon — a bare hostname/IP.
+  return host || null;
+}
+
+/** HTTP header server.ts sets from the real TCP remote address. */
+export const REMOTE_ADDR_HEADER = "x-stoa-remote-addr";
+
+/**
+ * The trustworthy client IP. Next 16's custom server does NOT populate
+ * NextRequest.ip, so server.ts injects the connection's `req.socket.remoteAddress`
+ * as `x-stoa-remote-addr`, OVERWRITING any client-supplied copy — so this is not
+ * spoofable. Falls back to request.ip for runtimes that set it (and unit tests).
+ */
+function connectionIp(request: NextRequest): string | null {
+  const header = request.headers.get(REMOTE_ADDR_HEADER);
+  if (header) return header.trim() || null;
+  const ip = (request as unknown as { ip?: string | null }).ip;
+  return ip || null;
 }
 
 function looksLocal(request: NextRequest): boolean {
   // The connection IP is the only trustworthy signal. When it is present and NOT
   // loopback, reject immediately — a remote client can spoof Host/Origin/Referer
   // but cannot spoof the TCP remote address.
-  const ip = (request as unknown as { ip?: string | null }).ip;
+  const ip = connectionIp(request);
   if (ip) {
     const lower = ip.toLowerCase();
     if (
@@ -478,11 +492,10 @@ const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_REQUESTS = 60;
 
 function getClientIp(request: NextRequest): string {
-  // Use the connection IP only. X-Forwarded-For is client-supplied and trivially
-  // spoofed, so trusting it would let a remote caller bypass per-client rate limits.
-  const ip = (request as unknown as { ip?: string | null }).ip;
-  if (ip) return ip;
-  return "unknown";
+  // Use the connection IP only (server-injected from req.socket.remoteAddress).
+  // X-Forwarded-For is client-supplied and trivially spoofed, so trusting it
+  // would let a remote caller bypass per-client rate limits.
+  return connectionIp(request) ?? "unknown";
 }
 
 export function checkRateLimit(request: NextRequest): {

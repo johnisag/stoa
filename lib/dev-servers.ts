@@ -19,6 +19,29 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Resolve the (file, args) to spawn for a dev-server binary. On Windows a
+ * `.cmd`/`.bat` shim (npm/npx/yarn/pnpm/next) CANNOT be spawned directly with
+ * shell:false: a full `.cmd` path EINVALs since the CVE-2024-27980 hardening
+ * (Node ≥18.20). Route it through `cmd.exe /c` WITHOUT shell:true, so Node still
+ * quotes each argv entry (no injection — tokenizeCommand already rejected shell
+ * metacharacters). Pure → unit-tested on every OS via `onWindows`. Mirrors
+ * spawnArgs (verify) / resolveSpawn (pty backend).
+ */
+export function resolveDevServerSpawn(
+  binaryPath: string,
+  args: string[],
+  onWindows: boolean
+): { file: string; args: string[] } {
+  if (onWindows && /\.(cmd|bat)$/i.test(binaryPath)) {
+    return {
+      file: process.env.ComSpec || "cmd.exe",
+      args: ["/c", binaryPath, ...args],
+    };
+  }
+  return { file: binaryPath, args };
+}
+
 const LOGS_DIR = path.join(homeDir(), ".stoa", "logs");
 
 // Ensure logs directory exists
@@ -261,7 +284,13 @@ async function spawnNodeServer(
     throw new UnsafeCommandError(`Command not found on PATH: ${binaryName}`);
   }
 
-  const child = spawn(binaryPath, argv.slice(1), {
+  const { file: spawnFile, args: spawnArgv } = resolveDevServerSpawn(
+    binaryPath,
+    argv.slice(1),
+    isWindows
+  );
+
+  const child = spawn(spawnFile, spawnArgv, {
     cwd,
     env,
     shell: false,

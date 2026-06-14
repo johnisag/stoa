@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  afterAll,
+  vi,
+} from "vitest";
 import { createRequire } from "module";
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -94,42 +102,40 @@ describe("stoa CLI: isGitInstall (git-checkout vs npm-global detection)", () => 
 });
 
 describe("stoa CLI: port resolution", () => {
+  // In VM test pools the module cannot be reliably re-evaluated per case, so
+  // load it once and vary env via vi.stubEnv (which is visible to the getter).
+  const cli = loadCliWith({ STOA_PORT: undefined, PORT: undefined });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("defaults to 3011 when neither STOA_PORT nor PORT is set", () => {
-    const cli = loadCliWith({ STOA_PORT: undefined, PORT: undefined });
     expect(cli.PORT).toBe("3011");
     expect(cli.serverEnv().PORT).toBe("3011");
   });
 
   it("maps STOA_PORT into the spawned server env as PORT", () => {
-    const cli = loadCliWith({ STOA_PORT: "3022", PORT: undefined });
+    vi.stubEnv("STOA_PORT", "3022");
     expect(cli.PORT).toBe("3022");
     expect(cli.serverEnv().PORT).toBe("3022");
   });
 
   it("honors raw PORT only when STOA_PORT is unset", () => {
-    expect(loadCliWith({ STOA_PORT: undefined, PORT: "4000" }).PORT).toBe(
-      "4000"
-    );
-    expect(loadCliWith({ STOA_PORT: "3022", PORT: "4000" }).PORT).toBe("3022");
+    vi.stubEnv("PORT", "4000");
+    expect(cli.PORT).toBe("4000");
+    vi.stubEnv("STOA_PORT", "3022");
+    expect(cli.PORT).toBe("3022");
   });
 
   it("emits exactly one canonical PORT key", () => {
-    const saved = { ...process.env };
-    try {
-      process.env.Port = "9999";
-      const env = loadCliWith({
-        STOA_PORT: "3022",
-        PORT: undefined,
-      }).serverEnv();
-      expect(
-        Object.keys(env).filter((k) => k.toUpperCase() === "PORT")
-      ).toEqual(["PORT"]);
-      expect(env.PORT).toBe("3022");
-    } finally {
-      for (const key of Object.keys(process.env))
-        if (!(key in saved)) delete process.env[key];
-      Object.assign(process.env, saved);
-    }
+    vi.stubEnv("Port", "9999");
+    vi.stubEnv("STOA_PORT", "3022");
+    const env = cli.serverEnv();
+    expect(Object.keys(env).filter((k) => k.toUpperCase() === "PORT")).toEqual([
+      "PORT",
+    ]);
+    expect(env.PORT).toBe("3022");
   });
 });
 

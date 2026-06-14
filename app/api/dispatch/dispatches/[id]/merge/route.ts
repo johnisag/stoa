@@ -41,12 +41,25 @@ export async function POST(
     // worktree is only a fallback when the repo row is gone (a reclaimed worktree
     // cwd otherwise makes gh's spawn throw a misleading ENOENT).
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-      | { repo_path: string; repo_slug: string }
+      | { repo_path: string; repo_slug: string; review_gate: number }
       | undefined;
     const cwd = expandHome(repo?.repo_path || d.worktree_path || "");
     if (!cwd) {
       return NextResponse.json(
         { error: "No checkout to merge from" },
+        { status: 409 }
+      );
+    }
+    // On a review-gated repo the merge MUST be pinned to the reviewed head, or a
+    // commit pushed after the panel's APPROVED could slip in. A missing review_sha
+    // means there's nothing to pin to, so refuse (mirrors auto-merge's wait). A
+    // non-gated repo has no verdict and legitimately merges unpinned.
+    if (repo?.review_gate && d.review_sha == null) {
+      return NextResponse.json(
+        {
+          error:
+            "This repo is review-gated but the PR has no pinned review SHA yet — re-run the review, then merge.",
+        },
         { status: 409 }
       );
     }

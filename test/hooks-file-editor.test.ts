@@ -64,4 +64,43 @@ describe("useFileEditor", () => {
       "/second.txt",
     ]);
   });
+
+  it("closing the active tab switches to a neighbor (not null); closing a non-active tab leaves active alone", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      const path = url.searchParams.get("path")!;
+      return {
+        json: async () => ({ path, content: "x", isBinary: false }),
+      } as Response;
+    });
+
+    const { result } = renderHook(() => useFileEditor());
+    await act(async () => {
+      await result.current.openFile("/a.txt");
+    });
+    await act(async () => {
+      await result.current.openFile("/b.txt");
+    });
+    await act(async () => {
+      await result.current.openFile("/c.txt");
+    });
+    expect(result.current.activeFilePath).toBe("/c.txt");
+
+    // Close the ACTIVE tab — active must move to the neighbor, NOT clear to null.
+    act(() => {
+      result.current.closeFile("/c.txt");
+    });
+    expect(result.current.openFiles.map((f) => f.path)).toEqual([
+      "/a.txt",
+      "/b.txt",
+    ]);
+    expect(result.current.activeFilePath).toBe("/b.txt");
+
+    // Close a NON-active tab — the active tab is unchanged.
+    act(() => {
+      result.current.closeFile("/a.txt");
+    });
+    expect(result.current.openFiles.map((f) => f.path)).toEqual(["/b.txt"]);
+    expect(result.current.activeFilePath).toBe("/b.txt");
+  });
 });

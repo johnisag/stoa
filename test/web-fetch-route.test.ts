@@ -204,6 +204,21 @@ describe("POST /api/web-fetch", () => {
     expect(written[0].content).toContain("a < b and c > d");
   });
 
+  it("returns a structured 500 when saving the temp file fails", async () => {
+    // The post-fetch write is no longer outside any try/catch — a disk error
+    // (EACCES/ENOSPC) must surface as JSON, not escape as an opaque error.
+    mockedLookup.mockResolvedValue(publicAddr());
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      okResponse("<p>hello</p>")
+    );
+    mockWriteFileSync.mockImplementation(() => {
+      throw new Error("ENOSPC: no space left on device");
+    });
+    const res = await POST(makeRequest({ url: "http://example.com/page" }));
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toMatch(/ENOSPC/);
+  });
+
   it("rate-limits repeated requests", async () => {
     mockedLookup.mockResolvedValue(publicAddr());
     const results: Response[] = [];

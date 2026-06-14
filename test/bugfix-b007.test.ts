@@ -6,28 +6,10 @@
  * not). An id containing a reserved char (#, &, /, space) otherwise corrupts the
  * request — e.g. `#` truncates the path at a fragment, `&` injects a query param.
  *
- * Drives the REAL request handler from the server module: we mock the MCP SDK's
- * Server to capture the registered CallToolRequestSchema handler, no-op the stdio
- * transport so the module's main() is harmless, and stub fetch to record the URL.
+ * We call the exported tool handler directly with a stubbed global fetch and
+ * assert the URLs it constructs.
  */
-import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
-
-// Capture the CallToolRequestSchema handler the module registers, and no-op the
-// transport/connect so importing the module doesn't try to talk over stdio.
-const handlers = vi.hoisted(
-  () => new Map<unknown, (req: unknown) => Promise<unknown>>()
-);
-vi.mock("@modelcontextprotocol/sdk/server/index.js", () => ({
-  Server: class {
-    setRequestHandler(schema: unknown, fn: (req: unknown) => Promise<unknown>) {
-      handlers.set(schema, fn);
-    }
-    async connect() {}
-  },
-}));
-vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
-  StdioServerTransport: class {},
-}));
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // Deterministic conductor id (no marker lookup against the real cwd).
 vi.mock("../lib/conductor-marker", () => ({
@@ -35,7 +17,7 @@ vi.mock("../lib/conductor-marker", () => ({
   pickConductorId: (supplied: string | undefined) => supplied ?? null,
 }));
 
-import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { handleToolCall } from "../mcp/orchestration-tools";
 
 // Record every fetched URL; return a benign JSON body so each handler branch
 // completes without throwing.
@@ -60,16 +42,8 @@ const fetchMock = vi.fn(async (url: string | URL) => {
 });
 vi.stubGlobal("fetch", fetchMock);
 
-// Import after the mocks are in place; this registers the handler. Done inside
-// beforeAll (not at top level) so it runs within the vitest runner context.
-beforeAll(async () => {
-  await import("../mcp/orchestration-server");
-});
-
 function callTool(name: string, args: Record<string, unknown>) {
-  const handler = handlers.get(CallToolRequestSchema);
-  if (!handler) throw new Error("CallToolRequestSchema handler not registered");
-  return handler({ params: { name, arguments: args } });
+  return handleToolCall({ params: { name, arguments: args } });
 }
 
 // An id with reserved URL chars: `#` (fragment), `&`+`=` (query injection),

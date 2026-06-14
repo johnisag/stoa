@@ -56,6 +56,7 @@ import {
 } from "./lib/budget";
 import { backendKeyForSession } from "./lib/providers/registry";
 import { getDb, queries, type Session } from "./lib/db";
+import { REMOTE_ADDR_HEADER } from "./lib/api-security";
 import { statusDetector, type SessionStatus } from "./lib/status-detector";
 import {
   getServerToken,
@@ -100,6 +101,13 @@ app.prepare().then(() => {
   const server = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url!, true);
+
+      // Inject the real TCP remote address as a trusted header so API routes can
+      // gate on the connection IP (Next 16 doesn't populate NextRequest.ip).
+      // OVERWRITE any client-supplied copy so a remote caller can't spoof it.
+      const remoteAddr = req.socket.remoteAddress;
+      if (remoteAddr) req.headers[REMOTE_ADDR_HEADER] = remoteAddr;
+      else delete req.headers[REMOTE_ADDR_HEADER];
 
       if (AUTH_ENABLED) {
         const decision = decideHttpAuth({

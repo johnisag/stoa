@@ -22,6 +22,8 @@ import { getLessonsBlockForCwd } from "@/lib/dispatch/lessons";
 import {
   parseJsonBody,
   resolveSandboxedPath,
+  resolveSandboxedPathOrHome,
+  getAllowedPathRoots,
   sanitizeGroupPath,
   sanitizeSessionName,
   SYSTEM_PROMPT_MAX_LENGTH,
@@ -74,10 +76,16 @@ function resolveProjectPath(
   project: { working_directory: string } | null | undefined
 ): { allowed: boolean; resolved: string } {
   const resolved = expandHome(input);
-  const roots = project
-    ? [expandHome(project.working_directory)]
-    : [expandHome("~")];
-  return resolveSandboxedPath(resolved, roots);
+  // A project-bound session is confined to that project's workspace. A
+  // projectless session may sit in ANY already-registered root (other projects,
+  // repos, dispatch repos, live sessions, Stoa-managed dirs) or under the user's
+  // home — not home-only, which 403s the common "repo on D:\ / /opt" layout.
+  if (project) {
+    return resolveSandboxedPath(resolved, [
+      expandHome(project.working_directory),
+    ]);
+  }
+  return resolveSandboxedPathOrHome(resolved, getAllowedPathRoots());
 }
 
 // POST /api/sessions - Create new session

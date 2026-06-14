@@ -290,6 +290,21 @@ describe("checkRateLimit", () => {
     // Same connection IP as reqA, even though X-Forwarded-For differs.
     expect(checkRateLimit(reqB).allowed).toBe(false);
   });
+
+  it("keys by the server-injected x-stoa-remote-addr header (Next 16 has no request.ip)", () => {
+    // Production path: the custom server sets x-stoa-remote-addr; request.ip is
+    // undefined. Distinct header values must get distinct buckets.
+    const reqA = {
+      headers: new Headers({ "x-stoa-remote-addr": "5.5.5.5" }),
+    } as unknown as NextRequest;
+    const reqB = {
+      headers: new Headers({ "x-stoa-remote-addr": "6.6.6.6" }),
+    } as unknown as NextRequest;
+    for (let i = 0; i < 60; i++)
+      expect(checkRateLimit(reqA).allowed).toBe(true);
+    expect(checkRateLimit(reqA).allowed).toBe(false); // A exhausted
+    expect(checkRateLimit(reqB).allowed).toBe(true); // B is a separate bucket
+  });
 });
 
 describe("requireLocalhost", () => {
@@ -308,6 +323,12 @@ describe("requireLocalhost", () => {
     expect(requireLocalhost(makeRequest("localhost:3011")).ok).toBe(true);
   });
 
+  it("strips the port from an IPv4 Host (127.0.0.1:3011)", () => {
+    // A single colon is host:port; the old `colons === 4` branch never matched
+    // an IPv4:port and the value only survived by accident.
+    expect(requireLocalhost(makeRequest("127.0.0.1:3011")).ok).toBe(true);
+  });
+
   it("rejects non-local hosts", () => {
     const result = requireLocalhost(makeRequest("evil.com"));
     expect(result.ok).toBe(false);
@@ -321,5 +342,25 @@ describe("requireLocalhost", () => {
     const req = { headers, ip: "192.168.1.1" } as unknown as NextRequest;
     const result = requireLocalhost(req);
     expect(result.ok).toBe(false);
+  });
+
+  it("trusts x-stoa-remote-addr over a spoofed Host (production path, no request.ip)", () => {
+    // A remote client connecting with a spoofed `Host: localhost` is rejected
+    // because the server-injected connection IP says otherwise.
+    const remote = {
+      headers: new Headers({
+        host: "localhost",
+        "x-stoa-remote-addr": "203.0.113.7",
+      }),
+    } as unknown as NextRequest;
+    expect(requireLocalhost(remote).ok).toBe(false);
+
+    const local = {
+      headers: new Headers({
+        host: "evil.com",
+        "x-stoa-remote-addr": "127.0.0.1",
+      }),
+    } as unknown as NextRequest;
+    expect(requireLocalhost(local).ok).toBe(true);
   });
 });

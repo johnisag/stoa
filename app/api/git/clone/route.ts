@@ -141,19 +141,35 @@ export async function POST(request: NextRequest) {
   // Clone the repository via execFile (no shell): url/clonePath are discrete
   // argv tokens, so shell metacharacters in the URL can't inject commands.
   // The `--` stops a `-`-leading url from being read as a git flag.
-  const { stderr } = await execFileAsync(
-    "git",
-    ["clone", "--", url, clonePath],
-    {
-      timeout: 120000,
-      // Windows: suppress the per-call conhost.exe console flash. No-op on POSIX.
-      windowsHide: isWindows,
-    }
-  );
+  // execFile REJECTS on a non-zero exit (auth failure, repo not found, network),
+  // so wrap it to return a descriptive error instead of an opaque 500.
+  try {
+    const { stderr } = await execFileAsync(
+      "git",
+      ["clone", "--", url, clonePath],
+      {
+        timeout: 120000,
+        // Windows: suppress the per-call conhost.exe console flash. No-op on POSIX.
+        windowsHide: isWindows,
+      }
+    );
 
-  // git clone outputs progress to stderr, not an error
-  if (stderr && stderr.includes("fatal:")) {
-    return NextResponse.json({ error: stderr.trim() }, { status: 500 });
+    // git clone outputs progress to stderr, not an error
+    if (stderr && stderr.includes("fatal:")) {
+      return NextResponse.json({ error: stderr.trim() }, { status: 500 });
+    }
+  } catch (error) {
+    // A failed clone surfaces its reason on stderr (e.g. "fatal: repository not
+    // found", auth prompt declined). Prefer that over the generic exec message.
+    const stderr =
+      typeof (error as { stderr?: unknown }).stderr === "string"
+        ? (error as { stderr: string }).stderr.trim() || ""
+        : "";
+    const message =
+      stderr ||
+      (error instanceof Error ? error.message : "Failed to clone repository");
+    console.error("Error cloning repository:", message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   return NextResponse.json({
