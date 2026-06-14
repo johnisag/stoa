@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { HelpCircle, Workflow, X } from "lucide-react";
+import { HelpCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
 import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
@@ -85,21 +85,22 @@ export function WorkflowsView({
   }
 
   return (
-    <div className="bg-background flex h-full w-full flex-col gap-0 overflow-hidden">
-      <div className="flex items-center justify-between gap-2 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Workflow className="h-5 w-5" />
-          <div>
-            <h2 className="text-base font-semibold">Workflows</h2>
-            <p className="text-muted-foreground text-xs">
-              Run a multi-step agent pipeline from a template — or author your
-              own in <span className="font-medium">Custom</span>.
-            </p>
-          </div>
-        </div>
-
+    <div className="bg-background flex h-full min-h-0 w-full flex-col gap-0 overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
+        <SegmentedTabs
+          ariaLabel="Workflows sections"
+          value={tab}
+          onChange={(key) => {
+            setTab(key);
+            setShowHelp(false);
+          }}
+          tabs={tabs.map((t) => ({
+            key: t.key,
+            label: t.label,
+            badge: t.count != null ? { count: t.count } : undefined,
+          }))}
+        />
         <div className="flex items-center gap-0.5">
-          {/* Jump to a sibling fleet view. */}
           {onOpenDispatch && (
             <NavIconButton
               entry={fleetNavEntry("dispatch")}
@@ -146,23 +147,6 @@ export function WorkflowsView({
             </Button>
           )}
         </div>
-      </div>
-
-      {/* segmented control */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-3">
-        <SegmentedTabs
-          ariaLabel="Workflows sections"
-          value={tab}
-          onChange={(key) => {
-            setTab(key);
-            setShowHelp(false);
-          }}
-          tabs={tabs.map((t) => ({
-            key: t.key,
-            label: t.label,
-            badge: t.count != null ? { count: t.count } : undefined,
-          }))}
-        />
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-4">

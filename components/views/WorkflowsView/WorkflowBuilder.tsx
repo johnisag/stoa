@@ -753,17 +753,8 @@ export function WorkflowBuilder({
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col items-start justify-between gap-2 sm:flex-row">
-        <div>
-          <h3 className="text-sm font-medium">Visual builder</h3>
-          <p className="text-muted-foreground text-xs leading-relaxed">
-            Drag steps and sticky notes to arrange the canvas; tap one to edit
-            it. Drag a step’s dot onto another to connect them. Right-click or
-            long-press for more options. Steps with no path between them run in
-            parallel.
-          </p>
-        </div>
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
           <Button
             type="button"
@@ -1035,12 +1026,12 @@ export function WorkflowBuilder({
       </div>
 
       {doc.nodes.length === 0 && doc.notes.length === 0 ? (
-        <div className="text-muted-foreground rounded-md border border-dashed px-3 py-8 text-center text-xs">
+        <div className="text-muted-foreground flex flex-1 items-center justify-center rounded-md border border-dashed px-3 text-center text-xs">
           No steps yet — tap <span className="font-medium">Add step</span> to
           add your first node.
         </div>
       ) : (
-        <div className="relative">
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border">
           <PipelineCanvas
             doc={doc}
             selectedIds={selectedIds}

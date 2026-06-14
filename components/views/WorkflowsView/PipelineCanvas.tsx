@@ -392,7 +392,7 @@ export function PipelineCanvas({
   return (
     <div
       ref={scrollRef}
-      className="bg-muted/20 max-h-[40vh] overflow-auto rounded-md border"
+      className="bg-muted/20 h-full w-full overflow-auto"
       onContextMenu={(e) => e.preventDefault()}
     >
       <svg
