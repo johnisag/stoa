@@ -87,3 +87,7 @@ workflows-must-have.md
 BUGS.md
 .tmp-*.mjs
 tmp-*.mjs
+
+# Kimi agent swarm scratchpads (local status/bug-hunting notes)
+competitor-wins-kimi.md
+new-bugs-kimi.md
