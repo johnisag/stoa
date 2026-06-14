@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
 import {
   Check,
+  ClipboardPaste,
   Copy,
   Download,
   FileJson,
@@ -21,6 +22,7 @@ import {
   Wand2,
 } from "lucide-react";
 import {
+  addPresetStep,
   addStep,
   connect,
   disconnect,
@@ -29,6 +31,7 @@ import {
   docToSpec,
   duplicateStep,
   moveNode,
+  nextAutoPosition,
   relayout,
   removeStep,
   renameStep,
@@ -38,6 +41,7 @@ import {
   CANVAS,
   type BuilderDoc,
 } from "@/lib/pipeline/builder-model";
+import { WORKFLOW_SNIPPETS } from "@/lib/pipeline/snippets";
 import { validateSpec } from "@/lib/pipeline/engine";
 import { useStartRun } from "@/data/pipelines/queries";
 import {
@@ -53,6 +57,7 @@ import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { PipelineCanvas } from "./PipelineCanvas";
 import { WorkflowsShortcuts } from "./WorkflowsShortcuts";
+import { SnippetsPanel } from "./SnippetsPanel";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -136,6 +141,8 @@ export function WorkflowBuilder({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const canvasScrollRef = useRef<HTMLDivElement | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
   // Bring the edit panel into view when a node is selected — on a phone it sits
   // below a tall canvas, so tapping a node would otherwise open a form off-screen.
   const editRef = useRef<HTMLDivElement>(null);
@@ -188,9 +195,10 @@ export function WorkflowBuilder({
     setSelectedId(null);
   }
 
-  function handleDuplicate() {
-    if (!selectedId) return;
-    const next = duplicateStep(doc, selectedId);
+  function handleDuplicate(id?: string) {
+    const sourceId = id ?? selectedId;
+    if (!sourceId) return;
+    const next = duplicateStep(doc, sourceId);
     if (next === doc) return;
     setDoc(next);
     const copy = next.nodes[next.nodes.length - 1];
@@ -237,6 +245,48 @@ export function WorkflowBuilder({
     }
   }
 
+  const parsedImport = useMemo(() => {
+    if (!pasteText.trim()) return null;
+    return docFromImportedJson(pasteText);
+  }, [pasteText]);
+
+  type PastePreview =
+    | { ok: null; count: number; name: string }
+    | { ok: false; count: number; name: string }
+    | { ok: true; count: number; name: string };
+
+  const pastePreview = useMemo<PastePreview>(() => {
+    if (!pasteText.trim()) return { ok: null, count: 0, name: "" };
+    if (!parsedImport) return { ok: false, count: 0, name: "" };
+    return {
+      ok: true,
+      count: parsedImport.nodes.length,
+      name: parsedImport.name,
+    };
+  }, [pasteText, parsedImport]);
+
+  async function handlePasteImport() {
+    if (!parsedImport) {
+      toast.error("That JSON isn’t a valid workflow.");
+      return;
+    }
+    if (
+      doc.nodes.length > 0 &&
+      !(await confirm({
+        title: "Replace current workflow?",
+        description: `Importing will replace the current ${doc.nodes.length}-step workflow.`,
+      }))
+    ) {
+      return;
+    }
+    loadDoc(parsedImport, null);
+    setPasteOpen(false);
+    setPasteText("");
+    toast.success(
+      `Imported ${parsedImport.nodes.length} step${parsedImport.nodes.length === 1 ? "" : "s"}`
+    );
+  }
+
   const keybindings: Keybinding[] = useMemo(
     () => [
       { chord: "mod+z", action: "undo", description: "Undo" },
@@ -269,9 +319,7 @@ export function WorkflowBuilder({
   function handleAdd() {
     // Cascade new nodes so they don't stack on top of each other; the user drags
     // them where they want.
-    const i = doc.nodes.length;
-    const x = CANVAS.PAD + (i % 4) * (CANVAS.NODE_W + 24);
-    const y = CANVAS.PAD + Math.floor(i / 4) * (CANVAS.NODE_H + 40);
+    const { x, y } = nextAutoPosition(doc);
     const next = addStep(doc, x, y);
     setDoc(next);
     setSelectedId(next.nodes[next.nodes.length - 1].step.id);
@@ -365,10 +413,19 @@ export function WorkflowBuilder({
     e.target.value = ""; // let the same file be picked again
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const next = docFromImportedJson(String(reader.result ?? ""));
       if (!next) {
         toast.error("That file isn’t a valid workflow JSON.");
+        return;
+      }
+      if (
+        doc.nodes.length > 0 &&
+        !(await confirm({
+          title: "Replace current workflow?",
+          description: `Importing will replace the current ${doc.nodes.length}-step workflow.`,
+        }))
+      ) {
         return;
       }
       loadDoc(next, null); // imported = a fresh unsaved draft
@@ -427,6 +484,22 @@ export function WorkflowBuilder({
     setSelectedId(null);
   }
 
+  async function handleContextCopyId(id: string) {
+    if (await copyText(id)) {
+      toast.success(`Copied step id “${id}”`);
+    } else {
+      toast.error("Could not copy to clipboard");
+    }
+  }
+
+  function handleSnippetSelect(snippetId: string) {
+    const snippet = WORKFLOW_SNIPPETS.find((s) => s.id === snippetId);
+    if (!snippet) return;
+    const next = addPresetStep(doc, snippet);
+    setDoc(next);
+    setSelectedId(next.nodes[next.nodes.length - 1].step.id);
+  }
+
   async function handleStart() {
     if (!valid || !conductorId) return;
     try {
@@ -450,8 +523,9 @@ export function WorkflowBuilder({
           <h3 className="text-sm font-medium">Visual builder</h3>
           <p className="text-muted-foreground text-xs leading-relaxed">
             Drag the boxes to arrange your DAG; tap one to edit it. Drag a box’s
-            dot onto another box to connect them. Steps with no path between
-            them run in parallel.
+            dot onto another box to connect them. Right-click or long-press a
+            step for more options. Steps with no path between them run in
+            parallel.
           </p>
         </div>
         <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
@@ -557,6 +631,9 @@ export function WorkflowBuilder({
               <DropdownMenuItem onSelect={() => fileRef.current?.click()}>
                 <Upload className="mr-2 h-3.5 w-3.5" /> Import workflow…
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPasteOpen(true)}>
+                <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> Paste JSON
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={handleExport}
                 disabled={doc.nodes.length === 0}
@@ -643,7 +720,7 @@ export function WorkflowBuilder({
       {doc.nodes.length === 0 ? (
         <div className="text-muted-foreground rounded-md border border-dashed px-3 py-8 text-center text-xs">
           No steps yet — tap <span className="font-medium">Add step</span> to
-          drop your first node.
+          add your first node.
         </div>
       ) : (
         <PipelineCanvas
@@ -655,9 +732,14 @@ export function WorkflowBuilder({
           onMoveEnd={handleMoveEnd}
           onConnect={(from, to) => setDoc((d) => connect(d, from, to))}
           onDisconnect={(from, to) => setDoc((d) => disconnect(d, from, to))}
+          onDuplicateNode={handleDuplicate}
+          onDeleteNode={handleDelete}
+          onCopyId={handleContextCopyId}
           scrollRef={canvasScrollRef}
         />
       )}
+
+      <SnippetsPanel onSelectSnippet={handleSnippetSelect} />
 
       {/* Edit panel for the selected node. */}
       {selected && (
@@ -672,7 +754,7 @@ export function WorkflowBuilder({
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={handleDuplicate}
+                onClick={() => handleDuplicate()}
                 title="Duplicate step (Ctrl/Cmd+D)"
               >
                 <Copy className="mr-1.5 h-3.5 w-3.5" /> Duplicate
@@ -909,6 +991,67 @@ export function WorkflowBuilder({
             Keyboard shortcuts available on the workflow builder canvas.
           </DialogDescription>
           <WorkflowsShortcuts onClose={() => setShortcutsOpen(false)} />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pasteOpen}
+        onOpenChange={(open) => {
+          setPasteOpen(open);
+          if (!open) setPasteText("");
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>Paste workflow JSON</DialogTitle>
+          <DialogDescription>
+            Paste a saved workflow or a bare pipeline spec — positions will be
+            seeded automatically.
+          </DialogDescription>
+          <Textarea
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            placeholder={'{ "name": "...", "steps": [...] }'}
+            spellCheck={false}
+            className="min-h-[160px] font-mono text-xs"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span
+              className={cn(
+                "text-xs",
+                pastePreview.ok === false && "text-red-600",
+                pastePreview.ok === true &&
+                  "text-emerald-600 dark:text-emerald-400",
+                pastePreview.ok === null && "text-muted-foreground"
+              )}
+            >
+              {pastePreview.ok === false
+                ? "That JSON doesn’t look like a workflow."
+                : pastePreview.ok === true
+                  ? `${pastePreview.count} step${pastePreview.count === 1 ? "" : "s"} ready to import${pastePreview.name ? ` (${pastePreview.name})` : ""}`
+                  : "Paste JSON above to preview"}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setPasteOpen(false);
+                  setPasteText("");
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handlePasteImport}
+                disabled={pastePreview.ok !== true}
+              >
+                Import
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

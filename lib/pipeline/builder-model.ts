@@ -162,12 +162,47 @@ export function relayout(doc: BuilderDoc): BuilderDoc {
 export function docFromImportedJson(text: string): BuilderDoc | null {
   try {
     const doc = parseBuilderDoc(text);
-    if (doc) return doc; // a BuilderDoc (has name + workingDirectory + nodes[])
+    if (doc) return dedupeStepIds(doc); // a BuilderDoc (has name + workingDirectory + nodes[])
     const { spec } = parsePipelineSpec(text); // else a bare PipelineSpec?
-    return spec ? docFromSpec(spec) : null;
+    return spec ? dedupeStepIds(docFromSpec(spec)) : null;
   } catch {
     return null; // never throw — a bad import file is a null, not a crash
   }
+}
+
+/**
+ * Rename any duplicate step ids so the imported doc renders with stable React
+ * keys and intact dependency edges. The first occurrence keeps its id; later
+ * collisions get a `uniqueStepId` suffix, and all `dependsOn` references are
+ * rewritten to match.
+ */
+export function dedupeStepIds(doc: BuilderDoc): BuilderDoc {
+  const renames = new Map<string, string>();
+  const nodes: BuilderNode[] = [];
+  for (const n of doc.nodes) {
+    let id = n.step.id;
+    if (nodes.some((existing) => existing.step.id === id)) {
+      id = uniqueStepId({ ...doc, nodes }, id);
+      renames.set(n.step.id, id);
+    }
+    nodes.push({ ...n, step: { ...n.step, id } });
+  }
+  const seen = new Set(nodes.map((n) => n.step.id));
+  return {
+    ...doc,
+    nodes: nodes.map((n) => {
+      if (!n.step.dependsOn) return n;
+      return {
+        ...n,
+        step: {
+          ...n.step,
+          dependsOn: n.step.dependsOn.map((d) =>
+            seen.has(d) ? d : (renames.get(d) ?? d)
+          ),
+        },
+      };
+    }),
+  };
 }
 
 /** A fresh step id not already used in the doc: `base`, then `base-2`, `base-3`… */
@@ -178,6 +213,16 @@ export function uniqueStepId(doc: BuilderDoc, base = "step"): string {
     const candidate = `${base}-${i}`;
     if (!used.has(candidate)) return candidate;
   }
+}
+
+/** The next grid slot used when auto-placing a new node (cascades so repeated
+ * adds don't stack exactly on top of each other). */
+export function nextAutoPosition(doc: BuilderDoc): { x: number; y: number } {
+  const i = doc.nodes.length;
+  return {
+    x: CANVAS.PAD + (i % 4) * (CANVAS.NODE_W + 24),
+    y: CANVAS.PAD + Math.floor(i / 4) * (CANVAS.NODE_H + 40),
+  };
 }
 
 /** Append a new step at (x, y) with a unique id and the default agent. */
@@ -192,6 +237,23 @@ export function addStep(
     ...doc,
     nodes: [...doc.nodes, { step: { id, agent, task: "" }, x, y }],
   };
+}
+
+/**
+ * Append a step pre-filled from a template/snippet at the next auto-grid slot.
+ * The id is derived from `preset.id` (made unique) and agent/task — plus optional
+ * exitCriteria — are copied in. Pure twin of the snippets panel's "tap to add",
+ * kept here so the construction is unit-tested rather than buried in the component.
+ */
+export function addPresetStep(
+  doc: BuilderDoc,
+  preset: { id: string; agent: AgentType; task: string; exitCriteria?: string }
+): BuilderDoc {
+  const id = uniqueStepId(doc, preset.id);
+  const { x, y } = nextAutoPosition(doc);
+  const step: PipelineStep = { id, agent: preset.agent, task: preset.task };
+  if (preset.exitCriteria) step.exitCriteria = preset.exitCriteria;
+  return { ...doc, nodes: [...doc.nodes, { step, x, y }] };
 }
 
 /** Move a node to (x, y), clamped to the top-left padding so it can't drift

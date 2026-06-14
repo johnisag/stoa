@@ -9,7 +9,10 @@ import {
   docFromSpec,
   docToSpec,
   uniqueStepId,
+  nextAutoPosition,
+  dedupeStepIds,
   addStep,
+  addPresetStep,
   moveNode,
   updateStep,
   setDependsOn,
@@ -80,6 +83,47 @@ describe("uniqueStepId", () => {
   });
 });
 
+describe("nextAutoPosition", () => {
+  it("cascades every fourth node to a new row", () => {
+    let doc = docFromSpec(spec([]));
+    expect(nextAutoPosition(doc)).toMatchObject({
+      x: CANVAS.PAD,
+      y: CANVAS.PAD,
+    });
+    doc = addStep(doc, 0, 0);
+    doc = addStep(doc, 0, 0);
+    doc = addStep(doc, 0, 0);
+    doc = addStep(doc, 0, 0);
+    expect(nextAutoPosition(doc)).toMatchObject({
+      x: CANVAS.PAD,
+      y: CANVAS.PAD + CANVAS.NODE_H + 40,
+    });
+  });
+});
+
+describe("dedupeStepIds", () => {
+  it("renames duplicate ids and rewrites dependsOn", () => {
+    const doc = dedupeStepIds(
+      docFromSpec(
+        spec([
+          step({ id: "a" }),
+          step({ id: "a" }),
+          step({ id: "b", dependsOn: ["a"] }),
+        ])
+      )
+    );
+    expect(ids(doc)).toEqual(["a", "a-2", "b"]);
+    expect(doc.nodes.find((n) => n.step.id === "b")!.step.dependsOn).toEqual([
+      "a",
+    ]);
+  });
+
+  it("is a no-op when ids are already unique", () => {
+    const doc = docFromSpec(spec([step({ id: "a" }), step({ id: "b" })]));
+    expect(dedupeStepIds(doc)).toEqual(doc);
+  });
+});
+
 describe("addStep", () => {
   it("appends a unique-id step at the given position with the default agent", () => {
     const doc = addStep(docFromSpec(spec([step({ id: "step" })])), 300, 120);
@@ -92,6 +136,44 @@ describe("addStep", () => {
   it("honors an explicit agent", () => {
     const doc = addStep(docFromSpec(spec([])), 0, 0, "codex");
     expect(doc.nodes[0].step.agent).toBe("codex");
+  });
+});
+
+describe("addPresetStep", () => {
+  it("appends a step from a preset at the next auto slot, copying agent/task/exitCriteria", () => {
+    const doc = addPresetStep(docFromSpec(spec([])), {
+      id: "review",
+      agent: "hermes",
+      task: "Review the change",
+      exitCriteria: "No findings remain",
+    });
+    expect(ids(doc)).toEqual(["review"]);
+    expect(doc.nodes[0]).toMatchObject(nextAutoPosition(docFromSpec(spec([]))));
+    expect(doc.nodes[0].step).toMatchObject({
+      id: "review",
+      agent: "hermes",
+      task: "Review the change",
+      exitCriteria: "No findings remain",
+    });
+  });
+
+  it("derives a unique id from the preset id on collision", () => {
+    let doc = addPresetStep(docFromSpec(spec([])), {
+      id: "research",
+      agent: "claude",
+      task: "t",
+    });
+    doc = addPresetStep(doc, { id: "research", agent: "claude", task: "t" });
+    expect(ids(doc)).toEqual(["research", "research-2"]);
+  });
+
+  it("omits exitCriteria when the preset has none", () => {
+    const doc = addPresetStep(docFromSpec(spec([])), {
+      id: "implement",
+      agent: "claude",
+      task: "t",
+    });
+    expect(doc.nodes[0].step.exitCriteria).toBeUndefined();
   });
 });
 
@@ -242,6 +324,19 @@ describe("docFromImportedJson", () => {
     expect(
       docFromImportedJson('{"name":"x","workingDirectory":2,"steps":[]}')
     ).toBeNull();
+  });
+
+  it("dedupes duplicate step ids on import", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      nodes: [
+        { step: { id: "a", agent: "claude", task: "t" }, x: 0, y: 0 },
+        { step: { id: "a", agent: "claude", task: "t2" }, x: 10, y: 10 },
+      ],
+    });
+    const imported = docFromImportedJson(raw)!;
+    expect(imported.nodes.map((n) => n.step.id)).toEqual(["a", "a-2"]);
   });
 });
 

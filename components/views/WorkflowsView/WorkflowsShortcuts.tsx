@@ -53,7 +53,8 @@ export function WorkflowsShortcuts({ onClose }: { onClose: () => void }) {
       <p className="text-muted-foreground text-xs leading-relaxed">
         Shortcuts are disabled while typing in a field. Tap a node to edit it,
         drag a node&apos;s right-hand dot onto another to connect them, and tap
-        an edge to remove it.
+        an edge to remove it. Right-click (or long-press on touch) a step for
+        Duplicate, Copy id, and Delete.
       </p>
     </div>
   );

@@ -1,13 +1,22 @@
 "use client";
 
 import {
+  useEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
+import { Copy, Trash2 } from "lucide-react";
 import { CANVAS, type BuilderDoc } from "@/lib/pipeline/builder-model";
 import { cn } from "@/lib/utils";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 const { NODE_W, NODE_H, PAD } = CANVAS;
 
@@ -32,6 +41,9 @@ export function PipelineCanvas({
   onMoveEnd,
   onConnect,
   onDisconnect,
+  onDuplicateNode,
+  onDeleteNode,
+  onCopyId,
   scrollRef,
 }: {
   doc: BuilderDoc;
@@ -46,6 +58,10 @@ export function PipelineCanvas({
   onConnect: (from: string, to: string) => void;
   /** Remove a dependency edge by tapping it. */
   onDisconnect: (from: string, to: string) => void;
+  /** Context-menu actions surfaced on a node. */
+  onDuplicateNode: (id: string) => void;
+  onDeleteNode: (id: string) => void;
+  onCopyId: (id: string) => void;
   /** Ref to the scrollable container, used by the parent to recenter/fit-all. */
   scrollRef?: RefObject<HTMLDivElement | null>;
 }) {
@@ -61,6 +77,26 @@ export function PipelineCanvas({
     x: number;
     y: number;
   } | null>(null);
+  // Long-press state: fire a synthetic context-menu event on touch after 500ms.
+  const longPress = useRef<{
+    id: string;
+    timer: ReturnType<typeof setTimeout>;
+    target: Element;
+    pointerId: number;
+    x: number;
+    y: number;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
+  useEffect(
+    () => () => {
+      if (longPress.current) {
+        clearTimeout(longPress.current.timer);
+        longPress.current = null;
+      }
+    },
+    []
+  );
 
   // Pointer client coords → SVG user space. viewBox == width/height (1:1, no
   // transform), so subtracting the svg's rect is exact even while scrolled.
@@ -70,6 +106,8 @@ export function PipelineCanvas({
   }
 
   function onNodePointerDown(e: ReactPointerEvent, id: string) {
+    // Only the primary button starts a drag / long-press.
+    if (e.button !== 0) return;
     e.stopPropagation();
     onSelectNode(id);
     const node = doc.nodes.find((n) => n.step.id === id);
@@ -77,15 +115,67 @@ export function PipelineCanvas({
     const p = toUser(e);
     drag.current = { id, dx: p.x - node.x, dy: p.y - node.y };
     e.currentTarget.setPointerCapture(e.pointerId);
+
+    // Start a 500ms long-press timer to open the context menu on touch.
+    if (longPress.current) {
+      clearTimeout(longPress.current.timer);
+      longPress.current = null;
+    }
+    longPress.current = {
+      id,
+      target: e.currentTarget,
+      pointerId: e.pointerId,
+      x: p.x,
+      y: p.y,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      timer: setTimeout(() => {
+        // Cancel any in-flight drag and release capture before opening the menu.
+        if (drag.current?.id === id) {
+          try {
+            longPress.current?.target.releasePointerCapture(
+              longPress.current.pointerId
+            );
+          } catch {
+            // capture may already be released
+          }
+          drag.current = null;
+        }
+        longPress.current?.target.dispatchEvent(
+          new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: longPress.current.clientX,
+            clientY: longPress.current.clientY,
+            button: 2,
+            buttons: 2,
+          })
+        );
+        longPress.current = null;
+      }, 500),
+    };
   }
 
   function onNodePointerMove(e: ReactPointerEvent) {
+    if (longPress.current) {
+      const p = toUser(e);
+      const dx = p.x - longPress.current.x;
+      const dy = p.y - longPress.current.y;
+      if (Math.sqrt(dx * dx + dy * dy) > 10) {
+        clearTimeout(longPress.current.timer);
+        longPress.current = null;
+      }
+    }
     if (!drag.current) return;
     const p = toUser(e);
     onMoveNode(drag.current.id, p.x - drag.current.dx, p.y - drag.current.dy);
   }
 
   function onNodePointerUp(e: ReactPointerEvent) {
+    if (longPress.current) {
+      clearTimeout(longPress.current.timer);
+      longPress.current = null;
+    }
     const didDrag = !!drag.current;
     if (drag.current && e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
@@ -150,6 +240,7 @@ export function PipelineCanvas({
     <div
       ref={scrollRef}
       className="bg-muted/20 max-h-[40vh] overflow-auto rounded-md border"
+      onContextMenu={(e) => e.preventDefault()}
     >
       <svg
         ref={svgRef}
@@ -221,65 +312,91 @@ export function PipelineCanvas({
           const hasError = errorIds?.has(n.step.id) ?? false;
           const label = n.step.name || n.step.id;
           return (
-            <g
-              key={n.step.id}
-              transform={`translate(${n.x}, ${n.y})`}
-              className="cursor-grab touch-none active:cursor-grabbing"
-              onPointerDown={(e) => onNodePointerDown(e, n.step.id)}
-              onPointerMove={onNodePointerMove}
-              onPointerUp={onNodePointerUp}
-              onPointerCancel={onNodePointerUp}
-            >
-              {/* Full label as a native tooltip / accessible name — node text is
-                  truncated, so two long shared-prefix names stay distinguishable. */}
-              <title>{label}</title>
-              <rect
-                width={NODE_W}
-                height={NODE_H}
-                rx={8}
-                strokeWidth={selected || isDropTarget || hasError ? 2 : 1}
-                className={cn(
-                  isDropTarget ? "fill-primary/10" : "fill-card",
-                  hasError
-                    ? "stroke-red-500"
-                    : selected || isDropTarget
-                      ? "stroke-primary"
-                      : "stroke-border"
-                )}
-              />
-              <text
-                x={10}
-                y={18}
-                fill="currentColor"
-                fontSize={12}
-                fontWeight={500}
-              >
-                {label.length > 18 ? `${label.slice(0, 17)}…` : label}
-              </text>
-              <text
-                x={10}
-                y={34}
-                className="fill-muted-foreground"
-                fontSize={10}
-              >
-                {n.step.agent}
-                {n.step.task?.trim() ? "" : " · no task yet"}
-              </text>
-              {hasError && (
+            <ContextMenu key={n.step.id}>
+              <ContextMenuTrigger asChild>
                 <g
-                  transform={`translate(${NODE_W - 8}, -8)`}
-                  role="img"
-                  aria-label="Step has a validation error"
+                  transform={`translate(${n.x}, ${n.y})`}
+                  tabIndex={0}
+                  className="group cursor-grab touch-none outline-none active:cursor-grabbing"
+                  onPointerDown={(e) => onNodePointerDown(e, n.step.id)}
+                  onPointerMove={onNodePointerMove}
+                  onPointerUp={onNodePointerUp}
+                  onPointerCancel={onNodePointerUp}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectNode(n.step.id);
+                    }
+                  }}
                 >
-                  <title>Step has a validation error</title>
-                  <circle
-                    r={6}
-                    className="stroke-background fill-red-500"
-                    strokeWidth={1.5}
+                  {/* Full label as a native tooltip / accessible name — node text is
+                      truncated, so two long shared-prefix names stay distinguishable. */}
+                  <title>{label}</title>
+                  <rect
+                    width={NODE_W}
+                    height={NODE_H}
+                    rx={8}
+                    strokeWidth={selected || isDropTarget || hasError ? 2 : 1}
+                    className={cn(
+                      isDropTarget ? "fill-primary/10" : "fill-card",
+                      hasError
+                        ? "stroke-red-500"
+                        : selected || isDropTarget
+                          ? "stroke-primary"
+                          : "stroke-border",
+                      "group-focus:stroke-primary"
+                    )}
                   />
+                  <text
+                    x={10}
+                    y={18}
+                    fill="currentColor"
+                    fontSize={12}
+                    fontWeight={500}
+                  >
+                    {label.length > 18 ? `${label.slice(0, 17)}…` : label}
+                  </text>
+                  <text
+                    x={10}
+                    y={34}
+                    className="fill-muted-foreground"
+                    fontSize={10}
+                  >
+                    {n.step.agent}
+                    {n.step.task?.trim() ? "" : " · no task yet"}
+                  </text>
+                  {hasError && (
+                    <g
+                      transform={`translate(${NODE_W - 8}, -8)`}
+                      role="img"
+                      aria-label="Step has a validation error"
+                    >
+                      <title>Step has a validation error</title>
+                      <circle
+                        r={6}
+                        className="stroke-background fill-red-500"
+                        strokeWidth={1.5}
+                      />
+                    </g>
+                  )}
                 </g>
-              )}
-            </g>
+              </ContextMenuTrigger>
+              <ContextMenuContent collisionPadding={8}>
+                <ContextMenuItem onSelect={() => onDuplicateNode(n.step.id)}>
+                  <Copy className="mr-2 h-3.5 w-3.5" /> Duplicate
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => onCopyId(n.step.id)}>
+                  Copy id
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+                  onSelect={() => onDeleteNode(n.step.id)}
+                >
+                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           );
         })}
 
