@@ -17,6 +17,8 @@ import {
   disconnect,
   removeStep,
   renameStep,
+  duplicateStep,
+  DUPLICATE_OFFSET,
   relayout,
   docFromImportedJson,
   serializeBuilderDoc,
@@ -70,7 +72,9 @@ describe("docFromSpec / docToSpec", () => {
 
 describe("uniqueStepId", () => {
   it("returns the base when free, else suffixes -2, -3…", () => {
-    const doc = docFromSpec(spec([step({ id: "step" }), step({ id: "step-2" })]));
+    const doc = docFromSpec(
+      spec([step({ id: "step" }), step({ id: "step-2" })])
+    );
     expect(uniqueStepId(doc)).toBe("step-3");
     expect(uniqueStepId(docFromSpec(spec([step({ id: "a" })])))).toBe("step");
   });
@@ -144,8 +148,7 @@ describe("setDependsOn", () => {
 });
 
 describe("connect / disconnect", () => {
-  const base = () =>
-    docFromSpec(spec([step({ id: "a" }), step({ id: "b" })]));
+  const base = () => docFromSpec(spec([step({ id: "a" }), step({ id: "b" })]));
 
   it("connect adds from → to (to depends on from)", () => {
     const doc = connect(base(), "a", "b");
@@ -164,7 +167,9 @@ describe("connect / disconnect", () => {
 
   it("disconnect removes the edge and clears an emptied dependsOn", () => {
     const doc = disconnect(connect(base(), "a", "b"), "a", "b");
-    expect(doc.nodes.find((n) => n.step.id === "b")!.step.dependsOn).toBeUndefined();
+    expect(
+      doc.nodes.find((n) => n.step.id === "b")!.step.dependsOn
+    ).toBeUndefined();
   });
 
   it("disconnect is a no-op for an absent edge", () => {
@@ -177,10 +182,7 @@ describe("removeStep", () => {
   it("removes the node and strips it from dependents", () => {
     const doc = removeStep(
       docFromSpec(
-        spec([
-          step({ id: "a" }),
-          step({ id: "b", dependsOn: ["a", "x"] }),
-        ])
+        spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a", "x"] })])
       ),
       "a"
     );
@@ -190,7 +192,9 @@ describe("removeStep", () => {
 
   it("drops a now-empty dependsOn to undefined", () => {
     const doc = removeStep(
-      docFromSpec(spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })])),
+      docFromSpec(
+        spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })])
+      ),
       "a"
     );
     expect(doc.nodes[0].step.dependsOn).toBeUndefined();
@@ -254,7 +258,9 @@ describe("serializeBuilderDoc / parseBuilderDoc", () => {
     expect(parseBuilderDoc("42")).toBeNull();
     expect(parseBuilderDoc(JSON.stringify({ name: "x" }))).toBeNull(); // no nodes
     expect(
-      parseBuilderDoc(JSON.stringify({ name: "x", workingDirectory: 1, nodes: [] }))
+      parseBuilderDoc(
+        JSON.stringify({ name: "x", workingDirectory: 1, nodes: [] })
+      )
     ).toBeNull();
   });
 
@@ -265,7 +271,11 @@ describe("serializeBuilderDoc / parseBuilderDoc", () => {
       nodes: [
         // dependsOn is a number → must not ride into the stored step (it would
         // later throw in validateSpec); the step itself is kept, deps dropped.
-        { step: { id: "a", agent: "claude", task: "t", dependsOn: 42 }, x: 0, y: 0 },
+        {
+          step: { id: "a", agent: "claude", task: "t", dependsOn: 42 },
+          x: 0,
+          y: 0,
+        },
         // array with a non-string entry → also dropped.
         {
           step: { id: "b", agent: "claude", task: "t", dependsOn: ["a", 7] },
@@ -334,6 +344,59 @@ describe("serializeBuilderDoc / parseBuilderDoc", () => {
   });
 });
 
+describe("duplicateStep", () => {
+  it("clones a node with a unique id, offset position, and cleared dependsOn", () => {
+    const base = docFromSpec(
+      spec([
+        step({ id: "a", name: "Research", exitCriteria: "tests pass" }),
+        step({ id: "b", dependsOn: ["a"] }),
+      ])
+    );
+    const doc = duplicateStep(base, "a");
+    expect(doc.nodes.length).toBe(3);
+    const copy = doc.nodes[2];
+    expect(copy.step.id).toBe("a-2");
+    expect(copy.step.name).toBe("Research");
+    expect(copy.step.exitCriteria).toBe("tests pass");
+    expect(copy.step.dependsOn).toBeUndefined();
+    // Copy is placed down-right of the source and does not overlap it.
+    expect(copy.x).toBeGreaterThan(base.nodes[0].x);
+    expect(copy.y).toBeGreaterThan(base.nodes[0].y);
+    expect(
+      copy.x >= base.nodes[0].x + CANVAS.NODE_W ||
+        copy.y >= base.nodes[0].y + CANVAS.NODE_H
+    ).toBe(true);
+    // Original and dependent untouched.
+    expect(doc.nodes[0].step.id).toBe("a");
+    expect(doc.nodes[1].step.dependsOn).toEqual(["a"]);
+  });
+
+  it("increments the suffix when the derived id is taken", () => {
+    const base = docFromSpec(spec([step({ id: "a" }), step({ id: "a-2" })]));
+    const doc = duplicateStep(base, "a");
+    expect(doc.nodes[2].step.id).toBe("a-3");
+  });
+
+  it("does not stack repeated duplicates on top of each other", () => {
+    const base = docFromSpec(spec([step({ id: "a" })]));
+    const once = duplicateStep(base, "a");
+    const twice = duplicateStep(once, "a");
+    const first = once.nodes[1];
+    const second = twice.nodes[2];
+    const overlap =
+      first.x < second.x + CANVAS.NODE_W &&
+      first.x + CANVAS.NODE_W > second.x &&
+      first.y < second.y + CANVAS.NODE_H &&
+      first.y + CANVAS.NODE_H > second.y;
+    expect(overlap).toBe(false);
+  });
+
+  it("is a no-op if the source id is not found", () => {
+    const base = docFromSpec(spec([step({ id: "a" })]));
+    expect(duplicateStep(base, "ghost")).toBe(base);
+  });
+});
+
 describe("renameStep", () => {
   it("renames and cascades into dependents' dependsOn", () => {
     const doc = renameStep(
@@ -350,9 +413,7 @@ describe("renameStep", () => {
   });
 
   it("is a no-op for an empty, unchanged, or colliding new id", () => {
-    const base = docFromSpec(
-      spec([step({ id: "a" }), step({ id: "b" })])
-    );
+    const base = docFromSpec(spec([step({ id: "a" }), step({ id: "b" })]));
     expect(renameStep(base, "a", "")).toBe(base);
     expect(renameStep(base, "a", "a")).toBe(base);
     expect(ids(renameStep(base, "a", "b"))).toEqual(["a", "b"]); // collision ignored

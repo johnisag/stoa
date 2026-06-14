@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
 import {
   Check,
@@ -14,11 +8,15 @@ import {
   Download,
   FileJson,
   FolderOpen,
+  Fullscreen,
+  HelpCircle,
   Loader2,
   Play,
   Plus,
+  Redo2,
   Save,
   Trash2,
+  Undo2,
   Upload,
   Wand2,
 } from "lucide-react";
@@ -29,6 +27,7 @@ import {
   docFromImportedJson,
   docFromSpec,
   docToSpec,
+  duplicateStep,
   moveNode,
   relayout,
   removeStep,
@@ -50,9 +49,17 @@ import {
 import { AGENT_OPTIONS } from "@/components/NewSessionDialog/NewSessionDialog.types";
 import type { AgentType } from "@/lib/providers";
 import { useConfirm } from "@/components/ConfirmProvider";
+import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { PipelineCanvas } from "./PipelineCanvas";
+import { WorkflowsShortcuts } from "./WorkflowsShortcuts";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,6 +79,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { Session } from "@/lib/db";
+import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
+import { useBuilderHistory } from "@/hooks/useBuilderHistory";
+import type { Keybinding } from "@/lib/keybindings";
 
 const EMPTY_DOC: BuilderDoc = {
   name: "My workflow",
@@ -121,8 +131,11 @@ export function WorkflowBuilder({
   onStarted: (runId: string) => void;
 }) {
   const start = useStartRun();
-  const [doc, setDoc] = useState<BuilderDoc>(EMPTY_DOC);
+  const { doc, setDoc, reset, undo, redo, canUndo, canRedo } =
+    useBuilderHistory(EMPTY_DOC);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const canvasScrollRef = useRef<HTMLDivElement | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Bring the edit panel into view when a node is selected — on a phone it sits
   // below a tall canvas, so tapping a node would otherwise open a form off-screen.
   const editRef = useRef<HTMLDivElement>(null);
@@ -153,12 +166,104 @@ export function WorkflowBuilder({
 
   const spec = useMemo(() => docToSpec(doc), [doc]);
   const { valid, errors } = useMemo(() => validateSpec(spec), [spec]);
+  const errorIds = useMemo(
+    () => new Set(errors.filter((e) => e.stepId).map((e) => e.stepId!)),
+    [errors]
+  );
   const selected = doc.nodes.find((n) => n.step.id === selectedId) ?? null;
   const canStart = valid && !!conductorId && !start.isPending;
   // Unsaved-changes signal: the current doc differs from the last save/load.
   const dirty = useMemo(
     () => doc.nodes.length > 0 && serializeBuilderDoc(doc) !== savedSnapshot,
     [doc, savedSnapshot]
+  );
+
+  function handleUndo() {
+    undo();
+    setSelectedId(null);
+  }
+
+  function handleRedo() {
+    redo();
+    setSelectedId(null);
+  }
+
+  function handleDuplicate() {
+    if (!selectedId) return;
+    const next = duplicateStep(doc, selectedId);
+    if (next === doc) return;
+    setDoc(next);
+    const copy = next.nodes[next.nodes.length - 1];
+    setSelectedId(copy.step.id);
+  }
+
+  function handleMoveNode(id: string, x: number, y: number) {
+    setDoc((d) => moveNode(d, id, x, y), { transient: true });
+  }
+
+  function handleMoveEnd() {
+    setDoc((d) => d);
+  }
+
+  function handleFitAll() {
+    const container = canvasScrollRef.current;
+    if (!container || doc.nodes.length === 0) return;
+    const minX = Math.min(...doc.nodes.map((n) => n.x));
+    const minY = Math.min(...doc.nodes.map((n) => n.y));
+    const maxX = Math.max(...doc.nodes.map((n) => n.x + CANVAS.NODE_W));
+    const maxY = Math.max(...doc.nodes.map((n) => n.y + CANVAS.NODE_H));
+    const pad = CANVAS.PAD;
+    const contentWidth = maxX - minX + pad * 2;
+    const contentHeight = maxY - minY + pad * 2;
+    const visibleWidth = container.clientWidth;
+    const visibleHeight = container.clientHeight;
+    container.scrollTo({
+      left: Math.max(0, minX - pad + (contentWidth - visibleWidth) / 2),
+      top: Math.max(0, minY - pad + (contentHeight - visibleHeight) / 2),
+      behavior: "smooth",
+    });
+  }
+
+  async function handleCopyJson() {
+    if (doc.nodes.length === 0) {
+      toast.error("Add a step first — nothing to copy yet.");
+      return;
+    }
+    const text = JSON.stringify(spec, null, 2);
+    if (await copyText(text)) {
+      toast.success("Workflow JSON copied to clipboard");
+    } else {
+      toast.error("Could not copy to clipboard");
+    }
+  }
+
+  const keybindings: Keybinding[] = useMemo(
+    () => [
+      { chord: "mod+z", action: "undo", description: "Undo" },
+      { chord: "mod+shift+z", action: "redo", description: "Redo" },
+      {
+        chord: "mod+d",
+        action: "duplicate",
+        description: "Duplicate selected step",
+      },
+      {
+        chord: "mod+shift+l",
+        action: "shortcuts",
+        description: "Show keyboard shortcuts",
+      },
+    ],
+    []
+  );
+
+  useGlobalKeybindings(
+    keybindings,
+    (action) => {
+      if (action === "undo") handleUndo();
+      else if (action === "redo") handleRedo();
+      else if (action === "duplicate") handleDuplicate();
+      else if (action === "shortcuts") setShortcutsOpen(true);
+    },
+    { capture: true, stopPropagation: true }
   );
 
   function handleAdd() {
@@ -173,7 +278,7 @@ export function WorkflowBuilder({
   }
 
   function loadDoc(next: BuilderDoc, savedWorkflowId: string | null) {
-    setDoc(next);
+    reset(next);
     setSelectedId(null);
     setSavedId(savedWorkflowId);
     setSavedSnapshot(serializeBuilderDoc(next)); // freshly loaded = no unsaved changes
@@ -189,7 +294,9 @@ export function WorkflowBuilder({
       return null;
     }
     if (!name) {
-      toast.error("Give the workflow a name first (the “Workflow name” field).");
+      toast.error(
+        "Give the workflow a name first (the “Workflow name” field)."
+      );
       return null;
     }
     return name;
@@ -295,6 +402,14 @@ export function WorkflowBuilder({
     setDoc((d) => updateStep(d, id, p));
   }
 
+  function patchTransient(id: string, p: Parameters<typeof updateStep>[2]) {
+    setDoc((d) => updateStep(d, id, p), { transient: true });
+  }
+
+  function commit() {
+    setDoc((d) => d);
+  }
+
   function commitRename(oldId: string, raw: string) {
     const newId = raw.trim();
     if (!newId || newId === oldId) return;
@@ -330,16 +445,59 @@ export function WorkflowBuilder({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex flex-col items-start justify-between gap-2 sm:flex-row">
         <div>
           <h3 className="text-sm font-medium">Visual builder</h3>
           <p className="text-muted-foreground text-xs leading-relaxed">
             Drag the boxes to arrange your DAG; tap one to edit it. Drag a box’s
-            dot onto another box to connect them. Steps with no path between them
-            run in parallel.
+            dot onto another box to connect them. Steps with no path between
+            them run in parallel.
           </p>
         </div>
-        <div className="flex flex-shrink-0 items-center gap-2">
+        <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="Undo"
+            title="Undo"
+            disabled={!canUndo}
+            onClick={handleUndo}
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="Redo"
+            title="Redo"
+            disabled={!canRedo}
+            onClick={handleRedo}
+          >
+            <Redo2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="Center all steps"
+            title="Center all steps"
+            disabled={doc.nodes.length === 0}
+            onClick={handleFitAll}
+          >
+            <Fullscreen className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts"
+            onClick={() => setShortcutsOpen(true)}
+          >
+            <HelpCircle className="h-3.5 w-3.5" />
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button type="button" variant="outline" size="sm">
@@ -405,6 +563,12 @@ export function WorkflowBuilder({
               >
                 <Download className="mr-2 h-3.5 w-3.5" /> Export workflow
               </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={handleCopyJson}
+                disabled={doc.nodes.length === 0}
+              >
+                <Copy className="mr-2 h-3.5 w-3.5" /> Copy JSON
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Saved workflows</DropdownMenuLabel>
               {savedList.data && savedList.data.length > 0 ? (
@@ -452,7 +616,12 @@ export function WorkflowBuilder({
           <span className="text-muted-foreground text-xs">Workflow name</span>
           <Input
             value={doc.name}
-            onChange={(e) => setDoc((d) => ({ ...d, name: e.target.value }))}
+            onChange={(e) =>
+              setDoc((d) => ({ ...d, name: e.target.value }), {
+                transient: true,
+              })
+            }
+            onBlur={commit}
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
@@ -462,8 +631,11 @@ export function WorkflowBuilder({
           <Input
             value={doc.workingDirectory}
             onChange={(e) =>
-              setDoc((d) => ({ ...d, workingDirectory: e.target.value }))
+              setDoc((d) => ({ ...d, workingDirectory: e.target.value }), {
+                transient: true,
+              })
             }
+            onBlur={commit}
           />
         </label>
       </div>
@@ -477,10 +649,13 @@ export function WorkflowBuilder({
         <PipelineCanvas
           doc={doc}
           selectedId={selectedId}
+          errorIds={errorIds}
           onSelectNode={setSelectedId}
-          onMoveNode={(id, x, y) => setDoc((d) => moveNode(d, id, x, y))}
+          onMoveNode={handleMoveNode}
+          onMoveEnd={handleMoveEnd}
           onConnect={(from, to) => setDoc((d) => connect(d, from, to))}
           onDisconnect={(from, to) => setDoc((d) => disconnect(d, from, to))}
+          scrollRef={canvasScrollRef}
         />
       )}
 
@@ -492,15 +667,26 @@ export function WorkflowBuilder({
         >
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium">Edit step</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="text-red-600 hover:text-red-600 dark:text-red-400"
-              onClick={() => handleDelete(selected.step.id)}
-            >
-              <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleDuplicate}
+                title="Duplicate step (Ctrl/Cmd+D)"
+              >
+                <Copy className="mr-1.5 h-3.5 w-3.5" /> Duplicate
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-red-600 hover:text-red-600 dark:text-red-400"
+                onClick={() => handleDelete(selected.step.id)}
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
+              </Button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -528,10 +714,11 @@ export function WorkflowBuilder({
               <Input
                 value={selected.step.name ?? ""}
                 onChange={(e) =>
-                  patch(selected.step.id, {
+                  patchTransient(selected.step.id, {
                     name: e.target.value || undefined,
                   })
                 }
+                onBlur={commit}
               />
             </label>
           </div>
@@ -569,8 +756,9 @@ export function WorkflowBuilder({
               spellCheck={false}
               placeholder="What this agent should do. Reference an upstream step's output with {{steps.<id>.output}}."
               onChange={(e) =>
-                patch(selected.step.id, { task: e.target.value })
+                patchTransient(selected.step.id, { task: e.target.value })
               }
+              onBlur={commit}
               className="min-h-[80px]"
             />
           </label>
@@ -621,10 +809,11 @@ export function WorkflowBuilder({
               spellCheck={false}
               placeholder="Unbreakable rules the step must satisfy, e.g. “must pass tests; open a PR”."
               onChange={(e) =>
-                patch(selected.step.id, {
+                patchTransient(selected.step.id, {
                   exitCriteria: e.target.value || undefined,
                 })
               }
+              onBlur={commit}
               className="min-h-[60px]"
             />
           </label>
@@ -710,6 +899,18 @@ export function WorkflowBuilder({
         )}
         Start pipeline
       </Button>
+
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent showCloseButton={false}>
+          <DialogTitle className="sr-only">
+            Workflow builder shortcuts
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            Keyboard shortcuts available on the workflow builder canvas.
+          </DialogDescription>
+          <WorkflowsShortcuts onClose={() => setShortcutsOpen(false)} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

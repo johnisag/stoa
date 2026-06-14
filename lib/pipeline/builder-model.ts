@@ -205,9 +205,7 @@ export function moveNode(
   return {
     ...doc,
     nodes: doc.nodes.map((n) =>
-      n.step.id === id
-        ? { ...n, x: Math.max(0, x), y: Math.max(0, y) }
-        : n
+      n.step.id === id ? { ...n, x: Math.max(0, x), y: Math.max(0, y) } : n
     ),
   };
 }
@@ -280,7 +278,10 @@ export function removeStep(doc: BuilderDoc, id: string): BuilderDoc {
         const dependsOn = n.step.dependsOn.filter((d) => d !== id);
         return {
           ...n,
-          step: { ...n.step, dependsOn: dependsOn.length ? dependsOn : undefined },
+          step: {
+            ...n.step,
+            dependsOn: dependsOn.length ? dependsOn : undefined,
+          },
         };
       }),
   };
@@ -308,5 +309,53 @@ export function renameStep(
         dependsOn: n.step.dependsOn?.map((d) => (d === oldId ? newId : d)),
       },
     })),
+  };
+}
+
+/** Offset used when duplicating a node so it doesn't overlap the original or prior duplicates. */
+export const DUPLICATE_OFFSET = CANVAS.NODE_H;
+
+/**
+ * Duplicate a step: clone its fields (except id and dependsOn), assign a unique
+ * id derived from the original, and offset the new node down-right so the user
+ * sees both. A no-op if the source id is not found.
+ */
+export function duplicateStep(doc: BuilderDoc, id: string): BuilderDoc {
+  const node = doc.nodes.find((n) => n.step.id === id);
+  if (!node) return doc;
+  const newId = uniqueStepId(doc, id);
+  const { id: _id, dependsOn: _dependsOn, ...restStep } = node.step;
+
+  // Nudge the copy clear of any node already occupying the target spot so
+  // repeated duplicates of the same source don't stack on top of each other.
+  // Cap iterations so a pathological doc can't loop forever.
+  let x = node.x + DUPLICATE_OFFSET;
+  let y = node.y + DUPLICATE_OFFSET;
+  let guard = 0;
+  const MAX_NUDGE = 100;
+  while (
+    guard++ < MAX_NUDGE &&
+    doc.nodes.some(
+      (n) =>
+        x < n.x + CANVAS.NODE_W &&
+        x + CANVAS.NODE_W > n.x &&
+        y < n.y + CANVAS.NODE_H &&
+        y + CANVAS.NODE_H > n.y
+    )
+  ) {
+    x += DUPLICATE_OFFSET;
+    y += DUPLICATE_OFFSET;
+  }
+
+  return {
+    ...doc,
+    nodes: [
+      ...doc.nodes,
+      {
+        step: { ...restStep, id: newId },
+        x,
+        y,
+      },
+    ],
   };
 }

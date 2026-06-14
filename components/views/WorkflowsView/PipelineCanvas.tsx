@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
 import { CANVAS, type BuilderDoc } from "@/lib/pipeline/builder-model";
 import { cn } from "@/lib/utils";
@@ -25,19 +26,28 @@ const { NODE_W, NODE_H, PAD } = CANVAS;
 export function PipelineCanvas({
   doc,
   selectedId,
+  errorIds,
   onSelectNode,
   onMoveNode,
+  onMoveEnd,
   onConnect,
   onDisconnect,
+  scrollRef,
 }: {
   doc: BuilderDoc;
   selectedId: string | null;
+  /** Step ids that have validation errors — shown as a red badge on the node. */
+  errorIds?: Set<string>;
   onSelectNode: (id: string | null) => void;
   onMoveNode: (id: string, x: number, y: number) => void;
+  /** Called when a node drag ends, so the parent can commit the move to history. */
+  onMoveEnd?: () => void;
   /** Create a dependency edge by dragging from a node's output port to another. */
   onConnect: (from: string, to: string) => void;
   /** Remove a dependency edge by tapping it. */
   onDisconnect: (from: string, to: string) => void;
+  /** Ref to the scrollable container, used by the parent to recenter/fit-all. */
+  scrollRef?: RefObject<HTMLDivElement | null>;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   // Active drag: which node, and the grab offset (pointer − node origin) so the
@@ -76,10 +86,12 @@ export function PipelineCanvas({
   }
 
   function onNodePointerUp(e: ReactPointerEvent) {
+    const didDrag = !!drag.current;
     if (drag.current && e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
     drag.current = null;
+    if (didDrag) onMoveEnd?.();
   }
 
   // Output-port drag → connect. stopPropagation so it doesn't start a node move.
@@ -135,7 +147,10 @@ export function PipelineCanvas({
     PAD + Math.max(NODE_H, ...doc.nodes.map((n) => n.y + NODE_H)) + PAD;
 
   return (
-    <div className="bg-muted/20 max-h-[40vh] overflow-auto rounded-md border">
+    <div
+      ref={scrollRef}
+      className="bg-muted/20 max-h-[40vh] overflow-auto rounded-md border"
+    >
       <svg
         ref={svgRef}
         width={width}
@@ -203,6 +218,7 @@ export function PipelineCanvas({
         {doc.nodes.map((n) => {
           const selected = n.step.id === selectedId;
           const isDropTarget = n.step.id === hoverTargetId;
+          const hasError = errorIds?.has(n.step.id) ?? false;
           const label = n.step.name || n.step.id;
           return (
             <g
@@ -221,10 +237,14 @@ export function PipelineCanvas({
                 width={NODE_W}
                 height={NODE_H}
                 rx={8}
-                strokeWidth={selected || isDropTarget ? 2 : 1}
+                strokeWidth={selected || isDropTarget || hasError ? 2 : 1}
                 className={cn(
                   isDropTarget ? "fill-primary/10" : "fill-card",
-                  selected || isDropTarget ? "stroke-primary" : "stroke-border"
+                  hasError
+                    ? "stroke-red-500"
+                    : selected || isDropTarget
+                      ? "stroke-primary"
+                      : "stroke-border"
                 )}
               />
               <text
@@ -245,6 +265,20 @@ export function PipelineCanvas({
                 {n.step.agent}
                 {n.step.task?.trim() ? "" : " · no task yet"}
               </text>
+              {hasError && (
+                <g
+                  transform={`translate(${NODE_W - 8}, -8)`}
+                  role="img"
+                  aria-label="Step has a validation error"
+                >
+                  <title>Step has a validation error</title>
+                  <circle
+                    r={6}
+                    className="stroke-background fill-red-500"
+                    strokeWidth={1.5}
+                  />
+                </g>
+              )}
             </g>
           );
         })}
