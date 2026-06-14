@@ -403,6 +403,8 @@ export class HostClient {
       if (!observer) this.decSizing(key);
       if (outSet.size === 0) this.outputListeners.delete(key);
       if (exitSet.size === 0) this.exitListeners.delete(key);
+      // Drop the size we recorded above — there's no detach for a failed attach.
+      if (outSet.size === 0) this.lastSize.delete(key);
       throw err;
     }
   }

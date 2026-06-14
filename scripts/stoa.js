@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /*
  * Stoa - Self-hosted AI coding session manager
  * https://github.com/johnisag/stoa
