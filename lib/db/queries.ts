@@ -303,7 +303,7 @@ export const queries = {
   createSavedWorkflow: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT INTO saved_workflows (id, name, builder_doc) VALUES (?, ?, ?)`
+      `INSERT INTO saved_workflows (id, name, builder_doc, history) VALUES (?, ?, ?, ?)`
     ),
 
   getSavedWorkflow: (db: Database.Database) =>
@@ -318,7 +318,7 @@ export const queries = {
   updateSavedWorkflow: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE saved_workflows SET name = ?, builder_doc = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE saved_workflows SET name = ?, builder_doc = ?, history = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
   deleteSavedWorkflow: (db: Database.Database) =>

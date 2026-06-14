@@ -68,6 +68,7 @@ export interface SavedWorkflowRow {
   id: string;
   name: string;
   builder_doc: string;
+  history: string;
   created_at: string;
   updated_at: string;
 }
