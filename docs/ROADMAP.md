@@ -1,16 +1,21 @@
 # Stoa — Roadmap
 
 Stoa is a **mobile-first, self-hosted web UI for running AI coding agents
-(Claude Code, Codex, Hermes) in real terminals — native on Windows, macOS, and
-Linux.**
+(Claude Code, Codex, Hermes, Kilo Code, Kimi Code) in real terminals — native on
+Windows, macOS, and Linux.**
 
-**Status (2026-06-12):** the **UI/UX campaign is COMPLETE** — all **21** items
+**Status (2026-06-14):** the **UI/UX campaign is COMPLETE** — all **21** items
 from the multi-agent UI/UX research (#214) shipped across **7 waves, PRs
-#215–#221**, each built by parallel worktree agents and merged through the full
-ceremony (gate → multi-agent review → 3-OS CI). The **"Ask / Command Stoa"
-chatbox is now shipped through Phase 2**: Ask (read-only, #223) + a Claude+Opus
-default model picker (#225) + **Command Stoa — the chatbox acts** (#226). Next:
-broaden the action set and seed-prompt the created session.
+#215–#221**. The **"Ask / Command Stoa" chatbox is shipped through Phase 2**: Ask
+(read-only, #223) + a Claude+Opus default model picker (#225) + **Command Stoa —
+the chatbox acts** (#226). The **visual workflow builder is shipped end-to-end** —
+Phase 0 custom spec (#239) → configurable nodes (#241) → SVG DAG graph (#242) →
+the drag-and-drop canvas with drag-to-connect edges, saved/reloadable workflows,
+and tidy-layout + import/export (#243–#246). **Multi-repo "workspace" sessions**
+(one session, a worktree per sub-repo, #237) ship with a **session-scoped Git
+panel** (#240). This PR adds two agent providers — **Kilo Code** (open-source
+agentic CLI) and **Kimi Code** (Moonshot AI's coding agent). Next: broaden the Command
+Stoa action set and seed-prompt the created session.
 
 ---
 

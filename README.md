@@ -2,9 +2,9 @@
 
 **Stoa is a self-hosted cockpit for running AI coding agents in real terminals — from any browser, including your phone.**
 
-Point it at a repo, pick an agent (Claude Code, Codex, or Hermes), and Stoa spawns a real terminal session you can watch stream live, steer, and reconnect to from anywhere on your network. It runs **natively on Windows, macOS, and Linux** — no WSL or tmux required on Windows — and your sessions keep running even after you close the tab.
+Point it at a repo, pick an agent (Claude Code, Codex, Hermes, Kilo Code, or Kimi Code), and Stoa spawns a real terminal session you can watch stream live, steer, and reconnect to from anywhere on your network. It runs **natively on Windows, macOS, and Linux** — no WSL or tmux required on Windows — and your sessions keep running even after you close the tab.
 
-It's built for the way agents actually work: run several side by side from a mobile-first UI, and — when you're ready to scale past hands-on — let **Dispatch** turn GitHub issues into reviewed, merged PRs autonomously. The fleet reviews its own PRs (a 3-critic gate), lands them (a self-rebasing merge train), splits a spec into conflict-free parallel tasks, verifies its changes, and learns from every review.
+It's built for the way agents actually work: run several side by side from a mobile-first UI. Open many repos at once as a **multi-repo workspace** (one session, a worktree per sub-repo) with a session-scoped Git panel. Compose pipelines in the **visual workflow builder** (drag-and-drop DAG canvas, saved and reloadable). Drive Stoa itself in plain language with the **Ask / Command Stoa** chatbox. And — when you're ready to scale past hands-on — let **Dispatch** turn GitHub issues into reviewed, merged PRs autonomously: the fleet reviews its own PRs (a 3-critic gate), lands them (a self-rebasing merge train), splits a spec into conflict-free parallel tasks, verifies its changes, and learns from every review.
 
 For a plain-English tour of every feature, open the **Guide** (the compass icon in the sidebar) once Stoa is running.
 
@@ -74,7 +74,7 @@ On Windows the native pty backend is selected automatically (no tmux/WSL needed)
 - Node.js 24+
 - tmux (macOS/Linux only — Windows uses the native pty backend)
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (for code search - auto-installed by installer script, or run `stoa update`)
-- At least one AI CLI: [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), or Hermes
+- At least one AI CLI: [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), Hermes, [Kilo Code](https://github.com/Kilo-Org/kilocode), or [Kimi Code](https://github.com/MoonshotAI/kimi-code)
 
 ## Supported Agents
 
@@ -83,12 +83,18 @@ On Windows the native pty backend is selected automatically (no tmux/WSL needed)
 | Claude Code | ✅     | ✅   | `--dangerously-skip-permissions`             |
 | Codex       | ❌     | ❌   | `--dangerously-bypass-approvals-and-sandbox` |
 | Hermes      | ✅     | ❌   | `--yolo`                                     |
+| Kilo Code   | ❌     | ❌   | —                                            |
+| Kimi Code   | ❌     | ❌   | `--yolo`                                     |
 
 _**Resume**/**Fork** reflect what Stoa manages per session, not the CLI's raw
 capability. **Auto-Approve** is the flag Stoa passes when you enable "skip
 permissions". Hermes resume works by capturing its session id from the startup
 banner. Codex resume/fork (its CLI exposes `codex resume`/`codex fork`
-subcommands) is planned — see [docs/ROADMAP.md](docs/ROADMAP.md)._
+subcommands) is planned — see [docs/ROADMAP.md](docs/ROADMAP.md). **Kilo Code**
+(the open-source agentic CLI) and **Kimi Code** (Moonshot AI's terminal coding
+agent) launch as
+real terminal sessions like any other agent; per-session resume/fork management
+is not wired yet._
 
 ## CLI Commands
 

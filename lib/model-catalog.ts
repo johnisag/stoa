@@ -43,7 +43,10 @@ const DEFAULT_MODEL_BY_AGENT: Partial<Record<AgentType, string>> = {
 // these the UI offers a FREE-TEXT model field instead of a dropdown, and any
 // non-empty value is accepted verbatim. Empty means "use the agent's own
 // default" (no model flag passed). Hermes live-fetches models via `hermes model`.
-const FREE_TEXT_MODEL_AGENTS = new Set<AgentType>(["hermes"]);
+// Kilo (free-text "provider/model" via the Kilo gateway, 500+) and Kimi
+// (config-defined aliases) are likewise dynamic — no static catalog, so the UI
+// shows a free-text field and any foreign static model is dropped to the default.
+const FREE_TEXT_MODEL_AGENTS = new Set<AgentType>(["hermes", "kilo", "kimi"]);
 
 export function isFreeTextModelAgent(agentType: AgentType): boolean {
   return FREE_TEXT_MODEL_AGENTS.has(agentType);

@@ -4,7 +4,14 @@
  * Centralized configuration for all AI coding agent providers.
  */
 
-export const PROVIDER_IDS = ["claude", "codex", "hermes", "shell"] as const;
+export const PROVIDER_IDS = [
+  "claude",
+  "codex",
+  "hermes",
+  "kilo",
+  "kimi",
+  "shell",
+] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
@@ -125,6 +132,66 @@ export const PROVIDERS: ProviderDefinition[] = [
     // in the working dir (Hermes strips env vars from MCP children, so the
     // conductor id can't ride the process env). See lib/mcp-config.ts.
     supportsOrchestration: true,
+  },
+  {
+    id: "kilo",
+    name: "Kilo Code",
+    description: "open-source agentic CLI",
+    cli: "kilo",
+    configDir: "~/.config/kilo",
+    // Launches Kilo's interactive TUI (an OpenCode fork; @kilocode/cli).
+    // Self-authenticating: the user signs in once via the TUI (`kilo auth` /
+    // /connect), so no env var is required to launch. Verified via
+    // `kilo --help` / `kilo run --help` (v7.3.45).
+    //  - modelFlag is "--model": models are a free-text "provider/model" string
+    //    served DYNAMICALLY via the Kilo gateway (500+), so Stoa offers a
+    //    FREE-TEXT model field (no static list). An empty model leaves Kilo on
+    //    its own configured default (no --model passed).
+    //  - resume/fork are NOT enabled yet: kilo HAS `-s, --session <id>` / `--fork`
+    //    and resumeFlag is kept ("--session") so the plumbing is ready, but Stoa
+    //    doesn't yet capture kilo's TUI session id, so supportsResume/supportsFork
+    //    stay false (fresh-launch-only) until a follow-up wires id-capture.
+    //  - NO auto-approve flag for the bare TUI: `--auto` is a `kilo run`
+    //    subcommand flag only, so autoApproveFlag stays UNSET here.
+    //  - The bare `kilo [project]` positional is a DIRECTORY, not a prompt — Stoa
+    //    sets the pty cwd, so no positional is passed (initialPromptFlag unset).
+    autoApproveFlag: undefined,
+    resumeFlag: "--session",
+    modelFlag: "--model",
+    supportsResume: false,
+    supportsFork: false,
+  },
+  {
+    id: "kimi",
+    name: "Kimi Code",
+    description: "Moonshot AI's coding agent",
+    cli: "kimi",
+    configDir: "~/.kimi-code",
+    // Kimi Code (Moonshot AI) — a terminal coding agent used exactly like Claude
+    // Code. Binary command `kimi` (lives at ~/.kimi-code/bin/kimi.exe). Bare
+    // `kimi` launches the interactive TUI. Self-authenticating: `kimi login`
+    // (device-code flow) writes credentials under ~/.kimi-code (config.toml,
+    // sessions/, credentials/), so no env var is required to launch. Verified via
+    // `kimi --help` (v0.14.3).
+    //  - modelFlag is "-m": the default model comes from ~/.kimi-code/config.toml
+    //    (`default_model = "kimi-code/kimi-for-coding"`, display "K2.7 Code"), so
+    //    it's config-defined/free-text (no static catalog) and Stoa offers a
+    //    FREE-TEXT model field. An empty model leaves Kimi Code on its own
+    //    configured default (no -m passed).
+    //  - resume is NOT enabled yet: kimi HAS `-S, --session [id]` / `-C,
+    //    --continue` and resumeFlag is kept ("--session") so the plumbing is
+    //    ready, but Stoa doesn't yet capture kimi's TUI session id, so
+    //    supportsResume stays false (fresh-launch-only). supportsFork: no fork.
+    //  - auto-approve: `-y, --yolo` ("auto-approve all actions"). --yolo wired
+    //    here. (The -p/--prompt headless path is a one-shot, not a persistent
+    //    session — not used.)
+    //  - No positional prompt on the bare TUI; Stoa sets the pty cwd.
+    //    initialPromptFlag unset (user types in the TUI).
+    autoApproveFlag: "--yolo",
+    resumeFlag: "--session",
+    modelFlag: "-m",
+    supportsResume: false,
+    supportsFork: false,
   },
   {
     id: "shell",
