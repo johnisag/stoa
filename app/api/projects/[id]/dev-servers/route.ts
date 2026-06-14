@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProject, addProjectDevServer } from "@/lib/projects";
+import { parseJsonBody, tokenizeCommand } from "@/lib/api-security";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -22,14 +23,37 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    const body = await request.json();
-    const { name, type, command, port, portEnvVar } = body;
+    const parsed = await parseJsonBody<{
+      name?: string;
+      type?: string;
+      command?: string;
+      port?: number;
+      portEnvVar?: string;
+    }>(request);
+    if (!parsed.ok) return parsed.response;
+
+    const { name, type, command, port, portEnvVar } = parsed.data;
 
     if (!name || !type || !command) {
       return NextResponse.json(
         { error: "Name, type, and command are required" },
         { status: 400 }
       );
+    }
+
+    if (type !== "node" && type !== "docker") {
+      return NextResponse.json(
+        { error: "type must be 'node' or 'docker'" },
+        { status: 400 }
+      );
+    }
+
+    try {
+      tokenizeCommand(command);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Invalid command";
+      return NextResponse.json({ error: message }, { status: 400 });
     }
 
     const devServer = addProjectDevServer(id, {

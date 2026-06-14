@@ -9,7 +9,18 @@ export function dirName(p: string): string {
   if (!p) return p;
   const parts = p.split(/[\\/]/);
   parts.pop();
-  return parts.join("/") || p;
+  // Use the separator that matches the input style: native-Windows paths
+  // (contains a backslash or a drive letter like "C:") display with "\",
+  // otherwise "/".
+  const sep = p.includes("\\") || /^[A-Za-z]:/.test(p) ? "\\" : "/";
+  const result = parts.join(sep);
+  // For a POSIX root path ("/") or a Windows drive root ("C:\"), popping leaves
+  // an empty dirname; return the original path so callers don't get "".
+  if (result === "" && p.startsWith("/")) return "/";
+  // A Windows path reduced to just its drive letter needs the trailing backslash
+  // to remain a valid directory path.
+  if (/^[A-Za-z]:$/.test(result) && /^[A-Za-z]:/.test(p)) return `${result}\\`;
+  return result || p;
 }
 
 /**

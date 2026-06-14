@@ -156,6 +156,8 @@ install_homebrew() {
         return 0
     fi
 
+    remote_install_guard "Homebrew" || return 1
+
     log_info "Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
@@ -197,6 +199,11 @@ install_node() {
             return 0
         fi
         log_warn "Node.js $version found, but 24+ required"
+    fi
+
+    if ! remote_install_guard "Node.js"; then
+        log_error "Node.js 24+ is required. Install it manually and re-run stoa install."
+        return 1
     fi
 
     log_info "Installing Node.js..."

@@ -67,4 +67,5 @@ export function getSessionBackend(): SessionBackend {
  */
 export function resetSessionBackend(): void {
   backend = null;
+  cachedType = null;
 }

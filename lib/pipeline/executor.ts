@@ -229,10 +229,14 @@ export async function runPipeline(
             const outcome = await deps.checkOutcome(state.sessionId!, step);
             return { id: state.id, outcome, error: null as string | null };
           } catch (e) {
+            const msg = e instanceof Error ? e.message : "poll failed";
+            // Log the fault so a persistently broken poller is visible; keeping the
+            // step running lets the cycle cap terminate it if it never recovers.
+            console.warn(`pipeline: checkOutcome failed for ${state.id}:`, msg);
             return {
               id: state.id,
               outcome: "running" as StepOutcome,
-              error: e instanceof Error ? e.message : "poll failed",
+              error: msg,
             };
           }
         })
@@ -261,7 +265,7 @@ export async function runPipeline(
       }
 
       // 3. Still waiting — sleep, with a hard cycle cap as a safety net.
-      if (++cycles > maxPollCycles) {
+      if (++cycles >= maxPollCycles) {
         run = forceTerminate(
           run,
           deps.now(),
@@ -274,10 +278,15 @@ export async function runPipeline(
     }
   } catch (err) {
     // Unexpected fault: drive the run to a terminal status so it never lingers
-    // as a zombie "running" snapshot, emit it, reap workers, then rethrow.
+    // as a zombie "running" snapshot, emit it, reap workers, then rethrow. The
+    // emit is best-effort: an onUpdate throw must not mask the original error.
     const detail = `pipeline executor error: ${err instanceof Error ? err.message : String(err)}`;
     run = forceTerminate(run, deps.now(), detail);
-    emit();
+    try {
+      emit();
+    } catch {
+      /* onUpdate is best-effort */
+    }
     await reapWorkers(run, deps);
     throw err;
   }

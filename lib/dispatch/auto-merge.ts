@@ -48,6 +48,9 @@ export function nextAutoMergeAction(input: {
   checks: CheckSummary;
   /** Verify harness armed for this repo. */
   verifyGate: boolean;
+  /** SHA the review verdict was pinned to. When the repo is review-gated and a
+   * verdict is APPROVED but the SHA is missing, we wait rather than merge. */
+  reviewSha: string | null;
   /** Stoa's local verify verdict for the CURRENT head (null when not armed, not
    * yet run, or the cached verdict is for an older SHA — the caller SHA-pins it). */
   verifyStatus: string | null;
@@ -61,6 +64,14 @@ export function nextAutoMergeAction(input: {
   }
   // Review gate armed → require the critic's APPROVED before merging.
   if (input.reviewGate && input.reviewDecision !== "APPROVED") return "wait";
+  // The verdict must be pinned to a SHA before we act on it; otherwise a push
+  // that lands between the verdict and this tick could merge unreviewed commits.
+  if (
+    input.reviewGate &&
+    input.reviewDecision === "APPROVED" &&
+    !input.reviewSha
+  )
+    return "wait";
   // CONFLICTING (needs rebase) or UNKNOWN (GitHub still computing) → not now.
   if (input.mergeable !== "MERGEABLE") return "wait";
   if (input.checks === "failing" || input.checks === "pending") return "wait";
@@ -175,6 +186,7 @@ export async function autoMergePass(): Promise<void> {
       // NOT GitHub's reviewDecision — the panel posts comments, not GitHub reviews,
       // so GitHub's field stays null and would block a gated PR forever.
       reviewDecision: d.review_decision,
+      reviewSha: d.review_sha,
       mergeable: readiness.mergeable,
       checks: readiness.checks,
       // Armed == gate on AND a command set (else verifyPass never runs and the
@@ -194,6 +206,10 @@ export async function autoMergePass(): Promise<void> {
         cwd: repoCwd,
         prNumber: d.pr_number,
         repoSlug: repo.repo_slug,
+        // SHA pin: if a review verdict was cached, gh refuses the merge unless the
+        // PR head still equals that SHA. This closes the race where a fixer/CI
+        // fixer/manual push slips commits in after approval.
+        matchHeadCommit: d.review_sha,
       });
       queries.updateDispatchStatus(db).run("merged", d.id);
       console.log(

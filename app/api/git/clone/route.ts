@@ -4,6 +4,11 @@ import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs/promises";
 import { expandHome, isWindows } from "@/lib/platform";
+import {
+  parseJsonBody,
+  getAllowedPathRoots,
+  resolveSandboxedPathOrHome,
+} from "@/lib/api-security";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,108 +51,115 @@ export function isAllowedCloneUrl(url: string): boolean {
  * Clone a git repository into a target directory
  */
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { url, directory } = body;
+  const parsed = await parseJsonBody<{ url?: string; directory?: string }>(
+    request
+  );
+  if (!parsed.ok) return parsed.response;
 
-    if (!url) {
-      return NextResponse.json(
-        { error: "Repository URL is required" },
-        { status: 400 }
-      );
-    }
+  const { url, directory } = parsed.data;
 
-    if (!directory) {
-      return NextResponse.json(
-        { error: "Target directory is required" },
-        { status: 400 }
-      );
-    }
-
-    if (typeof url !== "string" || !isAllowedCloneUrl(url)) {
-      return NextResponse.json(
-        { error: "Invalid repository URL" },
-        { status: 400 }
-      );
-    }
-
-    // Resolve ~ to home directory
-    const resolvedDir = expandHome(directory);
-
-    // Verify parent directory exists
-    try {
-      await fs.access(resolvedDir);
-    } catch {
-      return NextResponse.json(
-        { error: `Directory does not exist: ${directory}` },
-        { status: 400 }
-      );
-    }
-
-    // Extract repo name from URL for the clone target
-    const repoName = extractRepoName(url);
-    if (!repoName) {
-      return NextResponse.json(
-        { error: "Could not determine repository name from URL" },
-        { status: 400 }
-      );
-    }
-
-    const clonePath = path.join(resolvedDir, repoName);
-
-    // Defense in depth: the resolved clone target must stay inside resolvedDir.
-    // Guards against a repoName that slips a traversal past extractRepoName.
-    const resolvedParent = path.resolve(resolvedDir);
-    const resolvedClone = path.resolve(clonePath);
-    if (
-      resolvedClone !== resolvedParent &&
-      !resolvedClone.startsWith(resolvedParent + path.sep)
-    ) {
-      return NextResponse.json(
-        { error: "Invalid repository name in URL" },
-        { status: 400 }
-      );
-    }
-
-    // Check if target already exists
-    try {
-      await fs.access(clonePath);
-      return NextResponse.json(
-        { error: `Directory already exists: ${clonePath}` },
-        { status: 409 }
-      );
-    } catch {
-      // Good - doesn't exist yet
-    }
-
-    // Clone the repository via execFile (no shell): url/clonePath are discrete
-    // argv tokens, so shell metacharacters in the URL can't inject commands.
-    // The `--` stops a `-`-leading url from being read as a git flag.
-    const { stderr } = await execFileAsync(
-      "git",
-      ["clone", "--", url, clonePath],
-      {
-        timeout: 120000,
-        // Windows: suppress the per-call conhost.exe console flash. No-op on POSIX.
-        windowsHide: isWindows,
-      }
+  if (!url) {
+    return NextResponse.json(
+      { error: "Repository URL is required" },
+      { status: 400 }
     );
-
-    // git clone outputs progress to stderr, not an error
-    if (stderr && stderr.includes("fatal:")) {
-      return NextResponse.json({ error: stderr.trim() }, { status: 500 });
-    }
-
-    return NextResponse.json({
-      path: clonePath,
-      name: repoName,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to clone repository";
-    console.error("Error cloning repository:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
   }
+
+  if (!directory) {
+    return NextResponse.json(
+      { error: "Target directory is required" },
+      { status: 400 }
+    );
+  }
+
+  if (typeof url !== "string" || !isAllowedCloneUrl(url)) {
+    return NextResponse.json(
+      { error: "Invalid repository URL" },
+      { status: 400 }
+    );
+  }
+
+  // Resolve ~ to home directory
+  const resolvedDir = expandHome(directory);
+
+  // Restrict cloning to the user's home tree or an already-registered root.
+  const roots = getAllowedPathRoots();
+  const { allowed } = resolveSandboxedPathOrHome(resolvedDir, roots);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Target directory is outside the allowed workspace" },
+      { status: 403 }
+    );
+  }
+
+  // Verify parent directory exists
+  try {
+    await fs.access(resolvedDir);
+  } catch {
+    return NextResponse.json(
+      { error: `Directory does not exist: ${directory}` },
+      { status: 400 }
+    );
+  }
+
+  // Extract repo name from URL for the clone target
+  const repoName = extractRepoName(url);
+  if (!repoName) {
+    return NextResponse.json(
+      { error: "Could not determine repository name from URL" },
+      { status: 400 }
+    );
+  }
+
+  const clonePath = path.join(resolvedDir, repoName);
+
+  // Defense in depth: the resolved clone target must stay inside resolvedDir.
+  // Guards against a repoName that slips a traversal past extractRepoName.
+  const resolvedParent = path.resolve(resolvedDir);
+  const resolvedClone = path.resolve(clonePath);
+  if (
+    resolvedClone !== resolvedParent &&
+    !resolvedClone.startsWith(resolvedParent + path.sep)
+  ) {
+    return NextResponse.json(
+      { error: "Invalid repository name in URL" },
+      { status: 400 }
+    );
+  }
+
+  // Check if target already exists
+  try {
+    await fs.access(clonePath);
+    return NextResponse.json(
+      { error: `Directory already exists: ${clonePath}` },
+      { status: 409 }
+    );
+  } catch {
+    // Good - doesn't exist yet
+  }
+
+  // Clone the repository via execFile (no shell): url/clonePath are discrete
+  // argv tokens, so shell metacharacters in the URL can't inject commands.
+  // The `--` stops a `-`-leading url from being read as a git flag.
+  const { stderr } = await execFileAsync(
+    "git",
+    ["clone", "--", url, clonePath],
+    {
+      timeout: 120000,
+      // Windows: suppress the per-call conhost.exe console flash. No-op on POSIX.
+      windowsHide: isWindows,
+    }
+  );
+
+  // git clone outputs progress to stderr, not an error
+  if (stderr && stderr.includes("fatal:")) {
+    return NextResponse.json({ error: stderr.trim() }, { status: 500 });
+  }
+
+  return NextResponse.json({
+    path: clonePath,
+    name: repoName,
+  });
 }
 
 export function extractRepoName(url: string): string | null {

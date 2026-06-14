@@ -95,14 +95,19 @@ export class ClaudeProcessManager {
 
     // Store user message in database
     const db = getDb();
-    queries
-      .createMessage(db)
-      .run(
-        sessionId,
-        "user",
-        JSON.stringify([{ type: "text", text: prompt }]),
-        null
-      );
+    try {
+      await queries
+        .createMessage(db)
+        .run(
+          sessionId,
+          "user",
+          this.safeStringify([{ type: "text", text: prompt }]),
+          null
+        );
+    } catch (err) {
+      console.error(`Failed to store user message for ${sessionId}:`, err);
+      throw new Error(`Could not record prompt: ${(err as Error).message}`);
+    }
 
     // Build Claude CLI command
     const args = ["-p", "--output-format", "stream-json", "--verbose"];
@@ -112,14 +117,13 @@ export class ClaudeProcessManager {
       args.push("--model", options.model);
     }
 
-    // Handle session continuity
+    // Handle session continuity: explicit options take precedence, then DB value.
     const dbSession = queries.getSession(db).get(sessionId) as
       | Session
       | undefined;
-
-    if (dbSession?.claude_session_id) {
-      // Resume existing Claude session
-      args.push("--resume", dbSession.claude_session_id);
+    const resumeId = options.claudeSessionId ?? dbSession?.claude_session_id;
+    if (resumeId && options.resume !== false) {
+      args.push("--resume", resumeId);
     }
 
     // Add system prompt if specified
@@ -162,13 +166,8 @@ export class ClaudeProcessManager {
 
     const claudeProcess = spawn(spawnFile, spawnArgs, {
       cwd,
-      // On Windows inherit the full process env; on POSIX prepend Homebrew paths.
-      env: isWindows
-        ? process.env
-        : {
-            ...process.env,
-            PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH}`,
-          },
+      // Inherit the user's PATH; resolve required binaries with resolveBinary().
+      env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: isWindows,
     });
@@ -195,10 +194,6 @@ export class ClaudeProcessManager {
     claudeProcess.stderr?.on("data", (data: Buffer) => {
       const text = data.toString();
       console.error(`Claude stderr [${sessionId}]:`, text);
-    });
-
-    claudeProcess.on("error", (err) => {
-      console.error(`Claude spawn error [${sessionId}]:`, err);
     });
 
     // Handle process exit
@@ -241,7 +236,18 @@ export class ClaudeProcessManager {
   // Cancel a running Claude process
   cancelSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (session?.process) {
+    if (!session?.process) return;
+
+    if (isWindows) {
+      // SIGTERM is unreliable for .cmd/.bat shims on Windows. Start with the
+      // default kill, then escalate to SIGKILL if the process lingers.
+      session.process.kill();
+      setTimeout(() => {
+        if (!session.process?.killed) {
+          session.process?.kill("SIGKILL");
+        }
+      }, 2000);
+    } else {
       session.process.kill("SIGTERM");
     }
   }
@@ -284,7 +290,14 @@ export class ClaudeProcessManager {
         // Store Claude's session ID for future --resume
         const claudeSessionId = event.data.claudeSessionId;
         if (claudeSessionId) {
-          queries.updateSessionClaudeId(db).run(claudeSessionId, sessionId);
+          try {
+            queries.updateSessionClaudeId(db).run(claudeSessionId, sessionId);
+          } catch (err) {
+            console.error(
+              `Failed to update claude_session_id for ${sessionId}:`,
+              err
+            );
+          }
         }
         break;
       }
@@ -292,26 +305,33 @@ export class ClaudeProcessManager {
       case "text": {
         // Store assistant message
         if (event.data.role === "assistant") {
-          queries
-            .createMessage(db)
-            .run(
-              sessionId,
-              "assistant",
-              JSON.stringify(event.data.content),
-              null
+          try {
+            queries
+              .createMessage(db)
+              .run(
+                sessionId,
+                "assistant",
+                this.safeStringify(event.data.content),
+                null
+              );
+          } catch (err) {
+            console.error(
+              `Failed to store assistant message for ${sessionId}:`,
+              err
             );
+          }
         }
         break;
       }
 
       case "complete": {
         // Update session timestamp
-        queries.updateSessionStatus(db).run("idle", sessionId);
+        this.safeUpdateStatus(sessionId, "idle");
         break;
       }
 
       case "error": {
-        queries.updateSessionStatus(db).run("error", sessionId);
+        this.safeUpdateStatus(sessionId, "error");
         break;
       }
     }
@@ -319,7 +339,26 @@ export class ClaudeProcessManager {
 
   // Update session status in database
   private updateDbStatus(sessionId: string, status: string): void {
-    const db = getDb();
-    queries.updateSessionStatus(db).run(status, sessionId);
+    this.safeUpdateStatus(sessionId, status);
+  }
+
+  private safeUpdateStatus(sessionId: string, status: string): void {
+    try {
+      const db = getDb();
+      queries.updateSessionStatus(db).run(status, sessionId);
+    } catch (err) {
+      console.error(`Failed to update status for ${sessionId}:`, err);
+    }
+  }
+
+  /** JSON.stringify with a safe fallback so externally sourced objects can't
+   *  crash an event handler (circular refs, BigInt, etc.). */
+  private safeStringify(value: unknown): string {
+    try {
+      return JSON.stringify(value);
+    } catch (err) {
+      console.error("safeStringify failed:", err);
+      return "null";
+    }
   }
 }

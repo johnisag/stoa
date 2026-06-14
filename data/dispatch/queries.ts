@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  skipToken,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 // Type-only imports are erased at build, so pulling the domain types from the
 // (server-touching) lib/dispatch module does NOT drag node builtins into the
 // client bundle — same trick data/sessions/queries.ts uses for lib/db types.
@@ -168,7 +173,11 @@ async function prepareRepo(slug: string): Promise<PreparedRepo> {
 /** Ensure a picked GitHub repo exists locally (clone-if-needed) → returns its
  * local path + default branch so the form can fill in. */
 export function usePrepareRepo() {
-  return useMutation({ mutationFn: prepareRepo });
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: prepareRepo,
+    onSuccess: () => qc.invalidateQueries({ queryKey: dispatchKeys.repos() }),
+  });
 }
 
 // ── writes ── (the route parses camelCase keys; see app/api/dispatch/repos)
@@ -424,9 +433,9 @@ export function useOpenIssuesQuery(
   enabled: boolean
 ) {
   return useQuery({
-    queryKey: [...dispatchKeys.openIssues(repoId ?? ""), search],
-    queryFn: () => fetchOpenIssues(repoId as string, search),
-    enabled: enabled && !!repoId,
+    queryKey: [...dispatchKeys.openIssues(repoId ?? "__disabled__"), search],
+    queryFn:
+      enabled && repoId ? () => fetchOpenIssues(repoId, search) : skipToken,
     staleTime: 10000,
   });
 }
@@ -481,6 +490,8 @@ export function useMergeDispatch() {
       qc.setQueryData<IssueDispatch[]>(dispatchKeys.board(), (old) =>
         (old ?? []).map((r) => (r.id === id ? { ...r, status: "merged" } : r))
       );
+    },
+    onSettled: (_, __, id) => {
       qc.invalidateQueries({ queryKey: dispatchKeys.board() });
     },
   });
@@ -497,6 +508,7 @@ export type PlanRunStatus =
 
 /** Start a planner run for a repo + spec; resolves to the planId the UI polls. */
 export function useStartPlan() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
       repoId: string;
@@ -512,19 +524,25 @@ export function useStartPlan() {
       if (!res.ok) throw new Error(data.error || "Failed to start the planner");
       return data.planId as string;
     },
+    onSuccess: (planId) => {
+      // Seed the plan-detail cache so a remount before the caller stores the id
+      // still sees a running plan.
+      qc.setQueryData(dispatchKeys.plan(planId), { status: "running" });
+    },
   });
 }
 
 /** Poll a planner run while it's running (stops once ready/failed, or no planId). */
 export function usePlanPoll(planId: string | null) {
   return useQuery({
-    queryKey: planId ? dispatchKeys.plan(planId) : dispatchKeys.plan("none"),
-    enabled: !!planId,
-    queryFn: async (): Promise<PlanRunStatus> => {
-      const res = await fetch(`/api/dispatch/plan/${planId}`);
-      if (!res.ok) throw new Error("Failed to poll the planner");
-      return res.json();
-    },
+    queryKey: dispatchKeys.plan(planId ?? "__disabled__"),
+    queryFn: planId
+      ? async (): Promise<PlanRunStatus> => {
+          const res = await fetch(`/api/dispatch/plan/${planId}`);
+          if (!res.ok) throw new Error("Failed to poll the planner");
+          return res.json();
+        }
+      : skipToken,
     refetchInterval: (query) =>
       query.state.data?.status === "running" ? 3000 : false,
   });
@@ -551,18 +569,26 @@ export function useApprovePlan() {
       if (!res.ok) throw new Error(data.error || "Failed to file the tasks");
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, input) => {
       qc.invalidateQueries({ queryKey: dispatchKeys.pending() });
       qc.invalidateQueries({ queryKey: dispatchKeys.board() });
+      qc.invalidateQueries({ queryKey: dispatchKeys.plan(input.planId) });
     },
   });
 }
 
 /** Cancel a planner run (reclaim its worktree + kill the planner). */
 export function useCancelPlan() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (planId: string) => {
-      await fetch(`/api/dispatch/plan/${planId}`, { method: "DELETE" });
+      const res = await fetch(`/api/dispatch/plan/${planId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to cancel the planner");
+    },
+    onSettled: (_, __, planId) => {
+      qc.invalidateQueries({ queryKey: dispatchKeys.plan(planId) });
     },
   });
 }
@@ -580,16 +606,17 @@ export interface Lesson {
 /** What the critic has flagged for a repo (newest first). Lazy: only while open. */
 export function useLessons(repoId: string | null, enabled: boolean) {
   return useQuery({
-    queryKey: repoId
-      ? dispatchKeys.lessons(repoId)
-      : dispatchKeys.lessons("none"),
-    enabled: enabled && !!repoId,
-    queryFn: async (): Promise<Lesson[]> => {
-      const res = await fetch(`/api/dispatch/repos/${repoId}/lessons`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Failed to load lessons");
-      return data.lessons ?? [];
-    },
+    queryKey: dispatchKeys.lessons(repoId ?? "__disabled__"),
+    queryFn:
+      enabled && repoId
+        ? async (): Promise<Lesson[]> => {
+            const res = await fetch(`/api/dispatch/repos/${repoId}/lessons`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok)
+              throw new Error(data.error || "Failed to load lessons");
+            return data.lessons ?? [];
+          }
+        : skipToken,
     staleTime: 5000,
   });
 }

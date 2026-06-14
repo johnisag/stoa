@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  skipToken,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 // Type-only imports are erased at build (no server modules in the client bundle).
 import type { InboxItem } from "@/lib/verdict-inbox";
 import type { ReviewerFinding } from "@/lib/dispatch/reviewer";
@@ -30,23 +35,24 @@ export function useInbox(enabled = true) {
 
 /** Per-lens critic findings for one item, fetched LIVE on demand (card expand). */
 export function useFindings(item: InboxItem | null, enabled: boolean) {
+  const canFetch = enabled && !!item && item.prNumber != null;
   return useQuery({
     queryKey: item
       ? inboxKeys.findings(item.type, item.id)
-      : inboxKeys.findings("none", "none"),
-    queryFn: async (): Promise<ReviewerFinding[]> => {
-      if (!item || item.prNumber == null) return [];
-      const p = new URLSearchParams({
-        type: item.type,
-        id: item.id,
-        pr: String(item.prNumber),
-      });
-      if (item.sessionId) p.set("session", item.sessionId);
-      const res = await fetch(`/api/verdict-inbox/findings?${p}`);
-      if (!res.ok) throw new Error("Failed to load findings");
-      return (await res.json()).findings ?? [];
-    },
-    enabled: enabled && !!item && item.prNumber != null,
+      : inboxKeys.findings("__disabled__", "__disabled__"),
+    queryFn: canFetch
+      ? async (): Promise<ReviewerFinding[]> => {
+          const p = new URLSearchParams({
+            type: item.type,
+            id: item.id,
+            pr: String(item.prNumber),
+          });
+          if (item.sessionId) p.set("session", item.sessionId);
+          const res = await fetch(`/api/verdict-inbox/findings?${p}`);
+          if (!res.ok) throw new Error("Failed to load findings");
+          return (await res.json()).findings ?? [];
+        }
+      : skipToken,
     staleTime: 10000,
   });
 }
@@ -100,8 +106,14 @@ export function useInboxActions() {
     onSuccess: (_d, item) => settle(item),
   });
   const retry = useMutation({
-    mutationFn: (item: InboxItem) =>
-      act(`/api/dispatch/dispatches/${item.id}`, "POST", { action: "retry" }),
+    mutationFn: (item: InboxItem) => {
+      if (item.type !== "dispatch") {
+        throw new Error("Retry is only supported for dispatch items");
+      }
+      return act(`/api/dispatch/dispatches/${item.id}`, "POST", {
+        action: "retry",
+      });
+    },
     onSuccess: (_d, item) => settle(item),
   });
   return { merge, dismiss, retry };

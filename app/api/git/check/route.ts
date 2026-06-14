@@ -12,28 +12,47 @@ import {
 } from "@/lib/worktrees";
 import { findGitReposUnder } from "@/lib/repo-scan";
 import { getDb, queries, type Session } from "@/lib/db";
+import {
+  parseJsonBody,
+  getAllowedPathRoots,
+  resolveSandboxedPathOrHome,
+} from "@/lib/api-security";
 
 /**
  * POST /api/git/check
  * Check if a path is a git repository and return branch info
  */
 export async function POST(request: NextRequest) {
+  const parsed = await parseJsonBody<{ path?: string }>(request);
+  if (!parsed.ok) return parsed.response;
+
+  const body = parsed.data;
+  const { path: dirPath } = body;
+
+  if (!dirPath) {
+    return NextResponse.json({ error: "Path is required" }, { status: 400 });
+  }
+
+  // Allow probing the home tree (project creation flow) as well as registered
+  // project/repo roots.
+  const roots = getAllowedPathRoots();
+  const { allowed, resolved } = resolveSandboxedPathOrHome(dirPath, roots);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Path is outside the allowed workspace" },
+      { status: 403 }
+    );
+  }
+
   try {
-    const body = await request.json();
-    const { path: dirPath } = body;
-
-    if (!dirPath) {
-      return NextResponse.json({ error: "Path is required" }, { status: 400 });
-    }
-
     // Check if it's a git repo
-    const isRepo = await isGitRepo(dirPath);
+    const isRepo = await isGitRepo(resolved);
 
     if (!isRepo) {
       // Not a git repo itself — but it may be a ROOT holding several sibling
       // repos (≤2 deep), e.g. ~/my-projects/pocs. Surface them so the New Session
       // dialog can offer a multi-repo "workspace" (one worktree per picked repo).
-      const subRepos = await findGitReposUnder(dirPath, 2);
+      const subRepos = await findGitReposUnder(resolved, 2);
       return NextResponse.json({
         isGitRepo: false,
         branches: [],
@@ -50,10 +69,10 @@ export async function POST(request: NextRequest) {
     // Get branch info + existing worktrees
     const [branches, defaultBranch, currentBranch, rawWorktrees] =
       await Promise.all([
-        getBranches(dirPath),
-        getDefaultBranch(dirPath),
-        getCurrentBranch(dirPath),
-        listWorktrees(dirPath),
+        getBranches(resolved),
+        getDefaultBranch(resolved),
+        getCurrentBranch(resolved),
+        listWorktrees(resolved),
       ]);
 
     // Annotate Stoa-managed worktrees with whether a live session already owns

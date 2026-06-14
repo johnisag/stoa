@@ -174,8 +174,9 @@ describe("RecordingBackend decorator", () => {
     expect(created.cwd).toBe("/work");
     expect(created.binary).toBe("claude");
     expect(created.argCount).toBe(2);
-    // binary present => the shell command string is omitted (not the spawn path).
-    expect(created.command).toBeUndefined();
+    // command is recorded whenever it is present (regardless of binary path),
+    // so the audit trail captures the exact shell command used.
+    expect(created.command).toBe("claude --foo");
   });
 
   it("records the shell command verbatim when no binary is given (tmux/fallback path)", async () => {

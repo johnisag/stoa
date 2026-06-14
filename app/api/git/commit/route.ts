@@ -7,42 +7,54 @@ import {
   getGitStatus,
   expandPath,
 } from "@/lib/git-status";
+import {
+  parseJsonBody,
+  getAllowedPathRoots,
+  resolveSandboxedPath,
+} from "@/lib/api-security";
 
 export async function POST(request: NextRequest) {
+  const parsed = await parseJsonBody<{
+    path?: string;
+    message?: string;
+    branchName?: string;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
+  const body = parsed.data;
+  const { path: rawPath, message, branchName } = body;
+
+  if (!rawPath) {
+    return NextResponse.json({ error: "Path is required" }, { status: 400 });
+  }
+
+  if (!message) {
+    return NextResponse.json(
+      { error: "Commit message is required" },
+      { status: 400 }
+    );
+  }
+
+  const expandedPath = expandPath(rawPath);
+  const roots = getAllowedPathRoots();
+  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Path is outside the allowed workspace" },
+      { status: 403 }
+    );
+  }
+
+  if (!isGitRepo(expandedPath)) {
+    return NextResponse.json(
+      { error: "Not a git repository" },
+      { status: 400 }
+    );
+  }
+
   try {
-    const body = await request.json();
-    const {
-      path: rawPath,
-      message,
-      branchName,
-    } = body as {
-      path: string;
-      message: string;
-      branchName?: string;
-    };
-
-    if (!rawPath) {
-      return NextResponse.json({ error: "Path is required" }, { status: 400 });
-    }
-
-    if (!message) {
-      return NextResponse.json(
-        { error: "Commit message is required" },
-        { status: 400 }
-      );
-    }
-
-    const path = expandPath(rawPath);
-
-    if (!isGitRepo(path)) {
-      return NextResponse.json(
-        { error: "Not a git repository" },
-        { status: 400 }
-      );
-    }
-
     // Check if there are staged changes
-    const status = getGitStatus(path);
+    const status = getGitStatus(expandedPath);
     if (status.staged.length === 0) {
       return NextResponse.json(
         { error: "No staged changes to commit" },
@@ -52,13 +64,13 @@ export async function POST(request: NextRequest) {
 
     // Create new branch if on main/master and branch name provided
     let newBranch = false;
-    if (branchName && isMainBranch(path)) {
-      createBranch(path, branchName);
+    if (branchName && isMainBranch(expandedPath)) {
+      createBranch(expandedPath, branchName);
       newBranch = true;
     }
 
     // Commit
-    const output = commit(path, message);
+    const output = commit(expandedPath, message);
 
     return NextResponse.json({
       success: true,

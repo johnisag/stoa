@@ -16,6 +16,7 @@ export const ShimmeringLoader = forwardRef<
   return (
     <div
       ref={ref}
+      aria-hidden="true"
       className={cn("bg-muted h-4 animate-pulse rounded", className)}
       style={{
         animationFillMode: "backwards",
@@ -34,7 +35,7 @@ export function GenericSkeletonLoader({
   className,
 }: GenericSkeletonLoaderProps) {
   return (
-    <div className={cn("space-y-2", className)}>
+    <div aria-busy="true" className={cn("space-y-2", className)}>
       <ShimmeringLoader />
       <ShimmeringLoader className="w-3/4" />
       <ShimmeringLoader className="w-1/2" />
@@ -48,7 +49,7 @@ interface SessionCardSkeletonProps {
 
 export function SessionCardSkeleton({ count = 3 }: SessionCardSkeletonProps) {
   return (
-    <div className="space-y-2 p-2">
+    <div aria-busy="true" className="space-y-2 p-2">
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
@@ -73,7 +74,7 @@ export function ProjectSectionSkeleton({
   count = 2,
 }: ProjectSectionSkeletonProps) {
   return (
-    <div className="space-y-4 p-2">
+    <div aria-busy="true" className="space-y-4 p-2">
       {Array.from({ length: count }).map((_, i) => (
         <div key={i} className="space-y-2">
           <div className="flex items-center gap-2 px-2">
@@ -93,7 +94,7 @@ interface DevServerSkeletonProps {
 
 export function DevServerSkeleton({ count = 2 }: DevServerSkeletonProps) {
   return (
-    <div className="space-y-2">
+    <div aria-busy="true" className="space-y-2">
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}

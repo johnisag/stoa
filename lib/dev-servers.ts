@@ -8,7 +8,14 @@ import {
   homeDir,
   expandHome,
   isPortInUse as portInUse,
+  resolveBinary,
 } from "./platform";
+import {
+  tokenizeCommand,
+  UnsafeCommandError,
+  getAllowedPathRoots,
+  resolveSandboxedPath,
+} from "./api-security";
 
 const execFileAsync = promisify(execFile);
 
@@ -243,12 +250,21 @@ async function spawnNodeServer(
     port: ports.length > 0 ? ports[0] : undefined,
   });
 
-  // Run the command directly with cwd set via the spawn option; no `cd` prefix
-  // so we avoid cmd/PowerShell `cd &&` quoting issues on Windows.
-  const child = spawn(command, [], {
+  // Tokenize the user-supplied command into an argv array and resolve the
+  // binary cross-platform (npm CLIs are .cmd shims on Windows). Then spawn
+  // with shell: false so shell metacharacters cannot inject extra commands.
+  const argv = tokenizeCommand(command);
+  const binaryName = argv[0];
+  const binaryPath = resolveBinary(binaryName);
+  if (!binaryPath) {
+    fs.closeSync(logFd);
+    throw new UnsafeCommandError(`Command not found on PATH: ${binaryName}`);
+  }
+
+  const child = spawn(binaryPath, argv.slice(1), {
     cwd,
     env,
-    shell: true,
+    shell: false,
     detached: true,
     stdio: ["ignore", logFd, logFd],
     windowsHide: isWindows,
@@ -298,6 +314,24 @@ export async function startServer(
 ): Promise<DevServer> {
   const id = generateId();
   const ports = opts.ports || [];
+
+  // Validate the command can be tokenized safely before touching the DB.
+  tokenizeCommand(opts.command);
+
+  // Validate workingDirectory resolves inside the project's workspace.
+  const project = queries.getProject(db).get(opts.projectId) as
+    | { working_directory: string }
+    | undefined;
+  if (!project) {
+    throw new Error("Project not found");
+  }
+  const roots = [expandHome(project.working_directory)];
+  const cwdCheck = resolveSandboxedPath(opts.workingDirectory, roots);
+  if (!cwdCheck.allowed) {
+    throw new Error(
+      `Working directory is outside the project workspace: ${opts.workingDirectory}`
+    );
+  }
 
   // Create database record first
   queries.createDevServer(db).run(

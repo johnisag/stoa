@@ -112,6 +112,9 @@ export async function dispatchOne(
   // Tracked so the catch can clean up a half-built dispatch — otherwise a failure
   // after createWorktree leaks the worktree+branch and the next attempt collides.
   let createdWorktree: string | null = null;
+  // Set once the session row is inserted; used by the catch to reclaim an orphan
+  // if the backend create throws.
+  let sessionId: string | null = null;
 
   try {
     const provider = getProvider(repo.agent_type);
@@ -130,15 +133,24 @@ export async function dispatchOne(
     });
     createdWorktree = worktreePath;
 
-    // 2. Env setup (copy .env, install deps) in the background — never block.
+    // 2. Env setup (copy .env, install deps) BEFORE spawning so the agent doesn't
+    // race its own build/test against an unfinished setup. This is synchronous with
+    // the dispatch; the worktree is unusable until deps are ready anyway.
     const sourcePath = expandHome(repo.repo_path);
-    runInBackground(async () => {
+    try {
       await setupWorktree({ worktreePath, sourcePath });
-    }, `dispatch-setup-${candidate.id}`);
+    } catch (setupErr) {
+      // A setup failure is logged but not fatal — the agent may still be able to
+      // install deps itself; failing here would lose the claimed dispatch.
+      console.warn(
+        `dispatch: setupWorktree failed for ${candidate.id}:`,
+        setupErr
+      );
+    }
 
     // 3. Conductor-free session row + link it onto the (already-claimed) dispatch
     // row BEFORE spawning, so the sweep can judge liveness even if spawn crashes.
-    const sessionId = randomUUID();
+    sessionId = randomUUID();
     const tmuxName = sessionKey({
       kind: "agent",
       provider: provider.id,
@@ -204,6 +216,19 @@ export async function dispatchOne(
       } catch (cleanupErr) {
         console.error("dispatch worktree cleanup failed:", cleanupErr);
       }
+    }
+    // The session row was inserted before the backend create; if the backend
+    // create threw, the row is now orphaned. Reclaim it so the sessions table
+    // doesn't accumulate dead rows.
+    try {
+      if (sessionId) {
+        const sess = queries.getSession(db).get(sessionId) as
+          | { id: string }
+          | undefined;
+        if (sess) queries.deleteSession(db).run(sessionId);
+      }
+    } catch (sessionCleanupErr) {
+      console.error("dispatch session cleanup failed:", sessionCleanupErr);
     }
     queries.updateDispatchStatus(db).run("failed", candidate.id);
   }

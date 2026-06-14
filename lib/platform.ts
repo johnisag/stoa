@@ -69,7 +69,9 @@ export function defaultInteractiveShell(): string {
   if (isWindows) {
     return resolveBinary("pwsh") || process.env.ComSpec || "powershell.exe";
   }
-  return process.env.SHELL || "/bin/bash";
+  // Avoid hardcoding /bin/bash (AGENTS.md discourages hardcoded /bin paths).
+  // Prefer $SHELL, then resolve sh on PATH, then the POSIX-standard /bin/sh.
+  return process.env.SHELL || resolveBinary("sh") || "/bin/sh";
 }
 
 /**

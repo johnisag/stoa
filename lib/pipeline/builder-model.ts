@@ -205,9 +205,7 @@ export function moveNode(
   return {
     ...doc,
     nodes: doc.nodes.map((n) =>
-      n.step.id === id
-        ? { ...n, x: Math.max(0, x), y: Math.max(0, y) }
-        : n
+      n.step.id === id ? { ...n, x: Math.max(0, x), y: Math.max(0, y) } : n
     ),
   };
 }
@@ -280,7 +278,10 @@ export function removeStep(doc: BuilderDoc, id: string): BuilderDoc {
         const dependsOn = n.step.dependsOn.filter((d) => d !== id);
         return {
           ...n,
-          step: { ...n.step, dependsOn: dependsOn.length ? dependsOn : undefined },
+          step: {
+            ...n.step,
+            dependsOn: dependsOn.length ? dependsOn : undefined,
+          },
         };
       }),
   };
@@ -298,6 +299,18 @@ export function renameStep(
 ): BuilderDoc {
   if (!newId || newId === oldId) return doc;
   if (doc.nodes.some((n) => n.step.id === newId)) return doc;
+
+  // Rewrite {{steps.<oldId>.output}} placeholders in task/exitCriteria so a rename
+  // doesn't leave dangling output references that validateSpec will reject.
+  const outputRef = new RegExp(
+    `\\{\\{\\s*steps\\.${escapeRegExp(oldId)}\\.output\\s*\\}\\}`,
+    "g"
+  );
+  const rewrite = (text: string | undefined) =>
+    // Use a replacer function so special `$` sequences in the new id are treated
+    // as literal text, not as String.prototype.replace substitution patterns.
+    text?.replace(outputRef, () => `{{steps.${newId}.output}}`);
+
   return {
     ...doc,
     nodes: doc.nodes.map((n) => ({
@@ -306,7 +319,14 @@ export function renameStep(
         ...n.step,
         id: n.step.id === oldId ? newId : n.step.id,
         dependsOn: n.step.dependsOn?.map((d) => (d === oldId ? newId : d)),
+        task: rewrite(n.step.task) ?? n.step.task,
+        exitCriteria: rewrite(n.step.exitCriteria),
       },
     })),
   };
+}
+
+/** Escape a string for use inside a RegExp constructor. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

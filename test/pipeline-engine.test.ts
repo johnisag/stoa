@@ -140,6 +140,21 @@ describe("validateSpec", () => {
     );
   });
 
+  it("rejects step ids with leading or trailing whitespace", () => {
+    const r = validateSpec(spec([step({ id: " a" }), step({ id: "b " })]));
+    expect(r.valid).toBe(false);
+    expect(
+      r.errors.some((e) =>
+        /must not have leading or trailing whitespace/.test(e.message)
+      )
+    ).toBe(true);
+    expect(
+      r.errors.filter((e) =>
+        /must not have leading or trailing whitespace/.test(e.message)
+      )
+    ).toHaveLength(2);
+  });
+
   it("flags an empty task", () => {
     const r = validateSpec(spec([step({ id: "a", task: "  " })]));
     expect(r.valid).toBe(false);
@@ -233,7 +248,9 @@ describe("validateSpec", () => {
       r = validateSpec(bad as unknown as PipelineSpec);
     }).not.toThrow();
     expect(r!.valid).toBe(false);
-    expect(r!.errors.some((e) => /name is required/.test(e.message))).toBe(true);
+    expect(r!.errors.some((e) => /name is required/.test(e.message))).toBe(
+      true
+    );
   });
 
   it("flags a dependency on an unknown step", () => {

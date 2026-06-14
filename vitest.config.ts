@@ -4,7 +4,7 @@ import { resolve } from "path";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["test/**/*.test.ts"],
+    include: ["test/**/*.test.{ts,tsx}"],
     setupFiles: ["test/setup.ts"],
     // pty integration tests spawn real processes; allow a little room.
     testTimeout: 15000,

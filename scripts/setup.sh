@@ -19,21 +19,37 @@ if [ "$NODE_VERSION" -lt 24 ]; then
 fi
 echo "Node.js: $(node -v)"
 
-# Check tmux
-if ! command -v tmux &> /dev/null; then
-    echo "Error: tmux is not installed"
-    echo "Install: brew install tmux (macOS) or apt install tmux (Linux)"
+# Check Git
+if ! command -v git &> /dev/null; then
+    echo "Error: Git is required but was not found"
     exit 1
 fi
-echo "tmux: $(tmux -V)"
+echo "Git: $(git --version)"
 
-# Check Claude CLI
-if ! command -v claude &> /dev/null; then
-    echo "Error: Claude Code CLI is not installed"
-    echo "Install: npm install -g @anthropic-ai/claude-code"
-    exit 1
+# tmux is only required on the tmux backend (the default on macOS/Linux). The pty
+# backend (default on Windows, or via STOA_BACKEND=pty) does not need it.
+if [ "${STOA_BACKEND:-}" != "pty" ]; then
+    if ! command -v tmux &> /dev/null; then
+        echo "Warning: tmux is not installed. It is required unless you set STOA_BACKEND=pty"
+    else
+        echo "tmux: $(tmux -V)"
+    fi
 fi
-echo "Claude CLI: installed"
+
+# At least one supported AI CLI should be available, but we no longer hard-require
+# Claude — users may prefer Codex, Hermes, Kilo Code, or Kimi Code.
+AGENTS=(claude codex hermes kilo kimi)
+FOUND=()
+for agent in "${AGENTS[@]}"; do
+    if command -v "$agent" &> /dev/null; then
+        FOUND+=("$agent")
+    fi
+done
+if [ ${#FOUND[@]} -eq 0 ]; then
+    echo "Warning: No supported AI agent CLI found (claude, codex, hermes, kilo, kimi). Install at least one before creating an agent session."
+else
+    echo "AI agents found: ${FOUND[*]}"
+fi
 
 # Check jq
 if ! command -v jq &> /dev/null; then

@@ -1,4 +1,9 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  skipToken,
+  useQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { gitKeys } from "./keys";
 
 // Re-export for convenience
@@ -38,6 +43,7 @@ async function fetchGitCheck(path: string): Promise<{ isGitRepo: boolean }> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
   });
+  if (!res.ok) throw new Error("Failed to check git repository");
   return res.json();
 }
 
@@ -79,7 +85,8 @@ async function fetchGitStatus(workingDir: string): Promise<GitStatus> {
     `/api/git/status?path=${encodeURIComponent(workingDir)}`
   );
   const data = await res.json();
-  if (data.error) throw new Error(data.error);
+  if (!res.ok || data.error)
+    throw new Error(data.error || "Failed to fetch git status");
   return data;
 }
 
@@ -100,8 +107,9 @@ export function useGitStatus(
 
 async function fetchPRData(workingDir: string): Promise<PRData | null> {
   const res = await fetch(`/api/git/pr?path=${encodeURIComponent(workingDir)}`);
+  if (!res.ok) throw new Error("Failed to fetch PR data");
   const data = await res.json();
-  if (data.error) return null;
+  if (data.error) throw new Error(data.error);
   return data;
 }
 
@@ -128,7 +136,8 @@ export function useCreatePR(workingDir: string) {
       );
       const info = await infoRes.json();
 
-      if (info.error) throw new Error(info.error);
+      if (!infoRes.ok || info.error)
+        throw new Error(info.error || "Failed to generate PR content");
 
       if (info.existingPR) {
         // PR already exists, just return it
@@ -148,7 +157,8 @@ export function useCreatePR(workingDir: string) {
       });
 
       const result = await createRes.json();
-      if (result.error) throw new Error(result.error);
+      if (!createRes.ok || result.error)
+        throw new Error(result.error || "Failed to create PR");
 
       return { pr: result.pr, created: true };
     },
@@ -157,8 +167,9 @@ export function useCreatePR(workingDir: string) {
       if (data.pr?.url) {
         window.open(data.pr.url, "_blank");
       }
-      // Invalidate PR status
+      // Invalidate PR status and local git status (pushing the branch changes it)
       queryClient.invalidateQueries({ queryKey: gitKeys.pr(workingDir) });
+      queryClient.invalidateQueries({ queryKey: gitKeys.status(workingDir) });
     },
   });
 }
@@ -174,7 +185,8 @@ export function useStageFiles(workingDir: string) {
         body: JSON.stringify({ path: workingDir, files }),
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!res.ok || data.error)
+        throw new Error(data.error || "Failed to stage files");
       return data;
     },
     onSuccess: () => {
@@ -194,7 +206,8 @@ export function useUnstageFiles(workingDir: string) {
         body: JSON.stringify({ path: workingDir, files }),
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!res.ok || data.error)
+        throw new Error(data.error || "Failed to unstage files");
       return data;
     },
     onSuccess: () => {
@@ -303,10 +316,9 @@ export function useCommitHistory(workingDir: string, limit: number = 30) {
 
 export function useCommitDetail(workingDir: string, hash: string | null) {
   return useQuery({
-    queryKey: gitKeys.commitDetail(workingDir, hash || ""),
-    queryFn: () => fetchCommitDetail(workingDir, hash!),
+    queryKey: gitKeys.commitDetail(workingDir, hash ?? "__disabled__"),
+    queryFn: hash ? () => fetchCommitDetail(workingDir, hash) : skipToken,
     staleTime: 60000, // Commit details don't change
-    enabled: !!workingDir && !!hash,
   });
 }
 
@@ -316,10 +328,16 @@ export function useCommitFileDiff(
   file: string | null
 ) {
   return useQuery({
-    queryKey: gitKeys.commitFileDiff(workingDir, hash || "", file || ""),
-    queryFn: () => fetchCommitFileDiff(workingDir, hash!, file!),
+    queryKey: gitKeys.commitFileDiff(
+      workingDir,
+      hash ?? "__disabled__",
+      file ?? "__disabled__"
+    ),
+    queryFn:
+      hash && file
+        ? () => fetchCommitFileDiff(workingDir, hash, file)
+        : skipToken,
     staleTime: 60000, // Diffs don't change
-    enabled: !!workingDir && !!hash && !!file,
   });
 }
 
@@ -339,7 +357,8 @@ async function fetchMultiRepoGitStatus(
 
   const res = await fetch(`/api/git/multi-status?${params}`);
   const data = await res.json();
-  if (data.error) throw new Error(data.error);
+  if (!res.ok || data.error)
+    throw new Error(data.error || "Failed to fetch multi-repo status");
   return data;
 }
 

@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { useConfirm } from "@/components/ConfirmProvider";
 import {
   useLessons,
   useClearLessons,
@@ -48,6 +49,7 @@ export function LessonsDialog({
   const { data: lessons = [], isLoading } = useLessons(repoId, open);
   const clear = useClearLessons();
   const add = useAddLesson();
+  const confirm = useConfirm();
   const [newRule, setNewRule] = useState("");
 
   const autoCount = lessons.filter((l) => l.source !== "manual").length;
@@ -65,15 +67,18 @@ export function LessonsDialog({
     );
   };
 
-  const forget = (lessonId?: string) => {
+  const forget = async (lessonId?: string) => {
     // The bulk action clears only the auto-captured FINDINGS (curated manual rules
     // survive — remove those individually). Confirm it (re-learned only when the
     // critic blocks again); a single forget is low-stakes.
     if (
       !lessonId &&
-      !confirm(
-        `Forget all ${autoCount} critic findings for ${repoSlug}? They're re-learned only when the critic blocks a PR again (your own rules are kept).`
-      )
+      !(await confirm({
+        title: `Forget all ${autoCount} critic findings?`,
+        description: `Forget all ${autoCount} critic findings for ${repoSlug}? They're re-learned only when the critic blocks a PR again (your own rules are kept).`,
+        confirmLabel: "Forget findings",
+        destructive: true,
+      }))
     ) {
       return;
     }

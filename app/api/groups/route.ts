@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, queries, type Group } from "@/lib/db";
+import { parseJsonBody, sanitizeGroupPath } from "@/lib/api-security";
 
 // GET /api/groups - List all groups
 export async function GET() {
@@ -24,9 +25,14 @@ export async function GET() {
 
 // POST /api/groups - Create a new group
 export async function POST(request: Request) {
+  const parsed = await parseJsonBody<{
+    name?: string;
+    parentPath?: string;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
   try {
-    const body = await request.json();
-    const { name, parentPath } = body;
+    const { name, parentPath } = parsed.data;
 
     if (!name || typeof name !== "string") {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });

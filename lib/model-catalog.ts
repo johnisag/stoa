@@ -6,19 +6,32 @@ export interface ModelOption {
 }
 
 // Default first (Sonnet), matching the Codex list — the top item is the default,
-// not a "most capable" ranking. Values are unversioned family aliases ('opus'
-// resolves to the latest Opus), so labels stay unversioned too.
+// not a "most capable" ranking. Values include both unversioned family aliases
+// ('opus' resolves to the latest Opus) and versioned aliases so callers can pick
+// a specific Claude 4.x family. The versioned aliases reflect the active model
+// families as of mid-2026; verify with `claude --help` on the target deployment.
 const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { value: "sonnet", label: "Sonnet" },
+  { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
   { value: "opus", label: "Opus" },
+  { value: "claude-opus-4-7", label: "Opus 4.7" },
   { value: "haiku", label: "Haiku" },
+  { value: "claude-haiku-4-5", label: "Haiku 4.5" },
 ];
 
+// Updated for the Codex CLI surface as of mid-2026. `gpt-5.5` is the current
+// recommended flagship; `gpt-5.3-codex` / `gpt-5.3-codex-spark` are current coding
+// specialists. `gpt-5.4` is kept as a valid fallback and `gpt-5.4-mini` /
+// `gpt-5.4-nano` remain available. `gpt-5.2-codex` has been removed (listed for
+// shutdown). Verify the exact list with `codex --help` / `codex models list` on
+// the target deployment.
 const CODEX_MODEL_OPTIONS: ModelOption[] = [
+  { value: "gpt-5.5", label: "GPT-5.5" },
   { value: "gpt-5.4", label: "GPT-5.4" },
+  { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+  { value: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark" },
   { value: "gpt-5.4-mini", label: "GPT-5.4 mini" },
   { value: "gpt-5.4-nano", label: "GPT-5.4 nano" },
-  { value: "gpt-5.2-codex", label: "GPT-5.2-Codex" },
 ];
 
 const MODEL_OPTIONS_BY_AGENT: Partial<Record<AgentType, ModelOption[]>> = {
@@ -35,7 +48,7 @@ export const HERMES_DEFAULT_MODEL = "claude-opus-4-8";
 
 const DEFAULT_MODEL_BY_AGENT: Partial<Record<AgentType, string>> = {
   claude: "sonnet",
-  codex: "gpt-5.4",
+  codex: "gpt-5.5",
   hermes: HERMES_DEFAULT_MODEL,
 };
 

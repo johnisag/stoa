@@ -5,6 +5,12 @@ import { createIssue } from "@/lib/dispatch/create";
 import { dispatchOne } from "@/lib/dispatch/dispatcher";
 import { normalizeRecurrence } from "@/lib/dispatch/recurrence";
 import type { DispatchRepo, IssueDispatch } from "@/lib/dispatch/types";
+import {
+  parseJsonBody,
+  validateGitHubLabels,
+  ISSUE_TITLE_MAX_LENGTH,
+  ISSUE_BODY_MAX_LENGTH,
+} from "@/lib/api-security";
 
 /**
  * POST /api/dispatch/issues/create
@@ -17,16 +23,25 @@ import type { DispatchRepo, IssueDispatch } from "@/lib/dispatch/types";
  * 60s reconciler dedupes GitHub issues on (repo, issue#); local tasks never dedupe.
  */
 export async function POST(request: NextRequest) {
+  const parsed = await parseJsonBody<{
+    repoId?: string;
+    title?: string;
+    body?: string;
+    labels?: unknown[];
+    disposition?: string;
+    scheduledAt?: string;
+    autoMerge?: boolean;
+    source?: string;
+    recurrence?: unknown;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
   try {
-    const body = await request.json();
+    const body = parsed.data;
     const repoId = typeof body?.repoId === "string" ? body.repoId : "";
     const title = typeof body?.title === "string" ? body.title.trim() : "";
     const issueBody = typeof body?.body === "string" ? body.body : "";
-    const labels = Array.isArray(body?.labels)
-      ? (body.labels as unknown[]).filter(
-          (l): l is string => typeof l === "string"
-        )
-      : [];
+    const rawLabels = Array.isArray(body?.labels) ? body.labels : [];
     const disposition =
       body?.disposition === "now"
         ? "now"
@@ -46,6 +61,24 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    if (title.length > ISSUE_TITLE_MAX_LENGTH) {
+      return NextResponse.json(
+        { error: `title exceeds ${ISSUE_TITLE_MAX_LENGTH} characters` },
+        { status: 400 }
+      );
+    }
+    if (issueBody.length > ISSUE_BODY_MAX_LENGTH) {
+      return NextResponse.json(
+        { error: `body exceeds ${ISSUE_BODY_MAX_LENGTH} characters` },
+        { status: 400 }
+      );
+    }
+    const labelCheck = validateGitHubLabels(rawLabels);
+    if (!labelCheck.ok) {
+      return NextResponse.json({ error: labelCheck.reason }, { status: 400 });
+    }
+    const labels = labelCheck.labels;
+
     if (disposition === "scheduled" && Number.isNaN(Date.parse(scheduledAt))) {
       return NextResponse.json(
         { error: "a valid scheduledAt time is required" },

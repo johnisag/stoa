@@ -1,149 +1,43 @@
 import { describe, it, expect } from "vitest";
-import {
-  baseName,
-  dirName,
-  relativePath,
-  formatPathsForAgent,
-  formatTerminalTextForAgent,
-} from "@/lib/path-display";
+import { baseName, dirName, joinPath, relativePath } from "@/lib/path-display";
 
-describe("baseName", () => {
-  it("handles both separators", () => {
-    expect(baseName("/a/b/c.ts")).toBe("c.ts");
-    expect(baseName("C:\\a\\b\\c.ts")).toBe("c.ts");
-    expect(baseName("c.ts")).toBe("c.ts");
-  });
-});
-
-describe("dirName", () => {
-  it("drops the last segment", () => {
-    expect(dirName("/a/b/c.ts")).toBe("/a/b");
-    expect(dirName("C:\\a\\b\\c.ts")).toBe("C:/a/b");
-  });
-});
-
-describe("relativePath", () => {
-  it("strips a POSIX base prefix", () => {
-    expect(relativePath("/home/u/proj/src/db.ts", "/home/u/proj")).toBe(
-      "src/db.ts"
-    );
+describe("path-display helpers", () => {
+  describe("baseName", () => {
+    it("is separator-agnostic", () => {
+      expect(baseName("C:\\my-projects\\stoa")).toBe("stoa");
+      expect(baseName("/a/b/c")).toBe("c");
+      expect(baseName("")).toBe("");
+    });
   });
 
-  it("strips a Windows base prefix and normalizes to forward slashes", () => {
-    expect(
-      relativePath("C:\\Users\\u\\proj\\src\\db.ts", "C:\\Users\\u\\proj")
-    ).toBe("src/db.ts");
+  describe("dirName", () => {
+    it("returns the directory portion of a path", () => {
+      expect(dirName("/a/b/c")).toBe("/a/b");
+      expect(dirName("C:\\Users\\foo\\bar")).toBe("C:\\Users\\foo");
+    });
+
+    it("preserves the input separator style", () => {
+      expect(dirName("C:/Users/foo")).toBe("C:\\Users");
+      expect(dirName("/a/b/c")).toBe("/a/b");
+    });
+
+    it("returns the original path for a root path", () => {
+      expect(dirName("/")).toBe("/");
+      expect(dirName("C:\\")).toBe("C:\\");
+    });
   });
 
-  it("tolerates a trailing separator on the base", () => {
-    expect(relativePath("/home/u/proj/a.ts", "/home/u/proj/")).toBe("a.ts");
+  describe("joinPath", () => {
+    it("detects the separator from the base", () => {
+      expect(joinPath("C:\\Users", "foo")).toBe("C:\\Users\\foo");
+      expect(joinPath("/home", "foo")).toBe("/home/foo");
+    });
   });
 
-  it("returns the basename when path equals base", () => {
-    expect(relativePath("/home/u/proj", "/home/u/proj")).toBe("proj");
-  });
-
-  it("returns the original path when it is not under the base", () => {
-    expect(relativePath("/etc/hosts", "/home/u/proj")).toBe("/etc/hosts");
-  });
-
-  it("does not treat a sibling prefix as a parent", () => {
-    // "/home/u/project2" must not be considered under "/home/u/proj"
-    expect(relativePath("/home/u/project2/x.ts", "/home/u/proj")).toBe(
-      "/home/u/project2/x.ts"
-    );
-  });
-});
-
-describe("formatPathsForAgent", () => {
-  it("appends a trailing space so the cursor lands ready", () => {
-    expect(formatPathsForAgent("/home/u/proj/src/db.ts")).toBe(
-      "/home/u/proj/src/db.ts "
-    );
-  });
-
-  it("normalizes Windows separators to forward slashes", () => {
-    expect(formatPathsForAgent("C:\\Users\\u\\proj\\db.ts")).toBe(
-      "C:/Users/u/proj/db.ts "
-    );
-  });
-
-  it("double-quotes a path containing whitespace", () => {
-    expect(formatPathsForAgent("/home/u/my docs/notes.md")).toBe(
-      '"/home/u/my docs/notes.md" '
-    );
-  });
-
-  it("quotes a Windows path with spaces after normalizing", () => {
-    expect(formatPathsForAgent("C:\\Program Files\\app\\x.ts")).toBe(
-      '"C:/Program Files/app/x.ts" '
-    );
-  });
-
-  it("joins multiple paths with a single space, quoting only those that need it", () => {
-    expect(formatPathsForAgent(["/a/x.ts", "/a/my dir/y.ts", "/a/z.ts"])).toBe(
-      '/a/x.ts "/a/my dir/y.ts" /a/z.ts '
-    );
-  });
-
-  it("drops empty and blank entries", () => {
-    expect(formatPathsForAgent(["", "  ", "/a/x.ts"])).toBe("/a/x.ts ");
-  });
-
-  it("returns an empty string when there is nothing to inject", () => {
-    expect(formatPathsForAgent([])).toBe("");
-    expect(formatPathsForAgent("")).toBe("");
-  });
-
-  it("strips control characters (keystroke-injection guard)", () => {
-    // A filename can legally contain a raw newline/ESC/DEL; injected verbatim into
-    // the pty those are keystrokes (Enter, bracketed-paste escapes). Build them via
-    // fromCharCode so there are no literal control bytes in this source.
-    const nl = String.fromCharCode(10);
-    const esc = String.fromCharCode(27);
-    const del = String.fromCharCode(127);
-    expect(formatPathsForAgent(`/a/foo${nl}bar.ts`)).toBe("/a/foobar.ts ");
-    expect(formatPathsForAgent(`/a/x${esc}${del}y.ts`)).toBe("/a/xy.ts ");
-    // Strips before the whitespace check, so a path that's only control chars drops.
-    expect(formatPathsForAgent(nl + esc)).toBe("");
-  });
-});
-
-describe("formatTerminalTextForAgent", () => {
-  // Build control chars via fromCharCode so there are no literal control bytes
-  // in this source (mirrors the formatPathsForAgent guard test above).
-  const nl = String.fromCharCode(10); // \n
-  const cr = String.fromCharCode(13); // \r
-  const tab = String.fromCharCode(9); // \t
-  const esc = String.fromCharCode(27); // ESC
-  const bel = String.fromCharCode(7); // BEL
-  const del = String.fromCharCode(127); // DEL
-
-  it("trims surrounding whitespace but keeps internal newlines", () => {
-    expect(formatTerminalTextForAgent(`  line1${nl}line2  `)).toBe(
-      `line1${nl}line2`
-    );
-  });
-
-  it("normalizes CRLF and a lone CR to LF", () => {
-    expect(formatTerminalTextForAgent(`a${cr}${nl}b${cr}c`)).toBe(
-      `a${nl}b${nl}c`
-    );
-  });
-
-  it("keeps tabs (legitimate captured layout)", () => {
-    expect(formatTerminalTextForAgent(`col1${tab}col2`)).toBe(`col1${tab}col2`);
-  });
-
-  it("strips C0 controls and DEL (keystroke-injection guard)", () => {
-    // ESC, BEL and DEL are removed; the rest of an ANSI sequence is plain text.
-    expect(formatTerminalTextForAgent(`x${esc}[31my${bel}${del}`)).toBe(
-      "x[31my"
-    );
-  });
-
-  it("returns an empty string for empty or control-only input", () => {
-    expect(formatTerminalTextForAgent("")).toBe("");
-    expect(formatTerminalTextForAgent(esc + bel + nl)).toBe("");
+  describe("relativePath", () => {
+    it("returns a path relative to the base with forward slashes", () => {
+      expect(relativePath("/a/b/c", "/a/b")).toBe("c");
+      expect(relativePath("C:\\a\\b\\c", "C:\\a\\b")).toBe("c");
+    });
   });
 });

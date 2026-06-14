@@ -5,6 +5,7 @@ import { getDb, queries, type Session } from "@/lib/db";
 import { backendKeyForSession } from "@/lib/providers/registry";
 import { getSessionBackend } from "@/lib/session-backend";
 import { appendFileSync } from "fs";
+import { parseJsonBody, SEND_KEYS_MAX_LENGTH } from "@/lib/api-security";
 
 // Log to file for debugging
 const LOG_FILE = path.join(os.tmpdir(), "stoa-send-keys.log");
@@ -17,15 +18,31 @@ function log(msg: string) {
   } catch {}
 }
 
+// Reject C0 control characters except tab and newline, which are intentional
+// terminal input. Keeps backspace/escape/bell from being injected as keystrokes.
+function hasDisallowedControlChars(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 32 && code !== 9 && code !== 10) return true;
+    if (code === 127) return true;
+  }
+  return false;
+}
+
 // POST /api/sessions/[id]/send-keys - Send text to a tmux session
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const parsed = await parseJsonBody<{
+    text?: string;
+    pressEnter?: boolean;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
   try {
     const { id } = await params;
-    const body = await request.json();
-    const { text, pressEnter = true } = body;
+    const { text, pressEnter = true } = parsed.data;
 
     log(`=== START send-keys for session ${id} ===`);
     log(`Text length: ${text?.length || 0}, pressEnter: ${pressEnter}`);
@@ -33,6 +50,22 @@ export async function POST(
     if (!text) {
       log("ERROR: No text provided");
       return NextResponse.json({ error: "No text provided" }, { status: 400 });
+    }
+
+    if (text.length > SEND_KEYS_MAX_LENGTH) {
+      log(`ERROR: Text too long (${text.length})`);
+      return NextResponse.json(
+        { error: `Text exceeds maximum length of ${SEND_KEYS_MAX_LENGTH}` },
+        { status: 400 }
+      );
+    }
+
+    if (hasDisallowedControlChars(text)) {
+      log("ERROR: Text contains disallowed control characters");
+      return NextResponse.json(
+        { error: "Text contains disallowed control characters" },
+        { status: 400 }
+      );
     }
 
     const db = getDb();

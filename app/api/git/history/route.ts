@@ -1,21 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCommitHistory } from "@/lib/git-history";
+import {
+  getAllowedPathRoots,
+  resolveSandboxedPath,
+  parseBoundedInt,
+} from "@/lib/api-security";
+
+const MAX_HISTORY_LIMIT = 200;
 
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const path = searchParams.get("path");
-    const limitStr = searchParams.get("limit");
-    const limit = limitStr ? parseInt(limitStr, 10) : 30;
+    const rawPath = searchParams.get("path");
+    const limit = parseBoundedInt(
+      searchParams.get("limit"),
+      1,
+      MAX_HISTORY_LIMIT,
+      30
+    );
 
-    if (!path) {
+    if (!rawPath) {
       return NextResponse.json(
         { error: "Missing path parameter" },
         { status: 400 }
       );
     }
 
-    const commits = getCommitHistory(path, limit);
+    const roots = getAllowedPathRoots();
+    const { allowed, resolved } = resolveSandboxedPath(rawPath, roots);
+    if (!allowed) {
+      return NextResponse.json(
+        { error: "Path is outside the allowed workspace" },
+        { status: 403 }
+      );
+    }
+
+    const commits = getCommitHistory(resolved, limit);
     return NextResponse.json({ commits });
   } catch (error) {
     console.error("Error getting commit history:", error);

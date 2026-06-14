@@ -1,11 +1,5 @@
 // Stream-JSON message types from Claude CLI
 
-export interface StreamMessageInit {
-  type: "init";
-  session_id: string;
-  timestamp: string;
-}
-
 export interface StreamMessageSystem {
   type: "system";
   subtype: "init" | string;
@@ -56,7 +50,6 @@ export interface StreamMessageResult {
 }
 
 export type StreamMessage =
-  | StreamMessageInit
   | StreamMessageSystem
   | StreamMessageAssistant
   | StreamMessageContent

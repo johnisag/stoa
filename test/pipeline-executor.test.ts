@@ -5,7 +5,7 @@
  * independent steps in parallel, cascades skips on failure, handles spawn
  * failure, and terminates on the cycle cap.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { runPipeline } from "@/lib/pipeline/executor";
 import type { ExecutorDeps, StepOutcome } from "@/lib/pipeline/executor";
 import type { PipelineSpec, PipelineStep } from "@/lib/pipeline/types";
@@ -172,6 +172,43 @@ describe("runPipeline", () => {
     expect(run.steps.a.status).toBe("failed");
     expect(run.steps.a.detail).toMatch(/timed out/);
     expect(run.status).toBe("failed");
+  });
+
+  it("caps poll cycles at maxPollCycles exactly (not maxPollCycles + 1)", async () => {
+    const deps = fakeDeps({});
+    let calls = 0;
+    deps.checkOutcome = async () => {
+      calls++;
+      return "running";
+    };
+    await runPipeline(spec([step({ id: "a" })]), deps, {
+      maxPollCycles: 2,
+    });
+    // First poll increments to 1, second poll increments to 2 and trips >= cap.
+    expect(calls).toBe(2);
+  });
+
+  it("logs a warning when checkOutcome throws but keeps the step running", async () => {
+    const deps = fakeDeps({});
+    let calls = 0;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    deps.checkOutcome = async () => {
+      calls++;
+      if (calls === 1) throw new Error("poll boom");
+      return "succeeded";
+    };
+    try {
+      const run = await runPipeline(spec([step({ id: "a" })]), deps, {
+        maxPollCycles: 3,
+      });
+      expect(run.steps.a.status).toBe("succeeded");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("pipeline: checkOutcome failed for a"),
+        expect.stringContaining("poll boom")
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("caps concurrent launches at maxParallelism (extras wait for a slot)", async () => {

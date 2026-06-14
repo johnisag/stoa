@@ -74,7 +74,7 @@ export async function listGitHubRepos(): Promise<GitHubRepo[]> {
     {
       encoding: "utf-8",
       timeout: 15000,
-      windowsHide: process.platform === "win32",
+      windowsHide: true,
     }
   );
   return parseGitHubRepos(stdout);
@@ -139,7 +139,7 @@ export async function prepareGitHubRepo(
   await fs.mkdir(parent, { recursive: true });
   await execFileAsync(gh, ["repo", "clone", slug, dest], {
     timeout: 120000,
-    windowsHide: process.platform === "win32",
+    windowsHide: true,
   });
   return {
     path: dest,

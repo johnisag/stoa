@@ -103,7 +103,9 @@ describe("saved-workflows service", () => {
   });
 
   it("update returns undefined for a missing id", () => {
-    expect(updateSavedWorkflow("ghost", { name: "x", doc: doc() })).toBeUndefined();
+    expect(
+      updateSavedWorkflow("ghost", { name: "x", doc: doc() })
+    ).toBeUndefined();
   });
 
   it("deletes and reports whether a row was removed", () => {

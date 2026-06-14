@@ -24,6 +24,8 @@ export const AGENT_BADGE: Record<string, string> = {
   codex: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
   hermes: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
   shell: "bg-slate-500/15 text-slate-600 dark:text-slate-400",
+  kilo: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
+  kimi: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
 };
 
 export const STATUS_META: Record<

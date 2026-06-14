@@ -91,7 +91,14 @@ function getClaudeSessionIdFromFiles(projectPath: string): string | null {
     if (fs.existsSync(configFile)) {
       try {
         const config = JSON.parse(fs.readFileSync(configFile, "utf-8"));
-        if (config.projects?.[projectPath]?.lastSessionId) {
+        if (
+          isClaudeConfig(config) &&
+          typeof config.projects === "object" &&
+          config.projects !== null &&
+          typeof config.projects[projectPath] === "object" &&
+          config.projects[projectPath] !== null &&
+          typeof config.projects[projectPath].lastSessionId === "string"
+        ) {
           return config.projects[projectPath].lastSessionId;
         }
       } catch {
@@ -273,6 +280,16 @@ export async function GET() {
     return NextResponse.json({ statuses: statusMap });
   } catch (error) {
     console.error("Error getting session statuses:", error);
-    return NextResponse.json({ statuses: {} });
+    const message =
+      error instanceof Error ? error.message : "Backend status check failed";
+    return NextResponse.json({ error: message, statuses: {} }, { status: 503 });
   }
+}
+
+interface ClaudeConfig {
+  projects?: Record<string, { lastSessionId?: string }>;
+}
+
+function isClaudeConfig(value: unknown): value is ClaudeConfig {
+  return typeof value === "object" && value !== null;
 }

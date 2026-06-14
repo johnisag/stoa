@@ -257,7 +257,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
 
   const getPaneData = useCallback(
     (paneId: string): PaneData => {
-      return state.panes[paneId] || defaultPaneData;
+      return state.panes[paneId] ? state.panes[paneId] : { ...defaultPaneData };
     },
     [state.panes]
   );

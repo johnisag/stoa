@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
 import {
   Check,
@@ -189,7 +183,9 @@ export function WorkflowBuilder({
       return null;
     }
     if (!name) {
-      toast.error("Give the workflow a name first (the “Workflow name” field).");
+      toast.error(
+        "Give the workflow a name first (the “Workflow name” field)."
+      );
       return null;
     }
     return name;
@@ -335,8 +331,8 @@ export function WorkflowBuilder({
           <h3 className="text-sm font-medium">Visual builder</h3>
           <p className="text-muted-foreground text-xs leading-relaxed">
             Drag the boxes to arrange your DAG; tap one to edit it. Drag a box’s
-            dot onto another box to connect them. Steps with no path between them
-            run in parallel.
+            dot onto another box to connect them. Steps with no path between
+            them run in parallel.
           </p>
         </div>
         <div className="flex flex-shrink-0 items-center gap-2">

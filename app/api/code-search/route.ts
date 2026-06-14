@@ -1,14 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchCode, formatSearchResults } from "@/lib/code-search";
-import { expandHome } from "@/lib/platform";
+import {
+  getAllowedPathRoots,
+  resolveSandboxedPath,
+  parseBoundedInt,
+} from "@/lib/api-security";
+
+const MAX_RESULTS = 1000;
+const MAX_CONTEXT_LINES = 10;
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = request.nextUrl;
     const query = searchParams.get("query");
     const path = searchParams.get("path");
-    const maxResults = parseInt(searchParams.get("maxResults") || "100");
-    const contextLines = parseInt(searchParams.get("contextLines") || "2");
+    const maxResults = parseBoundedInt(
+      searchParams.get("maxResults"),
+      1,
+      MAX_RESULTS,
+      100
+    );
+    const contextLines = parseBoundedInt(
+      searchParams.get("contextLines"),
+      0,
+      MAX_CONTEXT_LINES,
+      2
+    );
 
     if (!query) {
       return NextResponse.json(
@@ -24,9 +41,16 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const expandedPath = expandHome(path);
+    const roots = getAllowedPathRoots();
+    const { allowed, resolved } = resolveSandboxedPath(path, roots);
+    if (!allowed) {
+      return NextResponse.json(
+        { error: "Path is outside the allowed workspace" },
+        { status: 403 }
+      );
+    }
 
-    const rawMatches = searchCode(expandedPath, query, {
+    const rawMatches = searchCode(resolved, query, {
       maxResults,
       contextLines,
     });
@@ -36,7 +60,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       results,
       query,
-      path: expandedPath,
+      path: resolved,
       count: results.length,
     });
   } catch (error) {

@@ -48,9 +48,20 @@ describe("model catalog — static agents (claude/codex)", () => {
     expect(resolveModelForAgent("claude", "opus")).toBe("opus");
     expect(resolveModelForAgent("claude", "bogus")).toBe("sonnet"); // invalid → default
   });
+
+  it("codex: dropdown list + gpt-5.5 default + validates against the list", () => {
+    expect(getModelOptions("codex").length).toBeGreaterThan(0);
+    expect(getDefaultModelForAgent("codex")).toBe("gpt-5.5");
+    expect(isSupportedModelForAgent("codex", "gpt-5.5")).toBe(true);
+    expect(isSupportedModelForAgent("codex", "gpt-5.2-codex")).toBe(false);
+    expect(resolveModelForAgent("codex", "gpt-5.3-codex")).toBe(
+      "gpt-5.3-codex"
+    );
+    expect(resolveModelForAgent("codex", "bogus")).toBe("gpt-5.5"); // invalid → default
+  });
 });
 
-describe("model catalog — free-text agents (hermes)", () => {
+describe("model catalog — free-text agents (hermes, kilo, kimi)", () => {
   it("is flagged free-text (vs. static agents)", () => {
     expect(isFreeTextModelAgent("hermes")).toBe(true);
     expect(isFreeTextModelAgent("claude")).toBe(false);
@@ -96,6 +107,45 @@ describe("model catalog — free-text agents (hermes)", () => {
   });
 });
 
+describe("model catalog — free-text agents (kilo + kimi)", () => {
+  it("is flagged free-text", () => {
+    expect(isFreeTextModelAgent("kilo")).toBe(true);
+    expect(isFreeTextModelAgent("kimi")).toBe(true);
+  });
+
+  it("offers no static list and falls back to the agent's own default", () => {
+    expect(getModelOptions("kilo")).toEqual([]);
+    expect(getModelOptions("kimi")).toEqual([]);
+    // Empty model → agent default (empty string means "use the agent's config").
+    expect(getDefaultModelForAgent("kilo")).toBe("");
+    expect(getDefaultModelForAgent("kimi")).toBe("");
+  });
+
+  it("accepts any non-empty model verbatim; empty → the agent default", () => {
+    for (const agent of ["kilo", "kimi"] as const) {
+      expect(isSupportedModelForAgent(agent, "provider/model-name")).toBe(true);
+      expect(isSupportedModelForAgent(agent, "")).toBe(false);
+      expect(resolveModelForAgent(agent, "  openai/gpt-5  ")).toBe(
+        "openai/gpt-5"
+      );
+      expect(resolveModelForAgent(agent, "")).toBe("");
+      expect(resolveModelForAgent(agent, null)).toBe("");
+    }
+  });
+
+  it("does NOT inherit another agent's static model", () => {
+    for (const agent of ["kilo", "kimi"] as const) {
+      expect(resolveModelForAgent(agent, "opus")).toBe("");
+      expect(resolveModelForAgent(agent, "sonnet")).toBe("");
+      expect(resolveModelForAgent(agent, "gpt-5.4")).toBe("");
+      // but a genuine provider-qualified model still passes through
+      expect(resolveModelForAgent(agent, "anthropic/claude-opus-4.8")).toBe(
+        "anthropic/claude-opus-4.8"
+      );
+    }
+  });
+});
+
 describe("nextModelOnAgentChange (model carry-over on agent switch)", () => {
   it("static -> free-text: resets to the free-text agent's default (no leak)", () => {
     // No static model name leaks into Hermes; it resets to Hermes's own default.
@@ -111,6 +161,40 @@ describe("nextModelOnAgentChange (model carry-over on agent switch)", () => {
 
   it("static -> static: keeps a valid model, else the new agent's default", () => {
     expect(nextModelOnAgentChange("claude", "opus")).toBe("opus");
-    expect(nextModelOnAgentChange("codex", "sonnet")).toBe("gpt-5.4");
+    expect(nextModelOnAgentChange("codex", "sonnet")).toBe("gpt-5.5");
+  });
+});
+
+describe("model catalog — free-text agents (kilo + kimi)", () => {
+  it.each(["kilo", "kimi"] as const)(
+    "%s: is flagged free-text, has no static list, defaults to empty",
+    (agent) => {
+      expect(isFreeTextModelAgent(agent)).toBe(true);
+      expect(getModelOptions(agent)).toEqual([]);
+      expect(getDefaultModelForAgent(agent)).toBe("");
+    }
+  );
+
+  it.each(["kilo", "kimi"] as const)(
+    "%s: accepts any non-empty model verbatim; drops foreign static models",
+    (agent) => {
+      expect(
+        isSupportedModelForAgent(agent, "anthropic/claude-sonnet-4.6")
+      ).toBe(true);
+      // A static Claude/Codex model must NOT leak in.
+      expect(resolveModelForAgent(agent, "opus")).toBe("");
+      expect(resolveModelForAgent(agent, "sonnet")).toBe("");
+      expect(resolveModelForAgent(agent, "gpt-5.5")).toBe("");
+      // A genuine free-text model passes through.
+      expect(resolveModelForAgent(agent, "openrouter/x")).toBe("openrouter/x");
+      // Empty → agent picks its own default (no model flag).
+      expect(resolveModelForAgent(agent, "")).toBe("");
+      expect(resolveModelForAgent(agent, null)).toBe("");
+    }
+  );
+
+  it("nextModelOnAgentChange resets to empty when switching to a free-text agent", () => {
+    expect(nextModelOnAgentChange("kilo", "sonnet")).toBe("");
+    expect(nextModelOnAgentChange("kimi", "gpt-5.5")).toBe("");
   });
 });

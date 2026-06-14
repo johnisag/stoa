@@ -55,6 +55,18 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
   // still allowing a genuine re-notification once the cooldown passes.
   const lastNotified = useRef<Map<string, number>>(new Map());
 
+  // Keep mutable copies of values that would otherwise make the returned
+  // callbacks unstable (and cause effect re-runs in consumers like
+  // useSessionStatusesQuery).
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const permissionRef = useRef(permissionGranted);
+  permissionRef.current = permissionGranted;
+  const onSessionClickRef = useRef(onSessionClick);
+  onSessionClickRef.current = onSessionClick;
+  const onSeeChangesRef = useRef(onSeeChanges);
+  onSeeChangesRef.current = onSeeChanges;
+
   // Load settings on mount
   useEffect(() => {
     setSettings(loadSettings());
@@ -103,7 +115,9 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
       sessionName: string,
       message?: string
     ) => {
-      if (!settings.enabled || !settings.events[event]) return;
+      const currentSettings = settingsRef.current;
+      const currentPermission = permissionRef.current;
+      if (!currentSettings.enabled || !currentSettings.events[event]) return;
 
       // Names are untrusted — strip terminal artifacts (ANSI/box-drawing/control
       // chars) so a toast never renders as "strange vertical lines" / tofu.
@@ -133,22 +147,22 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         description: body,
         action: {
           label: "Go to session",
-          onClick: () => onSessionClick?.(sessionId),
+          onClick: () => onSessionClickRef.current?.(sessionId),
         },
       });
 
       // Browser notification (only if page not focused)
-      if (settings.browserNotifications && permissionGranted) {
+      if (currentSettings.browserNotifications && currentPermission) {
         sendBrowserNotification(
           title,
           { body, tag: `stoa-${event}-${sessionName}` },
-          () => onSessionClick?.(sessionId)
+          () => onSessionClickRef.current?.(sessionId)
         );
       }
 
       // Audio cue — synthesized beep, gated by the master Sound toggle AND this
       // event's per-event toggle (the playback itself debounces rapid repeats).
-      if (shouldBeep(settings, event)) {
+      if (shouldBeep(currentSettings, event)) {
         playNotificationSound(event);
       }
 
@@ -157,7 +171,7 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         flashTabTitle(`Waiting: ${safeName}`);
       }
     },
-    [settings, permissionGranted, onSessionClick]
+    []
   );
 
   // Transient "See changes" affordance: when the active session's turn settles
@@ -177,17 +191,25 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         description: "Review what changed",
         action: {
           label: "See changes",
-          onClick: () => onSeeChanges?.(sessionId),
+          onClick: () => onSeeChangesRef.current?.(sessionId),
         },
       });
     },
-    [onSeeChanges]
+    []
   );
+
+  // Stable refs to the callbacks above so `checkStateChanges` can have an empty
+  // dependency array and not trigger consumer effect re-runs.
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
+  const offerSeeChangesRef = useRef(offerSeeChanges);
+  offerSeeChangesRef.current = offerSeeChanges;
 
   // Check for state changes and notify
   const checkStateChanges = useCallback(
     (sessions: SessionState[], activeSessionId?: string | null) => {
-      if (!settings.enabled) return;
+      const currentSettings = settingsRef.current;
+      if (!currentSettings.enabled) return;
 
       const now = Date.now();
       // Only suppress the focused session while the WINDOW itself is focused —
@@ -227,11 +249,11 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
           // the diff of what it changed — review is then one tap, not a hunt.
           // The previousStates update below is the once-per-transition gate.
           if (
-            onSeeChanges &&
+            onSeeChangesRef.current &&
             shouldOfferSeeChanges(prevStatus, currentStatus) &&
             shouldNotify(`${session.id}-seechanges`)
           ) {
-            offerSeeChanges(session.id, session.name);
+            offerSeeChangesRef.current(session.id, session.name);
           }
           previousStates.current.set(session.id, currentStatus);
           return;
@@ -244,16 +266,16 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         if (currentStatus === "waiting") {
           if (session.hasPrompt) {
             if (shouldNotify(`${session.id}-waiting`)) {
-              notify("waiting", session.id, session.name);
+              notifyRef.current("waiting", session.id, session.name);
             }
           } else if (prevStatus === "running" || prevStatus === "waiting") {
             if (shouldNotify(`${session.id}-completed`)) {
-              notify("completed", session.id, session.name);
+              notifyRef.current("completed", session.id, session.name);
             }
           }
         } else if (currentStatus === "error") {
           if (shouldNotify(`${session.id}-error`)) {
-            notify("error", session.id, session.name);
+            notifyRef.current("error", session.id, session.name);
           }
         } else if (
           currentStatus === "idle" &&
@@ -261,7 +283,7 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         ) {
           // running/waiting -> idle = the agent finished a turn ("done").
           if (shouldNotify(`${session.id}-completed`)) {
-            notify("completed", session.id, session.name);
+            notifyRef.current("completed", session.id, session.name);
           }
         }
 
@@ -293,7 +315,7 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         setTabNotificationCount(newWaitingCount);
       }
     },
-    [settings.enabled, notify, onSeeChanges, offerSeeChanges]
+    []
   );
 
   // Clear notifications when focused

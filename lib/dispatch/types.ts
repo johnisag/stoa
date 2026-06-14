@@ -87,6 +87,10 @@ export interface IssueDispatch {
   reviewer_session_id: string | null;
   /** Stoa's aggregated panel verdict (APPROVED / CHANGES_REQUESTED), null while reviewing. */
   review_decision: string | null;
+  /** PR head SHA the current panel verdict is pinned to (null until a complete
+   * verdict is cached). Auto-merge uses this as `matchHeadCommit` so a push after
+   * approval cannot merge unreviewed commits. */
+  review_sha: string | null;
   /** How many fix rounds the worker has done in response to review feedback. */
   fix_rounds: number;
   /** Session id of the in-flight fixer worker (null when none running). */

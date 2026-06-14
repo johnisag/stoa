@@ -115,6 +115,8 @@ export interface PanelVerdict {
   complete: boolean;
   /** Aggregate once complete: any REQUEST_CHANGES ⇒ CHANGES_REQUESTED, else APPROVED. */
   decision: "APPROVED" | "CHANGES_REQUESTED" | null;
+  /** PR head SHA at the moment the comments were read — used to pin the verdict. */
+  headRefOid: string | null;
 }
 
 interface PanelComment {
@@ -159,7 +161,7 @@ export function parsePanelComments(
     : lensKeys.some((k) => byLens[k] === "REQUEST_CHANGES")
       ? "CHANGES_REQUESTED"
       : "APPROVED";
-  return { byLens, complete, decision };
+  return { byLens, complete, decision, headRefOid: null };
 }
 
 // Stoa's own gh login, resolved once and cached for the process (constant for a
@@ -205,12 +207,21 @@ export async function aggregatePanelVerdict(
     byLens: {},
     complete: false,
     decision: null,
+    headRefOid: null,
   };
   try {
     const actor = await getGhActor(cwd);
     if (!actor) return incomplete;
     // --repo makes the read worktree-independent (run from the stable checkout).
-    const args = ["pr", "view", String(prNumber), "--json", "comments"];
+    // Read headRefOid in the SAME invocation as the comments so the pinned SHA
+    // cannot race a push that lands between a verdict read and a separate SHA read.
+    const args = [
+      "pr",
+      "view",
+      String(prNumber),
+      "--json",
+      "comments,headRefOid",
+    ];
     if (repoSlug) args.push("--repo", repoSlug);
     const { stdout } = await execFileAsync(gh, args, {
       cwd,
@@ -218,14 +229,22 @@ export async function aggregatePanelVerdict(
       timeout: 15000,
       windowsHide: true,
     });
-    const parsed = JSON.parse(stdout) as { comments?: RawComment[] };
+    const parsed = JSON.parse(stdout) as {
+      comments?: RawComment[];
+      headRefOid?: unknown;
+    };
     const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
     // Sort oldest→newest so parsePanelComments' "latest wins per lens" is correct
     // regardless of the order gh happens to return them in.
     comments.sort((a, b) =>
       String(a?.createdAt ?? "").localeCompare(String(b?.createdAt ?? ""))
     );
-    return parsePanelComments(comments, LENS_KEYS, round, actor);
+    const verdict = parsePanelComments(comments, LENS_KEYS, round, actor);
+    return {
+      ...verdict,
+      headRefOid:
+        typeof parsed.headRefOid === "string" ? parsed.headRefOid : null,
+    };
   } catch {
     return incomplete;
   }
@@ -259,7 +278,8 @@ export function parseSessionComments(
   actor: string
 ): PanelVerdict {
   const byLens: Record<string, "APPROVE" | "REQUEST_CHANGES"> = {};
-  if (!reviewSha) return { byLens, complete: false, decision: null };
+  if (!reviewSha)
+    return { byLens, complete: false, decision: null, headRefOid: null };
   for (const c of comments) {
     const login =
       c?.author && typeof c.author.login === "string" ? c.author.login : "";
@@ -279,7 +299,7 @@ export function parseSessionComments(
     : lensKeys.some((k) => byLens[k] === "REQUEST_CHANGES")
       ? "CHANGES_REQUESTED"
       : "APPROVED";
-  return { byLens, complete, decision };
+  return { byLens, complete, decision, headRefOid: null };
 }
 
 /** Read the session panel's verdict for an EXACT reviewSha from the PR comments.
@@ -293,6 +313,7 @@ export async function aggregateSessionVerdict(
     byLens: {},
     complete: false,
     decision: null,
+    headRefOid: null,
   };
   try {
     const actor = await getGhActor(cwd);
@@ -483,12 +504,13 @@ export async function spawnWorktreeWorker(
   onSpawn: (sessionId: string) => void
 ): Promise<string | null> {
   if (!target.worktreePath) return null;
+  let sessionId: string | null = null;
   try {
     const db = getDb();
     const provider = getProvider(target.agentType);
     const model = resolveModelForAgent(target.agentType, undefined);
     const cwd = expandHome(target.worktreePath);
-    const sessionId = randomUUID();
+    sessionId = randomUUID();
     const tmuxName = sessionKey({
       kind: "agent",
       provider: provider.id,
@@ -533,6 +555,19 @@ export async function spawnWorktreeWorker(
     return sessionId;
   } catch (err) {
     console.error(`spawn (${sessionName}) failed for ${target.label}:`, err);
+    // The session row was inserted before the backend create; if create threw the
+    // row is orphaned. Reclaim it so sessions don't accumulate dead rows.
+    try {
+      const db = getDb();
+      if (sessionId) {
+        const sess = queries.getSession(db).get(sessionId) as
+          | { id: string }
+          | undefined;
+        if (sess) queries.deleteSession(db).run(sessionId);
+      }
+    } catch (cleanupErr) {
+      console.error("spawnWorktreeWorker session cleanup failed:", cleanupErr);
+    }
     return null;
   }
 }

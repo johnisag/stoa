@@ -160,6 +160,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     modelFlag: "--model",
     supportsResume: false,
     supportsFork: false,
+    supportsOrchestration: true,
   },
   {
     id: "kimi",
@@ -180,8 +181,9 @@ export const PROVIDERS: ProviderDefinition[] = [
     //    configured default (no -m passed).
     //  - resume is ON: kimi HAS `-S, --session [id]` (resumeFlag "--session").
     //    Stoa captures the resume id from Kimi Code's startup banner ("Session:
-    //    session_<uuid>") per-session, exactly like Hermes (getProviderSessionId),
-    //    and passes `--session <id>` on respawn. No fork.
+    //    session_<uuid>") via the status detector's screen capture, exactly like
+    //    Hermes (getProviderSessionId), and passes `--session <id>` on respawn.
+    //    No fork.
     //  - auto-approve: `-y, --yolo` ("auto-approve all actions"). --yolo wired
     //    here. (The -p/--prompt headless path is a one-shot, not a persistent
     //    session — not used.)
@@ -192,6 +194,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     modelFlag: "-m",
     supportsResume: true,
     supportsFork: false,
+    supportsOrchestration: true,
   },
   {
     id: "shell",

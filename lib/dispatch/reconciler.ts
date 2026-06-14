@@ -17,7 +17,7 @@ import { getSessionBackend } from "../session-backend";
 import { expandHome } from "../platform";
 import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
-import { autoMergePass } from "./auto-merge";
+import { autoMergePass, getPrReadiness } from "./auto-merge";
 import { ciFixPass } from "./ci-fix";
 import { parseClaims, claimsConflict } from "./claims";
 import { captureLessons } from "./lessons";
@@ -561,7 +561,13 @@ export async function reviewGatePass(): Promise<void> {
         verdict.decision &&
         verdict.decision !== decision
       ) {
-        queries.setDispatchReviewDecision(db).run(verdict.decision, d.id);
+        // Pin the verdict to the head SHA that was read in the SAME gh invocation
+        // as the comments, so the pinned SHA cannot race a push between verdict
+        // aggregation and a separate SHA read. A gh failure leaves headRefOid null;
+        // we still cache the decision but auto-merge will wait for a non-null pin.
+        queries
+          .setDispatchReviewDecision(db)
+          .run(verdict.decision, verdict.headRefOid, d.id);
         decision = verdict.decision;
       }
     }

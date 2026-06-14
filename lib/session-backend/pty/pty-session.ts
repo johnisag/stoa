@@ -67,6 +67,7 @@ export class PtySession {
   private outputListeners = new Set<OutputListener>();
   private exitListeners = new Set<ExitListener>();
   private _alive = true;
+  private _dying = false;
   private _lastActivity: number;
   private _exitCode: number | null = null;
   // Last size actually pushed to the pty. A pty.resize() raises SIGWINCH, which
@@ -95,25 +96,32 @@ export class PtySession {
     this.term.loadAddon(this.serializer);
 
     this.pty.onData((data: string) => {
-      this._lastActivity = Date.now();
-      // Feed the headless emulator (rendered grid for capture()).
-      this.term.write(data);
-      // Retain raw bytes for the serialize() fallback, capped. Trim only when we
-      // cross the high-water mark (2× limit), back down to the limit — so the
-      // O(limit) slice happens at most once per `limit` bytes, not every chunk.
-      this.rawBuffer += data;
-      if (this.rawBuffer.length > RAW_BUFFER_HIGH_WATER) {
-        this.rawBuffer = this.rawBuffer.slice(
-          this.rawBuffer.length - RAW_BUFFER_LIMIT
-        );
-        // The slice cuts at a UTF-16 code-unit boundary; if it landed inside a
-        // surrogate pair, drop the orphaned low surrogate so the fallback
-        // repaint doesn't begin with a stray U+FFFD.
-        const c = this.rawBuffer.charCodeAt(0);
-        if (c >= 0xdc00 && c <= 0xdfff)
-          this.rawBuffer = this.rawBuffer.slice(1);
+      try {
+        this._lastActivity = Date.now();
+        // Feed the headless emulator (rendered grid for capture()).
+        this.term.write(data);
+        // Retain raw bytes for the serialize() fallback, capped. Trim only when we
+        // cross the high-water mark (2× limit), back down to the limit — so the
+        // O(limit) slice happens at most once per `limit` bytes, not every chunk.
+        this.rawBuffer += data;
+        if (this.rawBuffer.length > RAW_BUFFER_HIGH_WATER) {
+          this.rawBuffer = this.rawBuffer.slice(
+            this.rawBuffer.length - RAW_BUFFER_LIMIT
+          );
+          // The slice cuts at a UTF-16 code-unit boundary; if it landed inside a
+          // surrogate pair, drop the orphaned low surrogate so the fallback
+          // repaint doesn't begin with a stray U+FFFD.
+          const c = this.rawBuffer.charCodeAt(0);
+          if (c >= 0xdc00 && c <= 0xdfff)
+            this.rawBuffer = this.rawBuffer.slice(1);
+        }
+        PtySession.fanOut(this.outputListeners, data);
+      } catch (err) {
+        // A throw from term.write, the buffer trim, or a subscriber must NOT
+        // escape the node-pty callback — that would crash the Tier-2 daemon and
+        // kill every live session. Log and continue.
+        console.error("[pty-session] onData error:", err);
       }
-      PtySession.fanOut(this.outputListeners, data);
     });
 
     this.pty.onExit(({ exitCode }) => {
@@ -146,6 +154,16 @@ export class PtySession {
 
   get alive(): boolean {
     return this._alive;
+  }
+
+  /** True while the session is being torn down; new attaches should be rejected. */
+  get dying(): boolean {
+    return this._dying;
+  }
+
+  /** Mark the session as dying before the actual kill/exit completes. */
+  markDying(): void {
+    this._dying = true;
   }
 
   get lastActivity(): number {
@@ -288,6 +306,7 @@ export class PtySession {
 
   /** Terminate the process. */
   kill(): void {
+    this._dying = true;
     if (this._alive) {
       try {
         this.pty.kill();

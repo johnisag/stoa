@@ -164,7 +164,7 @@ export async function listOpenIssues(
         cwd: expandHome(repo.repo_path),
         encoding: "utf-8",
         timeout: 15000,
-        windowsHide: process.platform === "win32",
+        windowsHide: true,
       }
     );
     return parseIssues(stdout);
@@ -226,7 +226,7 @@ export async function getPRForBranchAnyState(
         cwd: workingDir,
         encoding: "utf-8",
         timeout: 15000,
-        windowsHide: process.platform === "win32",
+        windowsHide: true,
       }
     );
     const prs = JSON.parse(stdout);

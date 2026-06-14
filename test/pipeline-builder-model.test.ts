@@ -70,7 +70,9 @@ describe("docFromSpec / docToSpec", () => {
 
 describe("uniqueStepId", () => {
   it("returns the base when free, else suffixes -2, -3…", () => {
-    const doc = docFromSpec(spec([step({ id: "step" }), step({ id: "step-2" })]));
+    const doc = docFromSpec(
+      spec([step({ id: "step" }), step({ id: "step-2" })])
+    );
     expect(uniqueStepId(doc)).toBe("step-3");
     expect(uniqueStepId(docFromSpec(spec([step({ id: "a" })])))).toBe("step");
   });
@@ -144,8 +146,7 @@ describe("setDependsOn", () => {
 });
 
 describe("connect / disconnect", () => {
-  const base = () =>
-    docFromSpec(spec([step({ id: "a" }), step({ id: "b" })]));
+  const base = () => docFromSpec(spec([step({ id: "a" }), step({ id: "b" })]));
 
   it("connect adds from → to (to depends on from)", () => {
     const doc = connect(base(), "a", "b");
@@ -164,7 +165,9 @@ describe("connect / disconnect", () => {
 
   it("disconnect removes the edge and clears an emptied dependsOn", () => {
     const doc = disconnect(connect(base(), "a", "b"), "a", "b");
-    expect(doc.nodes.find((n) => n.step.id === "b")!.step.dependsOn).toBeUndefined();
+    expect(
+      doc.nodes.find((n) => n.step.id === "b")!.step.dependsOn
+    ).toBeUndefined();
   });
 
   it("disconnect is a no-op for an absent edge", () => {
@@ -177,10 +180,7 @@ describe("removeStep", () => {
   it("removes the node and strips it from dependents", () => {
     const doc = removeStep(
       docFromSpec(
-        spec([
-          step({ id: "a" }),
-          step({ id: "b", dependsOn: ["a", "x"] }),
-        ])
+        spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a", "x"] })])
       ),
       "a"
     );
@@ -190,7 +190,9 @@ describe("removeStep", () => {
 
   it("drops a now-empty dependsOn to undefined", () => {
     const doc = removeStep(
-      docFromSpec(spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })])),
+      docFromSpec(
+        spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })])
+      ),
       "a"
     );
     expect(doc.nodes[0].step.dependsOn).toBeUndefined();
@@ -254,7 +256,9 @@ describe("serializeBuilderDoc / parseBuilderDoc", () => {
     expect(parseBuilderDoc("42")).toBeNull();
     expect(parseBuilderDoc(JSON.stringify({ name: "x" }))).toBeNull(); // no nodes
     expect(
-      parseBuilderDoc(JSON.stringify({ name: "x", workingDirectory: 1, nodes: [] }))
+      parseBuilderDoc(
+        JSON.stringify({ name: "x", workingDirectory: 1, nodes: [] })
+      )
     ).toBeNull();
   });
 
@@ -265,7 +269,11 @@ describe("serializeBuilderDoc / parseBuilderDoc", () => {
       nodes: [
         // dependsOn is a number → must not ride into the stored step (it would
         // later throw in validateSpec); the step itself is kept, deps dropped.
-        { step: { id: "a", agent: "claude", task: "t", dependsOn: 42 }, x: 0, y: 0 },
+        {
+          step: { id: "a", agent: "claude", task: "t", dependsOn: 42 },
+          x: 0,
+          y: 0,
+        },
         // array with a non-string entry → also dropped.
         {
           step: { id: "b", agent: "claude", task: "t", dependsOn: ["a", 7] },
@@ -350,11 +358,48 @@ describe("renameStep", () => {
   });
 
   it("is a no-op for an empty, unchanged, or colliding new id", () => {
-    const base = docFromSpec(
-      spec([step({ id: "a" }), step({ id: "b" })])
-    );
+    const base = docFromSpec(spec([step({ id: "a" }), step({ id: "b" })]));
     expect(renameStep(base, "a", "")).toBe(base);
     expect(renameStep(base, "a", "a")).toBe(base);
     expect(ids(renameStep(base, "a", "b"))).toEqual(["a", "b"]); // collision ignored
+  });
+
+  it("rewrites {{steps.<oldId>.output}} placeholders in task and exitCriteria", () => {
+    const doc = renameStep(
+      docFromSpec(
+        spec([
+          step({ id: "a" }),
+          step({
+            id: "b",
+            dependsOn: ["a"],
+            task: "Read {{steps.a.output}} and summarize",
+            exitCriteria: "Uses {{steps.a.output}}",
+          }),
+          step({ id: "c", task: "Also {{steps.a.output}}" }),
+        ])
+      ),
+      "a",
+      "research"
+    );
+    const b = doc.nodes.find((n) => n.step.id === "b")!.step;
+    expect(b.task).toBe("Read {{steps.research.output}} and summarize");
+    expect(b.exitCriteria).toBe("Uses {{steps.research.output}}");
+    const c = doc.nodes.find((n) => n.step.id === "c")!.step;
+    expect(c.task).toBe("Also {{steps.research.output}}");
+  });
+
+  it("treats dollar signs in the new id as literal text", () => {
+    const doc = renameStep(
+      docFromSpec(
+        spec([
+          step({ id: "a" }),
+          step({ id: "b", task: "Use {{steps.a.output}}" }),
+        ])
+      ),
+      "a",
+      "$&"
+    );
+    const b = doc.nodes.find((n) => n.step.id === "b")!.step;
+    expect(b.task).toBe("Use {{steps.$&.output}}");
   });
 });

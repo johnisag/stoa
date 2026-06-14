@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type AnchorHTMLAttributes } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, HelpCircle, Loader2, Send, Sparkles, X } from "lucide-react";
@@ -40,6 +40,26 @@ import {
   type ChatMessage,
 } from "@/data/chat/useCommand";
 import { ChatHelp } from "./ChatHelp";
+
+/** Renders markdown links so external URLs open in a new tab. */
+function MarkdownLink({
+  href,
+  children,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement>) {
+  const isExternal = typeof href === "string" && /^https?:\/\//i.test(href);
+  return (
+    <a
+      href={href}
+      {...(isExternal
+        ? { target: "_blank", rel: "noopener noreferrer" }
+        : undefined)}
+      {...props}
+    >
+      {children}
+    </a>
+  );
+}
 
 // Starter prompts for the empty state — a mix of read-only questions (grounded in
 // the fleet's live state + recent activity) and one ACTION, hinting that Stoa can
@@ -402,7 +422,13 @@ export function ChatView({
         </DialogHeader>
 
         {/* Message list (or the help panel, toggled by the header "?") */}
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6">
+        <div
+          ref={scrollRef}
+          role="log"
+          aria-live="polite"
+          aria-label="Conversation"
+          className="min-h-0 flex-1 overflow-y-auto px-6"
+        >
           {showHelp ? (
             <ChatHelp
               onClose={() => setShowHelp(false)}
@@ -419,8 +445,9 @@ export function ChatView({
                   <li key={q}>
                     <button
                       type="button"
+                      disabled={propose.isPending}
                       onClick={() => pickExample(q)}
-                      className="bg-muted/40 hover:bg-muted rounded-full px-3 py-1.5 text-xs transition-colors"
+                      className="bg-muted/40 hover:bg-muted rounded-full px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
                     >
                       {q}
                     </button>
@@ -449,7 +476,10 @@ export function ChatView({
                     <div key={i} className="flex justify-start">
                       <div className="bg-muted/40 max-w-[90%] rounded-2xl rounded-bl-sm px-3 py-2">
                         <article className="prose prose-sm dark:prose-invert max-w-none">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{ a: MarkdownLink }}
+                          >
                             {message.content}
                           </ReactMarkdown>
                         </article>
@@ -473,7 +503,10 @@ export function ChatView({
                         ) : (
                           <X className="mt-0.5 h-4 w-4 shrink-0" />
                         )}
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{ a: MarkdownLink }}
+                        >
                           {message.content}
                         </ReactMarkdown>
                       </div>
@@ -559,6 +592,7 @@ export function ChatView({
               rows={1}
               disabled={propose.isPending}
               placeholder="Ask about your fleet, or start a session…"
+              aria-label="Ask Stoa a question"
               className="border-input bg-background focus-visible:ring-ring/60 max-h-32 min-h-[44px] flex-1 resize-none rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2 disabled:opacity-60"
             />
             <Button

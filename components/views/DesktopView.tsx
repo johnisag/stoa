@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { SessionList } from "@/components/SessionList";
 import { NewSessionDialog } from "@/components/NewSessionDialog";
 import { NotificationSettings } from "@/components/NotificationSettings";
@@ -84,6 +84,16 @@ export function DesktopView({
   // poll (~5s); minting these inline would give SessionCard fresh props each
   // poll and defeat its React.memo. `sessions` is a separate query key the
   // status poll doesn't touch, so these refs stay stable between polls.
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleSelect = useCallback(
     (id: string) => {
       const session = sessions.find((s) => s.id === id);
@@ -212,7 +222,13 @@ export function DesktopView({
                             document.body.removeChild(textarea);
                           }
                           setCopiedSessionId(true);
-                          setTimeout(() => setCopiedSessionId(false), 2000);
+                          if (copyTimeoutRef.current) {
+                            clearTimeout(copyTimeoutRef.current);
+                          }
+                          copyTimeoutRef.current = setTimeout(
+                            () => setCopiedSessionId(false),
+                            2000
+                          );
                         } catch {
                           console.error("Failed to copy to clipboard");
                         }

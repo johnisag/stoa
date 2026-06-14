@@ -52,20 +52,20 @@ export function WorkflowsHelp({ onClose }: { onClose: () => void }) {
         </li>
         <li>
           <span className="text-foreground font-medium">Or build it.</span> The{" "}
-          <span className="text-foreground">Build</span> tab is a visual canvas —
-          tap <span className="text-foreground">Add step</span> to drop a node,
-          drag the boxes to arrange your DAG, and tap one to edit its agent,
-          task, dependencies, and exit criteria. Drag the dot on a box&apos;s
-          right edge onto another box to make it depend on this one, and tap an
-          edge to remove it. It validates live and runs the same way; under the
-          hood it&apos;s the same spec as Custom. Use the{" "}
-          <span className="text-foreground">Saved</span> menu to save the current
-          canvas (its positions included), reload one later, save a copy,{" "}
-          <span className="text-foreground">Tidy layout</span> to auto-arrange the
-          boxes, or <span className="text-foreground">Import/Export</span> a
-          workflow as a JSON file to share it. Saving over a loaded workflow
-          overwrites it; an amber dot on the Saved button means you have unsaved
-          changes.
+          <span className="text-foreground">Build</span> tab is a visual canvas
+          — tap <span className="text-foreground">Add step</span> to drop a
+          node, drag the boxes to arrange your DAG, and tap one to edit its
+          agent, task, dependencies, and exit criteria. Drag the dot on a
+          box&apos;s right edge onto another box to make it depend on this one,
+          and tap an edge to remove it. It validates live and runs the same way;
+          under the hood it&apos;s the same spec as Custom. Use the{" "}
+          <span className="text-foreground">Saved</span> menu to save the
+          current canvas (its positions included), reload one later, save a
+          copy, <span className="text-foreground">Tidy layout</span> to
+          auto-arrange the boxes, or{" "}
+          <span className="text-foreground">Import/Export</span> a workflow as a
+          JSON file to share it. Saving over a loaded workflow overwrites it; an
+          amber dot on the Saved button means you have unsaved changes.
         </li>
         <li>
           <span className="text-foreground font-medium">Or go Custom.</span> The{" "}

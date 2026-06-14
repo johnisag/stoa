@@ -16,6 +16,14 @@ import { getSessionBackend } from "@/lib/session-backend";
 import { backendKeyForSession } from "@/lib/providers/registry";
 import { removeConductorMarker } from "@/lib/mcp-config";
 import { clearQueue } from "@/lib/prompt-queue";
+import { expandHome } from "@/lib/platform";
+import {
+  parseJsonBody,
+  resolveSandboxedPath,
+  sanitizeSessionName,
+  sanitizeGroupPath,
+  SYSTEM_PROMPT_MAX_LENGTH,
+} from "@/lib/api-security";
 
 // Sanitize a name for use as tmux session name
 function sanitizeTmuxName(name: string): string {
@@ -26,6 +34,13 @@ function sanitizeTmuxName(name: string): string {
     .replace(/^-|-$/g, "") // Remove leading/trailing dashes
     .slice(0, 50); // Limit length
 }
+
+const ALLOWED_SESSION_STATUS: Set<string> = new Set([
+  "idle",
+  "running",
+  "waiting",
+  "error",
+]);
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -54,9 +69,19 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
 // PATCH /api/sessions/[id] - Update session
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
+  const parsed = await parseJsonBody<{
+    name?: string;
+    status?: string;
+    workingDirectory?: string;
+    systemPrompt?: string;
+    groupPath?: string;
+    projectId?: string;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
   try {
     const { id } = await params;
-    const body = await request.json();
+    const body = parsed.data;
     const db = getDb();
 
     const existing = queries.getSession(db).get(id) as Session | undefined;
@@ -64,13 +89,28 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
+    // Resolve the session's project root for path validation.
+    const project = existing.project_id
+      ? getProject(existing.project_id)
+      : null;
+    const projectRoot = project
+      ? expandHome(project.working_directory)
+      : expandHome("~");
+
     // Build update query dynamically based on provided fields
     const updates: string[] = [];
     const values: unknown[] = [];
 
     // Handle name change - also rename tmux session and git branch (for worktrees)
     if (body.name !== undefined && body.name !== existing.name) {
-      const newTmuxName = sanitizeTmuxName(body.name);
+      const sanitized = sanitizeSessionName(body.name);
+      if (!sanitized) {
+        return NextResponse.json(
+          { error: "Invalid session name" },
+          { status: 400 }
+        );
+      }
+      const newTmuxName = sanitizeTmuxName(sanitized);
       const oldTmuxName = existing.tmux_name;
 
       // Try to rename the tmux session
@@ -112,23 +152,55 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       }
 
       updates.push("name = ?");
-      values.push(body.name);
+      values.push(sanitized);
     }
     if (body.status !== undefined) {
+      if (!ALLOWED_SESSION_STATUS.has(body.status)) {
+        return NextResponse.json(
+          { error: `Invalid status: ${body.status}` },
+          { status: 400 }
+        );
+      }
       updates.push("status = ?");
       values.push(body.status);
     }
     if (body.workingDirectory !== undefined) {
+      const { allowed, resolved } = resolveSandboxedPath(
+        body.workingDirectory,
+        [projectRoot]
+      );
+      if (!allowed) {
+        return NextResponse.json(
+          { error: "workingDirectory is outside the project workspace" },
+          { status: 403 }
+        );
+      }
       updates.push("working_directory = ?");
-      values.push(body.workingDirectory);
+      values.push(resolved);
     }
     if (body.systemPrompt !== undefined) {
+      if (
+        typeof body.systemPrompt === "string" &&
+        body.systemPrompt.length > SYSTEM_PROMPT_MAX_LENGTH
+      ) {
+        return NextResponse.json(
+          { error: "systemPrompt exceeds maximum length" },
+          { status: 400 }
+        );
+      }
       updates.push("system_prompt = ?");
       values.push(body.systemPrompt);
     }
     if (body.groupPath !== undefined) {
+      const sanitized = sanitizeGroupPath(body.groupPath);
+      if (!sanitized) {
+        return NextResponse.json(
+          { error: "Invalid groupPath" },
+          { status: 400 }
+        );
+      }
       updates.push("group_path = ?");
-      values.push(body.groupPath);
+      values.push(sanitized);
     }
     if (body.projectId !== undefined) {
       // Move the session to another project (the sidebar groups flat by
@@ -140,6 +212,24 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         return NextResponse.json(
           { error: "Project not found" },
           { status: 400 }
+        );
+      }
+      // Re-validate the session's existing paths against the target project's
+      // root so a caller can't satisfy the guard for project A and then relocate
+      // the session to project B, breaking the project-to-path invariant.
+      const targetProject = getProject(body.projectId)!;
+      const targetRoot = expandHome(targetProject.working_directory);
+      const roots = [targetRoot];
+      const wdCheck = existing.working_directory
+        ? resolveSandboxedPath(existing.working_directory, roots)
+        : { allowed: true };
+      const wtCheck = existing.worktree_path
+        ? resolveSandboxedPath(existing.worktree_path, roots)
+        : { allowed: true };
+      if (!wdCheck.allowed || !wtCheck.allowed) {
+        return NextResponse.json(
+          { error: "Session paths are outside the target project workspace" },
+          { status: 403 }
         );
       }
       updates.push("project_id = ?");

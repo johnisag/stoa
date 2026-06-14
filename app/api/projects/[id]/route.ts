@@ -6,6 +6,7 @@ import {
   toggleProjectExpanded,
   InvalidModelError,
 } from "@/lib/projects";
+import { parseJsonBody } from "@/lib/api-security";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -33,9 +34,18 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
 // PATCH /api/projects/[id] - Update a project
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
+  const parsed = await parseJsonBody<{
+    name?: string;
+    workingDirectory?: string;
+    agentType?: string;
+    defaultModel?: string;
+    initialPrompt?: string;
+    expanded?: boolean;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
   try {
     const { id } = await params;
-    const body = await request.json();
     const {
       name,
       workingDirectory,
@@ -43,7 +53,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       defaultModel,
       initialPrompt,
       expanded,
-    } = body;
+    } = parsed.data;
 
     // Handle expanded toggle separately
     if (typeof expanded === "boolean") {
@@ -61,7 +71,14 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       const project = updateProject(id, {
         name,
         working_directory: workingDirectory,
-        agent_type: agentType,
+        agent_type: agentType as
+          | "claude"
+          | "codex"
+          | "hermes"
+          | "kilo"
+          | "kimi"
+          | "shell"
+          | undefined,
         default_model: defaultModel,
         initial_prompt: initialPrompt,
       });
