@@ -12,8 +12,44 @@ import {
   parseBuilderDoc,
   serializeBuilderDoc,
   type BuilderDoc,
+  type HistorySnapshot,
   type SavedWorkflow,
 } from "./pipeline/builder-model";
+
+function parseHistory(raw: string): HistorySnapshot[] | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(v)) return null;
+  const parsed: HistorySnapshot[] = [];
+  for (const item of v) {
+    if (!item || typeof item !== "object") continue;
+    const snapshot = item as Record<string, unknown>;
+    if (
+      typeof snapshot.id !== "string" ||
+      typeof snapshot.name !== "string" ||
+      typeof snapshot.createdAt !== "string"
+    ) {
+      continue;
+    }
+    const doc = parseBuilderDoc(
+      typeof snapshot.doc === "string"
+        ? snapshot.doc
+        : JSON.stringify(snapshot.doc)
+    );
+    if (!doc) continue;
+    parsed.push({
+      id: snapshot.id,
+      name: snapshot.name,
+      doc,
+      createdAt: snapshot.createdAt,
+    });
+  }
+  return parsed;
+}
 
 function toSavedWorkflow(row: SavedWorkflowRow): SavedWorkflow {
   return {
@@ -25,7 +61,9 @@ function toSavedWorkflow(row: SavedWorkflowRow): SavedWorkflow {
       name: row.name,
       workingDirectory: "",
       nodes: [],
+      notes: [],
     },
+    history: parseHistory(row.history) ?? [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -38,7 +76,7 @@ export function createSavedWorkflow(input: {
   const id = randomUUID();
   queries
     .createSavedWorkflow(db)
-    .run(id, input.name, serializeBuilderDoc(input.doc));
+    .run(id, input.name, serializeBuilderDoc(input.doc), "[]");
   return toSavedWorkflow(
     queries.getSavedWorkflow(db).get(id) as SavedWorkflowRow
   );
@@ -61,10 +99,33 @@ export function updateSavedWorkflow(
   id: string,
   input: { name: string; doc: BuilderDoc }
 ): SavedWorkflow | undefined {
-  const result = queries
+  const existing = getSavedWorkflow(id);
+  if (!existing) return undefined;
+
+  // Snapshot the version we're about to overwrite. Label it with the shape it
+  // captured (steps + notes) so the History menu lists distinguishable entries
+  // instead of a column of identical "Save"s.
+  const stepN = existing.doc.nodes.length;
+  const noteN = existing.doc.notes.length;
+  const name =
+    `${stepN} step${stepN === 1 ? "" : "s"}` +
+    (noteN > 0 ? `, ${noteN} note${noteN === 1 ? "" : "s"}` : "");
+  const snapshot: HistorySnapshot = {
+    id: randomUUID(),
+    name,
+    doc: existing.doc,
+    createdAt: new Date().toISOString(),
+  };
+  const history = [snapshot, ...existing.history].slice(0, 10);
+
+  queries
     .updateSavedWorkflow(db)
-    .run(input.name, serializeBuilderDoc(input.doc), id);
-  if (result.changes === 0) return undefined;
+    .run(
+      input.name,
+      serializeBuilderDoc(input.doc),
+      JSON.stringify(history),
+      id
+    );
   return getSavedWorkflow(id);
 }
 

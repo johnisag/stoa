@@ -800,6 +800,24 @@ const migrations: Migration[] = [
   },
   {
     id: 35,
+    name: "add_history_to_saved_workflows",
+    up: (db) => {
+      // Version-history snapshots for saved workflows. Guarded so it is idempotent
+      // under re-runs and concurrent init.
+      const savedWorkflowsHasHistory = (
+        db.prepare(`PRAGMA table_info(saved_workflows)`).all() as {
+          name: string;
+        }[]
+      ).some((c) => c.name === "history");
+      if (!savedWorkflowsHasHistory) {
+        db.exec(
+          `ALTER TABLE saved_workflows ADD COLUMN history TEXT NOT NULL DEFAULT '[]'`
+        );
+      }
+    },
+  },
+  {
+    id: 36,
     name: "add_dispatch_review_sha_and_composite_indexes",
     up: (db) => {
       // Dispatch review SHA pinning: the head commit a panel verdict was cached for.

@@ -14,12 +14,23 @@ import {
  * terminal. `onAction` is held in a ref so the listener isn't re-bound on every
  * render (callers don't need to memoize it).
  */
+export interface UseGlobalKeybindingsOptions {
+  /** Use the capture phase so this listener runs before bubble-phase listeners. */
+  capture?: boolean;
+  /** Stop other listeners from seeing a matched shortcut (useful for scoped overlays). */
+  stopPropagation?: boolean;
+}
+
 export function useGlobalKeybindings(
   bindings: Keybinding[],
-  onAction: (action: string, e: KeyboardEvent) => void
+  onAction: (action: string, e: KeyboardEvent) => void,
+  options: UseGlobalKeybindingsOptions = {}
 ): void {
+  const { capture = false, stopPropagation = false } = options;
   const onActionRef = useRef(onAction);
-  onActionRef.current = onAction;
+  useEffect(() => {
+    onActionRef.current = onAction;
+  });
 
   useEffect(() => {
     const isMac = isMacPlatform();
@@ -43,9 +54,10 @@ export function useGlobalKeybindings(
       );
       if (!hit) return;
       e.preventDefault();
+      if (stopPropagation) e.stopImmediatePropagation();
       onActionRef.current(hit.action, e);
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [bindings]);
+    window.addEventListener("keydown", handler, capture);
+    return () => window.removeEventListener("keydown", handler, capture);
+  }, [bindings, capture, stopPropagation]);
 }
