@@ -18,15 +18,27 @@ import { CanvasAddon } from "@xterm/addon-canvas";
  *    WebGL and swap to CanvasAddon so it doesn't freeze on a dead context.
  *  - If even canvas throws, fall through to xterm's built-in DOM renderer.
  *
+ * The optional `deps` argument is used by tests to inject mock addons without
+ * relying on module mocking in headless/VM test pools.
+ *
  * Returns which renderer was attached (useful for diagnostics/tests).
  */
-export function loadRenderer(term: XTerm): "webgl" | "canvas" {
+export function loadRenderer(
+  term: XTerm,
+  deps: {
+    WebglAddon?: typeof WebglAddon;
+    CanvasAddon?: typeof CanvasAddon;
+  } = {}
+): "webgl" | "canvas" {
+  const Webgl = deps.WebglAddon ?? WebglAddon;
+  const Canvas = deps.CanvasAddon ?? CanvasAddon;
+
   try {
-    const webgl = new WebglAddon();
+    const webgl = new Webgl();
     webgl.onContextLoss(() => {
       webgl.dispose();
       try {
-        term.loadAddon(new CanvasAddon());
+        term.loadAddon(new Canvas());
       } catch {
         /* DOM renderer (no addon) is the last resort */
       }
@@ -35,7 +47,7 @@ export function loadRenderer(term: XTerm): "webgl" | "canvas" {
     return "webgl";
   } catch {
     try {
-      term.loadAddon(new CanvasAddon());
+      term.loadAddon(new Canvas());
     } catch {
       /* fall through to xterm's built-in DOM renderer */
     }

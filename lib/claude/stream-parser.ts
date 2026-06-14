@@ -22,8 +22,15 @@ export class StreamParser extends EventEmitter {
   write(chunk: string): void {
     this.buffer += chunk;
 
-    // Normalize CRLF and lone CR to LF so NDJSON splits cleanly on all platforms.
+    // Normalize line endings so NDJSON splits cleanly on every platform, WITHOUT
+    // splitting a still-incomplete record. Convert CRLF → LF and lone CR → LF —
+    // but hold back a TRAILING CR, which may be the first half of a CRLF whose LF
+    // lands in the next chunk, or the tail of an unfinished record. Converting it
+    // now would split that partial record early and emit a spurious parse error.
+    const trailingCR = this.buffer.endsWith("\r");
+    if (trailingCR) this.buffer = this.buffer.slice(0, -1);
     this.buffer = this.buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    if (trailingCR) this.buffer += "\r";
 
     // Cap unterminated-line buffering so a malformed stream can't grow forever.
     if (this.buffer.length > StreamParser.MAX_BUFFER) {

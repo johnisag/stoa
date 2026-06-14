@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /*
  * Stoa - Self-hosted AI coding session manager
  * https://github.com/johnisag/stoa
@@ -78,7 +77,8 @@ function serverEnv(extra = {}) {
   for (const [k, v] of Object.entries(process.env)) {
     if (k.toUpperCase() !== "PORT") env[k] = v;
   }
-  return { ...env, PORT, ...extra };
+  const resolvedPort = process.env.STOA_PORT || process.env.PORT || "3011";
+  return { ...env, PORT: resolvedPort, ...extra };
 }
 
 // ~/.stoa is the Stoa home; everything (pid, logs) lives under it.
@@ -697,5 +697,12 @@ module.exports = {
   commandSpec,
   buildIsComplete,
   waitUntilDead,
-  PORT,
 };
+
+// PORT is read from the current env on every access so tests that reload the
+// module with different env values see the updated port without depending on
+// require.cache invalidation.
+Object.defineProperty(module.exports, "PORT", {
+  get: () => process.env.STOA_PORT || process.env.PORT || "3011",
+  enumerable: true,
+});

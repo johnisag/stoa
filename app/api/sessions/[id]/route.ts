@@ -40,6 +40,7 @@ const ALLOWED_SESSION_STATUS: Set<string> = new Set([
   "running",
   "waiting",
   "error",
+  "dead",
 ]);
 
 interface RouteParams {

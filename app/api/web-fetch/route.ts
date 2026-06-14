@@ -5,13 +5,21 @@ import { lookup } from "dns/promises";
 import { tmpDir } from "@/lib/platform";
 import { isHttpUrl, htmlToText, isPrivateAddress } from "@/lib/web-fetch";
 import { formatTerminalTextForAgent } from "@/lib/path-display";
-import { parseJsonBody, checkRateLimit } from "@/lib/api-security";
+import {
+  parseJsonBody,
+  checkRateLimit,
+  clampInteger,
+} from "@/lib/api-security";
 
 // Bounds so a fetched page can't hang the request or blow up memory: abort the
-// fetch after TIMEOUT_MS and stop reading once we've pulled MAX_BYTES.
-const TIMEOUT_MS = parseInt(
-  process.env.STOA_WEB_FETCH_TIMEOUT_MS || "15000",
-  10
+// fetch after TIMEOUT_MS and stop reading once we've pulled MAX_BYTES. clampInteger
+// guards a non-numeric/garbage env value (a bare parseInt → NaN would make the
+// AbortController fire at 0ms and time out every fetch).
+const TIMEOUT_MS = clampInteger(
+  process.env.STOA_WEB_FETCH_TIMEOUT_MS,
+  1,
+  600_000,
+  15_000
 );
 const MAX_REDIRECTS = 5;
 
@@ -174,34 +182,44 @@ export async function POST(request: Request) {
     clearTimeout(timer);
   }
 
-  // Reduce HTML to readable text. Trust the content-type; only sniff when it's
-  // ABSENT (and then only on a document-level signal), so a raw .md/.txt that
-  // merely contains a tag-like token (e.g. `vec<i32>`) rides through unmangled.
-  const contentType = res.headers.get("content-type") || "";
-  const looksHtml = contentType
-    ? contentType.includes("text/html")
-    : /^\s*(<!doctype html|<html[\s>])/i.test(raw);
-  const reduced = looksHtml ? htmlToText(raw) : raw;
+  // Reduce → strip → write. Each step can throw (htmlToText on pathological
+  // input, fs.mkdirSync/writeFileSync on EACCES/ENOSPC), so guard the whole tail
+  // and return a structured 500 instead of letting it escape as an opaque error.
+  try {
+    // Reduce HTML to readable text. Trust the content-type; only sniff when it's
+    // ABSENT (and then only on a document-level signal), so a raw .md/.txt that
+    // merely contains a tag-like token (e.g. `vec<i32>`) rides through unmangled.
+    const contentType = res.headers.get("content-type") || "";
+    const looksHtml = contentType
+      ? contentType.includes("text/html")
+      : /^\s*(<!doctype html|<html[\s>])/i.test(raw);
+    const reduced = looksHtml ? htmlToText(raw) : raw;
 
-  // Strip C0 controls + DEL before this text can reach the agent's pty
-  // (keystroke-injection guard); keeps tab/newline so the layout survives.
-  const text = formatTerminalTextForAgent(reduced);
-  if (!text) {
-    return NextResponse.json(
-      { error: "No readable text found at that URL" },
-      { status: 422 }
-    );
+    // Strip C0 controls + DEL before this text can reach the agent's pty
+    // (keystroke-injection guard); keeps tab/newline so the layout survives.
+    const text = formatTerminalTextForAgent(reduced);
+    if (!text) {
+      return NextResponse.json(
+        { error: "No readable text found at that URL" },
+        { status: 422 }
+      );
+    }
+
+    // Write to a temp file and return its path — the FilePicker injects the
+    // path like any attached file. Header records the source URL for the agent.
+    const tempDir = path.join(tmpDir(), "stoa-web-fetch");
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    const filePath = path.join(tempDir, tempNameForUrl(url));
+    const header = formatTerminalTextForAgent(`Source: ${url}`);
+    fs.writeFileSync(filePath, `${header}\n\n${text}\n`, "utf-8");
+
+    return NextResponse.json({ path: filePath });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to save fetched page";
+    console.error("web-fetch save error:", message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-
-  // Write to a temp file and return its path — the FilePicker injects the
-  // path like any attached file. Header records the source URL for the agent.
-  const tempDir = path.join(tmpDir(), "stoa-web-fetch");
-  if (!fs.existsSync(tempDir)) {
-    fs.mkdirSync(tempDir, { recursive: true });
-  }
-  const filePath = path.join(tempDir, tempNameForUrl(url));
-  const header = formatTerminalTextForAgent(`Source: ${url}`);
-  fs.writeFileSync(filePath, `${header}\n\n${text}\n`, "utf-8");
-
-  return NextResponse.json({ path: filePath });
 }

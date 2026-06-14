@@ -907,14 +907,36 @@ export function runMigrations(db: Database.Database): void {
   for (const migration of migrations) {
     if (applied.has(migration.id)) continue;
 
-    migration.up(db);
-    const result = insertMigration.run(migration.id, migration.name);
-    if (result.changes > 0) {
-      console.log(`Migration ${migration.id}: ${migration.name} applied`);
-    } else {
-      console.log(
-        `Migration ${migration.id}: ${migration.name} skipped (concurrent apply)`
-      );
+    try {
+      migration.up(db);
+      const result = insertMigration.run(migration.id, migration.name);
+      if (result.changes > 0) {
+        console.log(`Migration ${migration.id}: ${migration.name} applied`);
+      } else {
+        console.log(
+          `Migration ${migration.id}: ${migration.name} skipped (concurrent apply)`
+        );
+      }
+    } catch (error) {
+      // Migrations are written to be idempotent (hasColumn / hasTable / IF NOT
+      // EXISTS), but a legacy or externally-modified DB can still have a column /
+      // table the guard can't detect. A "duplicate column" / "already exists"
+      // there means the schema is effectively present, so record it applied and
+      // move on. ANY OTHER error is a genuine migration bug — re-throw it loud
+      // rather than silently marking a half-applied migration done.
+      const msg = error instanceof Error ? error.message : String(error);
+      if (/duplicate column|already exists/i.test(msg)) {
+        insertMigration.run(migration.id, migration.name);
+        console.log(
+          `Migration ${migration.id}: ${migration.name} skipped (schema already present)`
+        );
+      } else {
+        console.error(
+          `Migration ${migration.id}: ${migration.name} failed:`,
+          error
+        );
+        throw error;
+      }
     }
   }
 }

@@ -5,16 +5,16 @@
  * context is lost — so the terminal always renders rather than freezing.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { loadRenderer } from "@/components/Terminal/hooks/terminal-renderer";
 
-// Capture constructions + the registered context-loss handler.
 const webglCtor = vi.fn();
 const canvasCtor = vi.fn();
+const webglDispose = vi.fn();
 let contextLossHandler: (() => void) | null = null;
 let webglShouldThrow = false;
-const webglDispose = vi.fn();
 
-vi.mock("@xterm/addon-webgl", () => ({
-  WebglAddon: class {
+function makeWebglAddon() {
+  return class {
     constructor() {
       webglCtor();
       if (webglShouldThrow) throw new Error("WebGL unavailable");
@@ -25,17 +25,16 @@ vi.mock("@xterm/addon-webgl", () => ({
     dispose() {
       webglDispose();
     }
-  },
-}));
-vi.mock("@xterm/addon-canvas", () => ({
-  CanvasAddon: class {
+  };
+}
+
+function makeCanvasAddon() {
+  return class {
     constructor() {
       canvasCtor();
     }
-  },
-}));
-
-import { loadRenderer } from "@/components/Terminal/hooks/terminal-renderer";
+  };
+}
 
 function fakeTerm() {
   return { loadAddon: vi.fn() } as unknown as Parameters<
@@ -54,7 +53,10 @@ describe("loadRenderer — WebGL with canvas fallback", () => {
 
   it("attaches WebGL when available (not canvas)", () => {
     const term = fakeTerm();
-    const used = loadRenderer(term);
+    const used = loadRenderer(term, {
+      WebglAddon: makeWebglAddon() as any,
+      CanvasAddon: makeCanvasAddon() as any,
+    });
     expect(used).toBe("webgl");
     expect(webglCtor).toHaveBeenCalledTimes(1);
     expect(canvasCtor).not.toHaveBeenCalled();
@@ -64,7 +66,10 @@ describe("loadRenderer — WebGL with canvas fallback", () => {
   it("falls back to canvas when WebGL construction throws", () => {
     webglShouldThrow = true;
     const term = fakeTerm();
-    const used = loadRenderer(term);
+    const used = loadRenderer(term, {
+      WebglAddon: makeWebglAddon() as any,
+      CanvasAddon: makeCanvasAddon() as any,
+    });
     expect(used).toBe("canvas");
     expect(canvasCtor).toHaveBeenCalledTimes(1);
     expect(term.loadAddon).toHaveBeenCalledTimes(1); // the canvas addon
@@ -72,7 +77,10 @@ describe("loadRenderer — WebGL with canvas fallback", () => {
 
   it("swaps to canvas if the WebGL context is lost at runtime", () => {
     const term = fakeTerm();
-    loadRenderer(term);
+    loadRenderer(term, {
+      WebglAddon: makeWebglAddon() as any,
+      CanvasAddon: makeCanvasAddon() as any,
+    });
     expect(contextLossHandler).toBeTypeOf("function");
     canvasCtor.mockClear();
 

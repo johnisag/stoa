@@ -58,6 +58,10 @@ export class HostClient {
   // re-send the right observer flag after a reconnect (else an observer-only
   // key would silently re-register as a sizing client on the daemon).
   private sizingCounts = new Map<string, number>();
+  // Last viewport size sent per key, so a daemon-socket reconnect can re-attach
+  // at the browser's real dimensions instead of registering the client at the
+  // pty's current size (which can wrongly shrink the pty via applyMinSize).
+  private lastSize = new Map<string, { cols: number; rows: number }>();
   private spawnedThisCycle = false;
   // Mutable key refs for active attaches. rename() updates these so detach()
   // always targets the current key for sizing and daemon-detach.
@@ -231,10 +235,13 @@ export class HostClient {
   private async resubscribeAll(): Promise<void> {
     for (const key of [...this.outputListeners.keys()]) {
       try {
+        const size = this.lastSize.get(key);
         const res = await this.requestNoRetry<{ snapshot: string }>({
           t: "attach",
           key,
           observer: this.observerForKey(key),
+          cols: size?.cols,
+          rows: size?.rows,
         });
         const snap = res?.snapshot;
         // Prefix a full terminal reset (RIS) so the replayed snapshot REPLACES
@@ -293,9 +300,18 @@ export class HostClient {
     }
   }
 
-  private async fireAndForget(msg: ClientMessage): Promise<void> {
-    await this.ensureConnected();
-    this.socket?.write(encode(msg));
+  private fireAndForget(msg: ClientMessage): void {
+    // Truly fire-and-forget: a dropped input/resize/detach is non-fatal. Swallow
+    // the rejection HERE — ensureConnected() can reject (daemon unreachable, or a
+    // socket torn down mid-flight), and an unhandled rejection escaping a `void`
+    // caller can crash the whole process under Node's default throw mode.
+    void this.ensureConnected()
+      .then(() => {
+        this.socket?.write(encode(msg));
+      })
+      .catch(() => {
+        // best-effort; the next attach/reconnect re-syncs daemon state
+      });
   }
 
   /** Connect + validate the daemon is reachable. Throws if it can't be reached. */
@@ -337,12 +353,18 @@ export class HostClient {
     if (!observer)
       this.sizingCounts.set(key, (this.sizingCounts.get(key) ?? 0) + 1);
 
+    // Capture the key this attach is bound under. If a rename() happens later,
+    // the detach must decrement the sizing count under the CURRENT key, not the
+    // original one — otherwise the count leaks on the new key. Declared OUTSIDE
+    // the try so the catch can drop it on a failed attach.
+    const keyRef = { key };
+    this.attachKeyRefs.add(keyRef);
+    // Remember the size so a daemon reconnect can replay it (see resubscribeAll).
+    if (typeof cols === "number" && typeof rows === "number") {
+      this.lastSize.set(key, { cols, rows });
+    }
+
     try {
-      // Capture the key this attach is bound under. If a rename() happens later,
-      // the detach must decrement the sizing count under the CURRENT key, not the
-      // original one — otherwise the count leaks on the new key.
-      const keyRef = { key };
-      this.attachKeyRefs.add(keyRef);
       const res = await this.request<{ snapshot: string }>({
         t: "attach",
         key,
@@ -362,6 +384,7 @@ export class HostClient {
         // an empty listener set in the maps.
         if (lastOutput) this.outputListeners.delete(k);
         if (lastExit) this.exitListeners.delete(k);
+        if (lastOutput) this.lastSize.delete(k);
         // Only tell the daemon to detach when the LAST local listener for this
         // key is gone. All browser sockets share one daemon connection with a
         // single slot per key, so an unconditional detach here would tear down
@@ -371,7 +394,10 @@ export class HostClient {
       };
       return { snapshot: res?.snapshot ?? "", detach };
     } catch (err) {
-      // Roll back listener registration if the attach failed.
+      // Roll back listener registration if the attach failed. Drop the keyRef
+      // too — otherwise a rejected/timed-out attach leaks it permanently and
+      // rename() keeps re-keying the orphan.
+      this.attachKeyRefs.delete(keyRef);
       outSet.delete(onOutput);
       exitSet.delete(onExit);
       if (!observer) this.decSizing(key);
@@ -386,6 +412,7 @@ export class HostClient {
   }
 
   resize(key: string, cols: number, rows: number): void {
+    this.lastSize.set(key, { cols, rows });
     void this.fireAndForget({ t: "resize", key, cols, rows });
   }
 
@@ -407,6 +434,7 @@ export class HostClient {
     move(this.outputListeners);
     move(this.exitListeners);
     move(this.sizingCounts);
+    move(this.lastSize);
     // Update the detach closures of any in-flight attaches so they use the new
     // key for sizing and daemon detach.
     for (const ref of this.attachKeyRefs) {

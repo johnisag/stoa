@@ -35,9 +35,12 @@ export function useFileEditor(): UseFileEditorReturn {
   // file B, whichever fetch resolves last must not clobber state.
   const openGenerationRef = useRef(0);
   // closeFile is memoized with an empty deps array, so read the latest active
-  // path through a ref instead of capturing the first-render value.
+  // path AND the latest open files through refs instead of capturing the
+  // first-render values or a value mutated inside a state updater.
   const activeFilePathRef = useRef(activeFilePath);
   activeFilePathRef.current = activeFilePath;
+  const openFilesRef = useRef(openFiles);
+  openFilesRef.current = openFiles;
 
   const getFile = useCallback(
     (path: string) => openFiles.find((f) => f.path === path),
@@ -104,25 +107,24 @@ export function useFileEditor(): UseFileEditorReturn {
   );
 
   const closeFile = useCallback((path: string) => {
+    // Functional update so rapid successive closes compose correctly.
+    setOpenFiles((prev) => prev.filter((f) => f.path !== path));
+
+    // Only move the active tab when we closed the ACTIVE one. Compute the next
+    // active path synchronously from the latest committed list via the ref —
+    // NOT from a variable assigned inside the updater above (React runs the
+    // updater during the later render, so that value would still be stale here).
+    if (activeFilePathRef.current !== path) return;
+    const prev = openFilesRef.current;
+    const closedIndex = prev.findIndex((f) => f.path === path);
+    const newFiles = prev.filter((f) => f.path !== path);
     let nextActive: string | null = null;
-    setOpenFiles((prev) => {
-      const newFiles = prev.filter((f) => f.path !== path);
-      // Update active file if we closed the active one
-      const currentActive = activeFilePathRef.current;
-      if (currentActive !== path) {
-        nextActive = currentActive;
-        return newFiles;
-      }
-      const closedIndex = prev.findIndex((f) => f.path === path);
-      if (newFiles.length === 0) {
-        nextActive = null;
-      } else if (closedIndex >= newFiles.length) {
-        nextActive = newFiles[newFiles.length - 1].path;
-      } else {
-        nextActive = newFiles[closedIndex].path;
-      }
-      return newFiles;
-    });
+    if (newFiles.length > 0) {
+      nextActive =
+        closedIndex >= newFiles.length
+          ? newFiles[newFiles.length - 1].path
+          : newFiles[closedIndex].path;
+    }
     setActiveFilePath(nextActive);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
