@@ -13,7 +13,6 @@ import {
 import { getDb } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
 import { claudeProjectDirName, findClaudeProjectDir } from "@/lib/platform";
-import { getKimiSessionIdFromFiles } from "@/lib/kimi-session";
 
 const backend = getSessionBackend();
 
@@ -124,10 +123,8 @@ async function getClaudeSessionId(sessionName: string): Promise<string | null> {
 // per provider. Claude reads its env var / on-disk project files; Hermes prints
 // the id in its startup banner, which the status detector captures from the
 // rendered screen (Hermes writes no session file until clean exit); Kimi Code
-// ALSO prints its id in its banner (captured the same way, per-session) and
-// additionally writes it to ~/.kimi-code/session_index.jsonl — a cwd-keyed
-// on-disk fallback for when the banner has already scrolled off. Stored in the
-// shared `claude_session_id` column. Other agents have no resume id.
+// ALSO prints its id in its banner, captured the same per-session way. Stored in
+// the shared `claude_session_id` column. Other agents have no resume id.
 async function getProviderSessionId(
   sessionName: string,
   agentType: AgentType
@@ -139,15 +136,11 @@ async function getProviderSessionId(
     return getClaudeSessionId(sessionName);
   }
   if (agentType === "kimi") {
-    // Prefer the per-session id from Kimi Code's startup banner (captured from
-    // the rendered screen by the status detector, exactly like Hermes) — being
-    // per-session it disambiguates two sessions sharing one cwd. Fall back to the
-    // cwd-keyed on-disk index when the banner already scrolled off (e.g. attaching
-    // to an already-running session).
-    const banner = statusDetector.getKimiSessionId(sessionName);
-    if (banner) return banner;
-    const cwd = await getTmuxSessionCwd(sessionName);
-    return cwd ? getKimiSessionIdFromFiles(cwd) : null;
+    // Per-session id from Kimi Code's startup banner (captured from the rendered
+    // screen by the status detector), exactly like Hermes — being per-session it
+    // never confuses two sessions that share a cwd. Banner-only on purpose: a
+    // cwd-keyed on-disk fallback could resolve a stale same-cwd id.
+    return statusDetector.getKimiSessionId(sessionName);
   }
   return null;
 }
