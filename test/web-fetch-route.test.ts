@@ -127,7 +127,11 @@ describe("POST /api/web-fetch", () => {
     const res = await POST(makeRequest({ url: "http://example.com/page" }));
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.path).toMatch(/\\stoa-temp\\stoa-web-fetch\\/);
+    // Normalize Windows separators before asserting so the test passes on POSIX
+    // runners even though the mocked tmpRoot uses backslashes.
+    expect(json.path.replace(/\\/g, "/")).toMatch(
+      /C:\/stoa-temp\/stoa-web-fetch\//
+    );
     expect(written[0].content).toContain("hello world");
   });
 

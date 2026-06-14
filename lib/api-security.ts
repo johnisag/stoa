@@ -189,7 +189,10 @@ export function sanitizeGroupPath(path: unknown): string | null {
 // ── path sandboxing ──
 
 function normalizeForSandbox(p: string): string {
-  const resolved = path.resolve(expandHome(p));
+  // Normalize Windows-style separators to the current platform's separator so
+  // cross-platform sandbox comparisons work (tests feed Windows paths on POSIX).
+  const normalized = isWindows ? p : p.replace(/\\/g, "/");
+  const resolved = path.resolve(expandHome(normalized));
   return isWindows ? resolved.toLowerCase() : resolved;
 }
 
