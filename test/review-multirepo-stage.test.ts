@@ -95,4 +95,32 @@ describe("stageAllAcrossRepos (fan-out)", () => {
     await stageAllAcrossRepos([], "stage");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("rejects when any per-repo POST is not ok, after issuing all POSTs", async () => {
+    // /ws/b's POST fails (e.g. a git index.lock → 500); a fulfilled Response
+    // with ok:false must surface as a rejection, not be silently swallowed.
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      return Promise.resolve(
+        (body.path === "/ws/b"
+          ? { ok: false, status: 500 }
+          : { ok: true }) as unknown as Response
+      );
+    });
+
+    await expect(
+      stageAllAcrossRepos(
+        [
+          file("/ws/a", "src/x.ts"),
+          file("/ws/b", "src/y.ts"),
+          file("/ws/c", "src/z.ts"),
+        ],
+        "stage"
+      )
+    ).rejects.toThrow("/ws/b");
+
+    // All repos were still POSTed — failures are aggregated after every settle,
+    // not short-circuited on the first bad response.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 });

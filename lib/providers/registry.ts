@@ -69,7 +69,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     supportsFork: true,
     resumeFlag: "--resume",
     // Claude Code DOES take --model (an alias for the latest of a family —
-    // 'fable'/'opus'/'sonnet'/'haiku' — or a full id like 'claude-fable-5'), so the
+    // 'opus'/'sonnet'/'haiku' — or a full id like 'claude-opus-4-8'), so the
     // model picker actually drives the launch model. Verified via `claude --help`.
     // On `--resume` Claude restores the session's own model, so we omit --model
     // then (see restoresModelOnResume) rather than override it.

@@ -88,6 +88,14 @@ function parseShortstat(text: string): {
  * commit's shortstat sits at the front of the *next* RS segment; we therefore
  * carry the field block of one record and attach the shortstat that follows it.
  *
+ * git permits arbitrary control bytes in a commit message, so a body (%b) may
+ * itself contain a literal RS. That splits one logical record across several
+ * `output.split(RECORD_SEP)` segments, leaving a short field block (< 7 fields)
+ * whose tail is the continuation of the SAME record's body. We re-join those
+ * continuation segments — restoring the RS the split consumed — until the record
+ * has its full 7 fields. The 7th field (%at) is a unix-timestamp of digits, a
+ * reliable end-of-record marker that an embedded body byte cannot fake.
+ *
  * Pure and side-effect free so it can be unit-tested with a fixture.
  */
 export function parseCommitHistory(output: string): CommitSummary[] {
@@ -96,6 +104,11 @@ export function parseCommitHistory(output: string): CommitSummary[] {
 
   // Pending field block whose shortstat appears at the head of the next segment.
   let pendingFields: string[] | null = null;
+
+  // A record whose body contained an RS: its field block is still incomplete
+  // (< 7 fields) and the next segment(s) continue its body. We restore the RS
+  // that split() removed and keep accumulating until 7 fields are present.
+  let partialFields: string[] | null = null;
 
   const flush = (shortstatText: string) => {
     if (!pendingFields) return;
@@ -121,6 +134,28 @@ export function parseCommitHistory(output: string): CommitSummary[] {
   };
 
   for (const segment of segments) {
+    if (partialFields) {
+      // We are mid-record: the previous segment ended inside the body because
+      // it held a literal RS. Re-join this segment onto the unfinished field
+      // (restoring the RS that split() consumed), then keep appending any
+      // further NUL-delimited fields this segment carries.
+      const extra = segment.split(FIELD_SEP);
+      partialFields[partialFields.length - 1] += RECORD_SEP + extra[0];
+      for (let i = 1; i < extra.length; i++) partialFields.push(extra[i]);
+
+      if (
+        partialFields.length < 7 ||
+        !/^\d+$/.test(partialFields[partialFields.length - 1])
+      ) {
+        // Still inside the body (not yet 7 fields, or the would-be %at field is
+        // not an all-digit timestamp → another RS landed in the body).
+        continue;
+      }
+      pendingFields = partialFields;
+      partialFields = null;
+      continue;
+    }
+
     const nulIdx = segment.indexOf(FIELD_SEP);
     if (nulIdx === -1) {
       // No field block: this whole segment is the trailing shortstat for the
@@ -142,7 +177,8 @@ export function parseCommitHistory(output: string): CommitSummary[] {
 
     const fields = [hash, ...segment.slice(nulIdx + 1).split(FIELD_SEP)];
     if (fields.length < 7) {
-      pendingFields = null;
+      // Record's body held a literal RS; it continues in the next segment(s).
+      partialFields = fields;
       continue;
     }
     pendingFields = fields;

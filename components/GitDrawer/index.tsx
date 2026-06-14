@@ -41,6 +41,7 @@ import {
 } from "@/data/git/queries";
 import type { GitFile } from "@/lib/git-status";
 import { stageAllAcrossRepos } from "@/lib/multi-repo-stage";
+import { toast } from "sonner";
 import type { MultiRepoGitFile } from "@/lib/multi-repo-git";
 import type { ProjectRepository } from "@/lib/db";
 
@@ -222,9 +223,15 @@ export function GitDrawer({
         ...(multiRepoQuery.data?.unstaged ?? []),
         ...(multiRepoQuery.data?.untracked ?? []),
       ];
-      void stageAllAcrossRepos(files, "stage").finally(() => {
-        queryClient.invalidateQueries({ queryKey: gitKeys.all });
-      });
+      void stageAllAcrossRepos(files, "stage")
+        .catch((e) =>
+          toast.error(
+            e instanceof Error ? e.message : "Failed to stage all repos"
+          )
+        )
+        .finally(() => {
+          queryClient.invalidateQueries({ queryKey: gitKeys.all });
+        });
       return;
     }
     stageMutation.mutate(undefined);
@@ -232,12 +239,15 @@ export function GitDrawer({
 
   const handleUnstageAll = () => {
     if (isMultiRepo) {
-      void stageAllAcrossRepos(
-        multiRepoQuery.data?.staged ?? [],
-        "unstage"
-      ).finally(() => {
-        queryClient.invalidateQueries({ queryKey: gitKeys.all });
-      });
+      void stageAllAcrossRepos(multiRepoQuery.data?.staged ?? [], "unstage")
+        .catch((e) =>
+          toast.error(
+            e instanceof Error ? e.message : "Failed to unstage all repos"
+          )
+        )
+        .finally(() => {
+          queryClient.invalidateQueries({ queryKey: gitKeys.all });
+        });
       return;
     }
     unstageMutation.mutate(undefined);

@@ -7,8 +7,13 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { getSessionBackend } from "@/lib/session-backend";
-import { buildAgentArgs, claudeProvider } from "@/lib/providers";
-import { resolveModelForAgent } from "@/lib/model-catalog";
+import {
+  buildAgentArgs,
+  getProvider,
+  type AgentType,
+  type AgentSpawn,
+} from "@/lib/providers";
+import { getDefaultModelForAgent, getModelOptions } from "@/lib/model-catalog";
 import {
   parseClaudeTranscript,
   buildSummaryPrompt,
@@ -24,6 +29,60 @@ import {
 } from "@/lib/platform";
 
 const backend = getSessionBackend();
+
+/**
+ * Clamp a session's STORED model to the provider's STATIC catalog
+ * (getModelOptions), NOT isSupportedModelForAgent. A free-text agent (Hermes)
+ * accepts ANY string verbatim, and the value rides into the spawn `-m <model>`
+ * (and the shell-quoted tmux launch), so a non-catalog model is dropped to the
+ * provider's own default rather than forwarded. claude/codex clamp to their
+ * fixed, shell-inert catalogs; an unknown/foreign model → the agent's default.
+ * (See the model-token-injection convention.)
+ */
+function clampForkModel(agentType: AgentType, model: string | null): string {
+  if (
+    model &&
+    getModelOptions(agentType).some((option) => option.value === model)
+  ) {
+    return model;
+  }
+  return getDefaultModelForAgent(agentType);
+}
+
+/**
+ * Assemble the provider-generic spawn for the fork: the SAME provider as the
+ * original session (not a hardcoded Claude). Mirrors the canonical new-session /
+ * orchestration path — provider.buildFlags for the tmux command string and
+ * buildAgentArgs for the pty argv — so a fork of a codex/hermes session spawns
+ * that CLI, not `claude`. Pure (no I/O) so it is unit-testable.
+ *
+ * `isRoot` is the POSIX root check (only meaningful for Claude's IS_SANDBOX
+ * sandbox shim); the env prefix is only ever applied to the shell command
+ * string, never to the clean pty argv.
+ */
+export function buildForkSpawn(opts: {
+  agentType: AgentType;
+  model: string | null;
+  autoApprove: boolean;
+  isRoot: boolean;
+}): { command: string; spawn: AgentSpawn } {
+  const { agentType, autoApprove, isRoot } = opts;
+  const provider = getProvider(agentType);
+  // Clamp the stored model to the provider's static catalog before it reaches
+  // any spawn token (see clampForkModel).
+  const model = clampForkModel(agentType, opts.model);
+
+  // Auto-approve as root needs IS_SANDBOX=1 for Claude's
+  // --dangerously-skip-permissions; harmless (and only prepended to the shell
+  // command string) for the other providers.
+  const envPrefix = autoApprove && isRoot ? "IS_SANDBOX=1 " : "";
+  const flags = provider.buildFlags({ autoApprove, model });
+  const command = `${envPrefix}${provider.command} ${flags.join(" ")}`.trim();
+  // Structured argv for the pty backend (no IS_SANDBOX/env prefix — that's a
+  // POSIX-root sandbox concern handled by the tmux command path).
+  const agentSpawn = buildAgentArgs(agentType, { autoApprove, model });
+  return { command, spawn: agentSpawn };
+}
 
 // Get Claude session ID from tmux environment
 async function getClaudeSessionId(tmuxSession: string): Promise<string | null> {
@@ -273,7 +332,16 @@ export async function POST(
     if (createFork) {
       const newId = randomUUID();
       const newName = `${session.name} (fresh)`;
-      const agentType = session.agent_type || "claude";
+      // Normalize the stored agent_type through getProvider (its unknown → claude
+      // fallback is single-sourced) so the fork spawns the SAME provider as the
+      // original session and getProviderDefinition never throws on a stale value.
+      // A non-spawnable provider (e.g. a "shell" session, whose provider has an
+      // empty command) falls back to claude so the fork never hands backend.create
+      // an empty binary — matching the pre-generic behavior for that edge.
+      const forkProvider = getProvider(session.agent_type || "claude");
+      const agentType: AgentType = forkProvider.command
+        ? forkProvider.id
+        : "claude";
       const tmuxName = sessionKey({
         kind: "agent",
         provider: agentType,
@@ -298,35 +366,30 @@ export async function POST(
       newSession = queries.getSession(db).get(newId) as Session;
       const newTmuxSession = tmuxName;
 
-      // Start the fresh session through the provider seam so it honors the
-      // session's stored model (this is a fresh launch, so --model is passed;
-      // resolveModelForAgent guards a non-Claude stored model). Hand-rolling the
-      // flags here is what made this path silently ignore the model picker.
+      // Start the fresh session through the provider seam, spawning the SAME
+      // provider as the original session (claude/codex/hermes) so a non-Claude
+      // fork no longer silently launches `claude`. This is a fresh launch, so the
+      // model IS passed (clamped to the provider's static catalog inside
+      // buildForkSpawn). Hand-rolling Claude's flags here is what made this path
+      // both ignore the model picker AND ignore the agent type.
       const autoApprove = Boolean(session.auto_approve);
-      const spawnModel = resolveModelForAgent("claude", session.model);
       const isRoot = process.getuid?.() === 0;
-      const envPrefix = autoApprove && isRoot ? "IS_SANDBOX=1 " : "";
-      const claudeFlags = claudeProvider.buildFlags({
+      const { command, spawn: agentSpawn } = buildForkSpawn({
+        agentType,
+        model: session.model,
         autoApprove,
-        model: spawnModel,
-      });
-      const claudeCmd = `${envPrefix}claude ${claudeFlags.join(" ")}`.trim();
-      // Structured argv for the pty backend (no IS_SANDBOX/env prefix — that's a
-      // POSIX-root sandbox concern handled by the tmux command path).
-      const { args: claudeArgs } = buildAgentArgs("claude", {
-        autoApprove,
-        model: spawnModel,
+        isRoot,
       });
 
       console.log(
-        `[summarize] Creating session: ${newTmuxSession} (${claudeCmd})`
+        `[summarize] Creating session: ${newTmuxSession} (${command})`
       );
       await backend.create({
         name: newTmuxSession,
         cwd: cwdExpanded,
-        command: claudeCmd,
-        binary: "claude",
-        args: claudeArgs,
+        command,
+        binary: agentSpawn.binary,
+        args: agentSpawn.args,
       });
       console.log(`[summarize] Tmux session created: ${newTmuxSession}`);
 

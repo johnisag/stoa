@@ -6,11 +6,10 @@ export interface ModelOption {
 }
 
 // Default first (Sonnet), matching the Codex list — the top item is the default,
-// not a "most capable" ranking. Values are unversioned family aliases ('fable'
-// resolves to the latest Fable), so labels stay unversioned too.
+// not a "most capable" ranking. Values are unversioned family aliases ('opus'
+// resolves to the latest Opus), so labels stay unversioned too.
 const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { value: "sonnet", label: "Sonnet" },
-  { value: "fable", label: "Fable" },
   { value: "opus", label: "Opus" },
   { value: "haiku", label: "Haiku" },
 ];

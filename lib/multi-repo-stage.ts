@@ -34,13 +34,18 @@ export function groupFilePathsByRepoPath(
  * repo with an explicit file list. Shared by GitPanel and GitDrawer; the caller
  * is responsible for invalidating its query cache afterwards.
  */
-export function stageAllAcrossRepos(
+export async function stageAllAcrossRepos(
   files: MultiRepoGitFile[],
   endpoint: "stage" | "unstage"
 ): Promise<unknown> {
-  const byRepo = groupFilePathsByRepoPath(files);
-  return Promise.all(
-    Array.from(byRepo.entries()).map(([path, repoFiles]) =>
+  const byRepo = Array.from(groupFilePathsByRepoPath(files).entries());
+  // Fan out one POST per repo, then await all before inspecting results so a
+  // single per-repo failure (e.g. a git index.lock yielding a 400/500) can't be
+  // silently swallowed: a fulfilled Response with `res.ok === false` is still a
+  // failure. We surface it by throwing — matching the single-repo mutations,
+  // which throw on `data.error` — so the caller (GitPanel/GitDrawer) can react.
+  const responses = await Promise.all(
+    byRepo.map(([path, repoFiles]) =>
       fetch(`/api/git/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -48,4 +53,13 @@ export function stageAllAcrossRepos(
       })
     )
   );
+  const failed = byRepo
+    .filter((_entry, i) => !responses[i].ok)
+    .map(([path]) => path);
+  if (failed.length > 0) {
+    throw new Error(
+      `Failed to ${endpoint} ${failed.length} of ${byRepo.length} repo(s): ${failed.join(", ")}`
+    );
+  }
+  return responses;
 }

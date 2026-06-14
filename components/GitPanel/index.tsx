@@ -37,6 +37,7 @@ import {
 } from "@/data/git/queries";
 import type { GitStatus, GitFile } from "@/lib/git-status";
 import { stageAllAcrossRepos } from "@/lib/multi-repo-stage";
+import { toast } from "sonner";
 import type {
   MultiRepoGitFile,
   MultiRepoGitStatus,
@@ -333,6 +334,14 @@ export function GitPanel({
   ) => {
     try {
       await stageAllAcrossRepos(files, endpoint);
+    } catch (e) {
+      // stageAllAcrossRepos throws an aggregated error if any per-repo POST
+      // failed; surface it (consuming the rejection here so the void callers
+      // don't produce an unhandled rejection). The finally still refetches, so
+      // the list re-shows the true post-failure state.
+      toast.error(
+        e instanceof Error ? e.message : `Failed to ${endpoint} all repos`
+      );
     } finally {
       queryClient.invalidateQueries({ queryKey: gitKeys.all });
     }

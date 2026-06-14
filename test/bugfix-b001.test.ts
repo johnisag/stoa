@@ -192,6 +192,85 @@ describe("B001 parseCommitHistory — multi-line bodies survive framing", () => 
     expect(after.deletions).toBe(1);
   });
 
+  it("keeps a commit whose body contains a literal RS (0x1e) byte", () => {
+    // git permits arbitrary control bytes in a commit message. A literal RS in
+    // a body splits that one record across multiple output.split(RS) segments;
+    // the old parser saw a < 7-field block and SILENTLY DROPPED the commit (and
+    // could mis-attribute the next commit's shortstat). The reconstruction must
+    // re-join the split body and keep all three commits, stats intact.
+    const middleBody = `before-RS${RS}after-RS\nsecond line`;
+    const output =
+      record(
+        {
+          hash: "1".repeat(40),
+          short: "1111111",
+          subject: "feat: before",
+          body: "first",
+          author: "Ada",
+          email: "ada@example.com",
+          ts: 1700000000,
+        },
+        " 4 files changed, 40 insertions(+), 4 deletions(-)"
+      ) +
+      record(
+        {
+          hash: "2".repeat(40),
+          short: "2222222",
+          subject: "fix: body has a control byte",
+          body: middleBody,
+          author: "Bot",
+          email: "bot@example.com",
+          ts: 1700000100,
+        },
+        " 2 files changed, 6 insertions(+), 3 deletions(-)"
+      ) +
+      record(
+        {
+          hash: "3".repeat(40),
+          short: "3333333",
+          subject: "fix: after",
+          body: "third\nwith two lines",
+          author: "Eve",
+          email: "eve@example.com",
+          ts: 1700000200,
+        },
+        " 1 file changed, 2 insertions(+), 1 deletion(-)"
+      );
+
+    const commits = parseCommitHistory(output);
+    // All three must survive — the RS-in-body commit is no longer dropped.
+    expect(commits).toHaveLength(3);
+
+    const [before, middle, after] = commits;
+
+    expect(before.hash).toBe("1".repeat(40));
+    expect(before.subject).toBe("feat: before");
+    expect(before.body).toBe("first");
+    expect(before.filesChanged).toBe(4);
+    expect(before.additions).toBe(40);
+    expect(before.deletions).toBe(4);
+
+    // The middle commit: hash/subject/body (RS preserved) and its OWN stats,
+    // not the neighbours'.
+    expect(middle.hash).toBe("2".repeat(40));
+    expect(middle.shortHash).toBe("2222222");
+    expect(middle.subject).toBe("fix: body has a control byte");
+    expect(middle.body).toBe(middleBody);
+    expect(middle.author).toBe("Bot");
+    expect(middle.authorEmail).toBe("bot@example.com");
+    expect(middle.timestamp).toBe(1700000100);
+    expect(middle.filesChanged).toBe(2);
+    expect(middle.additions).toBe(6);
+    expect(middle.deletions).toBe(3);
+
+    expect(after.hash).toBe("3".repeat(40));
+    expect(after.subject).toBe("fix: after");
+    expect(after.body).toBe("third\nwith two lines");
+    expect(after.filesChanged).toBe(1);
+    expect(after.additions).toBe(2);
+    expect(after.deletions).toBe(1);
+  });
+
   it("ignores trailing whitespace/blank tail after the last record", () => {
     const output =
       record(

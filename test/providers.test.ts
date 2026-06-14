@@ -74,16 +74,16 @@ describe("Hermes provider wiring", () => {
 describe("Claude provider wiring", () => {
   it("takes --model (alias or full id) so the picker drives the launch model", () => {
     expect(getProviderDefinition("claude").modelFlag).toBe("--model");
-    const { args } = buildAgentArgs("claude", { model: "fable" });
-    expect(args).toEqual(["--model", "fable"]);
+    const { args } = buildAgentArgs("claude", { model: "opus" });
+    expect(args).toEqual(["--model", "opus"]);
   });
 
   // The picker must work on BOTH backends. The pty path (buildAgentArgs) and the
   // tmux path (provider.buildFlags) have to emit the model identically, or the
   // feature silently becomes Windows-only (tmux is the default on macOS/Linux).
   it("buildFlags (tmux path) emits the model on a fresh launch, like the pty path", () => {
-    expect(getProvider("claude").buildFlags({ model: "fable" })).toEqual([
-      "--model fable",
+    expect(getProvider("claude").buildFlags({ model: "opus" })).toEqual([
+      "--model opus",
     ]);
   });
 
