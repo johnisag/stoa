@@ -13,6 +13,7 @@ import {
 import { getDb } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
 import { claudeProjectDirName, findClaudeProjectDir } from "@/lib/platform";
+import { getKimiSessionIdFromFiles } from "@/lib/kimi-session";
 
 const backend = getSessionBackend();
 
@@ -119,10 +120,12 @@ async function getClaudeSessionId(sessionName: string): Promise<string | null> {
   return null;
 }
 
-// Resolve an agent's own session id (used later for `--resume <id>`), per
-// provider. Claude reads its env var / on-disk project files; Hermes prints the
-// id in its startup banner, which the status detector captures from the rendered
-// screen (Hermes writes no session file until clean exit). Stored in the shared
+// Resolve an agent's own session id (used later for `--resume`/`--session <id>`),
+// per provider. Claude reads its env var / on-disk project files; Hermes prints
+// the id in its startup banner, which the status detector captures from the
+// rendered screen (Hermes writes no session file until clean exit); Kimi Code
+// writes its sessions to ~/.kimi-code/session_index.jsonl keyed by workDir, so we
+// resolve its id from disk (matched by the session's cwd). Stored in the shared
 // `claude_session_id` column. Other agents have no resume id.
 async function getProviderSessionId(
   sessionName: string,
@@ -133,6 +136,10 @@ async function getProviderSessionId(
   }
   if (agentType === "claude") {
     return getClaudeSessionId(sessionName);
+  }
+  if (agentType === "kimi") {
+    const cwd = await getTmuxSessionCwd(sessionName);
+    return cwd ? getKimiSessionIdFromFiles(cwd) : null;
   }
   return null;
 }
