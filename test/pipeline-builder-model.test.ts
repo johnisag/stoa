@@ -18,6 +18,8 @@ import {
   removeStep,
   renameStep,
   relayout,
+  setProject,
+  setWorktree,
   docFromImportedJson,
   serializeBuilderDoc,
   parseBuilderDoc,
@@ -401,5 +403,85 @@ describe("renameStep", () => {
     );
     const b = doc.nodes.find((n) => n.step.id === "b")!.step;
     expect(b.task).toBe("Use {{steps.$&.output}}");
+  });
+});
+
+describe("project / worktree context", () => {
+  it("docToSpec prefers worktreePath over workingDirectory", () => {
+    const doc: BuilderDoc = {
+      name: "wf",
+      workingDirectory: "/repo",
+      worktreePath: "/wt/feature-1",
+      nodes: [],
+    };
+    expect(docToSpec(doc).workingDirectory).toBe("/wt/feature-1");
+  });
+
+  it("docFromSpec seeds null projectId/worktreePath", () => {
+    const doc = docFromSpec(spec([step({ id: "a" })]));
+    expect(doc.projectId).toBeNull();
+    expect(doc.worktreePath).toBeNull();
+  });
+
+  it("parseBuilderDoc preserves projectId and worktreePath", () => {
+    const raw = JSON.stringify({
+      name: "wf",
+      workingDirectory: "/repo",
+      projectId: "proj-1",
+      worktreePath: "/wt/feature-1",
+      nodes: [{ step: { id: "a", agent: "claude", task: "t" }, x: 0, y: 0 }],
+    });
+    const parsed = parseBuilderDoc(raw)!;
+    expect(parsed.projectId).toBe("proj-1");
+    expect(parsed.worktreePath).toBe("/wt/feature-1");
+  });
+
+  it("setProject updates projectId, workingDirectory, and clears worktreePath", () => {
+    const base = docFromSpec(spec([step({ id: "a" })]));
+    const doc = setProject(base, "proj-1", "/projects/app");
+    expect(doc.projectId).toBe("proj-1");
+    expect(doc.workingDirectory).toBe("/projects/app");
+    expect(doc.worktreePath).toBeNull();
+  });
+
+  it("setProject with null clears projectId and keeps workingDirectory", () => {
+    const base = setProject(
+      docFromSpec(spec([step({ id: "a" })])),
+      "proj-1",
+      "/projects/app"
+    );
+    const doc = setProject(base, null);
+    expect(doc.projectId).toBeNull();
+    expect(doc.workingDirectory).toBe("/projects/app");
+  });
+
+  it("setWorktree updates worktreePath and workingDirectory to the repo path", () => {
+    const base = setProject(
+      docFromSpec(spec([step({ id: "a" })])),
+      "proj-1",
+      "/projects/app"
+    );
+    const doc = setWorktree(base, "/wt/feature-1", "/projects/app");
+    expect(doc.worktreePath).toBe("/wt/feature-1");
+    expect(doc.workingDirectory).toBe("/projects/app");
+  });
+
+  it("setWorktree falls back to the worktree path when repo path is unknown", () => {
+    const base = docFromSpec(spec([step({ id: "a" })]));
+    const doc = setWorktree(base, "/wt/feature-1");
+    expect(doc.worktreePath).toBe("/wt/feature-1");
+    expect(doc.workingDirectory).toBe("/wt/feature-1");
+  });
+
+  it("setWorktree with null keeps project workingDirectory", () => {
+    const base = setProject(
+      docFromSpec(spec([step({ id: "a" })])),
+      "proj-1",
+      "/projects/app"
+    );
+    const withWt = setWorktree(base, "/wt/feature-1", "/projects/app");
+    const doc = setWorktree(withWt, null, "/projects/app");
+    expect(doc.worktreePath).toBeNull();
+    expect(doc.workingDirectory).toBe("/projects/app");
   });
 });

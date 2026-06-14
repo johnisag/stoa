@@ -36,6 +36,10 @@ export interface BuilderNode {
 export interface BuilderDoc {
   name: string;
   workingDirectory: string;
+  /** Optional selected project id that owns the working directory. */
+  projectId?: string | null;
+  /** Optional Stoa-managed worktree path the pipeline should run against. */
+  worktreePath?: string | null;
   nodes: BuilderNode[];
 }
 
@@ -115,7 +119,13 @@ export function parseBuilderDoc(raw: string): BuilderDoc | null {
     }
     nodes.push({ step, x: node.x, y: node.y });
   }
-  return { name: o.name, workingDirectory: o.workingDirectory, nodes };
+  return {
+    name: o.name,
+    workingDirectory: o.workingDirectory,
+    projectId: typeof o.projectId === "string" ? o.projectId : null,
+    worktreePath: typeof o.worktreePath === "string" ? o.worktreePath : null,
+    nodes,
+  };
 }
 
 /** Seed a builder doc from a spec, placing each node by its layout depth/row. */
@@ -125,6 +135,8 @@ export function docFromSpec(spec: PipelineSpec): BuilderDoc {
   return {
     name: spec.name ?? "",
     workingDirectory: spec.workingDirectory ?? "",
+    projectId: null,
+    worktreePath: null,
     nodes: (spec.steps ?? []).map((step) => {
       const p = placed.get(step.id);
       return {
@@ -141,7 +153,7 @@ export function docFromSpec(spec: PipelineSpec): BuilderDoc {
 export function docToSpec(doc: BuilderDoc): PipelineSpec {
   return {
     name: doc.name,
-    workingDirectory: doc.workingDirectory,
+    workingDirectory: doc.worktreePath || doc.workingDirectory,
     steps: doc.nodes.map((n) => n.step),
   };
 }
@@ -178,6 +190,40 @@ export function uniqueStepId(doc: BuilderDoc, base = "step"): string {
     const candidate = `${base}-${i}`;
     if (!used.has(candidate)) return candidate;
   }
+}
+
+/** Set the selected project on a doc, keeping the working directory in sync. */
+export function setProject(
+  doc: BuilderDoc,
+  projectId: string | null,
+  projectDir?: string
+): BuilderDoc {
+  const next: BuilderDoc = {
+    ...doc,
+    projectId,
+    worktreePath: null,
+  };
+  if (projectId && projectDir) {
+    next.workingDirectory = projectDir;
+  }
+  return next;
+}
+
+/** Set the selected Stoa worktree on a doc, keeping the working directory in sync. */
+export function setWorktree(
+  doc: BuilderDoc,
+  worktreePath: string | null,
+  repoPath?: string
+): BuilderDoc {
+  const next: BuilderDoc = { ...doc, worktreePath };
+  if (worktreePath) {
+    // Prefer the owning repo path as the pipeline base so each step can create a
+    // fresh worktree off the same repository; fall back to the worktree path itself.
+    next.workingDirectory = repoPath || worktreePath;
+  } else if (doc.projectId && repoPath) {
+    next.workingDirectory = repoPath;
+  }
+  return next;
 }
 
 /** Append a new step at (x, y) with a unique id and the default agent. */

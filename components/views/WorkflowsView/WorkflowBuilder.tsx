@@ -29,12 +29,16 @@ import {
   renameStep,
   serializeBuilderDoc,
   setDependsOn,
+  setProject,
+  setWorktree,
   updateStep,
   CANVAS,
   type BuilderDoc,
 } from "@/lib/pipeline/builder-model";
 import { validateSpec } from "@/lib/pipeline/engine";
 import { useStartRun } from "@/data/pipelines/queries";
+import { useProjectsQuery } from "@/data/projects/queries";
+import { useWorktrees, type StoaWorktree } from "@/data/worktrees/queries";
 import {
   useSavedWorkflows,
   useCreateSavedWorkflow,
@@ -94,6 +98,25 @@ const EXAMPLE_DOC: BuilderDoc = docFromSpec({
   ],
 });
 
+function worktreeBaseName(p: string) {
+  return p.split(/[/\\]/).filter(Boolean).pop() || p;
+}
+
+function worktreeLabel(w: StoaWorktree) {
+  return `${w.branch || worktreeBaseName(w.path)}${w.attached ? " (in use)" : ""}`;
+}
+
+function availableWorktrees(
+  doc: BuilderDoc,
+  worktrees: StoaWorktree[],
+  projectDir?: string
+): StoaWorktree[] {
+  // When a project is selected, only show worktrees that belong to the same repo.
+  if (!doc.projectId) return worktrees;
+  const base = projectDir || doc.workingDirectory;
+  return worktrees.filter((w) => w.projectId === base);
+}
+
 /**
  * Visual workflow builder (Phase 3): compose a pipeline by dragging nodes on a
  * canvas and editing the selected step in a form, instead of hand-writing JSON.
@@ -115,6 +138,9 @@ export function WorkflowBuilder({
   onStarted: (runId: string) => void;
 }) {
   const start = useStartRun();
+  const { data: projects = [] } = useProjectsQuery();
+  const { data: worktrees = [] } = useWorktrees();
+  const selectedProject = projects.find((p) => p.id === doc.projectId);
   const [doc, setDoc] = useState<BuilderDoc>(EMPTY_DOC);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Bring the edit panel into view when a node is selected — on a phone it sits
@@ -450,6 +476,61 @@ export function WorkflowBuilder({
             value={doc.name}
             onChange={(e) => setDoc((d) => ({ ...d, name: e.target.value }))}
           />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground text-xs">Project context</span>
+          <Select
+            value={doc.projectId || "none"}
+            onValueChange={(v) => {
+              const id = v === "none" ? null : v;
+              const project = projects.find((p) => p.id === id);
+              setDoc((d) => setProject(d, id, project?.working_directory));
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Pick a project" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">
+                <span className="text-muted-foreground">No project</span>
+              </SelectItem>
+              {projects
+                .filter((p) => !p.is_uncategorized)
+                .map((project) => (
+                  <SelectItem key={project.id} value={project.id}>
+                    {project.name}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground text-xs">Worktree</span>
+          <Select
+            value={doc.worktreePath || "new"}
+            onValueChange={(v) => {
+              const wt = worktrees.find((w) => w.path === v);
+              setDoc((d) => setWorktree(d, wt?.path ?? null, wt?.projectId));
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="new">
+                <span className="text-muted-foreground">New worktree</span>
+              </SelectItem>
+              {availableWorktrees(
+                doc,
+                worktrees,
+                selectedProject?.working_directory
+              ).map((w) => (
+                <SelectItem key={w.path} value={w.path}>
+                  {worktreeLabel(w)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground text-xs">
