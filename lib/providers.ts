@@ -397,9 +397,9 @@ export const kimiProvider: AgentProvider = {
   command: "kimi",
   configDir: "~/.kimi-code",
 
-  // Fresh-launch-only for now (lockstep with the registry def): kimi has
-  // --session, but Stoa doesn't yet capture its TUI session id.
-  supportsResume: false,
+  // Resume ON (lockstep with the registry def): Stoa captures kimi's id from
+  // ~/.kimi-code/session_index.jsonl and passes `--session <id>` on respawn.
+  supportsResume: true,
   supportsFork: false,
 
   buildFlags(options: BuildFlagsOptions): string[] {

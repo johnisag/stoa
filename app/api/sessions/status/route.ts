@@ -119,11 +119,12 @@ async function getClaudeSessionId(sessionName: string): Promise<string | null> {
   return null;
 }
 
-// Resolve an agent's own session id (used later for `--resume <id>`), per
-// provider. Claude reads its env var / on-disk project files; Hermes prints the
-// id in its startup banner, which the status detector captures from the rendered
-// screen (Hermes writes no session file until clean exit). Stored in the shared
-// `claude_session_id` column. Other agents have no resume id.
+// Resolve an agent's own session id (used later for `--resume`/`--session <id>`),
+// per provider. Claude reads its env var / on-disk project files; Hermes prints
+// the id in its startup banner, which the status detector captures from the
+// rendered screen (Hermes writes no session file until clean exit); Kimi Code
+// ALSO prints its id in its banner, captured the same per-session way. Stored in
+// the shared `claude_session_id` column. Other agents have no resume id.
 async function getProviderSessionId(
   sessionName: string,
   agentType: AgentType
@@ -133,6 +134,13 @@ async function getProviderSessionId(
   }
   if (agentType === "claude") {
     return getClaudeSessionId(sessionName);
+  }
+  if (agentType === "kimi") {
+    // Per-session id from Kimi Code's startup banner (captured from the rendered
+    // screen by the status detector), exactly like Hermes — being per-session it
+    // never confuses two sessions that share a cwd. Banner-only on purpose: a
+    // cwd-keyed on-disk fallback could resolve a stale same-cwd id.
+    return statusDetector.getKimiSessionId(sessionName);
   }
   return null;
 }

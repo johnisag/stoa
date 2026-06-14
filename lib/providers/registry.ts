@@ -178,10 +178,10 @@ export const PROVIDERS: ProviderDefinition[] = [
     //    it's config-defined/free-text (no static catalog) and Stoa offers a
     //    FREE-TEXT model field. An empty model leaves Kimi Code on its own
     //    configured default (no -m passed).
-    //  - resume is NOT enabled yet: kimi HAS `-S, --session [id]` / `-C,
-    //    --continue` and resumeFlag is kept ("--session") so the plumbing is
-    //    ready, but Stoa doesn't yet capture kimi's TUI session id, so
-    //    supportsResume stays false (fresh-launch-only). supportsFork: no fork.
+    //  - resume is ON: kimi HAS `-S, --session [id]` (resumeFlag "--session").
+    //    Stoa captures the resume id from Kimi Code's startup banner ("Session:
+    //    session_<uuid>") per-session, exactly like Hermes (getProviderSessionId),
+    //    and passes `--session <id>` on respawn. No fork.
     //  - auto-approve: `-y, --yolo` ("auto-approve all actions"). --yolo wired
     //    here. (The -p/--prompt headless path is a one-shot, not a persistent
     //    session — not used.)
@@ -190,7 +190,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     autoApproveFlag: "--yolo",
     resumeFlag: "--session",
     modelFlag: "-m",
-    supportsResume: false,
+    supportsResume: true,
     supportsFork: false,
   },
   {

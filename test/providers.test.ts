@@ -183,7 +183,7 @@ describe("Kimi provider wiring", () => {
     expect(def.cli).toBe("kimi");
     expect(def.autoApproveFlag).toBe("--yolo");
     expect(def.resumeFlag).toBe("--session");
-    expect(def.supportsResume).toBe(false); // fresh-launch-only (id-capture is a follow-up)
+    expect(def.supportsResume).toBe(true); // resume via on-disk session_index.jsonl
     expect(def.supportsFork).toBe(false); // no fork on the bare TUI
     expect(def.modelFlag).toBe("-m"); // free-text model alias via -m
     expect(isFreeTextModelAgent("kimi")).toBe(true);
@@ -193,7 +193,7 @@ describe("Kimi provider wiring", () => {
   it("has a provider object whose buildFlags emits --yolo only on auto-approve", () => {
     const p = getProvider("kimi");
     expect(p.command).toBe("kimi");
-    expect(p.supportsResume).toBe(false); // lockstep with the registry definition
+    expect(p.supportsResume).toBe(true); // lockstep with the registry definition
     expect(p.buildFlags({})).toEqual([]);
     expect(p.buildFlags({ autoApprove: true })).toEqual(["--yolo"]);
     expect(p.buildFlags({ skipPermissions: true })).toEqual(["--yolo"]);
@@ -212,8 +212,14 @@ describe("Kimi provider wiring", () => {
     ).toEqual(["--yolo", "-m kimi-k2"]);
   });
 
-  it("is fresh-launch-only for now (resume off until session-id capture is wired)", () => {
-    expect(getProviderDefinition("kimi").supportsResume).toBe(false);
+  it("resumes via --session <id> on both paths (id captured from the on-disk index)", () => {
+    const id = "session_ca9b5a60-f6da-47f8-b2fa-84805e8c8161";
+    expect(
+      buildAgentArgs("kimi", { model: "kimi-k2", sessionId: id }).args
+    ).toEqual(["-m", "kimi-k2", "--session", id]);
+    expect(
+      getProvider("kimi").buildFlags({ model: "kimi-k2", sessionId: id })
+    ).toEqual([`--session ${id}`, "-m kimi-k2"]);
   });
 
   it("is a valid agent type and appears in the New Session picker", () => {

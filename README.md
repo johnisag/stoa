@@ -84,17 +84,16 @@ On Windows the native pty backend is selected automatically (no tmux/WSL needed)
 | Codex       | ❌     | ❌   | `--dangerously-bypass-approvals-and-sandbox` |
 | Hermes      | ✅     | ❌   | `--yolo`                                     |
 | Kilo Code   | ❌     | ❌   | —                                            |
-| Kimi Code   | ❌     | ❌   | `--yolo`                                     |
+| Kimi Code   | ✅     | ❌   | `--yolo`                                     |
 
 _**Resume**/**Fork** reflect what Stoa manages per session, not the CLI's raw
 capability. **Auto-Approve** is the flag Stoa passes when you enable "skip
 permissions". Hermes resume works by capturing its session id from the startup
 banner. Codex resume/fork (its CLI exposes `codex resume`/`codex fork`
-subcommands) is planned — see [docs/ROADMAP.md](docs/ROADMAP.md). **Kilo Code**
-(the open-source agentic CLI) and **Kimi Code** (Moonshot AI's terminal coding
-agent) launch as
-real terminal sessions like any other agent; per-session resume/fork management
-is not wired yet._
+subcommands) is planned — see [docs/ROADMAP.md](docs/ROADMAP.md). **Kimi Code**
+resume works by capturing its session id from its startup banner, exactly like
+Hermes. **Kilo Code** launches as a real terminal session like any other agent;
+its per-session resume capture is a follow-up._
 
 ## CLI Commands
 
