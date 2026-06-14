@@ -195,4 +195,26 @@ describe("nextRateLimitAction", () => {
       })
     ).toBe("resume");
   });
+
+  it("a real prompt on screen → wait, even past reset (never resume INTO a dialog)", () => {
+    // Resume would inject Enter / a queued task; firing that into an open prompt
+    // would answer it. So a prompt forces "wait" regardless of the reset time.
+    expect(
+      nextRateLimitAction({
+        detected: true,
+        resetAtMs: NOW - 1,
+        nowMs: NOW,
+        hasPrompt: true,
+      })
+    ).toBe("wait");
+    // Without a prompt the same past-reset state resumes (control).
+    expect(
+      nextRateLimitAction({
+        detected: true,
+        resetAtMs: NOW - 1,
+        nowMs: NOW,
+        hasPrompt: false,
+      })
+    ).toBe("resume");
+  });
 });

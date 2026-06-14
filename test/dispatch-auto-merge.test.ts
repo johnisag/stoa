@@ -8,7 +8,13 @@ const { state } = vi.hoisted(() => ({
   state: {
     rows: [] as Array<Record<string, unknown>>,
     repo: { review_gate: 0, repo_path: "/repo", repo_slug: "owner/repo" } as
-      | { review_gate: number; repo_path: string; repo_slug: string }
+      | {
+          review_gate: number;
+          repo_path: string;
+          repo_slug: string;
+          verify_gate?: number;
+          verify_command?: string;
+        }
       | undefined,
     ghJson: "{}",
     mergeThrows: false,
@@ -256,6 +262,7 @@ describe("autoMergePass", () => {
       mergeable: "MERGEABLE",
       reviewDecision: null,
       statusCheckRollup: [],
+      headRefOid: "head000",
     });
     state.mergeThrows = false;
     state.mergeCalls = [];
@@ -283,11 +290,41 @@ describe("autoMergePass", () => {
         cwd: "/repo",
         prNumber: 7,
         repoSlug: "owner/repo",
-        matchHeadCommit: undefined,
+        // Ungated auto-merge still pins to the head we just read mergeable/checks
+        // on, so a push between the readiness read and the merge can't slip in.
+        matchHeadCommit: "head000",
       },
     ]);
     expect(state.statusUpdates).toContainEqual(["merged", "d1"]);
     expect(state.cleanupLabels).toContain("automerge-cleanup-d1");
+  });
+
+  it("SHA-pins a VERIFY-gated (review-off) merge to verify_sha, not null", async () => {
+    // Regression: review_sha is null on a verify-only repo, so the merge was
+    // running UNPINNED — a push after the verify pass could merge unverified.
+    state.repo = {
+      review_gate: 0,
+      verify_gate: 1,
+      verify_command: "npm test",
+      repo_path: "/repo",
+      repo_slug: "owner/repo",
+    };
+    state.ghJson = JSON.stringify({
+      mergeable: "MERGEABLE",
+      reviewDecision: null,
+      statusCheckRollup: [],
+      headRefOid: "verified-head",
+    });
+    state.rows = [row({ verify_status: "pass", verify_sha: "verified-head" })];
+    await autoMergePass();
+    expect(state.mergeCalls).toEqual([
+      {
+        cwd: "/repo",
+        prNumber: 7,
+        repoSlug: "owner/repo",
+        matchHeadCommit: "verified-head",
+      },
+    ]);
   });
 
   it("ignores rows that didn't opt in (auto_merge=0)", async () => {

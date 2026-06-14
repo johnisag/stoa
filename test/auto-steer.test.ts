@@ -3,6 +3,8 @@ import {
   detectPrompt,
   nextAutoAnswerAction,
   promptSignature,
+  shouldRearmAutoAnswer,
+  shouldAcknowledgeQueued,
   type PromptState,
 } from "../lib/auto-steer";
 
@@ -255,5 +257,36 @@ describe("promptSignature", () => {
       line: "Press Enter to continue",
     });
     expect(yes).not.toBe(cont);
+  });
+});
+
+describe("shouldRearmAutoAnswer", () => {
+  it("re-arms only on a truly settled turn (idle / dead)", () => {
+    expect(shouldRearmAutoAnswer("idle")).toBe(true);
+    expect(shouldRearmAutoAnswer("dead")).toBe(true);
+  });
+
+  it("does NOT re-arm on a transient running/spinner flap or while waiting", () => {
+    // The crux of the double-Enter bug: a live prompt that flaps to "running" for
+    // one capture must keep the guard so the SAME prompt isn't answered twice.
+    expect(shouldRearmAutoAnswer("running")).toBe(false);
+    expect(shouldRearmAutoAnswer("waiting")).toBe(false);
+    expect(shouldRearmAutoAnswer("error")).toBe(false);
+  });
+});
+
+describe("shouldAcknowledgeQueued", () => {
+  it("acknowledges a settled waiting turn with no prompt", () => {
+    expect(shouldAcknowledgeQueued("waiting", false)).toBe(true);
+  });
+
+  it("never acknowledges when a real prompt is detected (no paste into a dialog)", () => {
+    expect(shouldAcknowledgeQueued("waiting", true)).toBe(false);
+  });
+
+  it("only acts on waiting (idle dispatches directly; running/error/dead don't)", () => {
+    expect(shouldAcknowledgeQueued("idle", false)).toBe(false);
+    expect(shouldAcknowledgeQueued("running", false)).toBe(false);
+    expect(shouldAcknowledgeQueued("dead", false)).toBe(false);
   });
 });
