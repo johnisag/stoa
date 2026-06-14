@@ -1,5 +1,9 @@
 import childProcess from "node:child_process";
 
+// Some browser-targeted dependencies (e.g. @xterm/addon-canvas) reference the
+// global `self` at module load. Provide it in the Node test environment.
+(globalThis as any).self = globalThis;
+
 const originalFork = childProcess.fork as (...args: unknown[]) => unknown;
 
 childProcess.fork = ((...args: unknown[]) => {
