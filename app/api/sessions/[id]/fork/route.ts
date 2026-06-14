@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session, type Message } from "@/lib/db";
 import { sessionKey } from "@/lib/providers/registry";
+import { parseJsonBody, sanitizeSessionName } from "@/lib/api-security";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -15,11 +16,14 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Parse body if present, otherwise use empty object
     let body: { name?: string } = {};
     try {
-      body = await request.json();
+      const parsed = await parseJsonBody<{ name?: string }>(request);
+      if (parsed.ok) body = parsed.data;
     } catch {
       // No body provided, use defaults
     }
     const { name } = body;
+
+    const sanitizedName = sanitizeSessionName(name);
 
     const db = getDb();
 
@@ -34,7 +38,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     // Create new session
     const newId = randomUUID();
-    const newName = name || `${parent.name} (fork)`;
+    const newName = sanitizedName || `${parent.name} (fork)`;
     const agentType = parent.agent_type || "claude";
     const tmuxName = sessionKey({
       kind: "agent",

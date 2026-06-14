@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import nodePath from "path";
 import { listDirectory } from "@/lib/files";
-import { expandHome } from "@/lib/platform";
+import { getAllowedPathRoots, resolveSandboxedPath } from "@/lib/api-security";
 
 /**
  * GET /api/files?path=...&recursive=true
@@ -20,17 +20,21 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Expand ~ to home, then resolve to an ABSOLUTE path so drive-relative
-    // inputs like "\my-projects" become "C:\my-projects" (and children inherit
-    // the drive). Without this, Windows paths lose their drive letter in the UI.
-    const expandedPath = nodePath.resolve(expandHome(inputPath));
+    const roots = getAllowedPathRoots();
+    const { allowed, resolved } = resolveSandboxedPath(inputPath, roots);
+    if (!allowed) {
+      return NextResponse.json(
+        { error: "Path is outside the allowed workspace" },
+        { status: 403 }
+      );
+    }
 
-    const files = listDirectory(expandedPath, {
+    const files = listDirectory(resolved, {
       recursive,
       maxDepth: recursive ? 2 : 1,
     });
 
-    return NextResponse.json({ files, path: expandedPath });
+    return NextResponse.json({ files, path: resolved });
   } catch (error) {
     console.error("Error listing directory:", error);
     return NextResponse.json(

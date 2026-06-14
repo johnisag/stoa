@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  createSavedWorkflow,
-  listSavedWorkflows,
-} from "@/lib/saved-workflows";
+import { createSavedWorkflow, listSavedWorkflows } from "@/lib/saved-workflows";
 import { parseBuilderDoc } from "@/lib/pipeline/builder-model";
 
 // GET /api/saved-workflows - list all saved workflows (newest first)
@@ -37,10 +34,7 @@ export async function POST(request: NextRequest) {
     // Validate + sanitize the doc at the boundary — never trust the client's shape.
     const parsedDoc = parseBuilderDoc(JSON.stringify(doc ?? null));
     if (!parsedDoc) {
-      return NextResponse.json(
-        { error: "doc is malformed" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "doc is malformed" }, { status: 400 });
     }
     const workflow = createSavedWorkflow({ name, doc: parsedDoc });
     return NextResponse.json({ workflow }, { status: 201 });

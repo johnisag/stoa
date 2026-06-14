@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useConfirm } from "@/components/ConfirmProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -101,6 +102,7 @@ function ModeToggle({
 function RepoRow({ repo }: { repo: DispatchRepo }) {
   const update = useUpdateRepo();
   const del = useDeleteRepo();
+  const confirm = useConfirm();
   const [quota, setQuota] = useState(String(repo.daily_quota));
   const [conc, setConc] = useState(String(repo.max_concurrency));
   const [label, setLabel] = useState(repo.label_filter ?? "");
@@ -337,15 +339,19 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
           variant="ghost"
           size="icon-sm"
           aria-label="Remove repo"
-          onClick={() => {
+          onClick={async () => {
             if (
-              confirm(
-                `Stop tracking ${repo.repo_slug}? In-flight workers are unaffected.`
-              )
+              !(await confirm({
+                title: `Stop tracking ${repo.repo_slug}?`,
+                description: "In-flight workers are unaffected.",
+                confirmLabel: "Stop tracking",
+                destructive: true,
+              }))
             )
-              del.mutate(repo.id, {
-                onError: (e) => toast.error((e as Error).message),
-              });
+              return;
+            del.mutate(repo.id, {
+              onError: (e) => toast.error((e as Error).message),
+            });
           }}
         >
           <Trash2 className="text-muted-foreground hover:text-destructive h-4 w-4" />

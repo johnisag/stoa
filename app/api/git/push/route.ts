@@ -7,27 +7,43 @@ import {
   getGitStatus,
   expandPath,
 } from "@/lib/git-status";
+import {
+  parseJsonBody,
+  getAllowedPathRoots,
+  resolveSandboxedPath,
+} from "@/lib/api-security";
 
 export async function POST(request: NextRequest) {
+  const parsed = await parseJsonBody<{ path?: string }>(request);
+  if (!parsed.ok) return parsed.response;
+
+  const body = parsed.data;
+  const { path: rawPath } = body;
+
+  if (!rawPath) {
+    return NextResponse.json({ error: "Path is required" }, { status: 400 });
+  }
+
+  const expandedPath = expandPath(rawPath);
+  const roots = getAllowedPathRoots();
+  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Path is outside the allowed workspace" },
+      { status: 403 }
+    );
+  }
+
+  if (!isGitRepo(expandedPath)) {
+    return NextResponse.json(
+      { error: "Not a git repository" },
+      { status: 400 }
+    );
+  }
+
   try {
-    const body = await request.json();
-    const { path: rawPath } = body as { path: string };
-
-    if (!rawPath) {
-      return NextResponse.json({ error: "Path is required" }, { status: 400 });
-    }
-
-    const path = expandPath(rawPath);
-
-    if (!isGitRepo(path)) {
-      return NextResponse.json(
-        { error: "Not a git repository" },
-        { status: 400 }
-      );
-    }
-
     // Check if remote exists
-    const remoteUrl = getRemoteUrl(path);
+    const remoteUrl = getRemoteUrl(expandedPath);
     if (!remoteUrl) {
       return NextResponse.json(
         { error: "No remote origin configured" },
@@ -36,7 +52,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if there are commits to push
-    const status = getGitStatus(path);
+    const status = getGitStatus(expandedPath);
     if (status.ahead === 0) {
       return NextResponse.json({
         success: true,
@@ -46,8 +62,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Push (set upstream if needed)
-    const needsUpstream = !hasUpstream(path);
-    const output = push(path, needsUpstream);
+    const needsUpstream = !hasUpstream(expandedPath);
+    const output = push(expandedPath, needsUpstream);
 
     return NextResponse.json({
       success: true,

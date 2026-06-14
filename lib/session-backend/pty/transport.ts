@@ -113,7 +113,7 @@ export class LocalTransport implements PtyTransport {
   }
   async attachStream(req: AttachRequest): Promise<AttachHandle> {
     let session = getSession(req.key);
-    if ((!session || !session.alive) && req.spawn) {
+    if ((!session || !session.alive || session.dying) && req.spawn) {
       const cwd = req.spawn.cwd || ".";
       session =
         req.spawn.binary && req.spawn.binary.length > 0
@@ -208,7 +208,9 @@ export class HostTransport implements PtyTransport {
       req.key,
       req.onOutput,
       req.onExit,
-      req.observer
+      req.observer,
+      req.cols,
+      req.rows
     );
     return {
       snapshot,

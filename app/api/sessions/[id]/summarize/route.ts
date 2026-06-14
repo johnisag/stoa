@@ -134,11 +134,12 @@ async function getTmuxCwd(sessionName: string): Promise<string | null> {
 // Generate summary using Claude CLI with stdin
 async function generateSummary(conversation: string): Promise<string> {
   const prompt = buildSummaryPrompt();
+  const binary = resolveBinary("claude") || "claude";
 
   return new Promise((resolve, reject) => {
-    const claude = spawn(resolveBinary("claude") || "claude", ["-p", prompt], {
+    const claude = spawn(binary, ["-p", prompt], {
       stdio: ["pipe", "pipe", "pipe"],
-      shell: isWindows,
+      shell: false,
       windowsHide: isWindows,
     });
 

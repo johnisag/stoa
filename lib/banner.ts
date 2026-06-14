@@ -4,6 +4,12 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { tmpDir } from "./platform";
+import {
+  shellEscape,
+  tokenizeCommand,
+  UnsafeCommandError,
+} from "./api-security";
 
 /**
  * Generate the bash init script that shows the Stoa banner, configures the tmux
@@ -13,8 +19,14 @@ import * as path from "path";
  * (app/api/sessions/init-script) and orchestration workers (wrapWithBanner) call
  * this — previously each had its own copy and the rebrand updated only one, so
  * tmux sessions kept printing the old "AgentOS" figlet. Keep the art here only.
+ *
+ * The `agentCommand` string is tokenized and each token is shell-escaped before
+ * being written, so metacharacters in the command cannot inject shell code.
  */
 export function generateInitScript(agentCommand: string): string {
+  const argv = tokenizeCommand(agentCommand);
+  const execLine = `exec ${argv.map(shellEscape).join(" ")}`;
+
   return `#!/bin/bash
 # Stoa Session Init Script
 # Auto-generated - do not edit manually
@@ -60,9 +72,26 @@ if [ "$(id -u)" = "0" ]; then
   export IS_SANDBOX=1
 fi
 
-# Start the agent
-exec ${agentCommand}
+${execLine}
 `;
+}
+
+/**
+ * Validate that `agentCommand` only contains tokens Stoa itself would generate.
+ * This is belt-and-suspenders on top of tokenization/escaping: even if a caller
+ * somehow passes a metacharacter through, the command is refused before it
+ * reaches the filesystem.
+ */
+export function validateAgentCommand(agentCommand: unknown): string | null {
+  if (typeof agentCommand !== "string") return null;
+  const trimmed = agentCommand.trim();
+  if (!trimmed) return null;
+  try {
+    tokenizeCommand(trimmed);
+  } catch {
+    return null;
+  }
+  return trimmed;
 }
 
 /**
@@ -74,7 +103,7 @@ export function writeInitScript(agentCommand: string): {
   command: string;
 } {
   const scriptContent = generateInitScript(agentCommand);
-  const scriptPath = path.join(os.tmpdir(), `stoa-init-${Date.now()}.sh`);
+  const scriptPath = path.join(tmpDir(), `stoa-init-${Date.now()}.sh`);
   fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
   return { scriptPath, command: `bash ${scriptPath}` };
 }
@@ -100,3 +129,6 @@ export function getBanner(): string {
          AI Coding Session Manager
 `;
 }
+
+// Re-export the error type so callers can distinguish unsafe commands.
+export { UnsafeCommandError };

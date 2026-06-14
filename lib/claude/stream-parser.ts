@@ -3,6 +3,7 @@ import type {
   StreamMessage,
   StreamMessageSystem,
   StreamMessageAssistant,
+  StreamMessageContent,
   StreamMessageResult,
   ClientEvent,
   TextContent,
@@ -20,6 +21,17 @@ export class StreamParser extends EventEmitter {
   // Process incoming data chunk
   write(chunk: string): void {
     this.buffer += chunk;
+
+    // Normalize CRLF and lone CR to LF so NDJSON splits cleanly on all platforms.
+    this.buffer = this.buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+    // Cap unterminated-line buffering so a malformed stream can't grow forever.
+    if (this.buffer.length > StreamParser.MAX_BUFFER) {
+      console.error(
+        `[stream-parser] buffer exceeded ${StreamParser.MAX_BUFFER} chars; dropping`
+      );
+      this.buffer = this.buffer.slice(-StreamParser.MAX_BUFFER / 2);
+    }
 
     // Process complete lines (NDJSON format)
     const lines = this.buffer.split("\n");
@@ -52,6 +64,8 @@ export class StreamParser extends EventEmitter {
       this.emit("parse_error", { type: "parse_error", line, error: err });
     }
   }
+
+  static readonly MAX_BUFFER = 4 * 1024 * 1024; // 4 MiB
 
   private transformToClientEvent(message: StreamMessage): ClientEvent | null {
     const timestamp = new Date().toISOString();
@@ -100,8 +114,14 @@ export class StreamParser extends EventEmitter {
 
       // Legacy message format (if used)
       case "message": {
-        const textBlocks = message.content
-          .filter((c): c is TextContent => c.type === "text")
+        const content = (message as StreamMessageContent).content;
+        if (!content) return null;
+
+        const textBlocks = content
+          .filter(
+            (c): c is TextContent =>
+              c.type === "text" && typeof c.text === "string"
+          )
           .map((c) => c.text);
 
         if (textBlocks.length > 0) {
@@ -110,9 +130,9 @@ export class StreamParser extends EventEmitter {
             sessionId: this.sessionId,
             timestamp,
             data: {
-              role: message.role,
+              role: (message as StreamMessageContent).role,
               text: textBlocks.join(""),
-              content: message.content,
+              content,
             },
           };
         }

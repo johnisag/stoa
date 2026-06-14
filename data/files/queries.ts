@@ -12,7 +12,8 @@ export interface DirectoryData {
 async function fetchDirectory(path: string): Promise<DirectoryData> {
   const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
   const data = await res.json();
-  if (data.error) throw new Error(data.error);
+  if (!res.ok || data.error)
+    throw new Error(data.error || "Failed to fetch directory");
   return { files: data.files || [], resolvedPath: data.path || path };
 }
 

@@ -69,7 +69,10 @@ import {
 } from "./lib/auth";
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = "0.0.0.0";
+// Bind to localhost by default so a dev server is never accidentally exposed to
+// the network. Override with STOA_HOST=0.0.0.0 if you genuinely need remote access
+// (pair with STOA_REQUIRE_AUTH=1 / STOA_AUTH=off as documented).
+const hostname = process.env.STOA_HOST || "127.0.0.1";
 
 // Auth (Jupyter-style token; loopback trusted unless STOA_REQUIRE_AUTH=1). The
 // Origin allowlist on WS upgrades runs even when the token gate is disabled.
@@ -874,7 +877,7 @@ app.prepare().then(() => {
       }
       process.exit(1);
     });
-    server.listen(port, () => {
+    server.listen(port, hostname, () => {
       console.log(`> Stoa ready on http://${hostname}:${port}`);
       if (AUTH_ENABLED) {
         console.log(

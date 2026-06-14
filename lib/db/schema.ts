@@ -16,6 +16,22 @@ export function createSchema(db: Database.Database): void {
       system_prompt TEXT,
       group_path TEXT NOT NULL DEFAULT 'sessions',
       agent_type TEXT NOT NULL DEFAULT 'claude',
+      -- Orchestration columns (migration 3, 4, 6, 7, 9)
+      worktree_path TEXT,
+      branch_name TEXT,
+      base_branch TEXT,
+      dev_server_port INTEGER,
+      pr_url TEXT,
+      pr_number INTEGER,
+      pr_status TEXT,
+      conductor_session_id TEXT REFERENCES sessions(id),
+      worker_task TEXT,
+      worker_status TEXT,
+      auto_approve INTEGER NOT NULL DEFAULT 0,
+      project_id TEXT REFERENCES projects(id),
+      tmux_name TEXT,
+      worktree_paths TEXT,
+      mcp_launch_args TEXT,
       FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
     );
 
@@ -162,6 +178,10 @@ export function createSchema(db: Database.Database): void {
       scheduled_at TEXT,
       reviewer_session_id TEXT,
       review_decision TEXT,
+      -- PR head SHA the cached panel verdict is pinned to. Set when a complete
+      -- verdict is cached; cleared on re-review / retry. Auto-merge passes this to
+      -- gh --match-head-commit so a push after approval cannot merge unreviewed code.
+      review_sha TEXT,
       fix_rounds INTEGER NOT NULL DEFAULT 0,
       fixer_session_id TEXT,
       auto_merge INTEGER NOT NULL DEFAULT 0,
@@ -258,19 +278,29 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_saved_workflows_updated ON saved_workflows(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_key ON session_events(session_key);
     CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_session_events_key_type_id ON session_events(session_key, event_type, id);
     CREATE INDEX IF NOT EXISTS idx_session_events_created ON session_events(created_at);
     -- Dedupe real GitHub issues only (number > 0); local tasks use issue_number 0
     -- and must NOT collide, so they're excluded from the uniqueness via a partial index.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_repo_issue ON issue_dispatches(repo_id, issue_number) WHERE issue_number > 0;
     CREATE INDEX IF NOT EXISTS idx_dispatch_status ON issue_dispatches(status);
     CREATE INDEX IF NOT EXISTS idx_dispatch_repo ON issue_dispatches(repo_id);
+    CREATE INDEX IF NOT EXISTS idx_dispatch_repo_status ON issue_dispatches(repo_id, status);
+    CREATE INDEX IF NOT EXISTS idx_dispatch_dispatched_at ON issue_dispatches(dispatched_at DESC);
     CREATE INDEX IF NOT EXISTS idx_session_ceremonies_step ON session_ceremonies(step);
+    CREATE INDEX IF NOT EXISTS idx_sessions_group ON sessions(group_path);
+    CREATE INDEX IF NOT EXISTS idx_sessions_conductor ON sessions(conductor_session_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp ON messages(session_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id);
+    CREATE INDEX IF NOT EXISTS idx_tool_calls_session_timestamp ON tool_calls(session_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id);
+    CREATE INDEX IF NOT EXISTS idx_tool_calls_message_timestamp ON tool_calls(message_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
     CREATE INDEX IF NOT EXISTS idx_project_dev_servers_project ON project_dev_servers(project_id);
     CREATE INDEX IF NOT EXISTS idx_project_repositories_project ON project_repositories(project_id);
+    CREATE INDEX IF NOT EXISTS idx_dev_servers_project ON dev_servers(project_id);
 
     -- Default Uncategorized project
     INSERT OR IGNORE INTO projects (id, name, working_directory, is_uncategorized, sort_order)

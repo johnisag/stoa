@@ -1,5 +1,17 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { execFile } from "child_process";
+
+vi.mock("child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("child_process")>();
+  return {
+    ...actual,
+    execFile: vi.fn(),
+    execFileSync: vi.fn(),
+  };
+});
+
 import {
+  aggregatePanelVerdict,
   buildLensReviewPrompt,
   parsePanelComments,
   parseSessionComments,
@@ -250,6 +262,7 @@ describe("parsePanelComments", () => {
     const comments = LENS_KEYS.map((k) => c(k, 0, "APPROVE"));
     const v = parsePanelComments(comments, LENS_KEYS, 0, "");
     expect(v.complete).toBe(false);
+    expect(v.headRefOid).toBeNull();
   });
 
   it("ignores non-marker comments and bad bodies", () => {
@@ -261,6 +274,38 @@ describe("parsePanelComments", () => {
     ];
     const v = parsePanelComments(comments, LENS_KEYS, 0, ACTOR);
     expect(v.complete).toBe(true);
+    expect(v.decision).toBe("APPROVED");
+    expect(v.headRefOid).toBeNull();
+  });
+});
+
+describe("aggregatePanelVerdict", () => {
+  it("reads the PR head SHA in the same gh invocation as the comments", async () => {
+    const comments = LENS_KEYS.map(
+      (lens) => `STOA_REVIEW lens=${lens} round=0 verdict=APPROVE`
+    );
+    vi.mocked(execFile).mockImplementation((_file, args, _opts, cb) => {
+      const callback = cb as unknown as (
+        err: Error | null,
+        result?: { stdout: string; stderr: string }
+      ) => void;
+      if (args?.[0] === "api") {
+        callback(null, { stdout: `${ACTOR}\n`, stderr: "" });
+      } else {
+        callback(null, {
+          stdout: JSON.stringify({
+            comments: [
+              { author: { login: ACTOR }, body: `ok\n${comments.join("\n")}` },
+            ],
+            headRefOid: "deadbeef",
+          }),
+          stderr: "",
+        });
+      }
+      return {} as ReturnType<typeof execFile>;
+    });
+    const v = await aggregatePanelVerdict("/repo", 7, 0, "owner/repo");
+    expect(v.headRefOid).toBe("deadbeef");
     expect(v.decision).toBe("APPROVED");
   });
 });

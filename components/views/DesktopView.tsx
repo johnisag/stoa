@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { SessionList } from "@/components/SessionList";
 import { NewSessionDialog } from "@/components/NewSessionDialog";
 import { NotificationSettings } from "@/components/NotificationSettings";
@@ -58,7 +58,7 @@ export function DesktopView({
   setShowQuickSwitcher,
   setShowDispatch,
   setShowAnalytics,
-  setShowWorkflows,
+  onOpenWorkflows,
   setShowVerdictInbox,
   setShowFleetBoard,
   setShowChat,
@@ -84,6 +84,16 @@ export function DesktopView({
   // poll (~5s); minting these inline would give SessionCard fresh props each
   // poll and defeat its React.memo. `sessions` is a separate query key the
   // status poll doesn't touch, so these refs stay stable between polls.
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleSelect = useCallback(
     (id: string) => {
       const session = sessions.find((s) => s.id === id);
@@ -212,7 +222,13 @@ export function DesktopView({
                             document.body.removeChild(textarea);
                           }
                           setCopiedSessionId(true);
-                          setTimeout(() => setCopiedSessionId(false), 2000);
+                          if (copyTimeoutRef.current) {
+                            clearTimeout(copyTimeoutRef.current);
+                          }
+                          copyTimeoutRef.current = setTimeout(
+                            () => setCopiedSessionId(false),
+                            2000
+                          );
                         } catch {
                           console.error("Failed to copy to clipboard");
                         }
@@ -350,7 +366,7 @@ export function DesktopView({
             <NavIconButton
               entry={fleetNavEntry("workflows")}
               variant="header"
-              onClick={() => setShowWorkflows(true)}
+              onClick={onOpenWorkflows}
               showLabel
             />
             <NavIconButton
@@ -416,7 +432,7 @@ export function DesktopView({
         currentSessionId={focusedActiveTab?.sessionId ?? undefined}
         activeSessionWorkingDir={activeSession?.working_directory ?? undefined}
         onOpenDispatch={() => setShowDispatch(true)}
-        onOpenWorkflows={() => setShowWorkflows(true)}
+        onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={() => setShowVerdictInbox(true)}
         onOpenFleetBoard={() => setShowFleetBoard(true)}
         onOpenInsight={() => setShowAnalytics(true)}

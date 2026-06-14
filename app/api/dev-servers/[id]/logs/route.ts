@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerLogs } from "@/lib/dev-servers";
+import { parseBoundedInt } from "@/lib/api-security";
+
+const MAX_LOG_LINES = 10000;
 
 // GET /api/dev-servers/[id]/logs - Get server logs
 export async function GET(
@@ -9,7 +12,12 @@ export async function GET(
   try {
     const { id } = await params;
     const { searchParams } = new URL(request.url);
-    const lines = parseInt(searchParams.get("lines") || "100", 10);
+    const lines = parseBoundedInt(
+      searchParams.get("lines"),
+      0,
+      MAX_LOG_LINES,
+      100
+    );
 
     const logs = await getServerLogs(id, lines);
     return NextResponse.json({ logs });

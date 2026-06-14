@@ -231,6 +231,7 @@ function runSync(cmd, args, { cwd = REPO_DIR, allowFail = false, env } = {}) {
   const result = spawnSync(spec.file, spec.args, {
     cwd,
     stdio: "inherit",
+    windowsHide: true,
     ...(env ? { env } : {}),
   });
   if (result.error) {
@@ -374,6 +375,7 @@ function cmdStop() {
     // /T kills the process tree (npm -> tsx -> node); /F forces termination.
     const res = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
       stdio: "ignore",
+      windowsHide: true,
     });
     if (res.status !== 0) {
       warn("taskkill reported a non-zero exit; process may already be gone");
@@ -486,7 +488,7 @@ function cmdLogs() {
       [
         "-NoProfile",
         "-Command",
-        `Get-Content -Path '${LOG_FILE.replace(/'/g, "''")}' -Tail 50 -Wait`,
+        `Get-Content -LiteralPath '${LOG_FILE.replace(/'/g, "''")}' -Tail 50 -Wait`,
       ],
       { allowFail: true }
     );
@@ -501,6 +503,7 @@ function gitCapture(args) {
   const r = spawnSync(spec.file, spec.args, {
     cwd: REPO_DIR,
     encoding: "utf8",
+    windowsHide: true,
   });
   return r.status === 0 ? (r.stdout || "").trim() : null;
 }

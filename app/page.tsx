@@ -48,7 +48,7 @@ import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { DispatchView } from "@/components/views/DispatchView";
 import { AnalyticsView } from "@/components/views/AnalyticsView";
-import { WorkflowsView } from "@/components/views/WorkflowsView";
+
 import { VerdictInboxView } from "@/components/views/VerdictInboxView";
 import { FleetBoardView } from "@/components/views/FleetBoardView";
 import { ChatView } from "@/components/views/ChatView";
@@ -190,7 +190,7 @@ function HomeContent() {
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
   const [showDispatch, setShowDispatch] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
-  const [showWorkflows, setShowWorkflows] = useState(false);
+
   const [showVerdictInbox, setShowVerdictInbox] = useState(false);
   const [showFleetBoard, setShowFleetBoard] = useState(false);
   const [showChat, setShowChat] = useState(false);
@@ -210,6 +210,7 @@ function HomeContent() {
     attachSession,
     getActiveTab,
     addTab,
+    addWorkflowsTab,
     splitHorizontal,
     reconcileSessions,
   } = usePanes();
@@ -687,7 +688,7 @@ function HomeContent() {
     else if (action === "pane-prev-tab") paneCommandActions.send("prev-tab");
     else if (action === "show-help") setShowHelp(true);
     else if (action === "open-dispatch") setShowDispatch(true);
-    else if (action === "open-workflows") setShowWorkflows(true);
+    else if (action === "open-workflows") addWorkflowsTab(focusedPaneId);
     else if (action === "open-verdict-inbox") setShowVerdictInbox(true);
     else if (action === "open-fleet-board") setShowFleetBoard(true);
     else if (action === "open-insight") setShowAnalytics(true);
@@ -703,17 +704,25 @@ function HomeContent() {
         projects={projects}
         onRegisterTerminal={registerTerminalRef}
         onMenuClick={isMobile ? () => setSidebarOpen(true) : undefined}
-        onDispatchClick={isMobile ? () => setShowDispatch(true) : undefined}
-        onWorkflowsClick={isMobile ? () => setShowWorkflows(true) : undefined}
-        onVerdictInboxClick={
-          isMobile ? () => setShowVerdictInbox(true) : undefined
-        }
-        onFleetBoardClick={isMobile ? () => setShowFleetBoard(true) : undefined}
+        onDispatchClick={() => setShowDispatch(true)}
+        onWorkflowsClick={() => addWorkflowsTab(paneId)}
+        onVerdictInboxClick={() => setShowVerdictInbox(true)}
+        onFleetBoardClick={() => setShowFleetBoard(true)}
         onAskStoaClick={isMobile ? () => setShowChat(true) : undefined}
         onSelectSession={handleSelectSession}
       />
     ),
-    [sessions, projects, registerTerminalRef, isMobile, handleSelectSession]
+    [
+      sessions,
+      projects,
+      registerTerminalRef,
+      isMobile,
+      handleSelectSession,
+      setShowDispatch,
+      setShowVerdictInbox,
+      setShowFleetBoard,
+      addWorkflowsTab,
+    ]
   );
 
   // New session in project handler
@@ -803,6 +812,29 @@ function HomeContent() {
     ? (projects.find((p) => p.id === startDevServerProjectId) ?? null)
     : null;
 
+  // Open a worker session referenced from the workflows tab in a new terminal
+  // tab so the workflows tab stays open and the worker gets a proper attach.
+  const handleWorkflowsOpenSession = useCallback(
+    (sessionId: string) => {
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) {
+        toast.error("Session not found — it may have been deleted.");
+        return;
+      }
+      openSessionInNewTab(session);
+    },
+    [sessions, openSessionInNewTab]
+  );
+
+  // Close a fleet dialog and open a workflows tab in the focused pane.
+  const openWorkflowsTabFrom = useCallback(
+    (close: (open: boolean) => void) => () => {
+      close(false);
+      addWorkflowsTab(focusedPaneId);
+    },
+    [addWorkflowsTab, focusedPaneId]
+  );
+
   // View props
   const viewProps = {
     sessions,
@@ -825,8 +857,7 @@ function HomeContent() {
     setShowDispatch,
     showAnalytics,
     setShowAnalytics,
-    showWorkflows,
-    setShowWorkflows,
+    onOpenWorkflows: () => addWorkflowsTab(focusedPaneId),
     showVerdictInbox,
     setShowVerdictInbox,
     showFleetBoard,
@@ -901,25 +932,14 @@ function HomeContent() {
       <DispatchView
         open={showDispatch}
         onOpenChange={setShowDispatch}
-        onOpenWorkflows={switchFleet(setShowDispatch, setShowWorkflows)}
+        onOpenWorkflows={openWorkflowsTabFrom(setShowDispatch)}
         onOpenVerdictInbox={switchFleet(setShowDispatch, setShowVerdictInbox)}
         onOpenFleetBoard={switchFleet(setShowDispatch, setShowFleetBoard)}
       />
       {/* Insight / analytics over the audit ledger. Self-contained dialog;
           opened from the Desktop/Mobile nav via setShowAnalytics. */}
       <AnalyticsView open={showAnalytics} onOpenChange={setShowAnalytics} />
-      {/* Workflows — run agent pipelines from the template catalog. Needs the
-          sessions list for the conductor picker; opened via setShowWorkflows. */}
-      <WorkflowsView
-        open={showWorkflows}
-        onOpenChange={setShowWorkflows}
-        sessions={sessions}
-        activeSessionId={focusedActiveTab?.sessionId ?? undefined}
-        onOpenSession={openSessionFrom(setShowWorkflows)}
-        onOpenDispatch={switchFleet(setShowWorkflows, setShowDispatch)}
-        onOpenVerdictInbox={switchFleet(setShowWorkflows, setShowVerdictInbox)}
-        onOpenFleetBoard={switchFleet(setShowWorkflows, setShowFleetBoard)}
-      />
+
       {/* Verdict Inbox — the fleet-wide review queue (dispatch + auto-mode
           sessions). Self-contained; opened via setShowVerdictInbox. */}
       <VerdictInboxView
@@ -927,7 +947,7 @@ function HomeContent() {
         onOpenChange={setShowVerdictInbox}
         onOpenSession={openSessionFrom(setShowVerdictInbox)}
         onOpenDispatch={switchFleet(setShowVerdictInbox, setShowDispatch)}
-        onOpenWorkflows={switchFleet(setShowVerdictInbox, setShowWorkflows)}
+        onOpenWorkflows={openWorkflowsTabFrom(setShowVerdictInbox)}
         onOpenFleetBoard={switchFleet(setShowVerdictInbox, setShowFleetBoard)}
       />
       {/* Fleet Board — the autonomous fleet as a lifecycle kanban (reuses the
@@ -937,7 +957,7 @@ function HomeContent() {
         onOpenChange={setShowFleetBoard}
         onOpenSession={openSessionFrom(setShowFleetBoard)}
         onOpenDispatch={switchFleet(setShowFleetBoard, setShowDispatch)}
-        onOpenWorkflows={switchFleet(setShowFleetBoard, setShowWorkflows)}
+        onOpenWorkflows={openWorkflowsTabFrom(setShowFleetBoard)}
         onOpenVerdictInbox={switchFleet(setShowFleetBoard, setShowVerdictInbox)}
       />
       {/* Ask Stoa — a read-only NL chatbox over the fleet's own data, answered by

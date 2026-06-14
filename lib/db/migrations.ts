@@ -6,43 +6,82 @@ interface Migration {
   up: (db: Database.Database) => void;
 }
 
-// All migrations in order - never modify existing ones, only add new
+function hasColumn(
+  db: Database.Database,
+  table: string,
+  column: string
+): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  return cols.some((c) => c.name === column);
+}
+
+function hasTable(db: Database.Database, table: string): boolean {
+  const rows = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name = ?`)
+    .all(table) as { name: string }[];
+  return rows.length > 0;
+}
+
+// All migrations in order. Migrations are idempotent (guarded by PRAGMA table_info
+// / IF NOT EXISTS) so a fresh schema or a concurrent-init race never throws a
+// duplicate-column/already-exists error. The runner no longer swallows those
+// errors, so every migration must be self-guarding.
 const migrations: Migration[] = [
   {
     id: 1,
     name: "add_group_path_to_sessions",
     up: (db) => {
-      db.exec(
-        `ALTER TABLE sessions ADD COLUMN group_path TEXT NOT NULL DEFAULT 'sessions'`
-      );
+      if (!hasColumn(db, "sessions", "group_path")) {
+        db.exec(
+          `ALTER TABLE sessions ADD COLUMN group_path TEXT NOT NULL DEFAULT 'sessions'`
+        );
+      }
     },
   },
   {
     id: 2,
     name: "add_agent_type_to_sessions",
     up: (db) => {
-      db.exec(
-        `ALTER TABLE sessions ADD COLUMN agent_type TEXT NOT NULL DEFAULT 'claude'`
-      );
+      if (!hasColumn(db, "sessions", "agent_type")) {
+        db.exec(
+          `ALTER TABLE sessions ADD COLUMN agent_type TEXT NOT NULL DEFAULT 'claude'`
+        );
+      }
     },
   },
   {
     id: 3,
     name: "add_worktree_columns_to_sessions",
     up: (db) => {
-      db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
-      db.exec(`ALTER TABLE sessions ADD COLUMN branch_name TEXT`);
-      db.exec(`ALTER TABLE sessions ADD COLUMN base_branch TEXT`);
-      db.exec(`ALTER TABLE sessions ADD COLUMN dev_server_port INTEGER`);
+      if (!hasColumn(db, "sessions", "worktree_path")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
+      }
+      if (!hasColumn(db, "sessions", "branch_name")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN branch_name TEXT`);
+      }
+      if (!hasColumn(db, "sessions", "base_branch")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN base_branch TEXT`);
+      }
+      if (!hasColumn(db, "sessions", "dev_server_port")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN dev_server_port INTEGER`);
+      }
     },
   },
   {
     id: 4,
     name: "add_pr_tracking_to_sessions",
     up: (db) => {
-      db.exec(`ALTER TABLE sessions ADD COLUMN pr_url TEXT`);
-      db.exec(`ALTER TABLE sessions ADD COLUMN pr_number INTEGER`);
-      db.exec(`ALTER TABLE sessions ADD COLUMN pr_status TEXT`);
+      if (!hasColumn(db, "sessions", "pr_url")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN pr_url TEXT`);
+      }
+      if (!hasColumn(db, "sessions", "pr_number")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN pr_number INTEGER`);
+      }
+      if (!hasColumn(db, "sessions", "pr_status")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN pr_status TEXT`);
+      }
     },
   },
   {
@@ -58,11 +97,17 @@ const migrations: Migration[] = [
     id: 6,
     name: "add_orchestration_columns_to_sessions",
     up: (db) => {
-      db.exec(
-        `ALTER TABLE sessions ADD COLUMN conductor_session_id TEXT REFERENCES sessions(id)`
-      );
-      db.exec(`ALTER TABLE sessions ADD COLUMN worker_task TEXT`);
-      db.exec(`ALTER TABLE sessions ADD COLUMN worker_status TEXT`);
+      if (!hasColumn(db, "sessions", "conductor_session_id")) {
+        db.exec(
+          `ALTER TABLE sessions ADD COLUMN conductor_session_id TEXT REFERENCES sessions(id)`
+        );
+      }
+      if (!hasColumn(db, "sessions", "worker_task")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN worker_task TEXT`);
+      }
+      if (!hasColumn(db, "sessions", "worker_status")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN worker_status TEXT`);
+      }
       db.exec(
         `CREATE INDEX IF NOT EXISTS idx_sessions_conductor ON sessions(conductor_session_id)`
       );
@@ -72,37 +117,51 @@ const migrations: Migration[] = [
     id: 7,
     name: "add_auto_approve_to_sessions",
     up: (db) => {
-      db.exec(
-        `ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0`
-      );
+      if (!hasColumn(db, "sessions", "auto_approve")) {
+        db.exec(
+          `ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0`
+        );
+      }
     },
   },
   {
     id: 8,
     name: "add_dev_server_columns",
     up: (db) => {
-      db.exec(
-        `ALTER TABLE dev_servers ADD COLUMN type TEXT NOT NULL DEFAULT 'node'`
-      );
-      db.exec(
-        `ALTER TABLE dev_servers ADD COLUMN name TEXT NOT NULL DEFAULT ''`
-      );
-      db.exec(
-        `ALTER TABLE dev_servers ADD COLUMN command TEXT NOT NULL DEFAULT ''`
-      );
-      db.exec(`ALTER TABLE dev_servers ADD COLUMN pid INTEGER`);
-      db.exec(
-        `ALTER TABLE dev_servers ADD COLUMN working_directory TEXT NOT NULL DEFAULT ''`
-      );
+      if (!hasColumn(db, "dev_servers", "type")) {
+        db.exec(
+          `ALTER TABLE dev_servers ADD COLUMN type TEXT NOT NULL DEFAULT 'node'`
+        );
+      }
+      if (!hasColumn(db, "dev_servers", "name")) {
+        db.exec(
+          `ALTER TABLE dev_servers ADD COLUMN name TEXT NOT NULL DEFAULT ''`
+        );
+      }
+      if (!hasColumn(db, "dev_servers", "command")) {
+        db.exec(
+          `ALTER TABLE dev_servers ADD COLUMN command TEXT NOT NULL DEFAULT ''`
+        );
+      }
+      if (!hasColumn(db, "dev_servers", "pid")) {
+        db.exec(`ALTER TABLE dev_servers ADD COLUMN pid INTEGER`);
+      }
+      if (!hasColumn(db, "dev_servers", "working_directory")) {
+        db.exec(
+          `ALTER TABLE dev_servers ADD COLUMN working_directory TEXT NOT NULL DEFAULT ''`
+        );
+      }
     },
   },
   {
     id: 9,
     name: "add_project_id_to_sessions",
     up: (db) => {
-      db.exec(
-        `ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id)`
-      );
+      if (!hasColumn(db, "sessions", "project_id")) {
+        db.exec(
+          `ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id)`
+        );
+      }
       db.exec(
         `UPDATE sessions SET project_id = 'uncategorized' WHERE project_id IS NULL`
       );
@@ -115,17 +174,14 @@ const migrations: Migration[] = [
     id: 10,
     name: "add_project_id_to_dev_servers",
     up: (db) => {
-      // Check if column exists first
-      const cols = db.prepare(`PRAGMA table_info(dev_servers)`).all() as {
-        name: string;
-      }[];
-      if (cols.some((c) => c.name === "project_id")) return;
-
-      db.exec(
-        `ALTER TABLE dev_servers ADD COLUMN project_id TEXT REFERENCES projects(id)`
-      );
+      const projectIdExists = hasColumn(db, "dev_servers", "project_id");
+      if (!projectIdExists) {
+        db.exec(
+          `ALTER TABLE dev_servers ADD COLUMN project_id TEXT REFERENCES projects(id)`
+        );
+      }
       // Migrate from session_id if it exists
-      const hasSessionId = cols.some((c) => c.name === "session_id");
+      const hasSessionId = hasColumn(db, "dev_servers", "session_id");
       if (hasSessionId) {
         db.exec(`
           UPDATE dev_servers
@@ -140,6 +196,8 @@ const migrations: Migration[] = [
       db.exec(
         `UPDATE dev_servers SET project_id = 'uncategorized' WHERE project_id IS NULL`
       );
+      // Always ensure the index exists, even when the column was already present
+      // (fresh schemas created it, but the index may be missing on some DBs).
       db.exec(
         `CREATE INDEX IF NOT EXISTS idx_dev_servers_project ON dev_servers(project_id)`
       );
@@ -149,7 +207,9 @@ const migrations: Migration[] = [
     id: 11,
     name: "add_tmux_name_to_sessions",
     up: (db) => {
-      db.exec(`ALTER TABLE sessions ADD COLUMN tmux_name TEXT`);
+      if (!hasColumn(db, "sessions", "tmux_name")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN tmux_name TEXT`);
+      }
       // Backfill existing sessions with computed tmux name
       db.exec(
         `UPDATE sessions SET tmux_name = agent_type || '-' || id WHERE tmux_name IS NULL`
@@ -160,7 +220,9 @@ const migrations: Migration[] = [
     id: 12,
     name: "add_initial_prompt_to_projects",
     up: (db) => {
-      db.exec(`ALTER TABLE projects ADD COLUMN initial_prompt TEXT`);
+      if (!hasColumn(db, "projects", "initial_prompt")) {
+        db.exec(`ALTER TABLE projects ADD COLUMN initial_prompt TEXT`);
+      }
     },
   },
   {
@@ -190,7 +252,9 @@ const migrations: Migration[] = [
       // Conductor wiring for providers with no on-disk config (e.g. Codex's
       // `-c mcp_servers.stoa.*`): a JSON array of extra argv tokens replayed at
       // every spawn. NULL for non-conductors and file-configured providers.
-      db.exec(`ALTER TABLE sessions ADD COLUMN mcp_launch_args TEXT`);
+      if (!hasColumn(db, "sessions", "mcp_launch_args")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN mcp_launch_args TEXT`);
+      }
     },
   },
   {
@@ -270,7 +334,9 @@ const migrations: Migration[] = [
     up: (db) => {
       // One-shot scheduling: a 'scheduled' row waits until scheduled_at, then the
       // reconciler promotes it to 'pending' (normal headroom/mode rules apply).
-      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN scheduled_at TEXT`);
+      if (!hasColumn(db, "issue_dispatches", "scheduled_at")) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN scheduled_at TEXT`);
+      }
     },
   },
   {
@@ -279,15 +345,21 @@ const migrations: Migration[] = [
     up: (db) => {
       // Opt-in reviewer gate (default off). When on, a worker's PR gets a critic
       // agent; Stoa surfaces the GitHub review decision in the cockpit.
-      db.exec(
-        `ALTER TABLE dispatch_repos ADD COLUMN review_gate INTEGER NOT NULL DEFAULT 0`
-      );
+      if (!hasColumn(db, "dispatch_repos", "review_gate")) {
+        db.exec(
+          `ALTER TABLE dispatch_repos ADD COLUMN review_gate INTEGER NOT NULL DEFAULT 0`
+        );
+      }
       // reviewer_session_id: set once a critic is spawned (spawn-once guard).
       // review_decision: cached GitHub reviewDecision for the cockpit badge.
-      db.exec(
-        `ALTER TABLE issue_dispatches ADD COLUMN reviewer_session_id TEXT`
-      );
-      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN review_decision TEXT`);
+      if (!hasColumn(db, "issue_dispatches", "reviewer_session_id")) {
+        db.exec(
+          `ALTER TABLE issue_dispatches ADD COLUMN reviewer_session_id TEXT`
+        );
+      }
+      if (!hasColumn(db, "issue_dispatches", "review_decision")) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN review_decision TEXT`);
+      }
     },
   },
   {
@@ -296,10 +368,16 @@ const migrations: Migration[] = [
     up: (db) => {
       // Fix loop: on CHANGES_REQUESTED a fixer worker addresses the feedback
       // (capped by fix_rounds); fixer_session_id tracks the in-flight fixer.
-      db.exec(
-        `ALTER TABLE issue_dispatches ADD COLUMN fix_rounds INTEGER NOT NULL DEFAULT 0`
-      );
-      db.exec(`ALTER TABLE issue_dispatches ADD COLUMN fixer_session_id TEXT`);
+      if (!hasColumn(db, "issue_dispatches", "fix_rounds")) {
+        db.exec(
+          `ALTER TABLE issue_dispatches ADD COLUMN fix_rounds INTEGER NOT NULL DEFAULT 0`
+        );
+      }
+      if (!hasColumn(db, "issue_dispatches", "fixer_session_id")) {
+        db.exec(
+          `ALTER TABLE issue_dispatches ADD COLUMN fixer_session_id TEXT`
+        );
+      }
     },
   },
   {
@@ -337,9 +415,11 @@ const migrations: Migration[] = [
       // Opt-in per-issue auto-merge (default off). When on, the reconciler merges
       // the worker's PR once it's ready (no conflicts, checks green, and — if the
       // repo armed review_gate — the critic approved).
-      db.exec(
-        `ALTER TABLE issue_dispatches ADD COLUMN auto_merge INTEGER NOT NULL DEFAULT 0`
-      );
+      if (!hasColumn(db, "issue_dispatches", "auto_merge")) {
+        db.exec(
+          `ALTER TABLE issue_dispatches ADD COLUMN auto_merge INTEGER NOT NULL DEFAULT 0`
+        );
+      }
     },
   },
   {
@@ -349,17 +429,23 @@ const migrations: Migration[] = [
       // Opt-in per-repo CI auto-fix (default off). When on, the reconciler spawns
       // a fixer on a worker's PR whose checks are RED, to read the failures, fix
       // them, and push — making red PRs self-heal toward a green, mergeable state.
-      db.exec(
-        `ALTER TABLE dispatch_repos ADD COLUMN ci_autofix INTEGER NOT NULL DEFAULT 0`
-      );
+      if (!hasColumn(db, "dispatch_repos", "ci_autofix")) {
+        db.exec(
+          `ALTER TABLE dispatch_repos ADD COLUMN ci_autofix INTEGER NOT NULL DEFAULT 0`
+        );
+      }
       // ci_fix_rounds caps the CI-fix attempts; ci_fixer_session_id tracks the
       // in-flight CI fixer (separate from the review fixer so the two don't clash).
-      db.exec(
-        `ALTER TABLE issue_dispatches ADD COLUMN ci_fix_rounds INTEGER NOT NULL DEFAULT 0`
-      );
-      db.exec(
-        `ALTER TABLE issue_dispatches ADD COLUMN ci_fixer_session_id TEXT`
-      );
+      if (!hasColumn(db, "issue_dispatches", "ci_fix_rounds")) {
+        db.exec(
+          `ALTER TABLE issue_dispatches ADD COLUMN ci_fix_rounds INTEGER NOT NULL DEFAULT 0`
+        );
+      }
+      if (!hasColumn(db, "issue_dispatches", "ci_fixer_session_id")) {
+        db.exec(
+          `ALTER TABLE issue_dispatches ADD COLUMN ci_fixer_session_id TEXT`
+        );
+      }
     },
   },
   {
@@ -718,14 +804,78 @@ const migrations: Migration[] = [
     up: (db) => {
       // Version-history snapshots for saved workflows. Guarded so it is idempotent
       // under re-runs and concurrent init.
-      const hasColumn = (
+      const savedWorkflowsHasHistory = (
         db.prepare(`PRAGMA table_info(saved_workflows)`).all() as {
           name: string;
         }[]
       ).some((c) => c.name === "history");
-      if (!hasColumn) {
+      if (!savedWorkflowsHasHistory) {
         db.exec(
           `ALTER TABLE saved_workflows ADD COLUMN history TEXT NOT NULL DEFAULT '[]'`
+        );
+      }
+    },
+  },
+  {
+    id: 36,
+    name: "add_dispatch_review_sha_and_composite_indexes",
+    up: (db) => {
+      // Dispatch review SHA pinning: the head commit a panel verdict was cached for.
+      // Set when a complete verdict is cached; cleared on re-review/retry/rebase.
+      if (
+        hasTable(db, "issue_dispatches") &&
+        !hasColumn(db, "issue_dispatches", "review_sha")
+      ) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN review_sha TEXT`);
+      }
+      // Covering/composite indexes for common hot queries. IF NOT EXISTS prevents
+      // errors when an index already exists; each CREATE is also guarded by hasTable
+      // because a migration may run against a partial legacy DB that hasn't created
+      // every table yet (e.g. migration tests that fake a pre-28 state).
+      if (hasTable(db, "dev_servers")) {
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_dev_servers_project ON dev_servers(project_id)`
+        );
+      }
+      if (hasTable(db, "sessions")) {
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_sessions_group ON sessions(group_path)`
+        );
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_sessions_conductor ON sessions(conductor_session_id)`
+        );
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id)`
+        );
+      }
+      if (hasTable(db, "messages")) {
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp ON messages(session_id, timestamp)`
+        );
+      }
+      if (hasTable(db, "tool_calls")) {
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_tool_calls_session_timestamp ON tool_calls(session_id, timestamp)`
+        );
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_tool_calls_message_timestamp ON tool_calls(message_id, timestamp)`
+        );
+      }
+      if (hasTable(db, "issue_dispatches")) {
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_dispatch_repo_status ON issue_dispatches(repo_id, status)`
+        );
+        // dispatched_at was added in migration 17; a heavily-minimized legacy fixture
+        // may have skipped it while still claiming that migration.
+        if (hasColumn(db, "issue_dispatches", "dispatched_at")) {
+          db.exec(
+            `CREATE INDEX IF NOT EXISTS idx_dispatch_dispatched_at ON issue_dispatches(dispatched_at DESC)`
+          );
+        }
+      }
+      if (hasTable(db, "session_events")) {
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_session_events_key_type_id ON session_events(session_key, event_type, id)`
         );
       }
     },
@@ -757,35 +907,14 @@ export function runMigrations(db: Database.Database): void {
   for (const migration of migrations) {
     if (applied.has(migration.id)) continue;
 
-    try {
-      migration.up(db);
-      const result = insertMigration.run(migration.id, migration.name);
-      if (result.changes > 0) {
-        console.log(`Migration ${migration.id}: ${migration.name} applied`);
-      } else {
-        console.log(
-          `Migration ${migration.id}: ${migration.name} skipped (concurrent apply)`
-        );
-      }
-    } catch (error) {
-      // Some migrations may fail if columns already exist (from old system or concurrent worker)
-      // Try to record as applied anyway to prevent re-running
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      if (
-        errorMsg.includes("duplicate column") ||
-        errorMsg.includes("already exists")
-      ) {
-        insertMigration.run(migration.id, migration.name);
-        console.log(
-          `Migration ${migration.id}: ${migration.name} skipped (already applied)`
-        );
-      } else {
-        console.error(
-          `Migration ${migration.id}: ${migration.name} failed:`,
-          error
-        );
-        throw error;
-      }
+    migration.up(db);
+    const result = insertMigration.run(migration.id, migration.name);
+    if (result.changes > 0) {
+      console.log(`Migration ${migration.id}: ${migration.name} applied`);
+    } else {
+      console.log(
+        `Migration ${migration.id}: ${migration.name} skipped (concurrent apply)`
+      );
     }
   }
 }

@@ -7,7 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
-import { Copy, Trash2 } from "lucide-react";
+import { Copy, ListTree, Trash2 } from "lucide-react";
 import {
   CANVAS,
   wrapNoteText,
@@ -48,6 +48,7 @@ export function PipelineCanvas({
   onDuplicateNode,
   onDeleteItem,
   onCopyId,
+  onGoToDefinitions,
   scrollRef,
 }: {
   doc: BuilderDoc;
@@ -74,6 +75,8 @@ export function PipelineCanvas({
   onDuplicateNode: (id: string) => void;
   onDeleteItem: (id: string) => void;
   onCopyId: (id: string) => void;
+  /** Scroll the selected item's definition/edit panel into view. */
+  onGoToDefinitions?: (id: string) => void;
   /** Ref to the scrollable container, used by the parent to recenter/fit-all. */
   scrollRef?: RefObject<HTMLDivElement | null>;
 }) {
@@ -389,7 +392,7 @@ export function PipelineCanvas({
   return (
     <div
       ref={scrollRef}
-      className="bg-muted/20 max-h-[40vh] overflow-auto rounded-md border"
+      className="bg-muted/20 h-full w-full overflow-auto"
       onContextMenu={(e) => e.preventDefault()}
     >
       <svg
@@ -525,6 +528,10 @@ export function PipelineCanvas({
                 </g>
               </ContextMenuTrigger>
               <ContextMenuContent collisionPadding={8}>
+                <ContextMenuItem onSelect={() => onGoToDefinitions?.(note.id)}>
+                  <ListTree className="mr-2 h-3.5 w-3.5" /> Go to definitions
+                </ContextMenuItem>
+                <ContextMenuSeparator />
                 <ContextMenuItem
                   className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
                   onSelect={() => onDeleteItem(note.id)}
@@ -615,6 +622,12 @@ export function PipelineCanvas({
                 </g>
               </ContextMenuTrigger>
               <ContextMenuContent collisionPadding={8}>
+                <ContextMenuItem
+                  onSelect={() => onGoToDefinitions?.(n.step.id)}
+                >
+                  <ListTree className="mr-2 h-3.5 w-3.5" /> Go to definitions
+                </ContextMenuItem>
+                <ContextMenuSeparator />
                 <ContextMenuItem onSelect={() => onDuplicateNode(n.step.id)}>
                   <Copy className="mr-2 h-3.5 w-3.5" /> Duplicate
                 </ContextMenuItem>

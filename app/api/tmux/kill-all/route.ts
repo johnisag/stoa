@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
 import { getManagedSessionPattern } from "@/lib/providers/registry";
+import { requireLocalhost } from "@/lib/api-security";
 
 // POST /api/tmux/kill-all - Kill all Stoa tmux sessions and remove from database
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
+
   try {
     const db = getDb();
     const backend = getSessionBackend();

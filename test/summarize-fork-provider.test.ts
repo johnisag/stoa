@@ -93,7 +93,7 @@ describe("F-A — buildForkSpawn (fork spawns the original provider, not claude)
       autoApprove: false,
       isRoot: false,
     });
-    expect(spawn.args).toEqual(["--model", "gpt-5.4"]); // codex default, not "opus"
+    expect(spawn.args).toEqual(["--model", "gpt-5.5"]); // codex default, not "opus"
   });
 
   it("drops a free-text/injection model for a hermes fork (getModelOptions is [])", () => {
@@ -111,5 +111,47 @@ describe("F-A — buildForkSpawn (fork spawns the original provider, not claude)
     expect(spawn.args).toEqual(["-m", "claude-opus-4-8"]); // HERMES_DEFAULT_MODEL
     expect(command).not.toContain(evil);
     expect(command).not.toContain("rm -rf");
+  });
+
+  it("spawns the KILO CLI for a kilo fork, dropping a free-text model to the default", () => {
+    const { command, spawn } = buildForkSpawn({
+      agentType: "kilo",
+      model: "evil; rm -rf ~",
+      autoApprove: false,
+      isRoot: false,
+    });
+    expect(spawn.binary).toBe("kilo");
+    // Kilo has no static catalog, so a free-text model is dropped to the agent
+    // default (empty → no --model flag).
+    expect(spawn.args).toEqual([]);
+    expect(command).toBe("kilo");
+    expect(command).not.toContain("rm -rf");
+  });
+
+  it("spawns the KIMI CLI for a kimi fork, dropping a free-text model to the default", () => {
+    const { command, spawn } = buildForkSpawn({
+      agentType: "kimi",
+      model: "evil; rm -rf ~",
+      autoApprove: false,
+      isRoot: false,
+    });
+    expect(spawn.binary).toBe("kimi");
+    // Kimi has no static catalog, so a free-text model is dropped to the agent
+    // default (empty → no -m flag).
+    expect(spawn.args).toEqual([]);
+    expect(command).toBe("kimi");
+    expect(command).not.toContain("rm -rf");
+  });
+
+  it("passes --yolo for a kimi fork when auto-approve is on (model still dropped)", () => {
+    const { spawn } = buildForkSpawn({
+      agentType: "kimi",
+      model: "kimi-k2",
+      autoApprove: true,
+      isRoot: false,
+    });
+    // Kimi has no static catalog, so the free-text model is dropped to the agent
+    // default (empty → no -m flag). --yolo is still passed.
+    expect(spawn.args).toEqual(["--yolo"]);
   });
 });

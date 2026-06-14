@@ -9,7 +9,7 @@ export const gitKeys = {
       "multi-status",
       projectId,
       fallbackPath || "",
-      (paths ?? []).join("|"),
+      JSON.stringify(paths ?? []),
     ] as const,
   pr: (workingDir: string) => [...gitKeys.all, "pr", workingDir] as const,
   history: (workingDir: string) =>

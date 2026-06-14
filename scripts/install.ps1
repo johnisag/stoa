@@ -10,6 +10,10 @@
     Designed to be run via:
         irm https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.ps1 | iex
 
+    SECURITY NOTE: This installer fetches code from the internet and executes it.
+    For production deployments, pin the remote script to an immutable release tag
+    or SHA and verify checksums before execution. See SECURITY.md for details.
+
 .NOTES
     PowerShell 5.1 compatible: no `&&`/`||` chaining; uses `if ($?) {}` instead.
     Does NOT install tmux (removed) or ripgrep (bundled via @vscode/ripgrep).
@@ -87,7 +91,7 @@ if (Test-Path $InstallDir) {
     if (-not (Test-Path $AgentHome)) {
         New-Item -ItemType Directory -Force -Path $AgentHome | Out-Null
     }
-    & git clone $RepoUrl $InstallDir
+    & git clone "$RepoUrl" "$InstallDir"
     if (-not $?) { Write-Err "git clone failed."; exit 1 }
 }
 
@@ -97,11 +101,11 @@ if (Test-Path $InstallDir) {
 Push-Location $InstallDir
 
 Write-Info "Installing dependencies..."
-& $npmCmd.Source install --include=dev --legacy-peer-deps
+& "$($npmCmd.Source)" install --include=dev --legacy-peer-deps
 if (-not $?) { Pop-Location; Write-Err "npm install failed."; exit 1 }
 
 Write-Info "Building for production..."
-& $npmCmd.Source run build
+& "$($npmCmd.Source)" run build
 if (-not $?) { Pop-Location; Write-Err "npm run build failed."; exit 1 }
 
 if (
@@ -117,7 +121,7 @@ Pop-Location
 
 Push-Location $InstallDir
 Write-Info "Attempting to link the 'stoa' command to your PATH (best-effort)..."
-& $npmCmd.Source link
+& "$($npmCmd.Source)" link
 $linked = $?
 Pop-Location
 

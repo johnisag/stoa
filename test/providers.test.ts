@@ -212,7 +212,7 @@ describe("Kimi provider wiring", () => {
     ).toEqual(["--yolo", "-m kimi-k2"]);
   });
 
-  it("resumes via --session <id> on both paths (id captured from the on-disk index)", () => {
+  it("resumes via --session <id> on both paths (id captured from the startup banner)", () => {
     const id = "session_ca9b5a60-f6da-47f8-b2fa-84805e8c8161";
     expect(
       buildAgentArgs("kimi", { model: "kimi-k2", sessionId: id }).args
@@ -296,17 +296,24 @@ describe("orchestration readiness contract", () => {
     expect(p.trustPromptPatterns).toEqual([]);
   });
 
+  it("Kilo and Kimi have empty ready/trust patterns (fallback to timeout)", () => {
+    expect(getProvider("kilo").readyPatterns).toEqual([]);
+    expect(getProvider("kilo").trustPromptPatterns).toEqual([]);
+    expect(getProvider("kimi").readyPatterns).toEqual([]);
+    expect(getProvider("kimi").trustPromptPatterns).toEqual([]);
+  });
+
   // "Enable orchestration" wires the stoa MCP server per provider convention:
   // Claude reads a project .mcp.json; Codex gets per-launch `-c mcp_servers.stoa.*`
   // flags; Hermes gets a global `mcp add` + a cwd marker file. The New Session box
   // and the create route both gate on this flag — only `shell` stays off.
   it("every agent provider advertises supportsOrchestration; shell does not", () => {
-    expect(getProviderDefinition("claude").supportsOrchestration).toBe(true);
-    expect(getProviderDefinition("codex").supportsOrchestration).toBe(true);
-    expect(getProviderDefinition("hermes").supportsOrchestration).toBe(true);
-    expect(Boolean(getProviderDefinition("shell").supportsOrchestration)).toBe(
-      false
-    );
+    for (const id of PROVIDER_IDS) {
+      const expected = id !== "shell";
+      expect(Boolean(getProviderDefinition(id).supportsOrchestration)).toBe(
+        expected
+      );
+    }
   });
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import {
   ChevronDown,
@@ -95,6 +95,7 @@ export function InboxCard({
   onOpenSession?: (sessionId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const findingsId = useId();
   const { data: findings = [], isLoading: loadingFindings } = useFindings(
     item,
     open
@@ -171,6 +172,8 @@ export function InboxCard({
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-controls={findingsId}
           className="flex min-w-0 flex-1 items-start gap-1.5 text-left"
         >
           {open ? (
@@ -227,7 +230,7 @@ export function InboxCard({
       </div>
 
       {open && (
-        <div className="flex flex-col gap-1.5 pl-5">
+        <div id={findingsId} className="flex flex-col gap-1.5 pl-5">
           {loadingFindings ? (
             <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading findings…

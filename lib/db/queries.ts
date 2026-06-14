@@ -1,14 +1,23 @@
 import type Database from "better-sqlite3";
 
-// Prepared statement cache
-const stmtCache = new Map<string, Database.Statement>();
+// Prepared statement cache keyed by Database instance so statements are released
+// when the database is garbage-collected. A WeakMap prevents unbounded growth
+// when many in-memory DB instances are opened (e.g. tests).
+const stmtCache = new WeakMap<
+  Database.Database,
+  Map<string, Database.Statement>
+>();
 
 function getStmt(db: Database.Database, sql: string): Database.Statement {
-  const key = sql;
-  let stmt = stmtCache.get(key);
+  let dbCache = stmtCache.get(db);
+  if (!dbCache) {
+    dbCache = new Map<string, Database.Statement>();
+    stmtCache.set(db, dbCache);
+  }
+  let stmt = dbCache.get(sql);
   if (!stmt) {
     stmt = db.prepare(sql);
-    stmtCache.set(key, stmt);
+    dbCache.set(sql, stmt);
   }
   return stmt;
 }
@@ -287,6 +296,9 @@ export const queries = {
       `SELECT * FROM project_repositories WHERE project_id = ? ORDER BY sort_order ASC`
     ),
 
+  getAllProjectRepositories: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM project_repositories ORDER BY sort_order ASC`),
+
   updateProjectRepository: (db: Database.Database) =>
     getStmt(
       db,
@@ -441,10 +453,12 @@ export const queries = {
       `UPDATE issue_dispatches SET reviewer_session_id = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // Cache the panel verdict AND the head SHA it was evaluated against so a later
+  // auto-merge can pin to that SHA and refuse if the head moved.
   setDispatchReviewDecision: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE issue_dispatches SET review_decision = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE issue_dispatches SET review_decision = ?, review_sha = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
   // Fix loop: start a fix round (record the fixer session, bump the counter).
@@ -477,13 +491,13 @@ export const queries = {
     ),
 
   // Merge train: a rebase fixer finished on a GATED repo — clear the fixer AND wipe
-  // the cached panel verdict so a fresh critic re-reviews the REBASED head. A rebase
-  // resolution rewrites the diff; it must never auto-merge under the pre-rebase
+  // the cached panel verdict + SHA so a fresh critic re-reviews the REBASED head. A
+  // rebase resolution rewrites the diff; it must never auto-merge under the pre-rebase
   // APPROVED (the same "never merge unreviewed code" rule the session ceremony pins).
   resetReviewAfterRebase: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE issue_dispatches SET reviewer_session_id = NULL, review_decision = NULL, rebase_fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE issue_dispatches SET reviewer_session_id = NULL, review_decision = NULL, review_sha = NULL, rebase_fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
     ),
 
   // Merge train: the PR is MERGEABLE again — zero the rebase counter so the cap
@@ -530,12 +544,12 @@ export const queries = {
       `UPDATE issue_dispatches SET verify_status = NULL, verify_output = NULL, verify_sha = NULL, updated_at = datetime('now') WHERE repo_id = ? AND status = 'pr_open'`
     ),
 
-  // Fix loop: a fixer finished — clear reviewer + decision + fixer so the next
-  // tick spawns a fresh critic against the updated PR (re-review).
+  // Fix loop: a fixer finished — clear reviewer + decision + SHA + fixer so the
+  // next tick spawns a fresh critic against the updated PR (re-review).
   resetForReReview: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE issue_dispatches SET reviewer_session_id = NULL, review_decision = NULL, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE issue_dispatches SET reviewer_session_id = NULL, review_decision = NULL, review_sha = NULL, fixer_session_id = NULL, updated_at = datetime('now') WHERE id = ?`
     ),
 
   // Retry a failed dispatch: wipe all worker/PR/review state back to a clean
@@ -545,7 +559,7 @@ export const queries = {
       db,
       // WHERE status='failed' so a double-tap retry only resets once (the second
       // is a no-op; dispatchOne's claimDispatch is still the spawn-once gate).
-      `UPDATE issue_dispatches SET status = 'pending', session_id = NULL, branch_name = NULL, worktree_path = NULL, pr_url = NULL, pr_number = NULL, pr_status = NULL, dispatched_at = NULL, reviewer_session_id = NULL, review_decision = NULL, fix_rounds = 0, fixer_session_id = NULL, ci_fix_rounds = 0, ci_fixer_session_id = NULL, rebase_rounds = 0, rebase_fixer_session_id = NULL, verify_status = NULL, verify_output = NULL, verify_sha = NULL, verify_ran_at = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'failed'`
+      `UPDATE issue_dispatches SET status = 'pending', session_id = NULL, branch_name = NULL, worktree_path = NULL, pr_url = NULL, pr_number = NULL, pr_status = NULL, dispatched_at = NULL, reviewer_session_id = NULL, review_decision = NULL, review_sha = NULL, fix_rounds = 0, fixer_session_id = NULL, ci_fix_rounds = 0, ci_fixer_session_id = NULL, rebase_rounds = 0, rebase_fixer_session_id = NULL, verify_status = NULL, verify_output = NULL, verify_sha = NULL, verify_ran_at = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'failed'`
     ),
 
   // Dispatch — issue pipeline rows

@@ -95,7 +95,7 @@ async function handleMessage(conn: Conn, msg: ClientMessage) {
 
     case "attach": {
       const session = getSession(msg.key);
-      if (!session) {
+      if (!session || session.dying) {
         send(conn, {
           t: "res",
           id: msg.id,
@@ -126,10 +126,13 @@ async function handleMessage(conn: Conn, msg: ClientMessage) {
         send(conn, { t: "exit", key: msg.key, code: exitCode })
       );
       // Register as a sizing client (pty -> smallest viewer) — UNLESS this is an
-      // observer (read-only mini-terminal), which must not shrink the pty.
+      // observer (read-only mini-terminal), which must not shrink the pty. Use the
+      // client's initial viewport size when provided so the first paint isn't clipped.
+      const initialCols = msg.cols ?? session.cols;
+      const initialRows = msg.rows ?? session.rows;
       const clientId = msg.observer
         ? null
-        : session.addClient(session.cols, session.rows);
+        : session.addClient(initialCols, initialRows);
       conn.attached.set(msg.key, { offOutput, offExit, clientId });
       // The snapshot is the response value; the client repaints it first.
       send(conn, { t: "res", id: msg.id, ok: true, value: { snapshot } });
@@ -147,10 +150,13 @@ async function handleMessage(conn: Conn, msg: ClientMessage) {
     case "resize": {
       const sub = conn.attached.get(msg.key);
       const session = getSession(msg.key);
+      // Ignore resize messages from clients that are not attached on this
+      // connection — otherwise a client that never attached could resize the
+      // shared pty and affect actual viewers.
+      if (!sub || !session) break;
       // Observers (clientId === null) own no sizing slot — ignore their resizes.
-      if (sub && sub.clientId !== null && session)
+      if (sub.clientId !== null)
         session.resizeClient(sub.clientId, msg.cols, msg.rows);
-      else if (!sub) session?.resize(msg.cols, msg.rows);
       break;
     }
 
@@ -159,8 +165,18 @@ async function handleMessage(conn: Conn, msg: ClientMessage) {
       send(conn, { t: "res", id: msg.id, ok: true });
       break;
 
-    case "rename":
-      if (renameSession(msg.oldKey, msg.newKey)) {
+    case "rename": {
+      const ok = renameSession(msg.oldKey, msg.newKey);
+      if (ok) {
+        // Migrate any subscription this connection holds under the old key so
+        // that a later detach (which the client now sends under the new key)
+        // actually cleans up the daemon-side output/exit listeners and sizing
+        // client instead of leaking them.
+        const sub = conn.attached.get(msg.oldKey);
+        if (sub) {
+          conn.attached.delete(msg.oldKey);
+          conn.attached.set(msg.newKey, sub);
+        }
         send(conn, { t: "res", id: msg.id, ok: true });
       } else {
         send(conn, {
@@ -171,6 +187,7 @@ async function handleMessage(conn: Conn, msg: ClientMessage) {
         });
       }
       break;
+    }
 
     case "capture": {
       const session = getSession(msg.key);

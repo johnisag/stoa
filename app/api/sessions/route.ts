@@ -19,6 +19,13 @@ import {
 } from "@/lib/mcp-config";
 import { expandHome } from "@/lib/platform";
 import { getLessonsBlockForCwd } from "@/lib/dispatch/lessons";
+import {
+  parseJsonBody,
+  resolveSandboxedPath,
+  sanitizeGroupPath,
+  sanitizeSessionName,
+  SYSTEM_PROMPT_MAX_LENGTH,
+} from "@/lib/api-security";
 
 // GET /api/sessions - List all sessions and groups
 export async function GET() {
@@ -58,10 +65,48 @@ function generateSessionName(db: ReturnType<typeof getDb>): string {
   return `Session ${nextNumber}`;
 }
 
+/**
+ * Validate that a session path resolves inside the project's workspace.
+ * Returns the resolved absolute path on success, or null if it escapes.
+ */
+function resolveProjectPath(
+  input: string,
+  project: { working_directory: string } | null | undefined
+): { allowed: boolean; resolved: string } {
+  const resolved = expandHome(input);
+  const roots = project
+    ? [expandHome(project.working_directory)]
+    : [expandHome("~")];
+  return resolveSandboxedPath(resolved, roots);
+}
+
 // POST /api/sessions - Create new session
 export async function POST(request: NextRequest) {
+  const parsed = await parseJsonBody<{
+    name?: string;
+    workingDirectory?: string;
+    parentSessionId?: string;
+    model?: string;
+    systemPrompt?: string;
+    groupPath?: string;
+    claudeSessionId?: string;
+    agentType?: string;
+    autoApprove?: boolean;
+    projectId?: string;
+    useWorktree?: boolean;
+    featureName?: string;
+    baseBranch?: string;
+    existingWorktreePath?: string;
+    existingWorktreeBranch?: string;
+    workspaceRepos?: Array<{ path: string; name: string }>;
+    useTmux?: boolean;
+    initialPrompt?: string;
+    enableOrchestration?: boolean;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
   try {
-    const body = await request.json();
+    const body = parsed.data;
     const db = getDb();
 
     const {
@@ -100,23 +145,52 @@ export async function POST(request: NextRequest) {
       ? rawAgentType
       : "claude";
     const project = projectId ? getProject(projectId) : null;
+    if (projectId && !project) {
+      return NextResponse.json({ error: "Project not found" }, { status: 400 });
+    }
+
+    // workingDirectory must resolve inside the project's workspace.
+    const cwdCheck = resolveProjectPath(workingDirectory, project ?? null);
+    if (!cwdCheck.allowed) {
+      return NextResponse.json(
+        { error: "workingDirectory is outside the project workspace" },
+        { status: 403 }
+      );
+    }
+    if (!existsSync(cwdCheck.resolved)) {
+      return NextResponse.json(
+        { error: `workingDirectory does not exist: ${workingDirectory}` },
+        { status: 400 }
+      );
+    }
+
     const model = resolveModelForAgent(
       agentType,
       (typeof requestedModel === "string" && requestedModel.trim()) ||
         project?.default_model
     );
 
-    // Auto-generate name if not provided
+    // Sanitize name / groupPath and bound system prompt length.
     const name =
-      providedName?.trim() ||
+      sanitizeSessionName(providedName) ||
       (featureName ? featureName : generateSessionName(db));
+    const sanitizedGroupPath = sanitizeGroupPath(groupPath) || "sessions";
+    if (
+      typeof systemPrompt === "string" &&
+      systemPrompt.length > SYSTEM_PROMPT_MAX_LENGTH
+    ) {
+      return NextResponse.json(
+        { error: "systemPrompt exceeds maximum length" },
+        { status: 400 }
+      );
+    }
 
     const id = randomUUID();
 
     // Handle worktree creation if requested
     let worktreePath: string | null = null;
     let branchName: string | null = null;
-    let actualWorkingDirectory = workingDirectory;
+    let actualWorkingDirectory = cwdCheck.resolved;
     let port: number | null = null;
     let setupResult: SetupResult | null = null;
     // Multi-repo workspace: the child worktree paths (for teardown), the repo
@@ -135,6 +209,18 @@ export async function POST(request: NextRequest) {
       // Multi-repo workspace: one worktree per picked sub-repo under one workspace
       // dir, which becomes the session's cwd. No single worktree_path/port — the
       // agent works across the subfolders (one branch/PR per repo).
+      // Validate each picked repo path is inside the project workspace.
+      for (const r of workspaceRepos) {
+        const repoCheck = resolveProjectPath(String(r.path), project ?? null);
+        if (!repoCheck.allowed) {
+          return NextResponse.json(
+            {
+              error: `workspace repo path is outside the project workspace: ${r.path}`,
+            },
+            { status: 403 }
+          );
+        }
+      }
       try {
         const ws = await createWorkspace({
           rootPath: workingDirectory,
@@ -161,13 +247,21 @@ export async function POST(request: NextRequest) {
       // branch + installed deps), so skip createWorktree and setupWorktree —
       // just point the session at it and allocate a dev-server port.
       const attachPath = expandHome(existingWorktreePath);
-      // Only attach to an actual Stoa worktree (the picker only ever offers
-      // these). Enforce it here too so a crafted request can't point a session
-      // at an arbitrary directory under the worktree contract.
-      if (!isStoaWorktree(attachPath)) {
+      // Only attach to an actual Stoa worktree that is ALSO inside the project's
+      // workspace. Being a Stoa worktree is not enough on its own — a worktree
+      // created for a different project or in an arbitrary location must not be
+      // attachable here.
+      const attachCheck = resolveProjectPath(
+        existingWorktreePath,
+        project ?? null
+      );
+      if (!attachCheck.allowed || !isStoaWorktree(attachPath)) {
         return NextResponse.json(
-          { error: "Not a Stoa worktree" },
-          { status: 400 }
+          {
+            error:
+              "Worktree is outside the allowed workspace or not a Stoa worktree",
+          },
+          { status: 403 }
         );
       }
       if (!existsSync(attachPath)) {
@@ -236,7 +330,7 @@ export async function POST(request: NextRequest) {
       parentSessionId,
       model,
       systemPrompt,
-      groupPath,
+      sanitizedGroupPath,
       agentType,
       autoApprove ? 1 : 0, // SQLite stores booleans as integers
       projectId

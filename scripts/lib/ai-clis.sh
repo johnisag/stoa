@@ -20,6 +20,8 @@ install_claude_code() {
         return 0
     fi
 
+    remote_install_guard "Claude Code" || return 1
+
     log_info "Installing Claude Code..."
     curl -fsSL https://claude.ai/install.sh | bash
 

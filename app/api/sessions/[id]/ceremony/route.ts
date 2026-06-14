@@ -6,6 +6,11 @@ import { getPRForBranchAnyState } from "@/lib/dispatch/issues";
 import { mergePR } from "@/lib/dispatch/merge";
 import { expandHome } from "@/lib/platform";
 import type { SessionCeremony } from "@/lib/dispatch/types";
+import {
+  parseJsonBody,
+  requireLocalhost,
+  SYSTEM_PROMPT_MAX_LENGTH,
+} from "@/lib/api-security";
 
 function requireSession(id: string): Session | null {
   return (queries.getSession(getDb()).get(id) as Session | undefined) ?? null;
@@ -27,20 +32,30 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
+
   try {
     const { id } = await params;
     let seedPrompt: string | undefined;
     let autoMerge = 0;
-    try {
-      const body = await request.json();
+    const parsed = await parseJsonBody<{
+      seedPrompt?: string;
+      autoMerge?: boolean;
+    }>(request);
+    if (parsed.ok) {
       seedPrompt =
-        typeof body?.seedPrompt === "string"
-          ? body.seedPrompt.trim()
+        typeof parsed.data?.seedPrompt === "string"
+          ? parsed.data.seedPrompt.trim()
           : undefined;
-      // Opt-in unattended merge; default off (the human does the final merge).
-      autoMerge = body?.autoMerge === true ? 1 : 0;
-    } catch {
-      // No body / invalid JSON is fine — auto mode with no seed prompt, no merge.
+      autoMerge = parsed.data?.autoMerge === true ? 1 : 0;
+    }
+
+    if (seedPrompt && seedPrompt.length > SYSTEM_PROMPT_MAX_LENGTH) {
+      return NextResponse.json(
+        { error: "seedPrompt exceeds maximum length" },
+        { status: 400 }
+      );
     }
 
     const db = getDb();
@@ -116,9 +131,12 @@ export async function POST(
  * (auto_merge off). Pinned to the reviewed SHA: gh refuses if the head moved off
  * what the panel approved, so even the human merge never lands unreviewed pushes. */
 export async function PUT(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
+
   const { id } = await params;
   const db = getDb();
   const session = requireSession(id);
@@ -169,9 +187,12 @@ export async function PUT(
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
+
   const { id } = await params;
   if (!requireSession(id)) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
@@ -184,9 +205,12 @@ export async function GET(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
+
   const { id } = await params;
   if (!requireSession(id)) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });

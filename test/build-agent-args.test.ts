@@ -86,6 +86,42 @@ describe("buildAgentArgs", () => {
     ]);
   });
 
+  it("kilo: fresh launch emits --model <free-text>", () => {
+    const { binary, args } = buildAgentArgs("kilo", {
+      model: "anthropic/claude-opus-4.8",
+    });
+    expect(binary).toBe("kilo");
+    expect(args).toEqual(["--model", "anthropic/claude-opus-4.8"]);
+    // empty model must not append --model (Kilo falls back to its own default)
+    expect(buildAgentArgs("kilo", { model: "" }).args).toEqual([]);
+  });
+
+  it("kimi: fresh launch emits --yolo -m <free-text>", () => {
+    const { binary, args } = buildAgentArgs("kimi", {
+      autoApprove: true,
+      model: "kimi-k2",
+    });
+    expect(binary).toBe("kimi");
+    expect(args).toEqual(["--yolo", "-m", "kimi-k2"]);
+    // empty model must not append -m (Kimi falls back to its own default)
+    expect(
+      buildAgentArgs("kimi", { autoApprove: true, model: "" }).args
+    ).toEqual(["--yolo"]);
+  });
+
+  it("kimi: resume emits --session <id> as discrete tokens", () => {
+    const id = "session_ca9b5a60-f6da-47f8-b2fa-84805e8c8161";
+    expect(buildAgentArgs("kimi", { sessionId: id }).args).toEqual([
+      "--session",
+      id,
+    ]);
+    expect(
+      buildAgentArgs("kimi", { autoApprove: true, sessionId: id }).args
+    ).toEqual(["--yolo", "--session", id]);
+    expect(buildAgentArgs("kimi", { sessionId: "" }).args).toEqual([]);
+    expect(buildAgentArgs("kimi", { sessionId: null }).args).toEqual([]);
+  });
+
   it("shell: empty binary (server spawns a plain shell)", () => {
     const { binary, args } = buildAgentArgs("shell", {});
     expect(binary).toBe("");

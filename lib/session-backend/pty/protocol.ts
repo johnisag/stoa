@@ -60,7 +60,14 @@ export type ClientMessage =
       cols?: number;
       rows?: number;
     }
-  | { t: "attach"; id: number; key: string; observer?: boolean }
+  | {
+      t: "attach";
+      id: number;
+      key: string;
+      observer?: boolean;
+      cols?: number;
+      rows?: number;
+    }
   | { t: "detach"; key: string }
   | { t: "input"; key: string; data: string }
   | { t: "resize"; key: string; cols: number; rows: number }

@@ -43,6 +43,8 @@ import {
   renameStep,
   serializeBuilderDoc,
   setDependsOn,
+  setProject,
+  setWorktree,
   updateNote,
   updateStep,
   CANVAS,
@@ -52,6 +54,8 @@ import {
 import { WORKFLOW_SNIPPETS } from "@/lib/pipeline/snippets";
 import { validateSpec } from "@/lib/pipeline/engine";
 import { useStartRun } from "@/data/pipelines/queries";
+import { useProjectsQuery } from "@/data/projects/queries";
+import { useWorktrees, type StoaWorktree } from "@/data/worktrees/queries";
 import {
   useSavedWorkflows,
   useCreateSavedWorkflow,
@@ -132,6 +136,25 @@ const EXAMPLE_DOC: BuilderDoc = docFromSpec({
   ],
 });
 
+function worktreeBaseName(p: string) {
+  return p.split(/[/\\]/).filter(Boolean).pop() || p;
+}
+
+function worktreeLabel(w: StoaWorktree) {
+  return `${w.branch || worktreeBaseName(w.path)}${w.attached ? " (in use)" : ""}`;
+}
+
+function availableWorktrees(
+  doc: BuilderDoc,
+  worktrees: StoaWorktree[],
+  projectDir?: string
+): StoaWorktree[] {
+  // When a project is selected, only show worktrees that belong to the same repo.
+  if (!doc.projectId) return worktrees;
+  const base = projectDir || doc.workingDirectory;
+  return worktrees.filter((w) => w.projectId === base);
+}
+
 /**
  * Visual workflow builder (Phase 3): compose a pipeline by dragging nodes on a
  * canvas and editing the selected step in a form, instead of hand-writing JSON.
@@ -155,6 +178,9 @@ export function WorkflowBuilder({
   const start = useStartRun();
   const { doc, committedDoc, setDoc, reset, undo, redo, canUndo, canRedo } =
     useBuilderHistory(EMPTY_DOC);
+  const { data: projects = [] } = useProjectsQuery();
+  const { data: worktrees = [] } = useWorktrees();
+  const selectedProject = projects.find((p) => p.id === doc.projectId);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const canvasScrollRef = useRef<HTMLDivElement | null>(null);
@@ -234,6 +260,15 @@ export function WorkflowBuilder({
   function clearSelection() {
     setSelectedIds(new Set());
     setPrimaryId(null);
+  }
+
+  function handleGoToDefinitions(id: string) {
+    handleSelectNode(id);
+    // The useEffect keyed on primaryId scrolls automatically on a new selection,
+    // but only when the value changes. Force a scroll for repeated menu clicks.
+    requestAnimationFrame(() => {
+      editRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
   }
 
   function handleSelectNode(
@@ -718,17 +753,8 @@ export function WorkflowBuilder({
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col items-start justify-between gap-2 sm:flex-row">
-        <div>
-          <h3 className="text-sm font-medium">Visual builder</h3>
-          <p className="text-muted-foreground text-xs leading-relaxed">
-            Drag steps and sticky notes to arrange the canvas; tap one to edit
-            it. Drag a step’s dot onto another to connect them. Right-click or
-            long-press for more options. Steps with no path between them run in
-            parallel.
-          </p>
-        </div>
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
           <Button
             type="button"
@@ -929,6 +955,61 @@ export function WorkflowBuilder({
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground text-xs">Project context</span>
+          <Select
+            value={doc.projectId || "none"}
+            onValueChange={(v) => {
+              const id = v === "none" ? null : v;
+              const project = projects.find((p) => p.id === id);
+              setDoc((d) => setProject(d, id, project?.working_directory));
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Pick a project" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">
+                <span className="text-muted-foreground">No project</span>
+              </SelectItem>
+              {projects
+                .filter((p) => !p.is_uncategorized)
+                .map((project) => (
+                  <SelectItem key={project.id} value={project.id}>
+                    {project.name}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground text-xs">Worktree</span>
+          <Select
+            value={doc.worktreePath || "new"}
+            onValueChange={(v) => {
+              const wt = worktrees.find((w) => w.path === v);
+              setDoc((d) => setWorktree(d, wt?.path ?? null, wt?.projectId));
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="new">
+                <span className="text-muted-foreground">New worktree</span>
+              </SelectItem>
+              {availableWorktrees(
+                doc,
+                worktrees,
+                selectedProject?.working_directory
+              ).map((w) => (
+                <SelectItem key={w.path} value={w.path}>
+                  {worktreeLabel(w)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground text-xs">
             Working directory
           </span>
@@ -945,12 +1026,12 @@ export function WorkflowBuilder({
       </div>
 
       {doc.nodes.length === 0 && doc.notes.length === 0 ? (
-        <div className="text-muted-foreground rounded-md border border-dashed px-3 py-8 text-center text-xs">
+        <div className="text-muted-foreground flex flex-1 items-center justify-center rounded-md border border-dashed px-3 text-center text-xs">
           No steps yet — tap <span className="font-medium">Add step</span> to
           add your first node.
         </div>
       ) : (
-        <div className="relative">
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border">
           <PipelineCanvas
             doc={doc}
             selectedIds={selectedIds}
@@ -963,6 +1044,7 @@ export function WorkflowBuilder({
             onDuplicateNode={handleDuplicate}
             onDeleteItem={handleConfirmDeleteItem}
             onCopyId={handleContextCopyId}
+            onGoToDefinitions={handleGoToDefinitions}
             scrollRef={canvasScrollRef}
           />
           <Minimap

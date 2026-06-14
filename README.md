@@ -63,11 +63,16 @@ irm https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.ps1 | i
 
 On Windows the native pty backend is selected automatically (no tmux/WSL needed). Set `STOA_BACKEND=tmux|pty` to override the choice on any platform.
 
-> **Session persistence:** Sessions survive browser disconnects everywhere. They
-> also survive a Stoa server restart — via tmux on macOS/Linux, and via the
-> Tier-2 pty-host daemon (default-on) on Windows. If the daemon is unavailable,
-> Windows falls back to Tier-1 (in-process), where sessions survive disconnects
-> but not a server restart.
+> **Session persistence:** Sessions survive browser disconnects everywhere. The
+> underlying terminal process also survives a Stoa server restart — via tmux on
+> macOS/Linux, and via the Tier-2 pty-host daemon (default-on) on Windows.
+> Agent-level resume after restart is guaranteed for Claude (its resume id is
+> read from on-disk project files). For Hermes and Kimi Code the resume id is
+> captured from the startup banner and is lost once the banner scrolls off, so
+> re-attached sessions may resume as fresh conversations if the banner was not
+> captured before the restart. If the daemon is unavailable, Windows falls back
+> to Tier-1 (in-process), where sessions survive disconnects but not a server
+> restart.
 
 ### Prerequisites
 

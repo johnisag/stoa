@@ -62,8 +62,11 @@ export function useMergeCeremony(sessionId: string) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to merge");
     },
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: sessionKeys.ceremony(sessionId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: sessionKeys.ceremony(sessionId) });
+      // A merged ceremony often updates the session state; refresh the list too.
+      qc.invalidateQueries({ queryKey: sessionKeys.list() });
+    },
   });
 }
 

@@ -7,6 +7,7 @@ import {
 } from "@/lib/dispatch/board-actions";
 import { reconcileOneStale } from "@/lib/dispatch/stale";
 import type { DispatchRepo, IssueDispatch } from "@/lib/dispatch/types";
+import { parseJsonBody, requireLocalhost } from "@/lib/api-security";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -26,6 +27,9 @@ const ACTIONS: BoardAction[] = [
 //   reconcile → re-check an open-PR row against GitHub (merged/closed out of band
 //               → merged/cancelled; still open → no-op).
 export async function POST(request: NextRequest, { params }: RouteParams) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
+
   try {
     const { id } = await params;
     const db = getDb();
@@ -36,8 +40,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const body = await request.json().catch(() => ({}));
-    const action = body?.action as BoardAction;
+    const parsed = await parseJsonBody<{ action?: string }>(request);
+    if (!parsed.ok) return parsed.response;
+
+    const action = parsed.data.action as BoardAction;
     if (!ACTIONS.includes(action)) {
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }

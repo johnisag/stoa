@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries } from "@/lib/db";
 import { mergePR } from "@/lib/dispatch/merge";
 import { expandHome } from "@/lib/platform";
 import type { IssueDispatch } from "@/lib/dispatch/types";
+import { requireLocalhost } from "@/lib/api-security";
 
 /**
  * POST /api/dispatch/dispatches/[id]/merge
@@ -11,9 +12,12 @@ import type { IssueDispatch } from "@/lib/dispatch/types";
  * Plain merge (no GitHub auto-merge); fails loudly if the PR isn't mergeable.
  */
 export async function POST(
-  _request: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
+
   const { id } = await params;
   try {
     const db = getDb();
@@ -46,7 +50,13 @@ export async function POST(
         { status: 409 }
       );
     }
-    await mergePR({ cwd, prNumber: d.pr_number, repoSlug: repo?.repo_slug });
+    await mergePR({
+      cwd,
+      prNumber: d.pr_number,
+      repoSlug: repo?.repo_slug,
+      // SHA-pin: refuse the merge if the PR head moved after the panel verdict.
+      matchHeadCommit: d.review_sha,
+    });
     queries.updateDispatchStatus(db).run("merged", id);
     return NextResponse.json({
       dispatch: queries.getDispatch(db).get(id) as IssueDispatch,

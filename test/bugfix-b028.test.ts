@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 
 // Regression guard for B028 (command injection) + B029 (path traversal) in
 // /api/git/clone.
@@ -95,8 +98,18 @@ describe("isAllowedCloneUrl (B028 — scheme allowlist)", () => {
 });
 
 describe("POST clone (B028 — git runs via execFile argv, no shell)", () => {
+  let cloneDir: string | null = null;
+
   beforeEach(() => {
     cp.execFile.mockClear();
+    cloneDir = fs.mkdtempSync(path.join(os.homedir(), "stoa-clone-test-"));
+  });
+
+  afterEach(() => {
+    if (cloneDir) {
+      fs.rmSync(cloneDir, { recursive: true, force: true });
+      cloneDir = null;
+    }
   });
 
   function makeRequest(body: unknown) {
@@ -104,19 +117,15 @@ describe("POST clone (B028 — git runs via execFile argv, no shell)", () => {
   }
 
   it("passes url + clonePath as discrete argv after `--` (no interpolation)", async () => {
-    // Clone into the OS temp dir, which exists, so the route reaches the spawn.
-    const os = await import("os");
-    const path = await import("path");
-    const tmp = os.tmpdir();
     const url = "https://github.com/user/repo.git";
 
-    const res = await POST(makeRequest({ url, directory: tmp }));
+    const res = await POST(makeRequest({ url, directory: cloneDir }));
 
     // git must have been invoked exactly once, as a binary + argv array.
     expect(cp.execFile).toHaveBeenCalledTimes(1);
     const [bin, args, opts] = cp.execFile.mock.calls[0];
     expect(bin).toBe("git");
-    expect(args).toEqual(["clone", "--", url, path.join(tmp, "repo")]);
+    expect(args).toEqual(["clone", "--", url, path.join(cloneDir!, "repo")]);
     // No shell, hidden console on Windows.
     expect((opts as { shell?: unknown }).shell).toBeUndefined();
     expect((opts as { windowsHide?: boolean }).windowsHide).toBe(

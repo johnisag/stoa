@@ -227,10 +227,19 @@ export function validateSpec(spec: PipelineSpec): PipelineValidationResult {
   const ids = new Set<string>();
   const dupes = new Set<string>();
   for (const step of spec.steps) {
-    const id = step?.id?.trim();
+    const rawId = step?.id;
+    const id = rawId?.trim();
     if (!id) {
       err(null, "every step must have a non-empty id");
       continue;
+    }
+    // Leading/trailing whitespace in a raw id passes the empty check but breaks
+    // dependsOn/output-ref lookup (those compare against the trimmed id).
+    if (typeof rawId === "string" && rawId !== id) {
+      err(
+        id,
+        `step id "${rawId}" must not have leading or trailing whitespace`
+      );
     }
     if (ids.has(id)) dupes.add(id);
     ids.add(id);

@@ -59,6 +59,9 @@ export class HostClient {
   // key would silently re-register as a sizing client on the daemon).
   private sizingCounts = new Map<string, number>();
   private spawnedThisCycle = false;
+  // Mutable key refs for active attaches. rename() updates these so detach()
+  // always targets the current key for sizing and daemon-detach.
+  private attachKeyRefs = new Set<{ key: string }>();
 
   /** Whether the daemon should treat this key's (re)attach as observer-only. */
   private observerForKey(key: string): boolean {
@@ -152,6 +155,9 @@ export class HostClient {
 
     const hadSubscriptions = this.outputListeners.size > 0;
 
+    // Single-flight the entire connect → ping → resubscribe sequence so multiple
+    // concurrent callers don't all run redundant pings/resubscribes against the
+    // same fresh socket.
     this.connecting = (async () => {
       this.spawnedThisCycle = false;
       let lastErr: Error | null = null;
@@ -159,7 +165,7 @@ export class HostClient {
         try {
           const s = await this.connectOnce();
           this.wireSocket(s);
-          return;
+          break;
         } catch (err) {
           lastErr = err as Error;
           // Spawn the daemon once per connect cycle, then keep retrying.
@@ -167,7 +173,25 @@ export class HostClient {
           await new Promise((r) => setTimeout(r, CONNECT_RETRY_MS));
         }
       }
-      throw lastErr ?? new Error("could not connect to pty host");
+      if (!this.socket || this.socket.destroyed) {
+        throw lastErr ?? new Error("could not connect to pty host");
+      }
+
+      // Validate the daemon is actually serving (not a half-open pipe). If the
+      // ping fails, tear down the socket so the NEXT call reconnects instead of
+      // treating this half-open socket as healthy (which would defeat the check).
+      try {
+        await this.pingRaw();
+      } catch (err) {
+        this.socket?.destroy();
+        this.socket = null;
+        throw err;
+      }
+
+      // If we reconnected while holding live subscriptions, re-attach them so
+      // output resumes and the screen repaints — a transient socket drop is then
+      // invisible to the browser.
+      if (hadSubscriptions) await this.resubscribeAll();
     })();
 
     try {
@@ -175,22 +199,6 @@ export class HostClient {
     } finally {
       this.connecting = null;
     }
-
-    // Validate the daemon is actually serving (not a half-open pipe). If the
-    // ping fails, tear down the socket so the NEXT call reconnects instead of
-    // treating this half-open socket as healthy (which would defeat the check).
-    try {
-      await this.pingRaw();
-    } catch (err) {
-      this.socket?.destroy();
-      this.socket = null;
-      throw err;
-    }
-
-    // If we reconnected while holding live subscriptions, re-attach them so
-    // output resumes and the screen repaints — a transient socket drop is then
-    // invisible to the browser.
-    if (hadSubscriptions) await this.resubscribeAll();
   }
 
   /** Low-level ping that does not recurse through ensureConnected. */
@@ -316,7 +324,9 @@ export class HostClient {
     key: string,
     onOutput: (data: string) => void,
     onExit: (code: number) => void,
-    observer = false
+    observer = false,
+    cols?: number,
+    rows?: number
   ): Promise<AttachResult> {
     let outSet = this.outputListeners.get(key);
     if (!outSet) this.outputListeners.set(key, (outSet = new Set()));
@@ -328,24 +338,36 @@ export class HostClient {
       this.sizingCounts.set(key, (this.sizingCounts.get(key) ?? 0) + 1);
 
     try {
+      // Capture the key this attach is bound under. If a rename() happens later,
+      // the detach must decrement the sizing count under the CURRENT key, not the
+      // original one — otherwise the count leaks on the new key.
+      const keyRef = { key };
+      this.attachKeyRefs.add(keyRef);
       const res = await this.request<{ snapshot: string }>({
         t: "attach",
         key,
         observer,
+        cols,
+        rows,
       });
       const detach = () => {
+        this.attachKeyRefs.delete(keyRef);
+        const k = keyRef.key;
         outSet!.delete(onOutput);
         exitSet!.delete(onExit);
-        if (!observer) this.decSizing(key);
-        const last = outSet!.size === 0;
-        if (last) this.outputListeners.delete(key);
-        if (exitSet!.size === 0) this.exitListeners.delete(key);
+        if (!observer) this.decSizing(k);
+        const lastOutput = outSet!.size === 0;
+        const lastExit = exitSet!.size === 0;
+        // Clean up under the CURRENT key so a rename before detach doesn't leak
+        // an empty listener set in the maps.
+        if (lastOutput) this.outputListeners.delete(k);
+        if (lastExit) this.exitListeners.delete(k);
         // Only tell the daemon to detach when the LAST local listener for this
         // key is gone. All browser sockets share one daemon connection with a
         // single slot per key, so an unconditional detach here would tear down
         // the shared subscription and freeze any OTHER tab still watching the
         // same session (e.g. a worker open full-screen AND observed).
-        if (last) void this.fireAndForget({ t: "detach", key });
+        if (lastOutput) void this.fireAndForget({ t: "detach", key: k });
       };
       return { snapshot: res?.snapshot ?? "", detach };
     } catch (err) {
@@ -385,6 +407,11 @@ export class HostClient {
     move(this.outputListeners);
     move(this.exitListeners);
     move(this.sizingCounts);
+    // Update the detach closures of any in-flight attaches so they use the new
+    // key for sizing and daemon detach.
+    for (const ref of this.attachKeyRefs) {
+      if (ref.key === oldKey) ref.key = newKey;
+    }
   }
 
   async capture(key: string, lines?: number): Promise<string> {

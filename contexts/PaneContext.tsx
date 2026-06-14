@@ -36,9 +36,10 @@ interface PaneContextValue {
   splitVertical: (paneId: string) => void;
   close: (paneId: string) => void;
   // Tab management
-  addTab: (paneId: string) => void;
+  addTab: (paneId: string, view?: TabData["view"]) => void;
   closeTab: (paneId: string, tabId: string) => void;
   switchTab: (paneId: string, tabId: string) => void;
+  addWorkflowsTab: (paneId: string) => void;
   // Session management (operates on active tab)
   attachSession: (paneId: string, sessionId: string, tmuxName: string) => void;
   detachSession: (paneId: string) => void;
@@ -125,11 +126,43 @@ export function PaneProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Tab management
-  const addTab = useCallback((paneId: string) => {
+  const addTab = useCallback((paneId: string, view?: TabData["view"]) => {
     setState((prev) => {
       const pane = prev.panes[paneId];
       if (!pane) return prev;
-      const newTab = createTab();
+      const newTab = createTab(view);
+      return {
+        ...prev,
+        panes: {
+          ...prev.panes,
+          [paneId]: {
+            ...pane,
+            tabs: [...pane.tabs, newTab],
+            activeTabId: newTab.id,
+          },
+        },
+      };
+    });
+  }, []);
+
+  const addWorkflowsTab = useCallback((paneId: string) => {
+    setState((prev) => {
+      const pane = prev.panes[paneId];
+      if (!pane) return prev;
+      const existing = pane.tabs.find((t) => t.view === "workflows");
+      if (existing) {
+        return {
+          ...prev,
+          panes: {
+            ...prev.panes,
+            [paneId]: {
+              ...pane,
+              activeTabId: existing.id,
+            },
+          },
+        };
+      }
+      const newTab = createTab("workflows");
       return {
         ...prev,
         panes: {
@@ -257,7 +290,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
 
   const getPaneData = useCallback(
     (paneId: string): PaneData => {
-      return state.panes[paneId] || defaultPaneData;
+      return state.panes[paneId] ? state.panes[paneId] : { ...defaultPaneData };
     },
     [state.panes]
   );
@@ -298,6 +331,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
       addTab,
       closeTab,
       switchTab,
+      addWorkflowsTab,
       attachSession,
       detachSession,
       reconcileSessions,

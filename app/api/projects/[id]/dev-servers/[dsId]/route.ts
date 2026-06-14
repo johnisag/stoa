@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateProjectDevServer, deleteProjectDevServer } from "@/lib/projects";
 import { queries, db, type ProjectDevServer } from "@/lib/db";
+import { parseJsonBody, tokenizeCommand } from "@/lib/api-security";
 
 interface RouteParams {
   params: Promise<{ id: string; dsId: string }>;
@@ -21,12 +22,38 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    const body = await request.json();
-    const { name, type, command, port, portEnvVar, sortOrder } = body;
+    const parsed = await parseJsonBody<{
+      name?: string;
+      type?: string;
+      command?: string;
+      port?: number;
+      portEnvVar?: string;
+      sortOrder?: number;
+    }>(request);
+    if (!parsed.ok) return parsed.response;
+
+    const { name, type, command, port, portEnvVar, sortOrder } = parsed.data;
+
+    if (typeof command === "string") {
+      try {
+        tokenizeCommand(command);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Invalid command";
+        return NextResponse.json({ error: message }, { status: 400 });
+      }
+    }
+
+    if (typeof type === "string" && type !== "node" && type !== "docker") {
+      return NextResponse.json(
+        { error: "type must be 'node' or 'docker'" },
+        { status: 400 }
+      );
+    }
 
     const devServer = updateProjectDevServer(dsId, {
       name,
-      type,
+      type: type as "node" | "docker" | undefined,
       command,
       port,
       portEnvVar,

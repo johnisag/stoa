@@ -98,7 +98,7 @@ export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
       ? data.files.filter(filterRef.current)
       : data.files;
     return sortFiles(items);
-  }, [showRoots, roots, data?.files]);
+  }, [showRoots, roots, data?.files, filter]);
 
   const filteredFiles = useMemo(
     () =>

@@ -334,6 +334,7 @@ export async function sessionCeremonyPass(): Promise<void> {
         prNumber,
         reviewGate: true,
         reviewDecision: decision,
+        reviewSha: c.review_sha,
         mergeable: readiness.mergeable,
         checks: readiness.checks,
         // The verify harness is dispatch-only (a ceremony has no per-repo

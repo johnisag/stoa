@@ -25,11 +25,12 @@ function getStagedDiff(workingDir: string): string {
  */
 function draftCommitMessage(diff: string): Promise<string> {
   const prompt = buildCommitPrompt(diff);
+  const binary = resolveBinary("claude") || "claude";
 
   return new Promise((resolve, reject) => {
-    const claude = spawn(resolveBinary("claude") || "claude", ["-p"], {
+    const claude = spawn(binary, ["-p"], {
       stdio: ["pipe", "pipe", "pipe"],
-      shell: isWindows,
+      shell: false,
       windowsHide: isWindows,
     });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { toast } from "sonner";
 import { Loader2, Sparkles, Trash2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import { claimsConflict } from "@/lib/dispatch/claims";
 
 /** Editable task row in the proposed partition (claims as a comma/space string). */
 interface DraftTask {
+  id: string;
   title: string;
   body: string;
   claimsText: string;
@@ -52,6 +53,10 @@ function overlappingIndices(drafts: DraftTask[]): Set<number> {
   return bad;
 }
 
+function draftId(prefix: string): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 /**
  * Plan tab: paste a spec → a planner agent proposes a partition of tasks that each
  * own a disjoint part of the codebase → review/edit (overlaps flagged red) → approve
@@ -72,15 +77,18 @@ export function PlanConsole({ open }: { open: boolean }) {
 
   // When the poll flips to "ready", seed the editable drafts once.
   const ready = poll.data?.status === "ready" ? poll.data.tasks : null;
-  if (ready && drafts === null) {
-    setDrafts(
-      ready.map((t: PlanTask) => ({
-        title: t.title,
-        body: t.body,
-        claimsText: t.claims.join(", "),
-      }))
-    );
-  }
+  useEffect(() => {
+    if (ready && drafts === null) {
+      setDrafts(
+        ready.map((t: PlanTask) => ({
+          id: draftId("task"),
+          title: t.title,
+          body: t.body,
+          claimsText: t.claims.join(", "),
+        }))
+      );
+    }
+  }, [ready, drafts]);
 
   const overlaps = useMemo(
     () => (drafts ? overlappingIndices(drafts) : new Set<number>()),
@@ -242,7 +250,7 @@ export function PlanConsole({ open }: { open: boolean }) {
 
           {drafts.map((d, i) => (
             <div
-              key={i}
+              key={d.id}
               className={`space-y-2 rounded-md border p-3 ${overlaps.has(i) ? "border-red-500/50" : ""}`}
             >
               <div className="flex items-center gap-2">
@@ -250,8 +258,8 @@ export function PlanConsole({ open }: { open: boolean }) {
                   value={d.title}
                   onChange={(e) =>
                     setDrafts((ds) =>
-                      ds!.map((x, k) =>
-                        k === i ? { ...x, title: e.target.value } : x
+                      ds!.map((x) =>
+                        x.id === d.id ? { ...x, title: e.target.value } : x
                       )
                     )
                   }
@@ -263,7 +271,7 @@ export function PlanConsole({ open }: { open: boolean }) {
                   variant="ghost"
                   aria-label="Remove task"
                   onClick={() =>
-                    setDrafts((ds) => ds!.filter((_, k) => k !== i))
+                    setDrafts((ds) => ds!.filter((x) => x.id !== d.id))
                   }
                 >
                   <Trash2 className="text-muted-foreground h-4 w-4" />
@@ -275,8 +283,8 @@ export function PlanConsole({ open }: { open: boolean }) {
                   value={d.claimsText}
                   onChange={(e) =>
                     setDrafts((ds) =>
-                      ds!.map((x, k) =>
-                        k === i ? { ...x, claimsText: e.target.value } : x
+                      ds!.map((x) =>
+                        x.id === d.id ? { ...x, claimsText: e.target.value } : x
                       )
                     )
                   }
@@ -296,8 +304,8 @@ export function PlanConsole({ open }: { open: boolean }) {
                   value={d.body}
                   onChange={(e) =>
                     setDrafts((ds) =>
-                      ds!.map((x, k) =>
-                        k === i ? { ...x, body: e.target.value } : x
+                      ds!.map((x) =>
+                        x.id === d.id ? { ...x, body: e.target.value } : x
                       )
                     )
                   }

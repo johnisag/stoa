@@ -120,8 +120,10 @@ export class RecordingBackend implements SessionBackend {
       binary: opts.binary,
       argCount: opts.args?.length ?? 0,
       // The banner-wrapped shell command (tmux / fallback path) is recorded
-      // verbatim — it's the literal "what did the agent run" the moat is about.
-      command: opts.binary ? undefined : opts.command,
+      // verbatim when present — it's the literal "what did the agent run" the
+      // moat is about. When a binary argv path is used, the command string still
+      // captures the joined invocation for audit readability.
+      command: opts.command ?? undefined,
     });
   }
 

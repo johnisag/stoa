@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 
 interface UseCopyToClipboardOptions {
   /** Duration to show copied feedback (ms). Default: 1500 */
@@ -26,6 +26,15 @@ export function useCopyToClipboard(
 ): UseCopyToClipboardReturn {
   const { feedbackDuration = 1500 } = options;
   const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
 
   const copy = useCallback(
     async (text: string): Promise<boolean> => {
@@ -33,8 +42,14 @@ export function useCopyToClipboard(
 
       try {
         await navigator.clipboard.writeText(text);
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
         setCopied(true);
-        setTimeout(() => setCopied(false), feedbackDuration);
+        timeoutRef.current = setTimeout(
+          () => setCopied(false),
+          feedbackDuration
+        );
         return true;
       } catch {
         // Clipboard API failed or unavailable

@@ -51,19 +51,28 @@ function withInitLock<T>(fn: () => T): T {
 // Initialize database with schema
 export function initDb(): Database.Database {
   return withInitLock(() => {
-    const db = new Database(DB_PATH, { timeout: 10000 });
+    let db: Database.Database | undefined;
+    try {
+      db = new Database(DB_PATH, { timeout: 10000 });
 
-    // Enable WAL mode for better concurrency
-    db.pragma("journal_mode = WAL");
-    db.pragma("busy_timeout = 10000");
+      // Enable WAL mode for better concurrency
+      db.pragma("journal_mode = WAL");
+      db.pragma("busy_timeout = 10000");
 
-    // Create tables and indexes
-    createSchema(db);
+      // Create tables and indexes
+      createSchema(db);
 
-    // Run migrations
-    runMigrations(db);
+      // Run migrations
+      runMigrations(db);
 
-    return db;
+      return db;
+    } catch (err) {
+      // A failed open/schema/migration must not leak the DB handle.
+      try {
+        db?.close();
+      } catch {}
+      throw err;
+    }
   });
 }
 

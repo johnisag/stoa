@@ -10,21 +10,23 @@ function haptic() {
 }
 
 export function useKeyRepeat(onKeyPress: () => void) {
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeatCountRef = useRef(0);
+  const onKeyPressRef = useRef(onKeyPress);
+  onKeyPressRef.current = onKeyPress;
 
   const startRepeat = useCallback(() => {
     // Immediate first press
     haptic();
-    onKeyPress();
+    onKeyPressRef.current();
     repeatCountRef.current = 0;
 
     // Start repeating after initial delay (like native keyboard)
     timeoutRef.current = setTimeout(() => {
       intervalRef.current = setInterval(() => {
         haptic();
-        onKeyPress();
+        onKeyPressRef.current();
         repeatCountRef.current++;
 
         // Accelerate after many repeats (more gradual than before)
@@ -32,12 +34,12 @@ export function useKeyRepeat(onKeyPress: () => void) {
           clearInterval(intervalRef.current);
           intervalRef.current = setInterval(() => {
             haptic();
-            onKeyPress();
+            onKeyPressRef.current();
           }, 80); // Fast repeat (was 50, now slower)
         }
       }, 150); // Initial repeat speed (was 120, now slower)
     }, 500); // Initial delay before repeat starts (was 400, now longer)
-  }, [onKeyPress]);
+  }, []);
 
   const stopRepeat = useCallback(() => {
     if (timeoutRef.current) {

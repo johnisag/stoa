@@ -16,7 +16,10 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     const { id } = await params;
     const workflow = getSavedWorkflow(id);
     if (!workflow) {
-      return NextResponse.json({ error: "Workflow not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Workflow not found" },
+        { status: 404 }
+      );
     }
     return NextResponse.json({ workflow });
   } catch (error) {
@@ -47,14 +50,14 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     }
     const parsedDoc = parseBuilderDoc(JSON.stringify(doc ?? null));
     if (!parsedDoc) {
-      return NextResponse.json(
-        { error: "doc is malformed" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "doc is malformed" }, { status: 400 });
     }
     const workflow = updateSavedWorkflow(id, { name, doc: parsedDoc });
     if (!workflow) {
-      return NextResponse.json({ error: "Workflow not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Workflow not found" },
+        { status: 404 }
+      );
     }
     return NextResponse.json({ workflow });
   } catch (error) {
@@ -71,7 +74,10 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
     if (!deleteSavedWorkflow(id)) {
-      return NextResponse.json({ error: "Workflow not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Workflow not found" },
+        { status: 404 }
+      );
     }
     return NextResponse.json({ success: true });
   } catch (error) {

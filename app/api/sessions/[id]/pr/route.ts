@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { getDb, queries, type Session } from "@/lib/db";
+import { requireLocalhost, parseJsonBody } from "@/lib/api-security";
 
 // Use execFile (no shell) so titles/bodies/branches pass as single argv
 // entries with no quoting/escaping. This is cross-platform safe (notably on
@@ -138,6 +139,9 @@ async function createPR(
 
 // GET /api/sessions/[id]/pr - Get PR info for session
 export async function GET(request: NextRequest, { params }: RouteParams) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
+
   try {
     const { id } = await params;
     const db = getDb();
@@ -184,10 +188,18 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
 // POST /api/sessions/[id]/pr - Create PR for session
 export async function POST(request: NextRequest, { params }: RouteParams) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
+
+  const parsed = await parseJsonBody<{
+    title?: string;
+    description?: string;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
   try {
     const { id } = await params;
-    const body = await request.json();
-    const { title, description } = body;
+    const { title, description } = parsed.data;
 
     const db = getDb();
     const session = queries.getSession(db).get(id) as Session | undefined;

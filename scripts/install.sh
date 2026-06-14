@@ -5,6 +5,10 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.sh | bash
 #
+# SECURITY NOTE: This installer fetches code from the internet and executes it.
+# For production deployments, pin the remote script to an immutable release tag
+# or SHA and verify checksums before execution. See SECURITY.md for details.
+#
 
 set -e
 

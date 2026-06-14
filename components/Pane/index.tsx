@@ -64,6 +64,12 @@ const GitPanel = dynamic(
   { ssr: false, loading: () => <GitPanelSkeleton /> }
 );
 
+const WorkflowsView = dynamic(
+  () =>
+    import("@/components/views/WorkflowsView").then((mod) => mod.WorkflowsView),
+  { ssr: false }
+);
+
 interface PaneProps {
   paneId: string;
   sessions: Session[];
@@ -530,11 +536,28 @@ export const Pane = memo(function Pane({
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
         >
-          {/* Terminals - one per tab */}
+          {/* Tabs - terminal or workflows */}
           {paneData.tabs.map((tab) => {
             const isActive = tab.id === activeTab?.id;
+            if (tab.view === "workflows") {
+              return (
+                <div
+                  key={tab.id}
+                  className={isActive ? "h-full w-full" : "hidden"}
+                >
+                  <WorkflowsView
+                    sessions={sessions}
+                    activeSessionId={activeTab?.sessionId ?? undefined}
+                    onOpenSession={onSelectSession}
+                    onOpenDispatch={onDispatchClick}
+                    onOpenVerdictInbox={onVerdictInboxClick}
+                    onOpenFleetBoard={onFleetBoardClick}
+                    onClose={() => closeTab(paneId, tab.id)}
+                  />
+                </div>
+              );
+            }
             const savedState = sessionRegistry.getTerminalState(paneId, tab.id);
-
             return (
               <div
                 key={tab.id}
@@ -625,14 +648,31 @@ export const Pane = memo(function Pane({
                 minSize={10}
               >
                 <div className="relative h-full">
-                  {/* Terminals - one per tab */}
+                  {/* Tabs - terminal or workflows */}
                   {paneData.tabs.map((tab) => {
                     const isActive = tab.id === activeTab?.id;
+                    if (tab.view === "workflows") {
+                      return (
+                        <div
+                          key={tab.id}
+                          className={isActive ? "h-full" : "hidden"}
+                        >
+                          <WorkflowsView
+                            sessions={sessions}
+                            activeSessionId={activeTab?.sessionId ?? undefined}
+                            onOpenSession={onSelectSession}
+                            onOpenDispatch={onDispatchClick}
+                            onOpenVerdictInbox={onVerdictInboxClick}
+                            onOpenFleetBoard={onFleetBoardClick}
+                            onClose={() => closeTab(paneId, tab.id)}
+                          />
+                        </div>
+                      );
+                    }
                     const savedState = sessionRegistry.getTerminalState(
                       paneId,
                       tab.id
                     );
-
                     return (
                       <div
                         key={tab.id}

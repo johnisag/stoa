@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, queries, type Group } from "@/lib/db";
+import { parseJsonBody } from "@/lib/api-security";
 
 // GET /api/groups/[...path] - Get a single group
 export async function GET(
@@ -36,9 +37,15 @@ export async function PATCH(
   const { path: pathParts } = await params;
   const path = pathParts.join("/");
 
+  const parsed = await parseJsonBody<{
+    name?: string;
+    expanded?: boolean;
+    sort_order?: number;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
   try {
-    const body = await request.json();
-    const { name, expanded, sort_order } = body;
+    const { name, expanded, sort_order } = parsed.data;
 
     // Check if group exists
     const group = queries.getGroup(db).get(path) as Group | undefined;

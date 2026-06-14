@@ -7,7 +7,7 @@
  * exactly one implementation of the SessionBackend contract.
  */
 
-import { isWindows, resolveBinary } from "../platform";
+import { isWindows, resolveBinary, defaultInteractiveShell } from "../platform";
 import type {
   SessionBackend,
   SessionActivity,
@@ -53,7 +53,7 @@ export class PtyBackend implements SessionBackend {
       );
     } else {
       await this.transport.spawn(name, {
-        binary: process.env.SHELL || "/bin/bash",
+        binary: defaultInteractiveShell(),
         args: ["-c", command],
         cwd,
       });

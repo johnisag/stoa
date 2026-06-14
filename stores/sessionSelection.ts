@@ -34,14 +34,27 @@ export const selectionActions = {
     selectionStore.lastSelectedId = null;
   },
 
+  /**
+   * Reads whether `sessionId` is selected. Because this reads directly from the
+   * Valtio proxy, components should only call it inside `useSnapshot` (or another
+   * subscription) if they need to re-render when the selection changes.
+   */
   isSelected: (sessionId: string) => {
     return selectionStore.selectedIds.has(sessionId);
   },
 
+  /**
+   * Returns the number of selected sessions. Like `isSelected`, this reads the
+   * live proxy; use it inside `useSnapshot` for reactive UI.
+   */
   getCount: () => {
     return selectionStore.selectedIds.size;
   },
 
+  /**
+   * Returns the selected ids as an array. Like `isSelected`, this reads the live
+   * proxy; use it inside `useSnapshot` for reactive UI.
+   */
   getSelectedIds: () => {
     return Array.from(selectionStore.selectedIds);
   },

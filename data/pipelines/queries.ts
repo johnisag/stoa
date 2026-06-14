@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  skipToken,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 // Type-only imports are erased at build, so pulling the pipeline types from the
 // (server-touching) lib/pipeline module does NOT drag node builtins into the
 // client bundle — the same trick data/dispatch/queries.ts uses for lib/dispatch.
@@ -44,9 +49,8 @@ export function useListRuns(enabled = true) {
  */
 export function usePollRun(id: string | null, enabled = true) {
   return useQuery({
-    queryKey: pipelineKeys.detail(id ?? ""),
-    queryFn: () => fetchRun(id as string),
-    enabled: enabled && !!id,
+    queryKey: pipelineKeys.detail(id ?? "__disabled__"),
+    queryFn: enabled && id ? () => fetchRun(id) : skipToken,
     staleTime: 1500,
     refetchInterval: (query) =>
       isRunActive(query.state.data as PipelineRun | undefined) ? 2500 : false,

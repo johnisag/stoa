@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useInbox } from "@/data/verdict-inbox/queries";
 import {
   useBoardQuery,
@@ -58,19 +58,23 @@ export function useFleetBoard(open: boolean) {
     repoById,
     total,
     needsMeCount,
-    isLoading: inbox.isLoading || board.isLoading || pending.isLoading,
-    isError: inbox.isError || board.isError || pending.isError,
+    isLoading:
+      inbox.isLoading ||
+      board.isLoading ||
+      pending.isLoading ||
+      repos.isLoading,
+    isError: inbox.isError || board.isError || pending.isError || repos.isError,
     isFetching:
       inbox.isFetching ||
       board.isFetching ||
       pending.isFetching ||
       repos.isFetching,
     // Re-fetch every read model behind the board on a manual Retry.
-    refetch: () => {
+    refetch: useCallback(() => {
       void inbox.refetch();
       void board.refetch();
       void pending.refetch();
       void repos.refetch();
-    },
+    }, [inbox.refetch, board.refetch, pending.refetch, repos.refetch]),
   };
 }

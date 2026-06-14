@@ -54,6 +54,7 @@ vi.mock("@/lib/dispatch/merge", () => ({
     cwd: string;
     prNumber: number;
     repoSlug?: string;
+    matchHeadCommit?: string | null;
   }) => {
     state.mergeCalls.push(opts);
     if (state.mergeThrows) throw new Error("Pull request is not mergeable");
@@ -170,6 +171,7 @@ describe("nextAutoMergeAction", () => {
     prNumber: 1,
     reviewGate: false,
     reviewDecision: null,
+    reviewSha: null as string | null,
     mergeable: "MERGEABLE",
     checks: "passing" as const,
     verifyGate: false,
@@ -224,7 +226,19 @@ describe("nextAutoMergeAction", () => {
     expect(
       nextAutoMergeAction({ ...gated, reviewDecision: "CHANGES_REQUESTED" })
     ).toBe("wait");
-    expect(nextAutoMergeAction({ ...gated, reviewDecision: "APPROVED" })).toBe(
+    expect(
+      nextAutoMergeAction({
+        ...gated,
+        reviewDecision: "APPROVED",
+        reviewSha: "abc",
+      })
+    ).toBe("merge");
+  });
+
+  it("waits when review-gated and APPROVED but the SHA pin is missing", () => {
+    const gated = { ...ready, reviewGate: true, reviewDecision: "APPROVED" };
+    expect(nextAutoMergeAction({ ...gated, reviewSha: null })).toBe("wait");
+    expect(nextAutoMergeAction({ ...gated, reviewSha: "abc123" })).toBe(
       "merge"
     );
   });
@@ -265,7 +279,12 @@ describe("autoMergePass", () => {
     // Armored: gh runs from the STABLE main checkout (/repo) + --repo, not the
     // worktree (/wt) — so a reclaimed worktree can't ENOENT the merge.
     expect(state.mergeCalls).toEqual([
-      { cwd: "/repo", prNumber: 7, repoSlug: "owner/repo" },
+      {
+        cwd: "/repo",
+        prNumber: 7,
+        repoSlug: "owner/repo",
+        matchHeadCommit: undefined,
+      },
     ]);
     expect(state.statusUpdates).toContainEqual(["merged", "d1"]);
     expect(state.cleanupLabels).toContain("automerge-cleanup-d1");
@@ -318,12 +337,29 @@ describe("autoMergePass", () => {
       repo_path: "/repo",
       repo_slug: "owner/repo",
     };
-    state.rows = [row({ review_decision: "APPROVED" })];
+    state.rows = [row({ review_decision: "APPROVED", review_sha: "abc" })];
     await autoMergePass();
     // Armored: gh runs from the STABLE main checkout (/repo) + --repo, not the
     // worktree (/wt) — so a reclaimed worktree can't ENOENT the merge.
     expect(state.mergeCalls).toEqual([
-      { cwd: "/repo", prNumber: 7, repoSlug: "owner/repo" },
+      {
+        cwd: "/repo",
+        prNumber: 7,
+        repoSlug: "owner/repo",
+        matchHeadCommit: "abc",
+      },
     ]);
+  });
+
+  it("SHA-pins the merge to the cached review_sha", async () => {
+    state.rows = [row({ review_sha: "abc123".repeat(4) })];
+    await autoMergePass();
+    expect(state.mergeCalls).toHaveLength(1);
+    expect(state.mergeCalls[0]).toMatchObject({
+      cwd: "/repo",
+      prNumber: 7,
+      repoSlug: "owner/repo",
+      matchHeadCommit: "abc123".repeat(4),
+    });
   });
 });

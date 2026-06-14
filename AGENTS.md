@@ -62,15 +62,18 @@ macOS, and Linux** — preserving that is a hard requirement, not a nice-to-have
    `components/NewSessionDialog/NewSessionDialog.types.ts` (`AGENT_OPTIONS`). A
    FREE-TEXT / dynamic-model provider needs a FOURTH place too —
    `lib/model-catalog.ts` (`FREE_TEXT_MODEL_AGENTS`).
-3. argv comes from `buildAgentArgs` — **clean tokens, no shell quoting** (it runs
+3. Add the provider id to `lib/command/actions.ts` (`SESSION_AGENT_IDS`) so
+   Command Stoa can create sessions for it. Also review agent-specific
+   allowlists such as `ASK_PROVIDERS` and summarize-fork model clamping.
+4. argv comes from `buildAgentArgs` — **clean tokens, no shell quoting** (it runs
    through a direct spawn). Only wire a flag you've verified.
-4. **Don't impose a static model list** if the agent's models are dynamic. A
+5. **Don't impose a static model list** if the agent's models are dynamic. A
    free-text / dynamic-model provider DOES set `modelFlag` (so its typed model is
    passed) and additionally joins `FREE_TEXT_MODEL_AGENTS` — that makes the UI
    show a free-text model field and drops any foreign static model so it can't
    leak in. This is what Hermes (live-fetches `/v1/models`), Kilo Code, and Kimi
    Code do; an empty model leaves the agent on its own configured default.
-5. Add coverage in `test/providers.test.ts` (the integrity sweep already guards
+6. Add coverage in `test/providers.test.ts` (the integrity sweep already guards
    that every id has a provider object, definition, and picker entry).
 
 ## Testing principles

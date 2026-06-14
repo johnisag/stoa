@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { getLanguageFromExtension } from "@/lib/file-utils";
 
 export interface OpenFile {
@@ -31,6 +31,13 @@ export function useFileEditor(): UseFileEditorReturn {
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Guards against superseded openFile requests: if the user clicks file A then
+  // file B, whichever fetch resolves last must not clobber state.
+  const openGenerationRef = useRef(0);
+  // closeFile is memoized with an empty deps array, so read the latest active
+  // path through a ref instead of capturing the first-render value.
+  const activeFilePathRef = useRef(activeFilePath);
+  activeFilePathRef.current = activeFilePath;
 
   const getFile = useCallback(
     (path: string) => openFiles.find((f) => f.path === path),
@@ -58,12 +65,16 @@ export function useFileEditor(): UseFileEditorReturn {
         return;
       }
 
+      const generation = ++openGenerationRef.current;
       setLoading(true);
       try {
         const res = await fetch(
           `/api/files/content?path=${encodeURIComponent(path)}`
         );
         const data = await res.json();
+
+        // Ignore stale responses so a fast second click wins.
+        if (generation !== openGenerationRef.current) return;
 
         if (data.error) {
           console.error("Failed to open file:", data.error);
@@ -84,27 +95,36 @@ export function useFileEditor(): UseFileEditorReturn {
       } catch (error) {
         console.error("Failed to open file:", error);
       } finally {
-        setLoading(false);
+        if (generation === openGenerationRef.current) {
+          setLoading(false);
+        }
       }
     },
     [openFiles]
   );
 
   const closeFile = useCallback((path: string) => {
+    let nextActive: string | null = null;
     setOpenFiles((prev) => {
       const newFiles = prev.filter((f) => f.path !== path);
       // Update active file if we closed the active one
-      setActiveFilePath((currentActive) => {
-        if (currentActive !== path) return currentActive;
-        // Select the next file, or previous, or null
-        const closedIndex = prev.findIndex((f) => f.path === path);
-        if (newFiles.length === 0) return null;
-        if (closedIndex >= newFiles.length)
-          return newFiles[newFiles.length - 1].path;
-        return newFiles[closedIndex].path;
-      });
+      const currentActive = activeFilePathRef.current;
+      if (currentActive !== path) {
+        nextActive = currentActive;
+        return newFiles;
+      }
+      const closedIndex = prev.findIndex((f) => f.path === path);
+      if (newFiles.length === 0) {
+        nextActive = null;
+      } else if (closedIndex >= newFiles.length) {
+        nextActive = newFiles[newFiles.length - 1].path;
+      } else {
+        nextActive = newFiles[closedIndex].path;
+      }
       return newFiles;
     });
+    setActiveFilePath(nextActive);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const updateContent = useCallback((path: string, content: string) => {
@@ -163,6 +183,7 @@ export function useFileEditor(): UseFileEditorReturn {
   const reset = useCallback(() => {
     setOpenFiles([]);
     setActiveFilePath(null);
+    openGenerationRef.current = 0;
   }, []);
 
   return {

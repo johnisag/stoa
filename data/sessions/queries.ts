@@ -58,6 +58,12 @@ export function useDeleteSession() {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
     },
+    onSuccess: (_data, sessionId) => {
+      // The per-session ceremony entry is no longer relevant once deleted.
+      queryClient.invalidateQueries({
+        queryKey: sessionKeys.ceremony(sessionId),
+      });
+    },
   });
 }
 
@@ -109,6 +115,7 @@ export function useForkSession() {
       const res = await fetch(`/api/sessions/${sessionId}/fork`, {
         method: "POST",
       });
+      if (!res.ok) throw new Error("Failed to fork session");
       const data = await res.json();
       return data.session || null;
     },
@@ -142,7 +149,11 @@ export function useRespondToSession() {
       if (!res.ok) {
         const msg = respondErrorMessage(res.status);
         if (msg) throw new Error(msg);
-        return { stale: true }; // benign — session already gone / past the prompt
+        // Only treat "session already gone" as benign; real server errors should surface.
+        if (res.status === 404 || res.status === 410) {
+          return { stale: true };
+        }
+        throw new Error(`Failed to respond to session (HTTP ${res.status})`);
       }
       return res.json();
     },
@@ -162,6 +173,7 @@ export function useSummarizeSession() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ createFork: true }),
       });
+      if (!res.ok) throw new Error("Failed to summarize session");
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       return data.newSession || null;
@@ -180,7 +192,7 @@ export function useSummarizeSession() {
  */
 export function useSessionDigest(sessionId: string, enabled: boolean) {
   return useQuery({
-    queryKey: ["session-digest", sessionId],
+    queryKey: sessionKeys.digest(sessionId),
     enabled,
     queryFn: async (): Promise<{ summary: string }> => {
       const res = await fetch(`/api/sessions/${sessionId}/summarize`);
@@ -315,11 +327,11 @@ export function useCreateSession() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
       });
-      const data = await res.json();
-      if (data.error) {
-        throw new Error(data.error);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to create session");
       }
-      return data;
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: sessionKeys.list() });

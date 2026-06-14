@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "setup": "bash scripts/setup.sh",
+    "setup": "node scripts/setup.js",
     "postinstall": "node scripts/postinstall.js",
     "prepare": "husky"
   },
@@ -24,18 +24,19 @@
     ".github/workflows-disabled/claude.yml": "2d89f2c5d04afa2cb64888b1155f5e71a23122319e7d2c8fac4e10b8bf27acb0",
     ".github/workflows/test.yml": "0fe3163206193f9b9c7a284377f94a2dbce74e85ca52f7b2fe937e27e47585b0",
     ".husky/pre-commit": "042eaf5386ffbfccd14639db8112e12d297a7d4d2caf25c36a4b10edcb822fc2",
-    "scripts/guard-surfaces.mjs": "a457e1a7c92f0c811bdff686180123f07bcd256fd2f7ce5da0d207dbb5ab0f1d",
-    "scripts/install.ps1": "b4f451e77f41ac48862344c3d8d4b5856a609c6140a97fc736c5e67b5960a633",
-    "scripts/install.sh": "6b673db658df993ace3291280996f8fca499e4bbabca441c87fd95113ba95149",
-    "scripts/lib/ai-clis.sh": "0019827ec924018f9fb91a26cf64cc020ddf097aca7d36dc58feedae2cc048fb",
+    "scripts/guard-surfaces.mjs": "e0865472565942a572f2832c7a4f781800f9c273a7f166572c6bd14a5aa6e36f",
+    "scripts/install.ps1": "95b67316e2546cb9d56d742d457176dd4d6ed98fbedfca4bc577738bd74a74ef",
+    "scripts/install.sh": "40faad388f4c3640e49e4ed49e97c0f248ed18f72e7e43c7068f10fac1e34d09",
+    "scripts/lib/ai-clis.sh": "209457010f89b2e7893e5ed6f039cdafaa1110c36070efcc2226a4c07c345d96",
     "scripts/lib/commands.sh": "46bc5ae0cb41db3af2ef99874e9cf0953b8bba6adadc1b1d6ce964e40e44fc2c",
-    "scripts/lib/common.sh": "e6ab975d4bde0ae409664e3f553ab125febbe139313314e4df2de9207762397f",
-    "scripts/lib/prerequisites.sh": "0bf66698f1721358f4eacbaff50b4f696b1c3661662d93e122f118094d8fa94b",
+    "scripts/lib/common.sh": "f2fd49e24bbc99347f61e7ebc1636e0fe5495dc8e77021e0bac9ee211af6be08",
+    "scripts/lib/prerequisites.sh": "8661ec571d16aac636d1fcc270298e977fca7aa75544c096ab6828c241bee11d",
     "scripts/postinstall.js": "53bb659676007f2c842b753f25436c33471e52581e279057d499b9165cfb8764",
     "scripts/precommit.js": "2481c0499afe3cbf71244606615c6af2804e57f2ab40fc6ebd3f6fedf45b83d5",
     "scripts/pty-host.ts": "fbefb477e3cbc695116715d4d00959352476756736cd17851d6165d675f7e5df",
-    "scripts/setup.sh": "6bbfd80aee21b7ba1d4c120317df49008e48897936adb905e0169216d7fa7488",
+    "scripts/setup.js": "0c36a6039d175ec1ce87b8819171d58907d8e5b8c95b5db66e2b8463dc18a33d",
+    "scripts/setup.sh": "bcf4d5278276b6bf8f90dbacaadc1e30b8954d13b84d06948d08e6880c05495b",
     "scripts/stoa": "4d3a59d282d745607517e128c148a9c8f0ac19fe248fccd81ed8235da71b76db",
-    "scripts/stoa.js": "6be8b053b3846f74dd37f5aac85d3b4e8a12bc8c63dacf0690e35bda0b7cd64a"
+    "scripts/stoa.js": "ae1b4109a9b14cdd799d475f158a79ad64581e4e42ed5749d44685cf0d9391af"
   }
 }

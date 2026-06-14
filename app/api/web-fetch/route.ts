@@ -5,10 +5,14 @@ import { lookup } from "dns/promises";
 import { tmpDir } from "@/lib/platform";
 import { isHttpUrl, htmlToText, isPrivateAddress } from "@/lib/web-fetch";
 import { formatTerminalTextForAgent } from "@/lib/path-display";
+import { parseJsonBody, checkRateLimit } from "@/lib/api-security";
 
 // Bounds so a fetched page can't hang the request or blow up memory: abort the
 // fetch after TIMEOUT_MS and stop reading once we've pulled MAX_BYTES.
-const TIMEOUT_MS = 15_000;
+const TIMEOUT_MS = parseInt(
+  process.env.STOA_WEB_FETCH_TIMEOUT_MS || "15000",
+  10
+);
 const MAX_REDIRECTS = 5;
 
 /**
@@ -108,85 +112,96 @@ async function readCapped(res: Response): Promise<string> {
 // control chars, write it to a temp file, and return { path }. The FilePicker
 // injects that path into the agent's prompt exactly like an uploaded file.
 export async function POST(request: Request) {
-  try {
-    const body = await request.json().catch(() => ({}));
-    const { url } = body as { url?: string };
-
-    if (!url || typeof url !== "string") {
-      return NextResponse.json({ error: "URL is required" }, { status: 400 });
-    }
-    // Scheme guard: only plain http/https web addresses (reject file:, data:,
-    // javascript:, ftp:, ...).
-    if (!isHttpUrl(url)) {
-      return NextResponse.json(
-        { error: "Only http(s) URLs are allowed" },
-        { status: 400 }
-      );
-    }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-    let res: Response;
-    let raw: string;
-    try {
-      res = await safeFetch(url, controller.signal);
-      if (!res.ok) {
-        return NextResponse.json(
-          { error: `Fetch failed with status ${res.status}` },
-          { status: 502 }
-        );
+  const rateLimit = checkRateLimit(
+    request as import("next/server").NextRequest
+  );
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "Rate limit exceeded", retryAfter: rateLimit.retryAfter },
+      {
+        status: 429,
+        headers: rateLimit.retryAfter
+          ? { "Retry-After": String(rateLimit.retryAfter) }
+          : {},
       }
-      raw = await readCapped(res);
-    } catch (err) {
-      const aborted =
-        err instanceof Error &&
-        (err.name === "AbortError" || controller.signal.aborted);
-      // Surface the specific reason (timeout / blocked host / unresolvable /
-      // redirect) so the user can tell a typo from a slow network.
-      const message = aborted
-        ? "Fetch timed out"
-        : err instanceof Error
-          ? err.message
-          : "Could not fetch the URL";
-      return NextResponse.json({ error: message }, { status: 502 });
-    } finally {
-      clearTimeout(timer);
-    }
+    );
+  }
 
-    // Reduce HTML to readable text. Trust the content-type; only sniff when it's
-    // ABSENT (and then only on a document-level signal), so a raw .md/.txt that
-    // merely contains a tag-like token (e.g. `vec<i32>`) rides through unmangled.
-    const contentType = res.headers.get("content-type") || "";
-    const looksHtml = contentType
-      ? contentType.includes("text/html")
-      : /^\s*(<!doctype html|<html[\s>])/i.test(raw);
-    const reduced = looksHtml ? htmlToText(raw) : raw;
+  const parsed = await parseJsonBody<{ url?: string }>(request);
+  if (!parsed.ok) return parsed.response;
 
-    // Strip C0 controls + DEL before this text can reach the agent's pty
-    // (keystroke-injection guard); keeps tab/newline so the layout survives.
-    const text = formatTerminalTextForAgent(reduced);
-    if (!text) {
+  const { url } = parsed.data;
+
+  if (!url || typeof url !== "string") {
+    return NextResponse.json({ error: "URL is required" }, { status: 400 });
+  }
+  // Scheme guard: only plain http/https web addresses (reject file:, data:,
+  // javascript:, ftp:, ...).
+  if (!isHttpUrl(url)) {
+    return NextResponse.json(
+      { error: "Only http(s) URLs are allowed" },
+      { status: 400 }
+    );
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  let res: Response;
+  let raw: string;
+  try {
+    res = await safeFetch(url, controller.signal);
+    if (!res.ok) {
       return NextResponse.json(
-        { error: "No readable text found at that URL" },
-        { status: 422 }
+        { error: `Fetch failed with status ${res.status}` },
+        { status: 502 }
       );
     }
-
-    // Write to a temp file and return its path — the FilePicker injects the
-    // path like any attached file. Header records the source URL for the agent.
-    const tempDir = path.join(tmpDir(), "stoa-web-fetch");
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-    const filePath = path.join(tempDir, tempNameForUrl(url));
-    const header = formatTerminalTextForAgent(`Source: ${url}`);
-    fs.writeFileSync(filePath, `${header}\n\n${text}\n`, "utf-8");
-
-    return NextResponse.json({ path: filePath });
-  } catch (error) {
-    console.error("web-fetch error:", error);
-    const msg = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    raw = await readCapped(res);
+  } catch (err) {
+    const aborted =
+      err instanceof Error &&
+      (err.name === "AbortError" || controller.signal.aborted);
+    // Surface the specific reason (timeout / blocked host / unresolvable /
+    // redirect) so the user can tell a typo from a slow network.
+    const message = aborted
+      ? "Fetch timed out"
+      : err instanceof Error
+        ? err.message
+        : "Could not fetch the URL";
+    return NextResponse.json({ error: message }, { status: 502 });
+  } finally {
+    clearTimeout(timer);
   }
+
+  // Reduce HTML to readable text. Trust the content-type; only sniff when it's
+  // ABSENT (and then only on a document-level signal), so a raw .md/.txt that
+  // merely contains a tag-like token (e.g. `vec<i32>`) rides through unmangled.
+  const contentType = res.headers.get("content-type") || "";
+  const looksHtml = contentType
+    ? contentType.includes("text/html")
+    : /^\s*(<!doctype html|<html[\s>])/i.test(raw);
+  const reduced = looksHtml ? htmlToText(raw) : raw;
+
+  // Strip C0 controls + DEL before this text can reach the agent's pty
+  // (keystroke-injection guard); keeps tab/newline so the layout survives.
+  const text = formatTerminalTextForAgent(reduced);
+  if (!text) {
+    return NextResponse.json(
+      { error: "No readable text found at that URL" },
+      { status: 422 }
+    );
+  }
+
+  // Write to a temp file and return its path — the FilePicker injects the
+  // path like any attached file. Header records the source URL for the agent.
+  const tempDir = path.join(tmpDir(), "stoa-web-fetch");
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+  const filePath = path.join(tempDir, tempNameForUrl(url));
+  const header = formatTerminalTextForAgent(`Source: ${url}`);
+  fs.writeFileSync(filePath, `${header}\n\n${text}\n`, "utf-8");
+
+  return NextResponse.json({ path: filePath });
 }

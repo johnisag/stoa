@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Inbox, HelpCircle, Loader2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
@@ -57,28 +57,41 @@ export function VerdictInboxView({
     i.reviewGate && !i.reviewDecision && i.state !== "failed";
   const approved = (i: InboxItem) => i.reviewDecision === "APPROVED";
 
-  const match = (i: InboxItem) =>
-    filter === "needs-me"
-      ? needsMe(i)
-      : filter === "in-review"
-        ? inReview(i)
-        : filter === "approved"
-          ? approved(i)
-          : true;
-  const filtered = items.filter(match);
+  const {
+    filtered,
+    counts: { allCount, needsMeCount, inReviewCount, approvedCount },
+  } = useMemo(() => {
+    const match = (i: InboxItem) =>
+      filter === "needs-me"
+        ? needsMe(i)
+        : filter === "in-review"
+          ? inReview(i)
+          : filter === "approved"
+            ? approved(i)
+            : true;
+    return {
+      filtered: items.filter(match),
+      counts: {
+        allCount: items.length,
+        needsMeCount: items.filter(needsMe).length,
+        inReviewCount: items.filter(inReview).length,
+        approvedCount: items.filter(approved).length,
+      },
+    };
+  }, [items, filter]);
 
   const tabs: { key: Filter; label: string; count: number }[] = [
-    { key: "all", label: "All", count: items.length },
-    { key: "needs-me", label: "Needs me", count: items.filter(needsMe).length },
+    { key: "all", label: "All", count: allCount },
+    { key: "needs-me", label: "Needs me", count: needsMeCount },
     {
       key: "in-review",
       label: "In review",
-      count: items.filter(inReview).length,
+      count: inReviewCount,
     },
     {
       key: "approved",
       label: "Approved",
-      count: items.filter(approved).length,
+      count: approvedCount,
     },
   ];
 

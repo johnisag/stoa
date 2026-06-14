@@ -16,6 +16,7 @@ interface SearchResponse {
 
 async function fetchRipgrepAvailability(): Promise<boolean> {
   const res = await fetch("/api/code-search/available");
+  if (!res.ok) throw new Error("Failed to check ripgrep availability");
   const data: AvailabilityResponse = await res.json();
   return data.available;
 }

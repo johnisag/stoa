@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isGitRepo } from "@/lib/git-status";
+import { isGitRepo, expandPath } from "@/lib/git-status";
 import {
   checkGhCli,
   getCommitsSinceBase,
@@ -11,19 +11,34 @@ import {
   getBaseBranch,
 } from "@/lib/pr";
 import { generatePRContent } from "@/lib/pr-generation";
+import {
+  parseJsonBody,
+  getAllowedPathRoots,
+  resolveSandboxedPath,
+} from "@/lib/api-security";
 
 // GET /api/git/pr - Get PR status (fast - no AI generation)
 // Use ?generate=true to also generate suggested title/body (slow - uses Claude CLI)
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
-  const path = searchParams.get("path");
+  const rawPath = searchParams.get("path");
   const shouldGenerate = searchParams.get("generate") === "true";
 
-  if (!path) {
+  if (!rawPath) {
     return NextResponse.json({ error: "Path is required" }, { status: 400 });
   }
 
-  if (!isGitRepo(path)) {
+  const expandedPath = expandPath(rawPath);
+  const roots = getAllowedPathRoots();
+  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Path is outside the allowed workspace" },
+      { status: 403 }
+    );
+  }
+
+  if (!isGitRepo(expandedPath)) {
     return NextResponse.json(
       { error: "Not a git repository" },
       { status: 400 }
@@ -41,8 +56,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const branch = getCurrentBranch(path);
-    const baseBranch = getBaseBranch(path);
+    const branch = getCurrentBranch(expandedPath);
+    const baseBranch = getBaseBranch(expandedPath);
 
     // Check if on main/master (can't create PR from there)
     if (branch === "main" || branch === "master") {
@@ -53,10 +68,10 @@ export async function GET(request: NextRequest) {
     }
 
     // Check if PR already exists
-    const existingPR = getPRForBranch(path, branch);
+    const existingPR = getPRForBranch(expandedPath, branch);
 
     // Get commits for listing
-    const commits = getCommitsSinceBase(path, baseBranch);
+    const commits = getCommitsSinceBase(expandedPath, baseBranch);
 
     // Only generate suggested content if explicitly requested (for PR creation flow)
     let suggestedTitle: string | undefined;
@@ -64,7 +79,7 @@ export async function GET(request: NextRequest) {
 
     if (shouldGenerate) {
       try {
-        const generated = await generatePRContent(path, baseBranch);
+        const generated = await generatePRContent(expandedPath, baseBranch);
         suggestedTitle = generated.title;
         suggestedBody = generated.description;
       } catch {
@@ -94,44 +109,52 @@ export async function GET(request: NextRequest) {
 
 // POST /api/git/pr - Create a new PR
 export async function POST(request: NextRequest) {
+  const parsed = await parseJsonBody<{
+    path?: string;
+    title?: string;
+    description?: string;
+    baseBranch?: string;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
+  const body = parsed.data;
+  const { path: rawPath, title, description, baseBranch: customBase } = body;
+
+  if (!rawPath) {
+    return NextResponse.json({ error: "Path is required" }, { status: 400 });
+  }
+
+  if (!title) {
+    return NextResponse.json({ error: "Title is required" }, { status: 400 });
+  }
+
+  const expandedPath = expandPath(rawPath);
+  const roots = getAllowedPathRoots();
+  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Path is outside the allowed workspace" },
+      { status: 403 }
+    );
+  }
+
+  if (!isGitRepo(expandedPath)) {
+    return NextResponse.json(
+      { error: "Not a git repository" },
+      { status: 400 }
+    );
+  }
+
+  if (!checkGhCli()) {
+    return NextResponse.json(
+      { error: "GitHub CLI not installed or not authenticated" },
+      { status: 400 }
+    );
+  }
+
   try {
-    const body = await request.json();
-    const {
-      path,
-      title,
-      description,
-      baseBranch: customBase,
-    } = body as {
-      path: string;
-      title: string;
-      description: string;
-      baseBranch?: string;
-    };
-
-    if (!path) {
-      return NextResponse.json({ error: "Path is required" }, { status: 400 });
-    }
-
-    if (!title) {
-      return NextResponse.json({ error: "Title is required" }, { status: 400 });
-    }
-
-    if (!isGitRepo(path)) {
-      return NextResponse.json(
-        { error: "Not a git repository" },
-        { status: 400 }
-      );
-    }
-
-    if (!checkGhCli()) {
-      return NextResponse.json(
-        { error: "GitHub CLI not installed or not authenticated" },
-        { status: 400 }
-      );
-    }
-
-    const branch = getCurrentBranch(path);
-    const baseBranch = customBase || getBaseBranch(path);
+    const branch = getCurrentBranch(expandedPath);
+    const baseBranch = customBase || getBaseBranch(expandedPath);
 
     // Check if on main/master
     if (branch === "main" || branch === "master") {
@@ -142,7 +165,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if PR already exists
-    const existingPR = getPRForBranch(path, branch);
+    const existingPR = getPRForBranch(expandedPath, branch);
     if (existingPR) {
       return NextResponse.json(
         { error: "PR already exists for this branch", pr: existingPR },
@@ -151,7 +174,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Create the PR
-    const pr = createPR(path, branch, baseBranch, title, description || "");
+    const pr = createPR(
+      expandedPath,
+      branch,
+      baseBranch,
+      title,
+      description || ""
+    );
 
     return NextResponse.json({ pr }, { status: 201 });
   } catch (error) {

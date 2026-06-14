@@ -18,6 +18,9 @@ export interface TabData {
   id: string;
   sessionId: string | null;
   attachedTmux: string | null;
+  /** Non-terminal tab kind. Undefined is treated as "terminal" for backward
+   * compatibility with persisted pane state from before view tabs existed. */
+  view?: "terminal" | "workflows";
 }
 
 export interface PaneData {
@@ -36,12 +39,13 @@ export function generateTabId(): string {
   return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-// Create a new tab
-export function createTab(): TabData {
+// Create a new tab. Defaults to a terminal tab for backward compatibility.
+export function createTab(view: TabData["view"] = "terminal"): TabData {
   return {
     id: generateTabId(),
     sessionId: null,
     attachedTmux: null,
+    view,
   };
 }
 

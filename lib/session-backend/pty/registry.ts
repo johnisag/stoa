@@ -13,7 +13,13 @@
  */
 
 import * as pty from "node-pty";
-import { isWindows, homeDir, expandHome, resolveBinary } from "../../platform";
+import {
+  isWindows,
+  homeDir,
+  expandHome,
+  resolveBinary,
+  defaultInteractiveShell,
+} from "../../platform";
 import { PtySession } from "./pty-session";
 
 /** The process-wide registry. Survives WebSocket lifecycles, dies with the Node process. */
@@ -144,7 +150,7 @@ export function spawnShellSession(
 ): PtySession {
   const shell = isWindows
     ? resolveBinary("pwsh") || process.env.ComSpec || "powershell.exe"
-    : process.env.SHELL || "/bin/bash";
+    : defaultInteractiveShell();
   return spawnSession(key, {
     binary: shell,
     args: [],
@@ -168,6 +174,10 @@ export async function killSessionAndWait(
 ): Promise<void> {
   const session = sessions.get(key);
   if (session) {
+    // Mark the session as dying BEFORE awaiting process exit so any concurrent
+    // attach sees the flag and rejects instead of subscribing to a session that
+    // is about to be deleted from the registry.
+    session.markDying();
     await session.killAndWait(timeoutMs);
     sessions.delete(key);
   }

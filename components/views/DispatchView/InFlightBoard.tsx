@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import {
   Loader2,
   GitPullRequest,
@@ -31,7 +31,7 @@ import {
 import { AGENT_BADGE, STATUS_META, repoUrl, timeAgo } from "./shared";
 import { taskLabel } from "@/lib/dispatch/task-label";
 
-function Card({
+const Card = memo(function Card({
   d,
   repo,
 }: {
@@ -367,7 +367,7 @@ function Card({
       )}
     </div>
   );
-}
+});
 
 const GROUPS: {
   key: string;

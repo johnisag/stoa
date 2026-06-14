@@ -1,4 +1,9 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  skipToken,
+  useQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { ProjectRepository } from "@/lib/db";
 import { repositoryKeys } from "./keys";
 import { projectKeys } from "@/data/projects/keys";
@@ -14,9 +19,8 @@ async function fetchProjectRepositories(
 
 export function useProjectRepositories(projectId: string | undefined) {
   return useQuery({
-    queryKey: repositoryKeys.list(projectId || ""),
-    queryFn: () => fetchProjectRepositories(projectId!),
-    enabled: !!projectId,
+    queryKey: repositoryKeys.list(projectId ?? "__disabled__"),
+    queryFn: projectId ? () => fetchProjectRepositories(projectId) : skipToken,
     staleTime: 30000,
   });
 }

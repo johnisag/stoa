@@ -55,7 +55,9 @@ export function useUpdateSavedWorkflow() {
         body: JSON.stringify(input),
       });
       if (!res.ok) {
-        throw new Error((await res.json()).error || "Failed to update workflow");
+        throw new Error(
+          (await res.json()).error || "Failed to update workflow"
+        );
       }
       return (await res.json()).workflow as SavedWorkflow;
     },

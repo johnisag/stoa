@@ -53,6 +53,8 @@ export function useSpeechRecognition(
   const [isSupported, setIsSupported] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const lastTranscriptRef = useRef("");
+  const onTranscriptRef = useRef(onTranscript);
+  onTranscriptRef.current = onTranscript;
 
   useEffect(() => {
     // Check for browser support
@@ -92,7 +94,7 @@ export function useSpeechRecognition(
         // Only send new final transcripts
         if (finalTranscript && finalTranscript !== lastTranscriptRef.current) {
           lastTranscriptRef.current = finalTranscript;
-          onTranscript(finalTranscript, true);
+          onTranscriptRef.current(finalTranscript, true);
         }
       };
 
@@ -104,7 +106,7 @@ export function useSpeechRecognition(
         recognitionRef.current.abort();
       }
     };
-  }, [onTranscript]);
+  }, []);
 
   const toggle = useCallback(() => {
     if (!recognitionRef.current) return;

@@ -5,6 +5,7 @@ import {
   validateWorkingDirectory,
   InvalidModelError,
 } from "@/lib/projects";
+import { parseJsonBody } from "@/lib/api-security";
 
 // GET /api/projects - List all projects with dev server configs
 export async function GET() {
@@ -22,31 +23,54 @@ export async function GET() {
 
 // POST /api/projects - Create a new project
 export async function POST(request: NextRequest) {
+  const parsed = await parseJsonBody<{
+    name?: string;
+    workingDirectory?: string;
+    agentType?: string;
+    defaultModel?: string;
+    devServers?: Array<{
+      name: string;
+      type: string;
+      command: string;
+      port?: number;
+      portEnvVar?: string;
+    }>;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+
+  const { name, workingDirectory, agentType, defaultModel, devServers } =
+    parsed.data;
+
+  if (!name || !workingDirectory) {
+    return NextResponse.json(
+      { error: "Name and working directory are required" },
+      { status: 400 }
+    );
+  }
+
+  if (!validateWorkingDirectory(workingDirectory)) {
+    return NextResponse.json(
+      { error: "Working directory does not exist" },
+      { status: 400 }
+    );
+  }
+
   try {
-    const body = await request.json();
-    const { name, workingDirectory, agentType, defaultModel, devServers } =
-      body;
-
-    if (!name || !workingDirectory) {
-      return NextResponse.json(
-        { error: "Name and working directory are required" },
-        { status: 400 }
-      );
-    }
-
-    if (!validateWorkingDirectory(workingDirectory)) {
-      return NextResponse.json(
-        { error: "Working directory does not exist" },
-        { status: 400 }
-      );
-    }
-
     const project = createProject({
       name,
       workingDirectory,
-      agentType,
+      agentType: agentType as
+        | "claude"
+        | "codex"
+        | "hermes"
+        | "kilo"
+        | "kimi"
+        | "shell"
+        | undefined,
       defaultModel,
-      devServers,
+      devServers: devServers as
+        | import("@/lib/projects").CreateDevServerOptions[]
+        | undefined,
     });
 
     return NextResponse.json({ project }, { status: 201 });

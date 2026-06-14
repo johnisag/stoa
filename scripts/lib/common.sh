@@ -87,3 +87,17 @@ get_tailscale_ip() {
         tailscale ip -4 2>/dev/null | head -1
     fi
 }
+
+# Remote installers fetch and execute code from the internet. They are gated off
+# by default so a convenience install cannot silently run an unpinned remote
+# script. Set STOA_ALLOW_REMOTE_INSTALL=1 to opt in, or install the dependency
+# manually and re-run stoa install.
+remote_install_guard() {
+    local name="$1"
+    if [[ "${STOA_ALLOW_REMOTE_INSTALL:-}" == "1" ]]; then
+        return 0
+    fi
+    log_warn "Skipping remote installation of ${name}."
+    log_info "Set STOA_ALLOW_REMOTE_INSTALL=1 to allow remote installers, or install ${name} manually and re-run."
+    return 1
+}

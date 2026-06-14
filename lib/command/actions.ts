@@ -30,8 +30,16 @@ import { getModelOptions } from "@/lib/model-catalog";
 export const COMMAND_ACTION_IDS = ["create_session"] as const;
 
 /** Agents a created session may run. A subset of PROVIDER_IDS — excludes "shell"
- * (the chatbox creates AI-agent sessions, not bare terminals). */
-export const SESSION_AGENT_IDS = ["claude", "codex", "hermes"] as const;
+ * (the chatbox creates AI-agent sessions, not bare terminals). Keep this in sync
+ * with the New Session dialog options (components/NewSessionDialog) so Command
+ * Stoa can create sessions for every AI agent the UI advertises. */
+export const SESSION_AGENT_IDS = [
+  "claude",
+  "codex",
+  "hermes",
+  "kilo",
+  "kimi",
+] as const;
 export type SessionAgentId = (typeof SESSION_AGENT_IDS)[number];
 
 /** The validated, normalized params for a create_session action. Every field is

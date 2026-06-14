@@ -200,6 +200,32 @@ describe("pty-host daemon (Tier 2)", () => {
     client.close();
   });
 
+  it("re-key daemon subscriptions on rename so detach under the new key works", async () => {
+    const client = new HostClient();
+    await client.spawn("host-rename-old", {
+      binary: "node",
+      args: ["-e", "setInterval(()=>{},1000)"],
+      cwd: process.cwd(),
+    });
+
+    await client.rename("host-rename-old", "host-rename-new");
+    expect(await client.exists("host-rename-old")).toBe(false);
+    expect(await client.exists("host-rename-new")).toBe(true);
+
+    // Attach under the new key and detach: this must not throw and the session
+    // must remain alive (the daemon re-keyed its subscription bookkeeping).
+    const { detach } = await client.attach(
+      "host-rename-new",
+      () => {},
+      () => {}
+    );
+    detach();
+    expect(await client.exists("host-rename-new")).toBe(true);
+
+    await client.kill("host-rename-new");
+    client.close();
+  });
+
   it("delivers an exit frame over IPC when the agent process exits", async () => {
     // Contract: when a session's pty exits, the daemon pushes an `exit` frame to
     // every attached client (it doesn't just silently reap). The browser relies
