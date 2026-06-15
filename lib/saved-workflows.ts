@@ -73,13 +73,24 @@ export function createSavedWorkflow(input: {
   name: string;
   doc: BuilderDoc;
 }): SavedWorkflow {
+  // Trim so a padded/whitespace-only name can't be persisted (the API rejects an
+  // empty-after-trim name first; this guards any direct caller too).
+  const name = input.name.trim();
+  if (!name) throw new Error("Workflow name is required");
   const id = randomUUID();
   queries
     .createSavedWorkflow(db)
-    .run(id, input.name, serializeBuilderDoc(input.doc), "[]");
-  return toSavedWorkflow(
-    queries.getSavedWorkflow(db).get(id) as SavedWorkflowRow
-  );
+    .run(id, name, serializeBuilderDoc(input.doc), "[]");
+  const row = queries.getSavedWorkflow(db).get(id) as
+    | SavedWorkflowRow
+    | undefined;
+  // The row was just inserted in the same synchronous better-sqlite3 call, so a
+  // miss is effectively unreachable — but guard the cast so a surprise surfaces a
+  // clear error, not a confusing TypeError deref inside toSavedWorkflow.
+  if (!row) {
+    throw new Error(`Saved workflow ${id} not found immediately after insert`);
+  }
+  return toSavedWorkflow(row);
 }
 
 export function listSavedWorkflows(): SavedWorkflow[] {
@@ -102,6 +113,11 @@ export function updateSavedWorkflow(
   const existing = getSavedWorkflow(id);
   if (!existing) return undefined;
 
+  // Reject an empty-after-trim name (symmetric with createSavedWorkflow; the API
+  // rejects first, this guards a direct caller).
+  const trimmedName = input.name.trim();
+  if (!trimmedName) throw new Error("Workflow name is required");
+
   // Snapshot the version we're about to overwrite. Label it with the shape it
   // captured (steps + notes) so the History menu lists distinguishable entries
   // instead of a column of identical "Save"s.
@@ -121,7 +137,7 @@ export function updateSavedWorkflow(
   queries
     .updateSavedWorkflow(db)
     .run(
-      input.name,
+      trimmedName,
       serializeBuilderDoc(input.doc),
       JSON.stringify(history),
       id

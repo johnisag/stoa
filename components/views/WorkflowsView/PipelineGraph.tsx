@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { layoutDag } from "@/lib/pipeline/graph-layout";
 import type { PipelineSpec, StepStatus } from "@/lib/pipeline/types";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,10 @@ export function PipelineGraph({
   spec: PipelineSpec;
   statusById?: Record<string, StepStatus | undefined>;
 }) {
+  // Per-instance arrowhead id — two PipelineGraphs mounted at once (e.g. a Custom
+  // preview + a RunDetail graph) must not share a marker id (every markerEnd would
+  // resolve to the first one in document order).
+  const arrowId = `stoa-graph-arrow-${useId()}`;
   const layout = layoutDag(spec);
   if (layout.nodes.length === 0) return null;
 
@@ -49,7 +54,7 @@ export function PipelineGraph({
         <defs>
           {/* Arrowhead on the target end of each edge so flow direction reads. */}
           <marker
-            id="stoa-graph-arrow"
+            id={arrowId}
             viewBox="0 0 8 8"
             refX={7}
             refY={4}
@@ -80,7 +85,7 @@ export function PipelineGraph({
               fill="none"
               className="stroke-border"
               strokeWidth={1.5}
-              markerEnd="url(#stoa-graph-arrow)"
+              markerEnd={`url(#${arrowId})`}
             />
           );
         })}

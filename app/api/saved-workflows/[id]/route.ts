@@ -45,14 +45,19 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
   }
   try {
     const { name, doc } = (body ?? {}) as { name?: unknown; doc?: unknown };
-    if (!name || typeof name !== "string") {
+    // Reject a missing OR whitespace-only name (mirrors POST).
+    const trimmedName = typeof name === "string" ? name.trim() : "";
+    if (!trimmedName) {
       return NextResponse.json({ error: "name is required" }, { status: 400 });
     }
     const parsedDoc = parseBuilderDoc(JSON.stringify(doc ?? null));
     if (!parsedDoc) {
       return NextResponse.json({ error: "doc is malformed" }, { status: 400 });
     }
-    const workflow = updateSavedWorkflow(id, { name, doc: parsedDoc });
+    const workflow = updateSavedWorkflow(id, {
+      name: trimmedName,
+      doc: parsedDoc,
+    });
     if (!workflow) {
       return NextResponse.json(
         { error: "Workflow not found" },
