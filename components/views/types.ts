@@ -40,8 +40,8 @@ export interface ViewProps {
   /** Open Insight/Analytics as a pane tab (it's a window now, not a dialog). */
   onOpenAnalytics: () => void;
   onOpenWorkflows: () => void;
-  showVerdictInbox: boolean;
-  setShowVerdictInbox: (show: boolean) => void;
+  /** Open the Verdict Inbox as a pane tab (it's a window now, not a dialog). */
+  onOpenVerdictInbox: () => void;
   /** Open the Fleet Board as a pane tab (it's a window now, not a dialog). */
   onOpenFleetBoard: () => void;
   showChat: boolean;

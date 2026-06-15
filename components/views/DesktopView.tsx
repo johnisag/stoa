@@ -59,7 +59,7 @@ export function DesktopView({
   onOpenDispatch,
   onOpenAnalytics,
   onOpenWorkflows,
-  setShowVerdictInbox,
+  onOpenVerdictInbox,
   onOpenFleetBoard,
   setShowChat,
   onShowShortcuts,
@@ -276,7 +276,7 @@ export function DesktopView({
                 },
                 {
                   id: "verdict-inbox",
-                  onClick: () => setShowVerdictInbox(true),
+                  onClick: onOpenVerdictInbox,
                   count: attentionCount,
                 },
                 {
@@ -433,7 +433,7 @@ export function DesktopView({
         activeSessionWorkingDir={activeSession?.working_directory ?? undefined}
         onOpenDispatch={onOpenDispatch}
         onOpenWorkflows={onOpenWorkflows}
-        onOpenVerdictInbox={() => setShowVerdictInbox(true)}
+        onOpenVerdictInbox={onOpenVerdictInbox}
         onOpenFleetBoard={onOpenFleetBoard}
         onOpenInsight={onOpenAnalytics}
         onNewSession={() => setShowNewSessionDialog(true)}
