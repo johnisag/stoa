@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     const inputPath = searchParams.get("path");
     // The folder PICKER's listing mode (see the sandbox note below). Forced shallow:
     // a crafted browse+recursive call must not deep-enumerate the host.
-    const browse = searchParams.get("browse") === "1";
+    const browse = searchParams.get("browse") === "true";
     const recursive = searchParams.get("recursive") === "true" && !browse;
     // Optional recursion depth (recursive only), clamped so a caller can't ask
     // the server to walk an unbounded tree. Defaults to the historical 2.
@@ -33,9 +33,10 @@ export async function GET(request: NextRequest) {
     const { allowed, resolved } = resolveSandboxedPath(inputPath, roots);
     // Browse mode (the folder picker) intentionally LISTS directories outside the
     // registered workspace roots, so a user can navigate the filesystem to pick a new
-    // project directory. It is name-only — it never reads file contents (that's
-    // /api/files/content, which stays strict) — and rides the same server auth as
-    // every route; it only relaxes the workspace-root check for listing.
+    // project directory. It returns a directory listing only (entry names + their
+    // paths, for navigation) and NEVER file contents (that's /api/files/content, which
+    // stays strict). It rides the same server auth as every route; it only relaxes the
+    // workspace-root check for listing.
     if (!allowed && !browse) {
       return NextResponse.json(
         { error: "Path is outside the allowed workspace" },

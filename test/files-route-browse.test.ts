@@ -1,5 +1,5 @@
 /**
- * /api/files GET — the folder picker's `browse=1` listing mode. It LISTS
+ * /api/files GET — the folder picker's `browse=true` listing mode. It LISTS
  * directories outside the registered workspace roots (so a user can navigate the
  * filesystem to pick a new project dir) while every other caller stays sandboxed,
  * and it is forced shallow (a crafted browse+recursive call must not deep-walk the
@@ -44,12 +44,12 @@ describe("/api/files GET — browse mode (folder picker)", () => {
     expect(listDirectory).not.toHaveBeenCalled();
   });
 
-  it("LISTS an out-of-workspace path when browse=1 (name-only picker mode)", async () => {
+  it("LISTS an out-of-workspace path when browse=true (picker mode, names + paths)", async () => {
     resolveSandboxedPath.mockReturnValue({
       allowed: false,
       resolved: "C:/outside",
     });
-    const res = await GET(req({ path: "C:/outside", browse: "1" }));
+    const res = await GET(req({ path: "C:/outside", browse: "true" }));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.files).toEqual([
@@ -67,7 +67,7 @@ describe("/api/files GET — browse mode (folder picker)", () => {
       resolved: "C:/outside",
     });
     await GET(
-      req({ path: "C:/outside", browse: "1", recursive: "true", depth: "8" })
+      req({ path: "C:/outside", browse: "true", recursive: "true", depth: "8" })
     );
     expect(listDirectory).toHaveBeenCalledWith("C:/outside", {
       recursive: false,
@@ -89,7 +89,7 @@ describe("/api/files GET — browse mode (folder picker)", () => {
   });
 
   it("400s when no path is given", async () => {
-    const res = await GET(req({ browse: "1" }));
+    const res = await GET(req({ browse: "true" }));
     expect(res.status).toBe(400);
   });
 });

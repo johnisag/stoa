@@ -18,9 +18,10 @@ async function fetchDirectory(
     params.set("recursive", "true");
     if (opts.depth != null) params.set("depth", String(opts.depth));
   }
-  // browse=1 = the folder picker's name-only listing, not confined to the
-  // registered workspace roots (so you can navigate to pick a new project dir).
-  if (opts.browse) params.set("browse", "1");
+  // browse = the folder picker's directory listing (names + paths, never file
+  // contents), not confined to the registered workspace roots (so you can navigate
+  // the filesystem to pick a new project dir).
+  if (opts.browse) params.set("browse", "true");
   const res = await fetch(`/api/files?${params}`);
   const data = await res.json();
   if (!res.ok || data.error)

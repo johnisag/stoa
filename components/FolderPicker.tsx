@@ -47,8 +47,8 @@ export function FolderPicker({
     navigateHome,
     pathForSegment,
     separator,
-    // Browse the whole filesystem (name-only) so a user can pick a project folder
-    // anywhere, not just inside an already-registered workspace root.
+    // browse: list the whole filesystem (dir names + paths, never contents) so a
+    // user can pick a project folder anywhere, not just inside a registered root.
   } = useDirectoryBrowser({ initialPath, filter: DIRS_ONLY, browse: true });
 
   // Git repo check for current directory
