@@ -47,7 +47,9 @@ export function FolderPicker({
     navigateHome,
     pathForSegment,
     separator,
-  } = useDirectoryBrowser({ initialPath, filter: DIRS_ONLY });
+    // browse: list the whole filesystem (dir names + paths, never contents) so a
+    // user can pick a project folder anywhere, not just inside a registered root.
+  } = useDirectoryBrowser({ initialPath, filter: DIRS_ONLY, browse: true });
 
   // Git repo check for current directory
   const [isGitRepo, setIsGitRepo] = useState(false);

@@ -26,6 +26,14 @@ interface UseDirectoryBrowserOptions {
    * names. Off by default so the directory-only consumers are unchanged.
    */
   recursiveSearch?: boolean;
+  /**
+   * Opt in to the folder PICKER's listing mode: list directories anywhere on the
+   * host (name-only), not just under the registered workspace roots, so a user can
+   * navigate to pick a NEW project directory. Off by default — every other consumer
+   * (file explorer, terminal attach) stays sandboxed. Applies to the per-directory
+   * listing; the recursive fuzzy-search path is not used with browse.
+   */
+  browse?: boolean;
 }
 
 /** Cap recursive matches so a huge repo can't flood the picker grid. */
@@ -59,7 +67,12 @@ function isRootPath(p: string, roots: string[]): boolean {
 }
 
 export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
-  const { initialPath = "~", filter, recursiveSearch = false } = options;
+  const {
+    initialPath = "~",
+    filter,
+    recursiveSearch = false,
+    browse = false,
+  } = options;
   const filterRef = useRef(filter);
   filterRef.current = filter;
 
@@ -74,7 +87,8 @@ export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
   // Pass a stable placeholder while showing roots so the directory query stays
   // idle and never requests an empty path.
   const { data, isPending, error } = useDirectoryFilesQuery(
-    showRoots ? "~" : requestedPath
+    showRoots ? "~" : requestedPath,
+    browse
   );
 
   // Filesystem roots + OS separator (drive letters on Windows, "/" on POSIX).
