@@ -69,6 +69,13 @@ const WorkflowsView = dynamic(
     import("@/components/views/WorkflowsView").then((mod) => mod.WorkflowsView),
   { ssr: false }
 );
+const FleetBoardView = dynamic(
+  () =>
+    import("@/components/views/FleetBoardView").then(
+      (mod) => mod.FleetBoardView
+    ),
+  { ssr: false }
+);
 
 interface PaneProps {
   paneId: string;
@@ -563,6 +570,22 @@ export const Pane = memo(function Pane({
                 </div>
               );
             }
+            if (tab.view === "fleet-board") {
+              return (
+                <div
+                  key={tab.id}
+                  className={isActive ? "h-full w-full" : "hidden"}
+                >
+                  <FleetBoardView
+                    onOpenSession={onOpenSessionInNewTab ?? onSelectSession}
+                    onOpenDispatch={onDispatchClick}
+                    onOpenWorkflows={onWorkflowsClick}
+                    onOpenVerdictInbox={onVerdictInboxClick}
+                    onClose={() => closeTab(paneId, tab.id)}
+                  />
+                </div>
+              );
+            }
             const savedState = sessionRegistry.getTerminalState(paneId, tab.id);
             return (
               <div
@@ -672,6 +695,24 @@ export const Pane = memo(function Pane({
                             onOpenDispatch={onDispatchClick}
                             onOpenVerdictInbox={onVerdictInboxClick}
                             onOpenFleetBoard={onFleetBoardClick}
+                            onClose={() => closeTab(paneId, tab.id)}
+                          />
+                        </div>
+                      );
+                    }
+                    if (tab.view === "fleet-board") {
+                      return (
+                        <div
+                          key={tab.id}
+                          className={isActive ? "h-full" : "hidden"}
+                        >
+                          <FleetBoardView
+                            onOpenSession={
+                              onOpenSessionInNewTab ?? onSelectSession
+                            }
+                            onOpenDispatch={onDispatchClick}
+                            onOpenWorkflows={onWorkflowsClick}
+                            onOpenVerdictInbox={onVerdictInboxClick}
                             onClose={() => closeTab(paneId, tab.id)}
                           />
                         </div>

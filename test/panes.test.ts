@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { createTab, createPaneData, type TabData } from "@/lib/panes";
+import {
+  createTab,
+  createPaneData,
+  isViewTab,
+  type TabData,
+  type ViewKind,
+} from "@/lib/panes";
 
 describe("lib/panes", () => {
   it("createTab defaults to a terminal view", () => {
@@ -10,9 +16,26 @@ describe("lib/panes", () => {
     expect(tab.id).toBeTruthy();
   });
 
-  it("createTab accepts a workflows view", () => {
-    const tab = createTab("workflows");
-    expect(tab.view).toBe("workflows");
+  it("createTab accepts any fleet view kind", () => {
+    const views: ViewKind[] = [
+      "workflows",
+      "dispatch",
+      "analytics",
+      "verdict-inbox",
+      "fleet-board",
+      "ask",
+    ];
+    for (const view of views) {
+      expect(createTab(view).view).toBe(view);
+    }
+  });
+
+  it("isViewTab: terminal/undefined are NOT views; every other kind is", () => {
+    expect(isViewTab("terminal")).toBe(false);
+    expect(isViewTab(undefined)).toBe(false);
+    expect(isViewTab("workflows")).toBe(true);
+    expect(isViewTab("fleet-board")).toBe(true);
+    expect(isViewTab("ask")).toBe(true);
   });
 
   it("createPaneData seeds a terminal tab", () => {

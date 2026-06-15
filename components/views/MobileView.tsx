@@ -30,7 +30,7 @@ export function MobileView({
   setShowAnalytics,
   onOpenWorkflows,
   setShowVerdictInbox,
-  setShowFleetBoard,
+  onOpenFleetBoard,
   setShowChat,
   showNotificationSettings,
   setShowNotificationSettings,
@@ -120,7 +120,7 @@ export function MobileView({
               setSidebarOpen(false);
             }}
             onShowFleetBoard={() => {
-              setShowFleetBoard(true);
+              onOpenFleetBoard();
               setSidebarOpen(false);
             }}
             onShowNotifications={() => {
@@ -177,7 +177,7 @@ export function MobileView({
         onOpenDispatch={() => setShowDispatch(true)}
         onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={() => setShowVerdictInbox(true)}
-        onOpenFleetBoard={() => setShowFleetBoard(true)}
+        onOpenFleetBoard={onOpenFleetBoard}
         onOpenInsight={() => setShowAnalytics(true)}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
