@@ -37,8 +37,8 @@ export interface ViewProps {
   setShowQuickSwitcher: (show: boolean) => void;
   showDispatch: boolean;
   setShowDispatch: (show: boolean) => void;
-  showAnalytics: boolean;
-  setShowAnalytics: (show: boolean) => void;
+  /** Open Insight/Analytics as a pane tab (it's a window now, not a dialog). */
+  onOpenAnalytics: () => void;
   onOpenWorkflows: () => void;
   showVerdictInbox: boolean;
   setShowVerdictInbox: (show: boolean) => void;

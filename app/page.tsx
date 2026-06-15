@@ -48,7 +48,6 @@ import { resolveModelForAgent } from "@/lib/model-catalog";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { DispatchView } from "@/components/views/DispatchView";
-import { AnalyticsView } from "@/components/views/AnalyticsView";
 
 import { VerdictInboxView } from "@/components/views/VerdictInboxView";
 import { ChatView } from "@/components/views/ChatView";
@@ -189,7 +188,6 @@ function HomeContent() {
     useState(false);
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
   const [showDispatch, setShowDispatch] = useState(false);
-  const [showAnalytics, setShowAnalytics] = useState(false);
 
   const [showVerdictInbox, setShowVerdictInbox] = useState(false);
   const [showChat, setShowChat] = useState(false);
@@ -707,7 +705,7 @@ function HomeContent() {
     else if (action === "open-verdict-inbox") setShowVerdictInbox(true);
     else if (action === "open-fleet-board")
       addViewTab(focusedPaneId, "fleet-board");
-    else if (action === "open-insight") setShowAnalytics(true);
+    else if (action === "open-insight") addViewTab(focusedPaneId, "analytics");
   });
 
   // Pane renderer
@@ -861,8 +859,7 @@ function HomeContent() {
     setShowQuickSwitcher,
     showDispatch,
     setShowDispatch,
-    showAnalytics,
-    setShowAnalytics,
+    onOpenAnalytics: () => addViewTab(focusedPaneId, "analytics"),
     onOpenWorkflows: () => addWorkflowsTab(focusedPaneId),
     showVerdictInbox,
     setShowVerdictInbox,
@@ -941,9 +938,6 @@ function HomeContent() {
         onOpenVerdictInbox={switchFleet(setShowDispatch, setShowVerdictInbox)}
         onOpenFleetBoard={openViewTabFrom(setShowDispatch, "fleet-board")}
       />
-      {/* Insight / analytics over the audit ledger. Self-contained dialog;
-          opened from the Desktop/Mobile nav via setShowAnalytics. */}
-      <AnalyticsView open={showAnalytics} onOpenChange={setShowAnalytics} />
 
       {/* Verdict Inbox — the fleet-wide review queue (dispatch + auto-mode
           sessions). Self-contained; opened via setShowVerdictInbox. */}

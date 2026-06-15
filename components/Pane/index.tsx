@@ -76,6 +76,11 @@ const FleetBoardView = dynamic(
     ),
   { ssr: false }
 );
+const AnalyticsView = dynamic(
+  () =>
+    import("@/components/views/AnalyticsView").then((mod) => mod.AnalyticsView),
+  { ssr: false }
+);
 
 interface PaneProps {
   paneId: string;
@@ -586,6 +591,16 @@ export const Pane = memo(function Pane({
                 </div>
               );
             }
+            if (tab.view === "analytics") {
+              return (
+                <div
+                  key={tab.id}
+                  className={isActive ? "h-full w-full" : "hidden"}
+                >
+                  <AnalyticsView onClose={() => closeTab(paneId, tab.id)} />
+                </div>
+              );
+            }
             const savedState = sessionRegistry.getTerminalState(paneId, tab.id);
             return (
               <div
@@ -713,6 +728,18 @@ export const Pane = memo(function Pane({
                             onOpenDispatch={onDispatchClick}
                             onOpenWorkflows={onWorkflowsClick}
                             onOpenVerdictInbox={onVerdictInboxClick}
+                            onClose={() => closeTab(paneId, tab.id)}
+                          />
+                        </div>
+                      );
+                    }
+                    if (tab.view === "analytics") {
+                      return (
+                        <div
+                          key={tab.id}
+                          className={isActive ? "h-full" : "hidden"}
+                        >
+                          <AnalyticsView
                             onClose={() => closeTab(paneId, tab.id)}
                           />
                         </div>

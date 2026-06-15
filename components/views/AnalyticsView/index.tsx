@@ -3,24 +3,23 @@
 /**
  * Analytics / Insight view — the cockpit lens over the audit-event ledger.
  *
- * A self-contained dialog (like DispatchView) with a segmented control across
- * the lenses: Overview · Performance · Behaviour · Intelligence · Trends ·
+ * A pane TAB (a window like a session, not a dialog) with a segmented control
+ * across the lenses: Overview · Performance · Behaviour · Intelligence · Trends ·
  * Issues. All data comes from one /api/analytics report (react-query); charts
  * are dependency-free inline SVG (see primitives.tsx).
  */
 
 import { useState } from "react";
-import { BarChart3, AlertTriangle, RefreshCw, HelpCircle } from "lucide-react";
+import {
+  BarChart3,
+  AlertTriangle,
+  RefreshCw,
+  HelpCircle,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { useAnalyticsQuery } from "@/data/analytics/queries";
 import type { AnalyticsReport } from "@/lib/analytics/types";
 import { StatCard, BarRow, Sparkline, fmt, fmtDuration } from "./primitives";
@@ -55,18 +54,17 @@ const EVENT_LABELS: Record<string, string> = {
 };
 
 export function AnalyticsView({
-  open,
-  onOpenChange,
+  onClose,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  /** Optional close affordance, used on mobile where the tab strip is hidden. */
+  onClose?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("overview");
   const [windowDays, setWindowDays] = useState<number>(14);
   const [showHelp, setShowHelp] = useState(false);
   const { data, isLoading, isError, refetch, isFetching } = useAnalyticsQuery(
     windowDays,
-    open
+    true
   );
 
   const issueCount = data?.issues.length ?? 0;
@@ -82,117 +80,128 @@ export function AnalyticsView({
   ];
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[85vh] w-[calc(100%-2rem)] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
-        <DialogHeader className="space-y-1 px-6 pt-6 pb-3 text-left">
-          <DialogTitle className="flex items-center gap-2">
-            <BarChart3 className="h-5 w-5" />
-            Insight
-          </DialogTitle>
-          <DialogDescription>
-            Performance, behaviour, and per-provider intelligence over the audit
-            ledger — fully on-box. Last {windowDays} days.
-          </DialogDescription>
-        </DialogHeader>
+    <div className="bg-background flex h-full min-h-0 w-full flex-col gap-0 overflow-hidden">
+      {/* Two-row header (intentional divergence from the 1-row WorkflowsView /
+          FleetBoardView headers): a title/close row, then the wider segmented
+          lens control + window-picker/refresh row that needs its own line. */}
+      <div className="flex items-center justify-between gap-2 px-4 pt-2">
+        <span className="flex min-w-0 items-center gap-2">
+          <BarChart3 className="h-4 w-4 flex-shrink-0" />
+          <span className="text-sm font-medium">Insight</span>
+          <span className="text-muted-foreground truncate text-xs">
+            Last {windowDays} days
+          </span>
+        </span>
+        {onClose && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Close Insight"
+            title="Close Insight"
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
 
-        {/* segmented control + window picker + refresh */}
-        <div className="flex flex-wrap items-center justify-between gap-2 px-6 pb-3">
-          <SegmentedTabs
-            ariaLabel="Insight lenses"
-            value={tab}
-            onChange={setTab}
-            className="max-w-full flex-nowrap overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            tabs={tabs.map((t) => ({
-              key: t.key,
-              label: t.label,
-              badge:
-                t.badge != null
-                  ? {
-                      count: t.badge,
-                      className:
-                        t.key === "issues"
-                          ? hasCritical
-                            ? "bg-red-500/20 text-red-400"
-                            : "bg-yellow-500/20 text-yellow-400"
-                          : undefined,
-                    }
-                  : undefined,
-            }))}
-          />
-          <div className="flex items-center gap-2">
-            <div className="bg-muted inline-flex rounded-md p-0.5 text-xs">
-              {WINDOWS.map((w) => (
-                <button
-                  key={w}
-                  type="button"
-                  aria-pressed={windowDays === w}
-                  onClick={() => setWindowDays(w)}
-                  className={cn(
-                    "min-h-[40px] rounded px-2.5 py-1.5 transition-colors",
-                    windowDays === w
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {w}d
-                </button>
-              ))}
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Refresh"
-              title="Refresh"
-              onClick={() => refetch()}
-            >
-              <RefreshCw
-                className={cn("h-4 w-4", isFetching && "animate-spin")}
-              />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="How Insight works"
-              title="How Insight works"
-              aria-pressed={showHelp}
-              onClick={() => setShowHelp((v) => !v)}
-            >
-              <HelpCircle className="h-4 w-4" />
-            </Button>
+      {/* segmented control + window picker + refresh */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-2">
+        <SegmentedTabs
+          ariaLabel="Insight lenses"
+          value={tab}
+          onChange={setTab}
+          className="max-w-full flex-nowrap overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          tabs={tabs.map((t) => ({
+            key: t.key,
+            label: t.label,
+            badge:
+              t.badge != null
+                ? {
+                    count: t.badge,
+                    className:
+                      t.key === "issues"
+                        ? hasCritical
+                          ? "bg-red-500/20 text-red-400"
+                          : "bg-yellow-500/20 text-yellow-400"
+                        : undefined,
+                  }
+                : undefined,
+          }))}
+        />
+        <div className="flex items-center gap-2">
+          <div className="bg-muted inline-flex rounded-md p-0.5 text-xs">
+            {WINDOWS.map((w) => (
+              <button
+                key={w}
+                type="button"
+                aria-pressed={windowDays === w}
+                onClick={() => setWindowDays(w)}
+                className={cn(
+                  "min-h-[40px] rounded px-2.5 py-1.5 transition-colors",
+                  windowDays === w
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {w}d
+              </button>
+            ))}
           </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Refresh"
+            title="Refresh"
+            onClick={() => refetch()}
+          >
+            <RefreshCw
+              className={cn("h-4 w-4", isFetching && "animate-spin")}
+            />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="How Insight works"
+            title="How Insight works"
+            aria-pressed={showHelp}
+            onClick={() => setShowHelp((v) => !v)}
+          >
+            <HelpCircle className="h-4 w-4" />
+          </Button>
         </div>
+      </div>
 
-        <div
-          className="flex-1 overflow-y-auto px-6 pb-6"
-          role="tabpanel"
-          aria-label={`${tab} insights`}
-        >
-          {showHelp ? (
-            <AnalyticsHelp onClose={() => setShowHelp(false)} />
-          ) : isLoading ? (
-            <Centered>Computing insight…</Centered>
-          ) : isError ? (
-            <Centered>Failed to load analytics. Try refresh.</Centered>
-          ) : !data ? (
-            <Centered>No data yet.</Centered>
-          ) : data.performance.sessionCount === 0 ? (
-            <Centered>
-              No sessions in the last {windowDays} days. Run an agent — the
-              ledger fills as you work.
-            </Centered>
-          ) : (
-            <>
-              {tab === "overview" && <Overview report={data} />}
-              {tab === "performance" && <Performance report={data} />}
-              {tab === "behaviour" && <Behaviour report={data} />}
-              {tab === "intelligence" && <Intelligence report={data} />}
-              {tab === "trends" && <Trends report={data} />}
-              {tab === "issues" && <Issues report={data} />}
-            </>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+      <div
+        className="flex-1 overflow-y-auto px-4 pb-4"
+        role="tabpanel"
+        aria-label={`${tab} insights`}
+      >
+        {showHelp ? (
+          <AnalyticsHelp onClose={() => setShowHelp(false)} />
+        ) : isLoading ? (
+          <Centered>Computing insight…</Centered>
+        ) : isError ? (
+          <Centered>Failed to load analytics. Try refresh.</Centered>
+        ) : !data ? (
+          <Centered>No data yet.</Centered>
+        ) : data.performance.sessionCount === 0 ? (
+          <Centered>
+            No sessions in the last {windowDays} days. Run an agent — the ledger
+            fills as you work.
+          </Centered>
+        ) : (
+          <>
+            {tab === "overview" && <Overview report={data} />}
+            {tab === "performance" && <Performance report={data} />}
+            {tab === "behaviour" && <Behaviour report={data} />}
+            {tab === "intelligence" && <Intelligence report={data} />}
+            {tab === "trends" && <Trends report={data} />}
+            {tab === "issues" && <Issues report={data} />}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
