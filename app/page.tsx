@@ -625,6 +625,17 @@ function HomeContent() {
     [sessions, attachToSession]
   );
 
+  // Open a worker session in a NEW tab beside the current one. Used by the
+  // Workflows view so opening a run's worker sits side-by-side with the
+  // workflows tab instead of replacing it.
+  const handleOpenSessionInNewTab = useCallback(
+    (sessionId: string) => {
+      const session = sessions.find((s) => s.id === sessionId);
+      if (session) openSessionInNewTab(session);
+    },
+    [sessions, openSessionInNewTab]
+  );
+
   // Cycle to the next/previous individually-navigable session (wraps around),
   // over the shared sidebar order (getSwitchableSessionOrder) so Alt+arrows,
   // mobile chevrons, and the pane swipe all agree. Workers are excluded — they
@@ -710,6 +721,7 @@ function HomeContent() {
         onFleetBoardClick={() => setShowFleetBoard(true)}
         onAskStoaClick={isMobile ? () => setShowChat(true) : undefined}
         onSelectSession={handleSelectSession}
+        onOpenSessionInNewTab={handleOpenSessionInNewTab}
       />
     ),
     [
@@ -718,6 +730,7 @@ function HomeContent() {
       registerTerminalRef,
       isMobile,
       handleSelectSession,
+      handleOpenSessionInNewTab,
       setShowDispatch,
       setShowVerdictInbox,
       setShowFleetBoard,

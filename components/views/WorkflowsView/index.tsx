@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { HelpCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
@@ -15,8 +15,11 @@ import { RunsList } from "./RunsList";
 import { RunDetail } from "./RunDetail";
 import { WorkflowsHelp } from "./WorkflowsHelp";
 import { WorkflowBuilder } from "./WorkflowBuilder";
-
-type Tab = "templates" | "build" | "custom" | "examples" | "runs";
+import {
+  loadWorkflowsViewState,
+  saveWorkflowsViewState,
+  type WorkflowsTab as Tab,
+} from "@/lib/workflows-view-state";
 
 /**
  * Workflows control plane — now a pane tab rather than a dialog. Four tabs:
@@ -26,14 +29,23 @@ type Tab = "templates" | "build" | "custom" | "examples" | "runs";
  * templates/examples from lib/pipeline over the existing /api/pipelines backend.
  */
 export function WorkflowsView({
+  tabId,
   sessions,
   activeSessionId,
   onOpenSession,
+  onOpenSessionInNewTab,
   onOpenDispatch,
   onOpenVerdictInbox,
   onOpenFleetBoard,
   onClose,
 }: {
+  /**
+   * The pane tab id this view lives in. Used to persist the view (sub-tab,
+   * picked template, open run) per tab so it survives a reload — the way a
+   * session tab re-attaches to its backend. Optional for callers that don't
+   * have one (persistence is simply skipped).
+   */
+  tabId?: string;
   sessions: Session[];
   activeSessionId?: string;
   /**
@@ -41,6 +53,12 @@ export function WorkflowsView({
    * threaded down to RunDetail; supplied from the pane (attach machinery).
    */
   onOpenSession?: (sessionId: string) => void;
+  /**
+   * Open a finished step's worker in a NEW pane tab (side-by-side with this
+   * workflows tab) instead of replacing it. Preferred over onOpenSession when
+   * supplied — it's the "workflows sit next to sessions" promise.
+   */
+  onOpenSessionInNewTab?: (sessionId: string) => void;
   /** Jump to a sibling fleet dialog (opens the target while this tab stays open).
    * Optional — each renders an icon in the header; wired in the pane. */
   onOpenDispatch?: () => void;
@@ -49,10 +67,20 @@ export function WorkflowsView({
   /** Optional close affordance, used on mobile where the tab strip is hidden. */
   onClose?: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>("templates");
-  const [pickedTemplate, setPickedTemplate] = useState<string | null>(null);
-  const [openRunId, setOpenRunId] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
+  // Seed from any persisted per-tab state (restored on reload). Read once on
+  // mount — the component is keyed by tab id, so a fresh mount per tab.
+  const [restored] = useState(() => loadWorkflowsViewState(tabId));
+  const [tab, setTab] = useState<Tab>(restored.tab);
+  const [pickedTemplate, setPickedTemplate] = useState<string | null>(
+    restored.pickedTemplate
+  );
+  const [openRunId, setOpenRunId] = useState<string | null>(restored.openRunId);
+  const [showHelp, setShowHelp] = useState(restored.showHelp);
+
+  // Persist the view whenever it changes so a reload lands back where we were.
+  useEffect(() => {
+    saveWorkflowsViewState(tabId, { tab, pickedTemplate, openRunId, showHelp });
+  }, [tabId, tab, pickedTemplate, openRunId, showHelp]);
 
   // Drives the "Runs" tab's active-count badge (deduped with RunsList's query).
   const { data: runs = [] } = useListRuns(true);
@@ -183,7 +211,7 @@ export function WorkflowsView({
             runId={openRunId}
             open={true}
             onBack={() => setOpenRunId(null)}
-            onOpenSession={onOpenSession}
+            onOpenSession={onOpenSessionInNewTab ?? onOpenSession}
           />
         ) : (
           <RunsList open={true} onOpen={setOpenRunId} />
