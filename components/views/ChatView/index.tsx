@@ -64,16 +64,18 @@ const EXAMPLE_QUESTIONS = [
 ];
 
 /**
- * Ask Stoa — a self-contained chat dialog that can both ANSWER and ACT. The user
- * asks natural-language questions about their fleet + sessions, and a chosen agent
- * (Claude or Codex) responds via the /api/command/propose backend, grounded in a
- * live fleet-state snapshot. A request the agent maps to an allowlisted action
- * (create_session) comes back as a CONFIRM CARD; nothing runs until the user
- * confirms, which calls /api/command/execute (re-validated + audited server-side).
+ * Ask Stoa — a chat PANE (a window, like a session — not a dialog) that can both
+ * ANSWER and ACT. The user asks natural-language questions about their fleet +
+ * sessions, and a chosen agent (Claude or Codex) responds via the
+ * /api/command/propose backend, grounded in a live fleet-state snapshot. A request
+ * the agent maps to an allowlisted action (create_session) comes back as a CONFIRM
+ * CARD; nothing runs until the user confirms, which calls /api/command/execute
+ * (re-validated + audited server-side).
  *
  * User turns render as plain text in a right-aligned bubble; assistant ANSWERS
  * render as markdown; PROPOSALS render as a confirm card; RESULTS as a status
- * bubble. The conversation resets on open so reopening is fresh.
+ * bubble. The conversation lives as long as the tab does (a fresh tab starts
+ * empty); closing the tab discards it.
  */
 export function ChatView({
   onClose,
@@ -400,7 +402,7 @@ export function ChatView({
         role="log"
         aria-live="polite"
         aria-label="Conversation"
-        className="min-h-0 flex-1 overflow-y-auto px-6"
+        className="min-h-0 flex-1 overflow-y-auto px-4"
       >
         {showHelp ? (
           <ChatHelp
@@ -549,7 +551,7 @@ export function ChatView({
       </div>
 
       {/* Composer */}
-      <div className="border-t p-3">
+      <div className="border-t px-4 py-3">
         <div className="flex items-end gap-2">
           <textarea
             ref={taRef}

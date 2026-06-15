@@ -18,9 +18,9 @@ const COMMAND_EXAMPLES = [
 ];
 
 /**
- * In-dialog primer for Ask / Command Stoa: what it can ANSWER (grounded in the
+ * In-pane primer for Ask / Command Stoa: what it can ANSWER (grounded in the
  * fleet's live state) and what it can DO (actions, always proposed → confirmed →
- * executed). Shown in the chat dialog's content area, toggled by the header "?".
+ * executed). Shown in the chat pane's content area, toggled by the header "?".
  * Mirrors DispatchHelp / WorkflowsHelp. Examples are clickable — they fill the
  * composer rather than send, so the user reviews (and edits placeholders) first.
  */
@@ -121,7 +121,8 @@ export function ChatHelp({
       <p className="text-muted-foreground text-xs leading-relaxed">
         Pick which agent (Claude or Codex) and model answers from the selectors
         in the header — it defaults to Claude on Opus. Enter sends · Shift+Enter
-        for a new line · the chat resets each time you open it.
+        for a new line · the conversation stays while this tab is open (close
+        the tab to start fresh).
       </p>
     </div>
   );
