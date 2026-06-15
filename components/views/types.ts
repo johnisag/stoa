@@ -35,8 +35,8 @@ export interface ViewProps {
   setShowNotificationSettings: (show: boolean) => void;
   showQuickSwitcher: boolean;
   setShowQuickSwitcher: (show: boolean) => void;
-  showDispatch: boolean;
-  setShowDispatch: (show: boolean) => void;
+  /** Open Dispatch as a pane tab (it's a window now, not a dialog). */
+  onOpenDispatch: () => void;
   /** Open Insight/Analytics as a pane tab (it's a window now, not a dialog). */
   onOpenAnalytics: () => void;
   onOpenWorkflows: () => void;

@@ -81,6 +81,11 @@ const AnalyticsView = dynamic(
     import("@/components/views/AnalyticsView").then((mod) => mod.AnalyticsView),
   { ssr: false }
 );
+const DispatchView = dynamic(
+  () =>
+    import("@/components/views/DispatchView").then((mod) => mod.DispatchView),
+  { ssr: false }
+);
 
 interface PaneProps {
   paneId: string;
@@ -601,6 +606,21 @@ export const Pane = memo(function Pane({
                 </div>
               );
             }
+            if (tab.view === "dispatch") {
+              return (
+                <div
+                  key={tab.id}
+                  className={isActive ? "h-full w-full" : "hidden"}
+                >
+                  <DispatchView
+                    onOpenWorkflows={onWorkflowsClick}
+                    onOpenVerdictInbox={onVerdictInboxClick}
+                    onOpenFleetBoard={onFleetBoardClick}
+                    onClose={() => closeTab(paneId, tab.id)}
+                  />
+                </div>
+              );
+            }
             const savedState = sessionRegistry.getTerminalState(paneId, tab.id);
             return (
               <div
@@ -740,6 +760,21 @@ export const Pane = memo(function Pane({
                           className={isActive ? "h-full" : "hidden"}
                         >
                           <AnalyticsView
+                            onClose={() => closeTab(paneId, tab.id)}
+                          />
+                        </div>
+                      );
+                    }
+                    if (tab.view === "dispatch") {
+                      return (
+                        <div
+                          key={tab.id}
+                          className={isActive ? "h-full" : "hidden"}
+                        >
+                          <DispatchView
+                            onOpenWorkflows={onWorkflowsClick}
+                            onOpenVerdictInbox={onVerdictInboxClick}
+                            onOpenFleetBoard={onFleetBoardClick}
                             onClose={() => closeTab(paneId, tab.id)}
                           />
                         </div>

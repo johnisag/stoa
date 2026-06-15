@@ -20,6 +20,7 @@ import {
   Workflow,
   Columns3,
   BarChart3,
+  Rocket,
 } from "lucide-react";
 import {
   Tooltip,
@@ -160,6 +161,7 @@ export function DesktopTabBar({
     if (tab.view === "workflows") return "Workflows";
     if (tab.view === "fleet-board") return "Fleet Board";
     if (tab.view === "analytics") return "Insight";
+    if (tab.view === "dispatch") return "Dispatch";
     if (tab.sessionId) {
       const s = sessions.find((sess) => sess.id === tab.sessionId);
       return s?.name || tab.attachedTmux || "Session";
@@ -204,6 +206,7 @@ export function DesktopTabBar({
               {tab.view === "analytics" && (
                 <BarChart3 className="h-3.5 w-3.5" />
               )}
+              {tab.view === "dispatch" && <Rocket className="h-3.5 w-3.5" />}
               <span className="max-w-[120px] truncate">{getTabName(tab)}</span>
               {tabs.length > 1 && (
                 <button

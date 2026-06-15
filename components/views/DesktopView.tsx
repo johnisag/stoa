@@ -56,7 +56,7 @@ export function DesktopView({
   setShowNotificationSettings,
   showQuickSwitcher,
   setShowQuickSwitcher,
-  setShowDispatch,
+  onOpenDispatch,
   onOpenAnalytics,
   onOpenWorkflows,
   setShowVerdictInbox,
@@ -272,7 +272,7 @@ export function DesktopView({
                 },
                 {
                   id: "dispatch",
-                  onClick: () => setShowDispatch(true),
+                  onClick: onOpenDispatch,
                 },
                 {
                   id: "verdict-inbox",
@@ -431,7 +431,7 @@ export function DesktopView({
         sessionStatuses={sessionStatuses}
         currentSessionId={focusedActiveTab?.sessionId ?? undefined}
         activeSessionWorkingDir={activeSession?.working_directory ?? undefined}
-        onOpenDispatch={() => setShowDispatch(true)}
+        onOpenDispatch={onOpenDispatch}
         onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={() => setShowVerdictInbox(true)}
         onOpenFleetBoard={onOpenFleetBoard}

@@ -47,7 +47,6 @@ import { sessionKey } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
-import { DispatchView } from "@/components/views/DispatchView";
 
 import { VerdictInboxView } from "@/components/views/VerdictInboxView";
 import { ChatView } from "@/components/views/ChatView";
@@ -187,7 +186,6 @@ function HomeContent() {
   const [showNotificationSettings, setShowNotificationSettings] =
     useState(false);
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
-  const [showDispatch, setShowDispatch] = useState(false);
 
   const [showVerdictInbox, setShowVerdictInbox] = useState(false);
   const [showChat, setShowChat] = useState(false);
@@ -700,7 +698,7 @@ function HomeContent() {
     else if (action === "pane-next-tab") paneCommandActions.send("next-tab");
     else if (action === "pane-prev-tab") paneCommandActions.send("prev-tab");
     else if (action === "show-help") setShowHelp(true);
-    else if (action === "open-dispatch") setShowDispatch(true);
+    else if (action === "open-dispatch") addViewTab(focusedPaneId, "dispatch");
     else if (action === "open-workflows") addWorkflowsTab(focusedPaneId);
     else if (action === "open-verdict-inbox") setShowVerdictInbox(true);
     else if (action === "open-fleet-board")
@@ -718,7 +716,7 @@ function HomeContent() {
         projects={projects}
         onRegisterTerminal={registerTerminalRef}
         onMenuClick={isMobile ? () => setSidebarOpen(true) : undefined}
-        onDispatchClick={() => setShowDispatch(true)}
+        onDispatchClick={() => addViewTab(paneId, "dispatch")}
         onWorkflowsClick={() => addWorkflowsTab(paneId)}
         onVerdictInboxClick={() => setShowVerdictInbox(true)}
         onFleetBoardClick={() => addViewTab(paneId, "fleet-board")}
@@ -734,7 +732,6 @@ function HomeContent() {
       isMobile,
       handleSelectSession,
       handleOpenSessionInNewTab,
-      setShowDispatch,
       setShowVerdictInbox,
       addViewTab,
       addWorkflowsTab,
@@ -829,8 +826,8 @@ function HomeContent() {
     : null;
 
   // Close a fleet dialog and open a fleet VIEW as a tab in the focused pane — the
-  // cross-link from a still-modal view (Dispatch/Verdict Inbox) to a now-windowed
-  // one (Workflows, Fleet Board).
+  // cross-link from a still-modal view (the Verdict Inbox) to a now-windowed one
+  // (Workflows, Fleet Board, Dispatch, …).
   const openViewTabFrom = useCallback(
     (close: (open: boolean) => void, view: ViewKind) => () => {
       close(false);
@@ -857,8 +854,7 @@ function HomeContent() {
     setShowNotificationSettings,
     showQuickSwitcher,
     setShowQuickSwitcher,
-    showDispatch,
-    setShowDispatch,
+    onOpenDispatch: () => addViewTab(focusedPaneId, "dispatch"),
     onOpenAnalytics: () => addViewTab(focusedPaneId, "analytics"),
     onOpenWorkflows: () => addWorkflowsTab(focusedPaneId),
     showVerdictInbox,
@@ -898,14 +894,6 @@ function HomeContent() {
       }
     };
 
-  // Cross-navigate between the mutually-exclusive fleet dialogs: close the
-  // current one and open the target so they never stack.
-  const switchFleet =
-    (close: (open: boolean) => void, open: (open: boolean) => void) => () => {
-      close(false);
-      open(true);
-    };
-
   return (
     <>
       {/* Gate the view on isHydrated so phones never flash DesktopView for a
@@ -929,15 +917,8 @@ function HomeContent() {
       />
       {/* Plain-English feature tour (opened from the sidebar footer). */}
       <StoaGuide open={showGuide} onOpenChange={setShowGuide} />
-      {/* Dispatch control plane (GitHub-issue -> agent fleet). Self-contained
-          dialog; the nav buttons in Desktop/MobileView open it via setShowDispatch. */}
-      <DispatchView
-        open={showDispatch}
-        onOpenChange={setShowDispatch}
-        onOpenWorkflows={openViewTabFrom(setShowDispatch, "workflows")}
-        onOpenVerdictInbox={switchFleet(setShowDispatch, setShowVerdictInbox)}
-        onOpenFleetBoard={openViewTabFrom(setShowDispatch, "fleet-board")}
-      />
+      {/* Dispatch is now a first-class pane TAB (see addViewTab), not a dialog —
+          opened from the nav / cross-links via onOpenDispatch. */}
 
       {/* Verdict Inbox — the fleet-wide review queue (dispatch + auto-mode
           sessions). Self-contained; opened via setShowVerdictInbox. */}
@@ -945,7 +926,7 @@ function HomeContent() {
         open={showVerdictInbox}
         onOpenChange={setShowVerdictInbox}
         onOpenSession={openSessionFrom(setShowVerdictInbox)}
-        onOpenDispatch={switchFleet(setShowVerdictInbox, setShowDispatch)}
+        onOpenDispatch={openViewTabFrom(setShowVerdictInbox, "dispatch")}
         onOpenWorkflows={openViewTabFrom(setShowVerdictInbox, "workflows")}
         onOpenFleetBoard={openViewTabFrom(setShowVerdictInbox, "fleet-board")}
       />
