@@ -12,6 +12,13 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const inputPath = searchParams.get("path");
     const recursive = searchParams.get("recursive") === "true";
+    // Optional recursion depth (recursive only), clamped so a caller can't ask
+    // the server to walk an unbounded tree. Defaults to the historical 2.
+    const depthParam = Number(searchParams.get("depth"));
+    const depth =
+      Number.isFinite(depthParam) && depthParam >= 1
+        ? Math.min(Math.floor(depthParam), 8)
+        : 2;
 
     if (!inputPath) {
       return NextResponse.json(
@@ -31,7 +38,7 @@ export async function GET(request: NextRequest) {
 
     const files = listDirectory(resolved, {
       recursive,
-      maxDepth: recursive ? 2 : 1,
+      maxDepth: recursive ? depth : 1,
     });
 
     return NextResponse.json({ files, path: resolved });

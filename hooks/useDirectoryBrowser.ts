@@ -2,8 +2,13 @@
 
 import { useState, useCallback, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useDirectoryFilesQuery } from "@/data/files";
-import type { FileNode } from "@/lib/file-utils";
+import { useDirectoryFilesQuery, useRecursiveFilesQuery } from "@/data/files";
+import {
+  flattenFileNodes,
+  relativeDisplayPath,
+  type FileNode,
+} from "@/lib/file-utils";
+import { fuzzyScore } from "@/lib/session-search";
 
 interface RootsData {
   roots: string[];
@@ -14,7 +19,17 @@ interface UseDirectoryBrowserOptions {
   initialPath?: string;
   /** Filter which files to show (e.g., directories only) */
   filter?: (node: FileNode) => boolean;
+  /**
+   * Opt in to fuzzy file search: when the search box is non-empty, search the
+   * whole subtree under the current directory (bounded recursive listing,
+   * ranked by fuzzyScore) instead of only filtering the current directory's
+   * names. Off by default so the directory-only consumers are unchanged.
+   */
+  recursiveSearch?: boolean;
 }
+
+/** Cap recursive matches so a huge repo can't flood the picker grid. */
+const RECURSIVE_RESULT_CAP = 100;
 
 function sortFiles(files: FileNode[]): FileNode[] {
   return [...files].sort((a, b) => {
@@ -44,7 +59,7 @@ function isRootPath(p: string, roots: string[]): boolean {
 }
 
 export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
-  const { initialPath = "~", filter } = options;
+  const { initialPath = "~", filter, recursiveSearch = false } = options;
   const filterRef = useRef(filter);
   filterRef.current = filter;
 
@@ -100,15 +115,45 @@ export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
     return sortFiles(items);
   }, [showRoots, roots, data?.files, filter]);
 
-  const filteredFiles = useMemo(
-    () =>
-      search
-        ? files.filter((f) =>
-            f.name.toLowerCase().includes(search.toLowerCase())
-          )
-        : files,
-    [files, search]
+  // Fuzzy file search across the subtree, opt-in. Only fetch the (bounded)
+  // recursive listing while the user is actually searching, so plain browsing
+  // never pays for it.
+  const searchActive =
+    recursiveSearch && search.trim().length > 0 && !showRoots;
+  const recursiveQuery = useRecursiveFilesQuery(
+    showRoots ? "~" : currentPath || requestedPath,
+    searchActive
   );
+  const recursiveReady = searchActive && !!recursiveQuery.data?.files;
+
+  const filteredFiles = useMemo(() => {
+    const q = search.trim();
+    if (recursiveReady) {
+      const root = currentPath || requestedPath;
+      const scored: { node: FileNode; score: number }[] = [];
+      for (const node of flattenFileNodes(recursiveQuery.data!.files)) {
+        if (filterRef.current && !filterRef.current(node)) continue;
+        const byName = fuzzyScore(q, node.name);
+        const byPath = fuzzyScore(q, relativeDisplayPath(root, node.path));
+        const score = Math.max(byName ?? -Infinity, byPath ?? -Infinity);
+        if (score > -Infinity) scored.push({ node, score });
+      }
+      scored.sort((a, b) => b.score - a.score);
+      return scored.slice(0, RECURSIVE_RESULT_CAP).map((s) => s.node);
+    }
+    // Shallow current-directory filter (also the fallback while a recursive
+    // search is still in flight).
+    return q
+      ? files.filter((f) => f.name.toLowerCase().includes(q.toLowerCase()))
+      : files;
+  }, [
+    recursiveReady,
+    recursiveQuery.data,
+    files,
+    search,
+    currentPath,
+    requestedPath,
+  ]);
 
   const navigateTo = useCallback((path: string) => {
     setSearch("");
@@ -184,6 +229,8 @@ export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
     error: showRoots ? null : error?.message || null,
     search,
     setSearch,
+    /** True while showing ranked subtree matches (vs. a single directory). */
+    searchingRecursively: recursiveReady,
     pathSegments,
     navigateTo,
     navigateUp,

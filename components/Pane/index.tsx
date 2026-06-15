@@ -676,6 +676,11 @@ export const Pane = memo(function Pane({
                   // Desktop pane surfaces copy/paste/attach in the tab bar, not
                   // floating over the terminal.
                   floatingActions={false}
+                  // Open the attach picker in the session's project, not HOME.
+                  filePickerInitialPath={
+                    sessions.find((s) => s.id === tab.sessionId)
+                      ?.working_directory ?? undefined
+                  }
                 />
               </div>
             );
@@ -782,6 +787,11 @@ export const Pane = memo(function Pane({
                           }
                           // Desktop surfaces copy/paste/attach in the tab bar.
                           floatingActions={false}
+                          // Open the attach picker in the session's project, not HOME.
+                          filePickerInitialPath={
+                            sessions.find((s) => s.id === tab.sessionId)
+                              ?.working_directory ?? undefined
+                          }
                         />
                       </div>
                     );

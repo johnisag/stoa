@@ -72,6 +72,9 @@ interface TerminalProps {
    *  The main session pane sets this false and surfaces them in its tab bar
    *  instead; surfaces without a tab bar (shell drawer) keep them (default). */
   floatingActions?: boolean;
+  /** Where the attach (📎) FilePicker opens. Pass the session's working
+   *  directory so it lands in the project instead of HOME (the default). */
+  filePickerInitialPath?: string;
 }
 
 export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
@@ -83,6 +86,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       initialScrollState,
       showImageButton = true,
       floatingActions = true,
+      filePickerInitialPath,
     },
     ref
   ) {
@@ -467,7 +471,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         {/* Image picker modal */}
         {showFilePicker && (
           <FilePicker
-            initialPath="~"
+            initialPath={filePickerInitialPath || "~"}
             onSelect={handleImageSelect}
             onSelectMany={handleImagesSelect}
             onClose={() => setShowFilePicker(false)}
