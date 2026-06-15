@@ -97,11 +97,11 @@
     "better-sqlite3": "^11.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.1",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.556.0",
     "monaco-editor": "^0.55.1",
-    "next": "^16.1.1",
+    "next": "^16.2.9",
     "next-themes": "^0.4.6",
     "node-pty": "^1.2.0-beta.6",
     "react": "^19.2.1",
@@ -135,13 +135,15 @@
     "prettier": "^3.7.4",
     "prettier-plugin-tailwindcss": "^0.7.2",
     "tailwindcss": "^4.1.18",
-    "tsx": "^4.21.0",
+    "tsx": "^4.22.4",
     "tw-animate-css": "^1.4.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.8"
   },
   "overrides": {
     "postcss": "^8.5.15",
-    "dompurify": "^3.4.8"
+    "dompurify": "^3.4.8",
+    "esbuild": "^0.28.1",
+    "hono": "^4.12.25"
   }
 }
