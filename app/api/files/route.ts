@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import nodePath from "path";
 import { listDirectory } from "@/lib/files";
 import { getAllowedPathRoots, resolveSandboxedPath } from "@/lib/api-security";
 

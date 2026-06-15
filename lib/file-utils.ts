@@ -40,7 +40,13 @@ export function relativeDisplayPath(base: string, fullPath: string): string {
   const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
   const b = norm(base);
   const f = norm(fullPath);
-  if (b && (f === b || f.startsWith(b + "/"))) {
+  // Windows paths are case-insensitive, so compare the boundary case-folded when
+  // either side used backslashes (e.g. a DB-stored cwd `C:\Repo` vs an OS-resolved
+  // `C:\repo`). POSIX stays case-sensitive. The returned segment keeps real casing.
+  const winish = base.includes("\\") || fullPath.includes("\\");
+  const cb = winish ? b.toLowerCase() : b;
+  const cf = winish ? f.toLowerCase() : f;
+  if (b && (cf === cb || cf.startsWith(cb + "/"))) {
     return f.slice(b.length + 1) || f;
   }
   return f.split("/").pop() || f;

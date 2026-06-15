@@ -16,7 +16,7 @@ async function fetchDirectory(
   const params = new URLSearchParams({ path });
   if (opts.recursive) {
     params.set("recursive", "true");
-    if (opts.depth) params.set("depth", String(opts.depth));
+    if (opts.depth != null) params.set("depth", String(opts.depth));
   }
   const res = await fetch(`/api/files?${params}`);
   const data = await res.json();

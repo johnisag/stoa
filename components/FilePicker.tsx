@@ -73,6 +73,9 @@ export function FilePicker({
     search,
     setSearch,
     searchingRecursively,
+    recursiveLoading,
+    recursiveMatchCount,
+    recursiveResultCap,
     pathSegments,
     navigateTo,
     navigateUp,
@@ -447,9 +450,14 @@ export function FilePicker({
       {/* Footer hint */}
       <div className="border-border border-t p-3 text-center">
         <p className="text-muted-foreground text-xs">
-          {searchingRecursively
-            ? "Showing fuzzy matches across subfolders — clear search to browse"
-            : "Select any file, or type to fuzzy-search this folder + subfolders"}
+          {recursiveLoading
+            ? "Searching subfolders…"
+            : searchingRecursively
+              ? recursiveMatchCount != null &&
+                recursiveMatchCount > recursiveResultCap
+                ? `Showing top ${recursiveResultCap} of ${recursiveMatchCount} matches — refine your search`
+                : "Showing fuzzy matches across subfolders — clear search to browse"
+              : "Select any file, or type to fuzzy-search this folder + subfolders"}
         </p>
       </div>
     </div>

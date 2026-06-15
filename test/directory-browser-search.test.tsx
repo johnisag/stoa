@@ -114,6 +114,52 @@ describe("useDirectoryBrowser — recursive fuzzy search (opt-in)", () => {
     ]);
   });
 
+  it("caps the result list and reports the true match total", async () => {
+    // 150 matching files under /repo/src → capped to 100, total reported as 150.
+    const many: FileNode[] = Array.from({ length: 150 }, (_, i) => ({
+      name: `util-${i}.ts`,
+      path: `/repo/src/util-${i}.ts`,
+      type: "file" as const,
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/files/roots"))
+          return ok({ roots: ["/"], separator: "/" });
+        if (url.includes("recursive=true"))
+          return ok({
+            files: [
+              {
+                name: "src",
+                path: "/repo/src",
+                type: "directory",
+                children: many,
+              },
+            ],
+            path: "/repo",
+          });
+        return ok({
+          files: [{ name: "src", path: "/repo/src", type: "directory" }],
+          path: "/repo",
+        });
+      })
+    );
+
+    const { result } = renderHook(
+      () =>
+        useDirectoryBrowser({ initialPath: "/repo", recursiveSearch: true }),
+      { wrapper: createWrapper() }
+    );
+    await waitFor(() => expect(result.current.files.length).toBe(1));
+
+    act(() => result.current.setSearch("util"));
+    await waitFor(() => expect(result.current.searchingRecursively).toBe(true));
+    expect(result.current.filteredFiles.length).toBe(
+      result.current.recursiveResultCap
+    );
+    expect(result.current.recursiveMatchCount).toBe(150);
+  });
+
   it("without recursiveSearch, search only filters the current directory", async () => {
     const { result } = renderHook(
       () => useDirectoryBrowser({ initialPath: "/repo" }),

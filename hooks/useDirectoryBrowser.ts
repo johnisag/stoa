@@ -125,8 +125,11 @@ export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
     searchActive
   );
   const recursiveReady = searchActive && !!recursiveQuery.data?.files;
+  // Searching the subtree, but the (bounded) recursive listing hasn't landed yet
+  // — the picker shows shallow current-dir matches meanwhile and an indicator.
+  const recursiveLoading = searchActive && !recursiveReady;
 
-  const filteredFiles = useMemo(() => {
+  const { items: filteredFiles, total: recursiveMatchCount } = useMemo(() => {
     const q = search.trim();
     if (recursiveReady) {
       const root = currentPath || requestedPath;
@@ -139,13 +142,17 @@ export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
         if (score > -Infinity) scored.push({ node, score });
       }
       scored.sort((a, b) => b.score - a.score);
-      return scored.slice(0, RECURSIVE_RESULT_CAP).map((s) => s.node);
+      return {
+        items: scored.slice(0, RECURSIVE_RESULT_CAP).map((s) => s.node),
+        total: scored.length,
+      };
     }
     // Shallow current-directory filter (also the fallback while a recursive
     // search is still in flight).
-    return q
+    const items = q
       ? files.filter((f) => f.name.toLowerCase().includes(q.toLowerCase()))
       : files;
+    return { items, total: null as number | null };
   }, [
     recursiveReady,
     recursiveQuery.data,
@@ -231,6 +238,12 @@ export function useDirectoryBrowser(options: UseDirectoryBrowserOptions = {}) {
     setSearch,
     /** True while showing ranked subtree matches (vs. a single directory). */
     searchingRecursively: recursiveReady,
+    /** Searching the subtree but the recursive listing hasn't landed yet. */
+    recursiveLoading,
+    /** Total subtree matches before the display cap (null when not recursive). */
+    recursiveMatchCount,
+    /** Max matches shown (so the UI can say "top N of M"). */
+    recursiveResultCap: RECURSIVE_RESULT_CAP,
     pathSegments,
     navigateTo,
     navigateUp,

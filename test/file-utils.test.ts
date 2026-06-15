@@ -60,4 +60,15 @@ describe("relativeDisplayPath", () => {
     expect(relativeDisplayPath("/repo", "/other/x.ts")).toBe("x.ts");
     expect(relativeDisplayPath("", "/other/x.ts")).toBe("x.ts");
   });
+
+  it("matches case-insensitively for Windows paths (cwd casing may differ)", () => {
+    // DB-stored cwd `C:\Repo` vs OS-resolved `C:\repo\src\a.ts` → still relative.
+    expect(relativeDisplayPath("C:\\Repo", "C:\\repo\\src\\a.ts")).toBe(
+      "src/a.ts"
+    );
+  });
+
+  it("stays case-sensitive on POSIX (distinct dirs differing only by case)", () => {
+    expect(relativeDisplayPath("/repo", "/Repo/a.ts")).toBe("a.ts");
+  });
 });
