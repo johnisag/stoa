@@ -411,6 +411,15 @@ export function connect(doc: BuilderDoc, from: string, to: string): BuilderDoc {
   return setDependsOn(doc, to, [...deps, from]);
 }
 
+/**
+ * The template token that interpolates a step's output into another step's task.
+ * The SINGLE source for that syntax — used by the builder's placeholder hint AND
+ * its "insert reference" menu so they can't drift from what the engine resolves.
+ */
+export function outputRefToken(stepId: string): string {
+  return `{{steps.${stepId}.output}}`;
+}
+
 /** Remove the dependency edge `from → to`. No-op if the target or edge is absent. */
 export function disconnect(
   doc: BuilderDoc,

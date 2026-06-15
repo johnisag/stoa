@@ -24,6 +24,11 @@ import {
 
 const { NODE_W, NODE_H, NOTE_W, NOTE_H, PAD } = CANVAS;
 
+// Pointer travel (SVG units ≈ px at the 1:1 viewBox) before a press becomes a node
+// DRAG. Below it a press is a tap/click: touch input wobbles a few px between down
+// and up, and without this guard that jitter nudges the node and eats the click.
+const NODE_DRAG_THRESHOLD = 4;
+
 /**
  * Interactive workflow canvas — draggable SVG nodes over a dependency-free render
  * (the same 1-unit-per-px viewBox model as PipelineGraph, so client→SVG mapping is
@@ -298,6 +303,9 @@ export function PipelineCanvas({
     const p = toUser(e);
     const dx = p.x - drag.current.start.x;
     const dy = p.y - drag.current.start.y;
+    // Ignore sub-threshold jitter so a tap isn't misread as a drag (which would
+    // nudge the node and swallow the selection click). Once dragging, keep going.
+    if (!drag.current.moved && Math.hypot(dx, dy) < NODE_DRAG_THRESHOLD) return;
     drag.current.moved = true;
 
     const updates: { id: string; x: number; y: number }[] = [];

@@ -22,6 +22,7 @@ import {
   updateStep,
   setDependsOn,
   connect,
+  outputRefToken,
   disconnect,
   removeStep,
   renameStep,
@@ -41,6 +42,7 @@ import {
   type BuilderNote,
 } from "@/lib/pipeline/builder-model";
 import type { PipelineSpec, PipelineStep } from "@/lib/pipeline/types";
+import { interpolateTask } from "@/lib/pipeline/engine";
 
 function step(over: Partial<PipelineStep> & { id: string }): PipelineStep {
   return { agent: "claude", task: `do ${over.id}`, ...over };
@@ -993,5 +995,24 @@ describe("wrapNoteText", () => {
     const lines = wrapNoteText("a\nb\nc\nd\ne\nf", 24, 4);
     expect(lines).toHaveLength(4);
     expect(lines[3].endsWith("…")).toBe(true);
+  });
+});
+
+describe("outputRefToken", () => {
+  it("produces the exact {{steps.<id>.output}} template", () => {
+    expect(outputRefToken("research")).toBe("{{steps.research.output}}");
+  });
+
+  it("round-trips with the engine's interpolateTask resolver", () => {
+    // The whole point of the builder's insert menu: the token it splices in is the
+    // one the engine actually resolves at run time.
+    expect(
+      interpolateTask(outputRefToken("research"), { research: "FINDINGS" })
+    ).toBe("FINDINGS");
+  });
+
+  it("works for ids with the allowed punctuation (dot/dash/underscore)", () => {
+    const id = "step-1_a.b";
+    expect(interpolateTask(outputRefToken(id), { [id]: "X" })).toBe("X");
   });
 });

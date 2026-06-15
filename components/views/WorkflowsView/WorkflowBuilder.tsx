@@ -40,6 +40,7 @@ import {
   moveNode,
   moveNote,
   nextAutoPosition,
+  outputRefToken,
   relayout,
   renameStep,
   serializeBuilderDoc,
@@ -204,6 +205,12 @@ export function WorkflowBuilder({
   useEffect(() => {
     if (primaryId) editRef.current?.scrollIntoView({ block: "nearest" });
   }, [primaryId]);
+
+  // The Task field's "insert an upstream step's output" affordance.
+  const taskRef = useRef<HTMLTextAreaElement>(null);
+  const [showRefMenu, setShowRefMenu] = useState(false);
+  // Collapse the menu whenever the selected step changes.
+  useEffect(() => setShowRefMenu(false), [primaryId]);
   const [conductorId, setConductorId] = useState<string>(
     defaultConductorId && sessions.some((s) => s.id === defaultConductorId)
       ? defaultConductorId
@@ -743,6 +750,34 @@ export function WorkflowBuilder({
 
   function commit() {
     setDoc((d) => d);
+  }
+
+  // Splice `{{steps.<id>.output}}` into the Task field at the caret AND wire the
+  // dependency (connect is idempotent + cycle-permissive, like the dependsOn
+  // checklist) so the reference actually resolves at runtime — one undoable edit.
+  function insertOutputRef(stepId: string) {
+    const node = primaryNode;
+    if (!node) return;
+    const token = outputRefToken(stepId);
+    const el = taskRef.current;
+    const task = node.step.task ?? "";
+    const start = el?.selectionStart ?? task.length;
+    const end = el?.selectionEnd ?? start;
+    const nextTask = task.slice(0, start) + token + task.slice(end);
+    setDoc((d) =>
+      connect(
+        updateStep(d, node.step.id, { task: nextTask }),
+        stepId,
+        node.step.id
+      )
+    );
+    setShowRefMenu(false);
+    // Restore focus + place the caret right after the inserted token.
+    requestAnimationFrame(() => {
+      const caret = start + token.length;
+      el?.focus();
+      el?.setSelectionRange(caret, caret);
+    });
   }
 
   function commitRename(oldId: string, raw: string) {
@@ -1373,6 +1408,7 @@ export function WorkflowBuilder({
               Task <span className="text-red-500">*</span>
             </span>
             <Textarea
+              ref={taskRef}
               value={primaryNode.step.task}
               spellCheck={false}
               placeholder="What this agent should do. Reference an upstream step's output with {{steps.<id>.output}}."
@@ -1382,6 +1418,41 @@ export function WorkflowBuilder({
               onBlur={commit}
               className="min-h-[80px]"
             />
+            {/* Insert a valid {{steps.<id>.output}} reference (no hand-typing /
+                typos) — picking a step also adds it as a dependency. */}
+            {doc.nodes.length > 1 && (
+              <div className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={() => setShowRefMenu((v) => !v)}
+                  className="text-muted-foreground hover:text-foreground self-start text-xs underline-offset-2 hover:underline"
+                >
+                  + Insert an upstream step&apos;s output
+                </button>
+                {showRefMenu && (
+                  <div className="flex flex-col gap-0.5 rounded-md border p-1">
+                    {doc.nodes
+                      .filter((n) => n.step.id !== primaryNode.step.id)
+                      .map((n) => (
+                        <button
+                          key={n.step.id}
+                          type="button"
+                          onClick={() => insertOutputRef(n.step.id)}
+                          title={`Insert ${outputRefToken(n.step.id)} and depend on this step`}
+                          className="hover:bg-accent flex items-center gap-2 rounded px-2 py-1 text-left text-xs"
+                        >
+                          <span className="truncate font-medium">
+                            {n.step.name || n.step.id}
+                          </span>
+                          <span className="text-muted-foreground truncate font-mono">
+                            {outputRefToken(n.step.id)}
+                          </span>
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </div>
+            )}
           </label>
 
           {/* dependsOn — a checklist of the other step ids (the house multi-select
