@@ -7,13 +7,6 @@ import { Check, HelpCircle, Loader2, Send, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -83,11 +76,10 @@ const EXAMPLE_QUESTIONS = [
  * bubble. The conversation resets on open so reopening is fresh.
  */
 export function ChatView({
-  open,
-  onOpenChange,
+  onClose,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  /** Optional close affordance, used on mobile where the tab strip is hidden. */
+  onClose?: () => void;
 }) {
   const [provider, setProvider] = useState<ChatProvider>(DEFAULT_CHAT_PROVIDER);
   // Defaults to Opus for Claude (the chatbox default, not the agent's Sonnet) —
@@ -116,23 +108,15 @@ export function ChatView({
     setModel(loadChatModel(p));
   }, []);
 
-  // On open: start a fresh conversation so a late answer from a previously-closed
-  // request can't orphan a stray bubble on reopen.
+  // Autofocus the composer when the tab mounts — but NOT on mobile, where focusing
+  // pops the on-screen keyboard over the empty-state hints before the user reads
+  // them. (The conversation lives as long as the tab does; a fresh tab starts
+  // empty via useState, so there's no open-gated reset.)
   useEffect(() => {
-    if (open) {
-      setMessages([]);
-      setInput("");
-    }
-  }, [open]);
-
-  // Autofocus the composer on open — but NOT on mobile, where focusing pops the
-  // on-screen keyboard over the empty-state hints before the user reads them.
-  useEffect(() => {
-    if (open && !isMobile) {
-      // rAF so the textarea exists (Radix mounts content on open) before focus.
+    if (!isMobile) {
       requestAnimationFrame(() => taRef.current?.focus());
     }
-  }, [open, isMobile]);
+  }, [isMobile]);
 
   // Keep the newest turn (and the thinking indicator) in view as it arrives —
   // but when the help panel is open, pin to the TOP so it reads from the start and
@@ -324,19 +308,6 @@ export function ChatView({
     }
   }
 
-  // Reset the conversation + input on close so reopening is a clean slate.
-  function handleOpenChange(next: boolean) {
-    if (!next) {
-      setMessages([]);
-      setInput("");
-      setShowHelp(false);
-      executingRef.current = false;
-      propose.reset();
-      execute.reset();
-    }
-    onOpenChange(next);
-  }
-
   const canSend = input.trim().length > 0 && !propose.isPending;
   // Only one action runs at a time (executingRef). Surface that on the cards: a
   // pending Confirm disables while ANOTHER card is executing, so it never looks
@@ -349,268 +320,266 @@ export function ChatView({
   );
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent
-        sheet={isMobile}
-        className="flex h-[85vh] w-[calc(100%-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
-      >
-        <DialogHeader className="space-y-3 px-6 pt-6 pb-3 text-left">
-          <div className="space-y-1">
-            <DialogTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5" />
-              Ask Stoa
-            </DialogTitle>
-            <DialogDescription>
-              Ask about your fleet — or tell Stoa to start a session. It always
-              asks you to confirm before acting.
-            </DialogDescription>
-          </div>
-          {/* Which agent + model answers — both persisted across reloads. */}
-          <div className="flex items-center gap-2">
-            <Select value={provider} onValueChange={handleProviderChange}>
-              <SelectTrigger
-                className="h-8 w-auto gap-1.5 text-xs"
-                aria-label="Answering agent"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CHAT_PROVIDER_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                    {option.value === "claude" && (
-                      <span className="text-muted-foreground ml-1.5 text-xs">
-                        · default
-                      </span>
-                    )}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={model} onValueChange={handleModelChange}>
-              <SelectTrigger
-                className="h-8 w-auto gap-1.5 text-xs"
-                aria-label="Model"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {getModelOptions(provider).map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                    {option.value === defaultChatModel(provider) && (
-                      <span className="text-muted-foreground ml-1.5 text-xs">
-                        · default
-                      </span>
-                    )}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+    <div className="bg-background flex h-full min-h-0 w-full flex-col gap-0 overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-4 py-2">
+        <span className="flex min-w-0 items-center gap-2">
+          <Sparkles className="h-4 w-4 flex-shrink-0" />
+          <span className="text-sm font-medium">Ask Stoa</span>
+        </span>
+        <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="How Ask Stoa works"
+            title="How Ask Stoa works"
+            aria-pressed={showHelp}
+            onClick={() => setShowHelp((v) => !v)}
+          >
+            <HelpCircle className="h-4 w-4" />
+          </Button>
+          {onClose && (
             <Button
               variant="ghost"
               size="icon-sm"
-              className="ml-auto"
-              aria-label="How Ask Stoa works"
-              title="How Ask Stoa works"
-              aria-pressed={showHelp}
-              onClick={() => setShowHelp((v) => !v)}
+              aria-label="Close Ask Stoa"
+              title="Close Ask Stoa"
+              onClick={onClose}
             >
-              <HelpCircle className="h-4 w-4" />
+              <X className="h-4 w-4" />
             </Button>
-          </div>
-        </DialogHeader>
+          )}
+        </div>
+      </div>
+      {/* Which agent + model answers — both persisted across reloads. */}
+      <div className="flex items-center gap-2 px-4 pb-2">
+        <Select value={provider} onValueChange={handleProviderChange}>
+          <SelectTrigger
+            className="h-8 w-auto gap-1.5 text-xs"
+            aria-label="Answering agent"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {CHAT_PROVIDER_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+                {option.value === "claude" && (
+                  <span className="text-muted-foreground ml-1.5 text-xs">
+                    · default
+                  </span>
+                )}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={model} onValueChange={handleModelChange}>
+          <SelectTrigger
+            className="h-8 w-auto gap-1.5 text-xs"
+            aria-label="Model"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {getModelOptions(provider).map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+                {option.value === defaultChatModel(provider) && (
+                  <span className="text-muted-foreground ml-1.5 text-xs">
+                    · default
+                  </span>
+                )}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
-        {/* Message list (or the help panel, toggled by the header "?") */}
-        <div
-          ref={scrollRef}
-          role="log"
-          aria-live="polite"
-          aria-label="Conversation"
-          className="min-h-0 flex-1 overflow-y-auto px-6"
-        >
-          {showHelp ? (
-            <ChatHelp
-              onClose={() => setShowHelp(false)}
-              onPickExample={pickExample}
-            />
-          ) : messages.length === 0 && !propose.isPending ? (
-            <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-4 text-center text-sm">
-              <Sparkles className="h-8 w-8 opacity-40" />
-              <p className="max-w-xs">
-                Ask about your fleet, or tell Stoa to do something. For example:
-              </p>
-              <ul className="space-y-1.5">
-                {EXAMPLE_QUESTIONS.map((q) => (
-                  <li key={q}>
-                    <button
-                      type="button"
-                      disabled={propose.isPending}
-                      onClick={() => pickExample(q)}
-                      className="bg-muted/40 hover:bg-muted rounded-full px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
-                    >
-                      {q}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <p className="text-muted-foreground/70 max-w-xs text-xs">
-                Actions (like starting a session) always ask you to confirm
-                first.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4 py-4">
-              {messages.map((message, i) => {
-                if (message.role === "user") {
-                  return (
-                    <div key={i} className="flex justify-end">
-                      <div className="bg-secondary text-secondary-foreground max-w-[85%] rounded-2xl rounded-br-sm px-3 py-2 text-sm whitespace-pre-wrap">
-                        {message.content}
-                      </div>
+      {/* Message list (or the help panel, toggled by the header "?") */}
+      <div
+        ref={scrollRef}
+        role="log"
+        aria-live="polite"
+        aria-label="Conversation"
+        className="min-h-0 flex-1 overflow-y-auto px-6"
+      >
+        {showHelp ? (
+          <ChatHelp
+            onClose={() => setShowHelp(false)}
+            onPickExample={pickExample}
+          />
+        ) : messages.length === 0 && !propose.isPending ? (
+          <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-4 text-center text-sm">
+            <Sparkles className="h-8 w-8 opacity-40" />
+            <p className="max-w-xs">
+              Ask about your fleet, or tell Stoa to do something. For example:
+            </p>
+            <ul className="space-y-1.5">
+              {EXAMPLE_QUESTIONS.map((q) => (
+                <li key={q}>
+                  <button
+                    type="button"
+                    disabled={propose.isPending}
+                    onClick={() => pickExample(q)}
+                    className="bg-muted/40 hover:bg-muted rounded-full px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
+                  >
+                    {q}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="text-muted-foreground/70 max-w-xs text-xs">
+              Actions (like starting a session) always ask you to confirm first.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4 py-4">
+            {messages.map((message, i) => {
+              if (message.role === "user") {
+                return (
+                  <div key={i} className="flex justify-end">
+                    <div className="bg-secondary text-secondary-foreground max-w-[85%] rounded-2xl rounded-br-sm px-3 py-2 text-sm whitespace-pre-wrap">
+                      {message.content}
                     </div>
-                  );
-                }
-                if (message.kind === "answer") {
-                  return (
-                    <div key={i} className="flex justify-start">
-                      <div className="bg-muted/40 max-w-[90%] rounded-2xl rounded-bl-sm px-3 py-2">
-                        <article className="prose prose-sm dark:prose-invert max-w-none">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{ a: MarkdownLink }}
-                          >
-                            {message.content}
-                          </ReactMarkdown>
-                        </article>
-                      </div>
-                    </div>
-                  );
-                }
-                if (message.kind === "result") {
-                  return (
-                    <div key={i} className="flex justify-start">
-                      <div
-                        className={cn(
-                          "flex max-w-[90%] items-start gap-2 rounded-2xl rounded-bl-sm px-3 py-2 text-sm [&_p]:m-0",
-                          message.ok
-                            ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                            : "bg-destructive/10 text-destructive"
-                        )}
-                      >
-                        {message.ok ? (
-                          <Check className="mt-0.5 h-4 w-4 shrink-0" />
-                        ) : (
-                          <X className="mt-0.5 h-4 w-4 shrink-0" />
-                        )}
+                  </div>
+                );
+              }
+              if (message.kind === "answer") {
+                return (
+                  <div key={i} className="flex justify-start">
+                    <div className="bg-muted/40 max-w-[90%] rounded-2xl rounded-bl-sm px-3 py-2">
+                      <article className="prose prose-sm dark:prose-invert max-w-none">
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
                           components={{ a: MarkdownLink }}
                         >
                           {message.content}
                         </ReactMarkdown>
-                      </div>
-                    </div>
-                  );
-                }
-                // Proposal — a confirm card. Nothing runs until the user confirms.
-                return (
-                  <div key={i} className="flex justify-start">
-                    <div className="border-border bg-muted/30 max-w-[90%] space-y-3 rounded-2xl rounded-bl-sm border px-4 py-3">
-                      <div className="flex items-start gap-2">
-                        <Sparkles className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
-                        <div className="space-y-0.5">
-                          <p className="text-sm font-medium">
-                            Stoa wants to act
-                          </p>
-                          <p className="text-muted-foreground text-sm">
-                            {message.proposal.summary}
-                          </p>
-                        </div>
-                      </div>
-                      {message.status === "pending" ||
-                      message.status === "executing" ? (
-                        <div className="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            onClick={() => handleConfirm(i)}
-                            disabled={anyExecuting}
-                            className="h-8"
-                          >
-                            {message.status === "executing" ? (
-                              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Check className="mr-1 h-3.5 w-3.5" />
-                            )}
-                            Confirm
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleCancel(i)}
-                            disabled={message.status === "executing"}
-                            className="h-8"
-                          >
-                            <X className="mr-1 h-3.5 w-3.5" />
-                            Cancel
-                          </Button>
-                        </div>
-                      ) : (
-                        <p className="text-muted-foreground text-xs">
-                          {message.status === "confirmed"
-                            ? "Confirmed."
-                            : "Cancelled."}
-                        </p>
-                      )}
+                      </article>
                     </div>
                   </div>
                 );
-              })}
-              {propose.isPending && (
-                <div className="flex justify-start">
-                  <div className="bg-muted/40 text-muted-foreground flex items-center gap-2 rounded-2xl rounded-bl-sm px-3 py-2 text-sm">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Thinking…
+              }
+              if (message.kind === "result") {
+                return (
+                  <div key={i} className="flex justify-start">
+                    <div
+                      className={cn(
+                        "flex max-w-[90%] items-start gap-2 rounded-2xl rounded-bl-sm px-3 py-2 text-sm [&_p]:m-0",
+                        message.ok
+                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                          : "bg-destructive/10 text-destructive"
+                      )}
+                    >
+                      {message.ok ? (
+                        <Check className="mt-0.5 h-4 w-4 shrink-0" />
+                      ) : (
+                        <X className="mt-0.5 h-4 w-4 shrink-0" />
+                      )}
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{ a: MarkdownLink }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                );
+              }
+              // Proposal — a confirm card. Nothing runs until the user confirms.
+              return (
+                <div key={i} className="flex justify-start">
+                  <div className="border-border bg-muted/30 max-w-[90%] space-y-3 rounded-2xl rounded-bl-sm border px-4 py-3">
+                    <div className="flex items-start gap-2">
+                      <Sparkles className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-medium">Stoa wants to act</p>
+                        <p className="text-muted-foreground text-sm">
+                          {message.proposal.summary}
+                        </p>
+                      </div>
+                    </div>
+                    {message.status === "pending" ||
+                    message.status === "executing" ? (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => handleConfirm(i)}
+                          disabled={anyExecuting}
+                          className="h-8"
+                        >
+                          {message.status === "executing" ? (
+                            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Check className="mr-1 h-3.5 w-3.5" />
+                          )}
+                          Confirm
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleCancel(i)}
+                          disabled={message.status === "executing"}
+                          className="h-8"
+                        >
+                          <X className="mr-1 h-3.5 w-3.5" />
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground text-xs">
+                        {message.status === "confirmed"
+                          ? "Confirmed."
+                          : "Cancelled."}
+                      </p>
+                    )}
                   </div>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Composer */}
-        <div className="border-t p-3">
-          <div className="flex items-end gap-2">
-            <textarea
-              ref={taRef}
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                grow();
-              }}
-              onKeyDown={handleKeyDown}
-              rows={1}
-              disabled={propose.isPending}
-              placeholder="Ask about your fleet, or start a session…"
-              aria-label="Ask Stoa a question"
-              className="border-input bg-background focus-visible:ring-ring/60 max-h-32 min-h-[44px] flex-1 resize-none rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2 disabled:opacity-60"
-            />
-            <Button
-              onClick={send}
-              disabled={!canSend}
-              className="h-11"
-              aria-label="Send"
-            >
-              {propose.isPending ? (
-                <Loader2 className={cn("h-4 w-4 animate-spin")} />
-              ) : (
-                <Send className="mr-1 h-4 w-4" />
-              )}
-              Send
-            </Button>
+              );
+            })}
+            {propose.isPending && (
+              <div className="flex justify-start">
+                <div className="bg-muted/40 text-muted-foreground flex items-center gap-2 rounded-2xl rounded-bl-sm px-3 py-2 text-sm">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Thinking…
+                </div>
+              </div>
+            )}
           </div>
+        )}
+      </div>
+
+      {/* Composer */}
+      <div className="border-t p-3">
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={taRef}
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              grow();
+            }}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            disabled={propose.isPending}
+            placeholder="Ask about your fleet, or start a session…"
+            aria-label="Ask Stoa a question"
+            className="border-input bg-background focus-visible:ring-ring/60 max-h-32 min-h-[44px] flex-1 resize-none rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2 disabled:opacity-60"
+          />
+          <Button
+            onClick={send}
+            disabled={!canSend}
+            className="h-11"
+            aria-label="Send"
+          >
+            {propose.isPending ? (
+              <Loader2 className={cn("h-4 w-4 animate-spin")} />
+            ) : (
+              <Send className="mr-1 h-4 w-4" />
+            )}
+            Send
+          </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }

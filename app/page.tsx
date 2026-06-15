@@ -46,8 +46,6 @@ import { sessionKey } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
-
-import { ChatView } from "@/components/views/ChatView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
@@ -185,7 +183,6 @@ function HomeContent() {
     useState(false);
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
 
-  const [showChat, setShowChat] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   // Session whose diff to show via the "See changes" jump (fired when a turn
@@ -718,7 +715,7 @@ function HomeContent() {
         onWorkflowsClick={() => addWorkflowsTab(paneId)}
         onVerdictInboxClick={() => addViewTab(paneId, "verdict-inbox")}
         onFleetBoardClick={() => addViewTab(paneId, "fleet-board")}
-        onAskStoaClick={isMobile ? () => setShowChat(true) : undefined}
+        onAskStoaClick={isMobile ? () => addViewTab(paneId, "ask") : undefined}
         onSelectSession={handleSelectSession}
         onOpenSessionInNewTab={handleOpenSessionInNewTab}
       />
@@ -845,8 +842,7 @@ function HomeContent() {
     onOpenWorkflows: () => addWorkflowsTab(focusedPaneId),
     onOpenVerdictInbox: () => addViewTab(focusedPaneId, "verdict-inbox"),
     onOpenFleetBoard: () => addViewTab(focusedPaneId, "fleet-board"),
-    showChat,
-    setShowChat,
+    onOpenAsk: () => addViewTab(focusedPaneId, "ask"),
     onShowShortcuts: () => setShowHelp(true),
     onShowGuide: () => setShowGuide(true),
     notificationSettings,
@@ -892,11 +888,9 @@ function HomeContent() {
       {/* Dispatch + Verdict Inbox are now first-class pane TABs (see addViewTab),
           not dialogs — opened from the nav / cross-links via onOpenDispatch /
           onOpenVerdictInbox. */}
-      {/* Fleet Board is now a first-class pane TAB (see addViewTab), not a dialog —
-          opened from the nav / cross-links via onOpenFleetBoard. */}
-      {/* Ask Stoa — a read-only NL chatbox over the fleet's own data, answered by
-          the user-selected agent. Self-contained; opened via setShowChat. */}
-      <ChatView open={showChat} onOpenChange={setShowChat} />
+      {/* Fleet Board + Insight + Ask Stoa are now first-class pane TABs (see
+          addViewTab), not dialogs — opened from the nav / cross-links. Every fleet
+          view is a window now; no fleet dialogs remain. */}
       {/* "See changes" jump-to-diff: opened by the transient toast action when a
           session's turn completes (useNotifications -> onSeeChanges). */}
       {seeChangesSessionId && (

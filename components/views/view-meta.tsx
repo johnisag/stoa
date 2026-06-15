@@ -1,4 +1,11 @@
-import { Workflow, Columns3, BarChart3, Rocket, Inbox } from "lucide-react";
+import {
+  Workflow,
+  Columns3,
+  BarChart3,
+  Rocket,
+  Inbox,
+  Sparkles,
+} from "lucide-react";
 import type { ComponentType } from "react";
 import type { ViewKind } from "@/lib/panes";
 
@@ -19,6 +26,7 @@ export const VIEW_META: Partial<Record<ViewKind, ViewMeta>> = {
   analytics: { label: "Insight", Icon: BarChart3 },
   dispatch: { label: "Dispatch", Icon: Rocket },
   "verdict-inbox": { label: "Verdict Inbox", Icon: Inbox },
+  ask: { label: "Ask Stoa", Icon: Sparkles },
 };
 
 /** The display metadata for a tab's view, or undefined for a terminal/unknown one. */
