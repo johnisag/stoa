@@ -166,4 +166,9 @@ export type SessionEventType =
   | "command_proposed"
   | "command_executed"
   | "command_rejected"
-  | "command_failed";
+  | "command_failed"
+  // Assisted workflow generator (generation-only) — a design was produced,
+  // rejected by the validator, or the spawn/run failed. Same synthetic key.
+  | "workflow_proposed"
+  | "workflow_rejected"
+  | "workflow_failed";
