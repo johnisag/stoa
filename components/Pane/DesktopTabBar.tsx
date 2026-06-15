@@ -17,10 +17,6 @@ import {
   PenLine,
   MessageSquarePlus,
   FileText,
-  Workflow,
-  Columns3,
-  BarChart3,
-  Rocket,
 } from "lucide-react";
 import {
   Tooltip,
@@ -34,6 +30,7 @@ import { SnippetsModal } from "@/components/Terminal/SnippetsModal";
 import { useState, type ReactNode } from "react";
 import type { Session } from "@/lib/db";
 import type { TabData } from "@/lib/panes";
+import { viewMeta, ViewTabIcon } from "@/components/views/view-meta";
 
 type ViewMode = "terminal" | "files" | "git" | "workers";
 
@@ -158,10 +155,8 @@ export function DesktopTabBar({
   const [showSnippets, setShowSnippets] = useState(false);
 
   const getTabName = (tab: TabData) => {
-    if (tab.view === "workflows") return "Workflows";
-    if (tab.view === "fleet-board") return "Fleet Board";
-    if (tab.view === "analytics") return "Insight";
-    if (tab.view === "dispatch") return "Dispatch";
+    const meta = viewMeta(tab.view);
+    if (meta) return meta.label;
     if (tab.sessionId) {
       const s = sessions.find((sess) => sess.id === tab.sessionId);
       return s?.name || tab.attachedTmux || "Session";
@@ -199,14 +194,7 @@ export function DesktopTabBar({
                   : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/50"
               )}
             >
-              {tab.view === "workflows" && <Workflow className="h-3.5 w-3.5" />}
-              {tab.view === "fleet-board" && (
-                <Columns3 className="h-3.5 w-3.5" />
-              )}
-              {tab.view === "analytics" && (
-                <BarChart3 className="h-3.5 w-3.5" />
-              )}
-              {tab.view === "dispatch" && <Rocket className="h-3.5 w-3.5" />}
+              <ViewTabIcon view={tab.view} className="h-3.5 w-3.5" />
               <span className="max-w-[120px] truncate">{getTabName(tab)}</span>
               {tabs.length > 1 && (
                 <button
