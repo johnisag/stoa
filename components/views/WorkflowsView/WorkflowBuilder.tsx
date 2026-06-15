@@ -194,6 +194,9 @@ export function WorkflowBuilder({
   const [genSummary, setGenSummary] = useState("");
   const [genProvider, setGenProvider] = useState<"claude" | "codex">("claude");
   const [genModel, setGenModel] = useState(""); // "" → the agent's default model
+  // A prose reply from the designer (a clarifying question, or why it couldn't
+  // design one). Shown inline (not a fleeting toast) so the user can act on it.
+  const [genAnswer, setGenAnswer] = useState<string | null>(null);
   const generate = useGenerateWorkflow();
   // Bring the edit panel into view when a node is selected — on a phone it sits
   // below a tall canvas, so tapping a node would otherwise open a form off-screen.
@@ -766,6 +769,7 @@ export function WorkflowBuilder({
     ) {
       return;
     }
+    setGenAnswer(null); // clear any prior reply before a fresh attempt
     try {
       const reply = await generate.mutateAsync({
         summary,
@@ -780,10 +784,9 @@ export function WorkflowBuilder({
         );
       } else {
         // The designer answered in prose (a clarifying question, or why it
-        // couldn't) — surface it; the canvas is untouched.
-        toast.message("The workflow designer replied", {
-          description: reply.text,
-        });
+        // couldn't) — surface it INLINE (it may need the user to act) and leave
+        // the canvas untouched.
+        setGenAnswer(reply.text);
       }
     } catch (e) {
       toast.error(
@@ -812,7 +815,10 @@ export function WorkflowBuilder({
     <div className="flex h-full min-h-0 flex-col gap-4">
       {/* Assisted generator: describe a goal → an agent DESIGNS the workflow and
           loads it onto the canvas for review. Nothing runs until you hit Start. */}
-      <div className="bg-card/40 flex flex-shrink-0 flex-col gap-2 rounded-md border p-3">
+      <div
+        className="bg-card/40 flex flex-shrink-0 flex-col gap-2 rounded-md border p-3"
+        aria-busy={generate.isPending}
+      >
         <div className="flex items-center gap-1.5">
           <Sparkles className="text-primary h-4 w-4" />
           <span className="text-sm font-medium">Design a workflow with AI</span>
@@ -865,7 +871,14 @@ export function WorkflowBuilder({
             type="button"
             size="sm"
             onClick={handleGenerate}
-            disabled={generate.isPending || !genSummary.trim()}
+            disabled={
+              generate.isPending || !genSummary.trim() || !doc.projectId
+            }
+            title={
+              !doc.projectId
+                ? "Pick a Project context below first"
+                : "Design a workflow for this goal"
+            }
           >
             {generate.isPending ? (
               <>
@@ -885,6 +898,21 @@ export function WorkflowBuilder({
             </span>
           )}
         </div>
+        {genAnswer && (
+          <div className="bg-muted/50 text-muted-foreground flex items-start justify-between gap-2 rounded-md border px-3 py-2 text-xs leading-relaxed">
+            <p className="min-w-0 whitespace-pre-wrap">{genAnswer}</p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Dismiss reply"
+              className="-mt-1 -mr-1 flex-shrink-0"
+              onClick={() => setGenAnswer(null)}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2">
