@@ -3,6 +3,7 @@
 import { useRef, useCallback, useEffect, memo, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { usePanes } from "@/contexts/PaneContext";
+import { isViewTab, type TabData } from "@/lib/panes";
 import { useViewport } from "@/hooks/useViewport";
 import type {
   TerminalHandle,
@@ -478,6 +479,52 @@ export const Pane = memo(function Pane({
     [viewMode, currentIndex, switchOrder, onSelectSession]
   );
 
+  // Render the component for a non-terminal VIEW tab. One place wires every
+  // fleet view to this pane's handlers, so the mobile + desktop tab-render paths
+  // share it (no per-view if-blocks duplicated across both). An unknown view kind
+  // returns null (renders an empty pane) rather than mis-rendering a terminal.
+  function renderPaneView(tab: TabData) {
+    switch (tab.view) {
+      case "workflows":
+        return (
+          <WorkflowsView
+            tabId={tab.id}
+            sessions={sessions}
+            activeSessionId={activeTab?.sessionId ?? undefined}
+            onOpenSession={onSelectSession}
+            onOpenSessionInNewTab={onOpenSessionInNewTab}
+            onOpenDispatch={onDispatchClick}
+            onOpenVerdictInbox={onVerdictInboxClick}
+            onOpenFleetBoard={onFleetBoardClick}
+            onClose={() => closeTab(paneId, tab.id)}
+          />
+        );
+      case "fleet-board":
+        return (
+          <FleetBoardView
+            onOpenSession={onOpenSessionInNewTab ?? onSelectSession}
+            onOpenDispatch={onDispatchClick}
+            onOpenWorkflows={onWorkflowsClick}
+            onOpenVerdictInbox={onVerdictInboxClick}
+            onClose={() => closeTab(paneId, tab.id)}
+          />
+        );
+      case "analytics":
+        return <AnalyticsView onClose={() => closeTab(paneId, tab.id)} />;
+      case "dispatch":
+        return (
+          <DispatchView
+            onOpenWorkflows={onWorkflowsClick}
+            onOpenVerdictInbox={onVerdictInboxClick}
+            onOpenFleetBoard={onFleetBoardClick}
+            onClose={() => closeTab(paneId, tab.id)}
+          />
+        );
+      default:
+        return null;
+    }
+  }
+
   return (
     <div
       className={cn(
@@ -560,64 +607,13 @@ export const Pane = memo(function Pane({
           {/* Tabs - terminal or workflows */}
           {paneData.tabs.map((tab) => {
             const isActive = tab.id === activeTab?.id;
-            if (tab.view === "workflows") {
+            if (isViewTab(tab.view)) {
               return (
                 <div
                   key={tab.id}
                   className={isActive ? "h-full w-full" : "hidden"}
                 >
-                  <WorkflowsView
-                    tabId={tab.id}
-                    sessions={sessions}
-                    activeSessionId={activeTab?.sessionId ?? undefined}
-                    onOpenSession={onSelectSession}
-                    onOpenSessionInNewTab={onOpenSessionInNewTab}
-                    onOpenDispatch={onDispatchClick}
-                    onOpenVerdictInbox={onVerdictInboxClick}
-                    onOpenFleetBoard={onFleetBoardClick}
-                    onClose={() => closeTab(paneId, tab.id)}
-                  />
-                </div>
-              );
-            }
-            if (tab.view === "fleet-board") {
-              return (
-                <div
-                  key={tab.id}
-                  className={isActive ? "h-full w-full" : "hidden"}
-                >
-                  <FleetBoardView
-                    onOpenSession={onOpenSessionInNewTab ?? onSelectSession}
-                    onOpenDispatch={onDispatchClick}
-                    onOpenWorkflows={onWorkflowsClick}
-                    onOpenVerdictInbox={onVerdictInboxClick}
-                    onClose={() => closeTab(paneId, tab.id)}
-                  />
-                </div>
-              );
-            }
-            if (tab.view === "analytics") {
-              return (
-                <div
-                  key={tab.id}
-                  className={isActive ? "h-full w-full" : "hidden"}
-                >
-                  <AnalyticsView onClose={() => closeTab(paneId, tab.id)} />
-                </div>
-              );
-            }
-            if (tab.view === "dispatch") {
-              return (
-                <div
-                  key={tab.id}
-                  className={isActive ? "h-full w-full" : "hidden"}
-                >
-                  <DispatchView
-                    onOpenWorkflows={onWorkflowsClick}
-                    onOpenVerdictInbox={onVerdictInboxClick}
-                    onOpenFleetBoard={onFleetBoardClick}
-                    onClose={() => closeTab(paneId, tab.id)}
-                  />
+                  {renderPaneView(tab)}
                 </div>
               );
             }
@@ -715,68 +711,13 @@ export const Pane = memo(function Pane({
                   {/* Tabs - terminal or workflows */}
                   {paneData.tabs.map((tab) => {
                     const isActive = tab.id === activeTab?.id;
-                    if (tab.view === "workflows") {
+                    if (isViewTab(tab.view)) {
                       return (
                         <div
                           key={tab.id}
                           className={isActive ? "h-full" : "hidden"}
                         >
-                          <WorkflowsView
-                            tabId={tab.id}
-                            sessions={sessions}
-                            activeSessionId={activeTab?.sessionId ?? undefined}
-                            onOpenSession={onSelectSession}
-                            onOpenSessionInNewTab={onOpenSessionInNewTab}
-                            onOpenDispatch={onDispatchClick}
-                            onOpenVerdictInbox={onVerdictInboxClick}
-                            onOpenFleetBoard={onFleetBoardClick}
-                            onClose={() => closeTab(paneId, tab.id)}
-                          />
-                        </div>
-                      );
-                    }
-                    if (tab.view === "fleet-board") {
-                      return (
-                        <div
-                          key={tab.id}
-                          className={isActive ? "h-full" : "hidden"}
-                        >
-                          <FleetBoardView
-                            onOpenSession={
-                              onOpenSessionInNewTab ?? onSelectSession
-                            }
-                            onOpenDispatch={onDispatchClick}
-                            onOpenWorkflows={onWorkflowsClick}
-                            onOpenVerdictInbox={onVerdictInboxClick}
-                            onClose={() => closeTab(paneId, tab.id)}
-                          />
-                        </div>
-                      );
-                    }
-                    if (tab.view === "analytics") {
-                      return (
-                        <div
-                          key={tab.id}
-                          className={isActive ? "h-full" : "hidden"}
-                        >
-                          <AnalyticsView
-                            onClose={() => closeTab(paneId, tab.id)}
-                          />
-                        </div>
-                      );
-                    }
-                    if (tab.view === "dispatch") {
-                      return (
-                        <div
-                          key={tab.id}
-                          className={isActive ? "h-full" : "hidden"}
-                        >
-                          <DispatchView
-                            onOpenWorkflows={onWorkflowsClick}
-                            onOpenVerdictInbox={onVerdictInboxClick}
-                            onOpenFleetBoard={onFleetBoardClick}
-                            onClose={() => closeTab(paneId, tab.id)}
-                          />
+                          {renderPaneView(tab)}
                         </div>
                       );
                     }
