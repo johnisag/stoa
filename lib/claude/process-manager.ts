@@ -2,7 +2,13 @@ import { spawn, execFile, ChildProcess } from "child_process";
 import { WebSocket } from "ws";
 import { StreamParser } from "./stream-parser";
 import { getDb, queries, type Session } from "../db";
-import { isWindows, homeDir, expandHome, resolveBinary } from "../platform";
+import {
+  isWindows,
+  homeDir,
+  expandHome,
+  resolveBinary,
+  killTreeArgs,
+} from "../platform";
 import type { ClaudeSessionOptions, ClientEvent } from "./types";
 
 interface ManagedSession {
@@ -238,29 +244,20 @@ export class ClaudeProcessManager {
     const session = this.sessions.get(sessionId);
     if (!session?.process) return;
 
-    if (isWindows) {
-      // session.process is the cmd.exe wrapper (claude is a .cmd shim), so a plain
-      // kill stops ONLY cmd.exe and orphans the claude/node child tree. taskkill
-      // /T kills the whole tree, /F forces it (SIGTERM is unreliable for .cmd
-      // shims, and the old `.killed` escalation was dead code — Node sets .killed
-      // on signal delivery, not exit, so the guard never fired).
-      const pid = session.process.pid;
-      if (pid) {
-        execFile(
-          "taskkill",
-          ["/pid", String(pid), "/T", "/F"],
-          { windowsHide: true },
-          (err) => {
-            // Fall back to a direct kill if taskkill isn't available.
-            if (err) session.process?.kill();
-          }
-        );
-      } else {
-        session.process.kill();
-      }
-    } else {
-      session.process.kill("SIGTERM");
+    // On Windows session.process is the cmd.exe wrapper (claude is a .cmd shim), so a
+    // plain kill stops ONLY cmd.exe and orphans the claude/node child tree. The shared
+    // killTreeArgs helper yields `taskkill /T /F` (whole tree, forced) on Windows and
+    // null on POSIX (where a plain SIGTERM reaps the group).
+    const pid = session.process.pid;
+    const argv = pid ? killTreeArgs(pid, isWindows) : null;
+    if (!argv) {
+      session.process.kill(isWindows ? undefined : "SIGTERM");
+      return;
     }
+    execFile(argv[0], argv.slice(1), { windowsHide: true }, (err) => {
+      // Fall back to a direct kill if taskkill isn't available.
+      if (err) session.process?.kill();
+    });
   }
 
   // Get session status

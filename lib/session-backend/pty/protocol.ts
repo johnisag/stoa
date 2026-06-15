@@ -69,7 +69,14 @@ export function hostAddress(): string {
   const preferred = path.join(os.tmpdir(), `${name}.sock`);
   if (preferred.length <= SUN_PATH_MAX) return preferred;
   const fallback = path.join("/tmp", `${name}.sock`);
-  return fallback.length <= SUN_PATH_MAX ? fallback : preferred;
+  if (fallback.length <= SUN_PATH_MAX) return fallback;
+  // Both overflow — only reachable with a pathologically long STOA_PTY_HOST_NAME
+  // (the default name is ~25 chars). Warn rather than fail silently; bind() will
+  // surface the real ENAMETOOLONG.
+  console.warn(
+    `[pty-host] socket path exceeds the AF_UNIX sun_path limit (${preferred.length} > ${SUN_PATH_MAX}); shorten STOA_PTY_HOST_NAME`
+  );
+  return preferred;
 }
 
 export interface SpawnSpecMsg {

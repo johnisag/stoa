@@ -362,6 +362,8 @@ export class PtySession {
         }
       };
       if (!argv) {
+        // Defensive: mirrors lib/ask killChildTree's null-argv path. Unreachable
+        // here (we always pass onWindows=true) but kept for symmetry/safety.
         fallback();
         resolve();
         return;
