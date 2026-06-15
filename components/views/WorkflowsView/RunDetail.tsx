@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils";
 import type { StepStatus } from "@/lib/pipeline/types";
 import type { Session } from "@/lib/db";
 import { describeStepWorktree } from "@/lib/pipeline/worktree-display";
-import { baseName } from "@/lib/path-display";
 import { PipelineGraph } from "./PipelineGraph";
 import {
   AGENT_BADGE,
@@ -198,16 +197,15 @@ export function RunDetail({
                       notes it runs in the one shared workflow worktree. */}
                   {worktree &&
                     (worktree.kind === "own" ? (
+                      // Branch only in the row (matching WorkerCard / SessionCard
+                      // / the Git panel); the full worktree path is the tooltip.
                       <span
-                        className="text-muted-foreground inline-flex w-fit items-center gap-1 text-[11px]"
+                        className="text-muted-foreground inline-flex w-fit max-w-full items-center gap-1 text-[11px]"
                         title={worktree.path}
                       >
                         <GitBranch className="h-3 w-3 flex-shrink-0" />
                         <span className="truncate">
                           {worktree.branch ?? "(detached)"}
-                        </span>
-                        <span className="opacity-70">
-                          · {baseName(worktree.path)}
                         </span>
                       </span>
                     ) : (
