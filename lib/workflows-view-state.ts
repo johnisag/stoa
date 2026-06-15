@@ -16,11 +16,13 @@ export type WorkflowsTab =
   | "examples"
   | "runs";
 
+// NOTE: the transient help overlay (showHelp) is deliberately NOT persisted —
+// restoring a full-screen help panel on every reload is jarring, and help is a
+// momentary affordance, not a durable view. It stays local to the component.
 export interface WorkflowsViewState {
   tab: WorkflowsTab;
   pickedTemplate: string | null;
   openRunId: string | null;
-  showHelp: boolean;
 }
 
 const VALID_TABS: readonly WorkflowsTab[] = [
@@ -35,7 +37,6 @@ export const DEFAULT_WORKFLOWS_VIEW_STATE: WorkflowsViewState = {
   tab: "templates",
   pickedTemplate: null,
   openRunId: null,
-  showHelp: false,
 };
 
 const KEY_PREFIX = "stoa-workflows-view:";
@@ -63,7 +64,6 @@ export function coerceWorkflowsViewState(raw: unknown): WorkflowsViewState {
     pickedTemplate:
       typeof o.pickedTemplate === "string" ? o.pickedTemplate : null,
     openRunId: typeof o.openRunId === "string" ? o.openRunId : null,
-    showHelp: o.showHelp === true,
   };
 }
 

@@ -53,7 +53,6 @@ describe("workflows-view-state", () => {
       tab: "runs",
       pickedTemplate: "bug-hunt",
       openRunId: "run-abc",
-      showHelp: false,
     };
     saveWorkflowsViewState("tab-7", state, store);
     expect(loadWorkflowsViewState("tab-7", store)).toEqual(state);
@@ -63,17 +62,12 @@ describe("workflows-view-state", () => {
     const store = fakeStorage();
     saveWorkflowsViewState(
       "tab-A",
-      { tab: "build", pickedTemplate: null, openRunId: null, showHelp: true },
+      { tab: "build", pickedTemplate: null, openRunId: null },
       store
     );
     saveWorkflowsViewState(
       "tab-B",
-      {
-        tab: "examples",
-        pickedTemplate: null,
-        openRunId: null,
-        showHelp: false,
-      },
+      { tab: "examples", pickedTemplate: null, openRunId: null },
       store
     );
     expect(loadWorkflowsViewState("tab-A", store).tab).toBe("build");
@@ -81,9 +75,23 @@ describe("workflows-view-state", () => {
   });
 
   it("coerces an unknown tab to the default tab", () => {
-    expect(coerceWorkflowsViewState({ tab: "evil", showHelp: true }).tab).toBe(
-      "templates"
+    expect(coerceWorkflowsViewState({ tab: "evil" }).tab).toBe("templates");
+  });
+
+  it("does not persist the transient help overlay (showHelp)", () => {
+    const store = fakeStorage();
+    // Even if an old/foreign blob carries showHelp, it's dropped on load.
+    store.setItem(
+      workflowsViewKey("tab-h"),
+      JSON.stringify({ tab: "runs", showHelp: true })
     );
+    const loaded = loadWorkflowsViewState("tab-h", store);
+    expect(loaded).toEqual({
+      tab: "runs",
+      pickedTemplate: null,
+      openRunId: null,
+    });
+    expect("showHelp" in loaded).toBe(false);
   });
 
   it("coerces wrong-typed fields to safe defaults", () => {
@@ -91,13 +99,11 @@ describe("workflows-view-state", () => {
       tab: "runs",
       pickedTemplate: 42,
       openRunId: { not: "a string" },
-      showHelp: "yes",
     });
     expect(out).toEqual({
       tab: "runs",
       pickedTemplate: null,
       openRunId: null,
-      showHelp: false, // only the literal `true` enables help
     });
   });
 
@@ -123,7 +129,7 @@ describe("workflows-view-state", () => {
     const store = fakeStorage();
     saveWorkflowsViewState(
       "tab-9",
-      { tab: "custom", pickedTemplate: null, openRunId: null, showHelp: false },
+      { tab: "custom", pickedTemplate: null, openRunId: null },
       store
     );
     expect(store.map.size).toBe(1);

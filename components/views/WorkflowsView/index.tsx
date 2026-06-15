@@ -75,12 +75,13 @@ export function WorkflowsView({
     restored.pickedTemplate
   );
   const [openRunId, setOpenRunId] = useState<string | null>(restored.openRunId);
-  const [showHelp, setShowHelp] = useState(restored.showHelp);
+  // Transient — intentionally not persisted (see workflows-view-state.ts).
+  const [showHelp, setShowHelp] = useState(false);
 
   // Persist the view whenever it changes so a reload lands back where we were.
   useEffect(() => {
-    saveWorkflowsViewState(tabId, { tab, pickedTemplate, openRunId, showHelp });
-  }, [tabId, tab, pickedTemplate, openRunId, showHelp]);
+    saveWorkflowsViewState(tabId, { tab, pickedTemplate, openRunId });
+  }, [tabId, tab, pickedTemplate, openRunId]);
 
   // Drives the "Runs" tab's active-count badge (deduped with RunsList's query).
   const { data: runs = [] } = useListRuns(true);

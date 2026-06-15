@@ -631,7 +631,11 @@ function HomeContent() {
   const handleOpenSessionInNewTab = useCallback(
     (sessionId: string) => {
       const session = sessions.find((s) => s.id === sessionId);
-      if (session) openSessionInNewTab(session);
+      if (!session) {
+        toast.error("Session not found — it may have been deleted.");
+        return;
+      }
+      openSessionInNewTab(session);
     },
     [sessions, openSessionInNewTab]
   );
@@ -824,20 +828,6 @@ function HomeContent() {
   const startDevServerProject = startDevServerProjectId
     ? (projects.find((p) => p.id === startDevServerProjectId) ?? null)
     : null;
-
-  // Open a worker session referenced from the workflows tab in a new terminal
-  // tab so the workflows tab stays open and the worker gets a proper attach.
-  const handleWorkflowsOpenSession = useCallback(
-    (sessionId: string) => {
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session) {
-        toast.error("Session not found — it may have been deleted.");
-        return;
-      }
-      openSessionInNewTab(session);
-    },
-    [sessions, openSessionInNewTab]
-  );
 
   // Close a fleet dialog and open a workflows tab in the focused pane.
   const openWorkflowsTabFrom = useCallback(

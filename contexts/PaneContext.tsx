@@ -356,6 +356,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
       addTab,
       closeTab,
       switchTab,
+      addWorkflowsTab,
       attachSession,
       detachSession,
       reconcileSessions,
