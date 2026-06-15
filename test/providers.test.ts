@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   getProvider,
   getAllProviders,
@@ -38,11 +38,21 @@ describe("parseMcpLaunchArgs — the single mcp_launch_args parser", () => {
   });
 
   it("returns [] for null/empty/malformed/non-array (spawn proceeds, no flags)", () => {
-    expect(parseMcpLaunchArgs(null)).toEqual([]);
-    expect(parseMcpLaunchArgs(undefined)).toEqual([]);
-    expect(parseMcpLaunchArgs("")).toEqual([]);
-    expect(parseMcpLaunchArgs("{not json")).toEqual([]);
-    expect(parseMcpLaunchArgs(JSON.stringify({ not: "an array" }))).toEqual([]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(parseMcpLaunchArgs(null)).toEqual([]);
+      expect(parseMcpLaunchArgs(undefined)).toEqual([]);
+      expect(parseMcpLaunchArgs("")).toEqual([]);
+      expect(parseMcpLaunchArgs("{not json")).toEqual([]);
+      expect(parseMcpLaunchArgs(JSON.stringify({ not: "an array" }))).toEqual(
+        []
+      );
+      // Only the malformed (unparseable) input warns — a diagnosable trail for a
+      // conductor that silently comes up without its MCP server.
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("feeds buildAgentArgs as extraArgs (before the positional prompt)", () => {

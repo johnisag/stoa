@@ -4,7 +4,7 @@
  * stoa-MCP wiring on re-attach: the spawn must replay session.mcp_launch_args as
  * clean argv (the server path did; this one had drifted).
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { buildSpawnForSession } from "@/lib/client/backend";
 import type { Session } from "@/lib/db";
 
@@ -53,10 +53,12 @@ describe("buildSpawnForSession", () => {
     const { args } = buildSpawnForSession(
       session({ mcp_launch_args: JSON.stringify(mcp) })
     );
-    // Every conductor token is present, in order, as discrete argv entries.
-    for (const token of mcp) expect(args).toContain(token);
-    const firstC = args.indexOf("-c");
-    expect(args[firstC + 1]).toBe("mcp_servers.stoa.command=stoa");
+    // The conductor tokens land as a contiguous, order-preserving run of discrete
+    // argv entries — not just "present somewhere" (reversed pairs would break the
+    // -c key/value association).
+    const start = args.indexOf("-c");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(args.slice(start, start + mcp.length)).toEqual(mcp);
   });
 
   it("omits the MCP flags for a non-conductor (null mcp_launch_args)", () => {
@@ -65,13 +67,18 @@ describe("buildSpawnForSession", () => {
   });
 
   it("survives a malformed mcp_launch_args (spawns without the flags, no throw)", () => {
-    expect(() =>
-      buildSpawnForSession(session({ mcp_launch_args: "{not json" }))
-    ).not.toThrow();
-    const { args } = buildSpawnForSession(
-      session({ mcp_launch_args: "{not json" })
-    );
-    expect(args).not.toContain("-c");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(() =>
+        buildSpawnForSession(session({ mcp_launch_args: "{not json" }))
+      ).not.toThrow();
+      const { args } = buildSpawnForSession(
+        session({ mcp_launch_args: "{not json" })
+      );
+      expect(args).not.toContain("-c");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("a shell session yields an empty spawn", () => {

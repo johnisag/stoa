@@ -560,6 +560,13 @@ export function parseMcpLaunchArgs(raw: string | null | undefined): string[] {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.map(String) : [];
   } catch {
+    // Malformed — degrade to a spawn without the conductor flags rather than
+    // failing the whole launch. Warn so a Codex conductor that silently comes up
+    // without its stoa MCP server is at least diagnosable from the logs.
+    console.warn(
+      "[parseMcpLaunchArgs] ignoring malformed mcp_launch_args:",
+      raw
+    );
     return [];
   }
 }
