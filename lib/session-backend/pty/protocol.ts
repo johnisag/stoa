@@ -28,16 +28,55 @@ import path from "path";
 import { isWindows } from "../../platform";
 
 /**
+ * A short, stable per-user token so two users (or two installs) on one machine
+ * don't bind/connect the SAME global pipe/socket. uid on POSIX (cheap + stable);
+ * the username elsewhere (uid is -1 on Windows). Hashed to a few base-36 chars so
+ * it stays filesystem-safe and short (matters for the POSIX sun_path limit below).
+ */
+function userToken(): string {
+  try {
+    const { username, uid } = os.userInfo();
+    const seed = uid >= 0 ? `uid:${uid}` : `user:${username}`;
+    let h = 5381;
+    for (let i = 0; i < seed.length; i++) {
+      h = ((h << 5) + h + seed.charCodeAt(i)) >>> 0; // djb2
+    }
+    return h.toString(36);
+  } catch {
+    return ""; // best effort — fall back to the bare name
+  }
+}
+
+/**
  * Absolute address of the host's listening socket. The basename can be
  * overridden via STOA_PTY_HOST_NAME so multiple Stoa instances (or test
- * files) can run isolated daemons without colliding on the global pipe/socket.
+ * files) can run isolated daemons without colliding; when unset, a per-user
+ * suffix keeps two users on one host from sharing the default address.
  */
 export function hostAddress(): string {
-  const name = process.env.STOA_PTY_HOST_NAME || "stoa-pty-host";
+  const explicit = process.env.STOA_PTY_HOST_NAME;
+  const token = userToken();
+  const name = explicit || (token ? `stoa-pty-host-${token}` : "stoa-pty-host");
   if (isWindows) {
     return `\\\\.\\pipe\\${name}`;
   }
-  return path.join(os.tmpdir(), `${name}.sock`);
+  // AF_UNIX sun_path is ~104 (macOS) / ~108 (Linux) bytes; a deep TMPDIR can push
+  // os.tmpdir()/<name>.sock past it so bind() fails (ENAMETOOLONG). Fall back to
+  // the short, conventional POSIX socket dir /tmp when the preferred path would
+  // overflow. (POSIX-only branch — Windows returned above; /tmp is the canonical
+  // short AF_UNIX home, not a general tmp-path shortcut.)
+  const SUN_PATH_MAX = 100; // conservative, leaves slack under the OS limit
+  const preferred = path.join(os.tmpdir(), `${name}.sock`);
+  if (preferred.length <= SUN_PATH_MAX) return preferred;
+  const fallback = path.join("/tmp", `${name}.sock`);
+  if (fallback.length <= SUN_PATH_MAX) return fallback;
+  // Both overflow — only reachable with a pathologically long STOA_PTY_HOST_NAME
+  // (the default name is ~25 chars). Warn rather than fail silently; bind() will
+  // surface the real ENAMETOOLONG.
+  console.warn(
+    `[pty-host] socket path exceeds the AF_UNIX sun_path limit (${preferred.length} > ${SUN_PATH_MAX}); shorten STOA_PTY_HOST_NAME`
+  );
+  return preferred;
 }
 
 export interface SpawnSpecMsg {

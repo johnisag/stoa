@@ -18,9 +18,10 @@
  */
 
 import type { IPty } from "node-pty";
+import { execFile } from "child_process";
 import { Terminal } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { isWindows } from "../../platform";
+import { isWindows, killTreeArgs } from "../../platform";
 
 /**
  * Max raw bytes retained for client replay. This is only a FALLBACK for when
@@ -338,14 +339,41 @@ export class PtySession {
     this.kill();
     const exited = await this.waitForExit(timeoutMs);
     if (isWindows && pid > 0 && this.processExists(pid)) {
-      try {
-        process.kill(pid);
-      } catch {
-        // already gone
-      }
+      // node-pty's kill stops only the conpty wrapper (cmd.exe — agent CLIs are
+      // `.cmd` shims), orphaning the shim → node → agent child tree. A plain
+      // process.kill(pid) on the wrapper has the same gap. Reap the whole tree
+      // with `taskkill /T /F` (mirrors ClaudeProcessManager.cancelSession and
+      // lib/ask), falling back to a single-process kill if taskkill is missing.
+      await this.forceKillTree(pid);
       return this.waitForExit(1000);
     }
     return exited;
+  }
+
+  /** Windows-only: tear down the whole pty process tree via `taskkill /T /F`. */
+  private forceKillTree(pid: number): Promise<void> {
+    return new Promise((resolve) => {
+      const argv = killTreeArgs(pid, true);
+      const fallback = () => {
+        try {
+          process.kill(pid);
+        } catch {
+          // already gone
+        }
+      };
+      if (!argv) {
+        // Defensive: mirrors lib/ask killChildTree's null-argv path. Unreachable
+        // here (we always pass onWindows=true) but kept for symmetry/safety.
+        fallback();
+        resolve();
+        return;
+      }
+      execFile(argv[0], argv.slice(1), { windowsHide: true }, (err) => {
+        // taskkill not on PATH / failed → degrade to a single-process kill.
+        if (err) fallback();
+        resolve();
+      });
+    });
   }
 
   private processExists(pid: number): boolean {

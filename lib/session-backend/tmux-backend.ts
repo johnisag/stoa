@@ -24,9 +24,16 @@ import type {
 
 const execAsync = promisify(exec);
 
-/** Wrap a session name for use inside a double-quoted shell argument. */
+/**
+ * Wrap a session name for use inside a double-quoted shell argument, escaping the
+ * characters that stay active inside double quotes (`\ " $ \``). Names reaching the
+ * backend today are internally generated (`sessionKey()` = `${provider}-${uuid}`)
+ * so this is contract hardening (AGENTS.md: "the backend owns escaping"), not a
+ * reachable injection — and it's a no-op for those metacharacter-free names, so the
+ * locked command strings are unchanged.
+ */
 function q(name: string): string {
-  return `"${name}"`;
+  return `"${name.replace(/(["\\$`])/g, "\\$1")}"`;
 }
 
 let pasteCounter = 0;

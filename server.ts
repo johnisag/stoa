@@ -57,6 +57,7 @@ import {
   type BudgetLevel,
 } from "./lib/budget";
 import { backendKeyForSession } from "./lib/providers/registry";
+import { homeDir, defaultInteractiveShell } from "./lib/platform";
 import { getDb, queries, type Session } from "./lib/db";
 import { REMOTE_ADDR_HEADER } from "./lib/api-security";
 import { statusDetector, type SessionStatus } from "./lib/status-detector";
@@ -741,12 +742,16 @@ app.prepare().then(() => {
     let ptyCols = 80;
     let ptyRows = 24;
     try {
-      const shell = process.env.SHELL || "/bin/zsh";
+      // This connection only runs under the macOS/Linux tmux backend (Windows is
+      // always pty), but use the platform helpers anyway so there are no hardcoded
+      // /bin paths or process.env.HOME reads (AGENTS.md).
+      const shell = defaultInteractiveShell();
+      const home = homeDir();
       // Use minimal env - only essentials for shell to work
       // This lets Next.js/Vite/etc load .env.local without interference from parent process env
       const minimalEnv: { [key: string]: string } = {
-        PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
-        HOME: process.env.HOME || "/",
+        PATH: process.env.PATH || "",
+        HOME: home,
         USER: process.env.USER || "",
         SHELL: shell,
         TERM: "xterm-256color",
@@ -758,7 +763,7 @@ app.prepare().then(() => {
         name: "xterm-256color",
         cols: 80,
         rows: 24,
-        cwd: process.env.HOME || "/",
+        cwd: home,
         env: minimalEnv,
       });
     } catch (err) {
