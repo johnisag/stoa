@@ -21,6 +21,14 @@
 
 import { getProviderDefinition } from "@/lib/providers/registry";
 import { getModelOptions } from "@/lib/model-catalog";
+import { validateSpec } from "@/lib/pipeline/engine";
+import { docFromSpec, type BuilderDoc } from "@/lib/pipeline/builder-model";
+import type { PipelineSpec, PipelineStep } from "@/lib/pipeline/types";
+import {
+  ROLE_TO_AGENT,
+  isWorkflowRole,
+  MAX_GENERATED_STEPS,
+} from "@/lib/command/workflow-roles";
 
 /** The actions Command Stoa can perform. Phase 2 ships ONE: create_session — the
  * same capability as the New Session dialog (cheap, non-destructive, killable).
@@ -176,6 +184,115 @@ export function validateProposal(raw: unknown): ProposalValidation {
     ok: true,
     proposal: { action: "create_session", params: res.params },
   };
+}
+
+// Caps for generated-step free text (control bytes stripped, length-bounded so a
+// crafted reply can't bloat the canvas/DB row). Tasks are multi-line prompts.
+const TASK_MAX = 6000;
+const EXIT_CRITERIA_MAX = 2000;
+const WORKFLOW_NAME_MAX = 120;
+
+/** A generated workflow design: either a laid-out BuilderDoc ready to load into
+ * the canvas, or a reason it was rejected (which degrades to a plain answer). */
+export type WorkflowValidation =
+  | { ok: true; doc: BuilderDoc }
+  | { ok: false; reason: string };
+
+/**
+ * Validate an LLM-generated workflow design into a laid-out BuilderDoc. This is
+ * the generator's fail-closed gate — the exact twin of validateProposal for the
+ * "assisted design workflow" feature. It NEVER executes anything: it produces a
+ * draft document the user reviews and (separately, explicitly) chooses to run.
+ *
+ * Posture (mirrors parseBuilderDoc + validateCreateSessionParams):
+ *  - each step's fields are whitelisted one-by-one — the raw object is never
+ *    spread, so junk/hostile fields can't ride into the doc;
+ *  - the agent comes ONLY from the role map; an unknown role fails the whole
+ *    design closed (no silent coercion); any LLM-supplied agent / model /
+ *    workingDirectory / worktreePolicy is DROPPED (the server owns those);
+ *  - the working directory is set SERVER-SIDE from the resolved project (the
+ *    agent never supplies a path);
+ *  - the assembled spec must pass the SAME validateSpec gate hand-built specs
+ *    pass (unique ids, acyclic, output-refs in the dependency closure, …), so a
+ *    near-miss DAG is rejected here rather than producing a broken canvas.
+ */
+export function validateWorkflowProposal(
+  raw: unknown,
+  opts: { projectId: string; projectDir: string }
+): WorkflowValidation {
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, reason: "the workflow design was not an object" };
+  }
+  const specRaw = (raw as Record<string, unknown>).spec;
+  if (!specRaw || typeof specRaw !== "object") {
+    return { ok: false, reason: "the design has no spec object" };
+  }
+  const s = specRaw as Record<string, unknown>;
+  if (!Array.isArray(s.steps) || s.steps.length === 0) {
+    return { ok: false, reason: "the design has no steps" };
+  }
+  if (s.steps.length > MAX_GENERATED_STEPS) {
+    return {
+      ok: false,
+      reason: `the design has too many steps (${s.steps.length} > ${MAX_GENERATED_STEPS})`,
+    };
+  }
+
+  const name = sanitizeText(s.name, WORKFLOW_NAME_MAX) ?? "Generated workflow";
+
+  const steps: PipelineStep[] = [];
+  for (const stepRaw of s.steps) {
+    if (!stepRaw || typeof stepRaw !== "object") {
+      return { ok: false, reason: "a step was not an object" };
+    }
+    const r = stepRaw as Record<string, unknown>;
+    // role is the fail-closed gate: an unknown role rejects the whole design
+    // rather than coercing to a default agent.
+    if (!isWorkflowRole(r.role)) {
+      return { ok: false, reason: `unknown role "${String(r.role)}"` };
+    }
+    const id = typeof r.id === "string" ? r.id.trim() : "";
+    if (!id) {
+      return { ok: false, reason: "a step is missing its id" };
+    }
+    const step: PipelineStep = {
+      id,
+      agent: ROLE_TO_AGENT[r.role],
+      task: sanitizeText(r.task, TASK_MAX) ?? "",
+    };
+    const stepName = sanitizeText(r.name, NAME_MAX);
+    if (stepName) step.name = stepName;
+    // dependsOn: only a clean string[] (trimmed to match the step ids); a
+    // malformed value is dropped (the step becomes a root) — same as parseBuilderDoc.
+    if (
+      Array.isArray(r.dependsOn) &&
+      r.dependsOn.every((d) => typeof d === "string")
+    ) {
+      step.dependsOn = (r.dependsOn as string[]).map((d) => d.trim());
+    }
+    if (typeof r.outputFile === "string" && r.outputFile.trim()) {
+      step.outputFile = r.outputFile.trim();
+    }
+    const exit = sanitizeText(r.exitCriteria, EXIT_CRITERIA_MAX);
+    if (exit) step.exitCriteria = exit;
+    steps.push(step);
+  }
+
+  const spec: PipelineSpec = {
+    name,
+    workingDirectory: opts.projectDir,
+    steps,
+  };
+  const validation = validateSpec(spec);
+  if (!validation.valid) {
+    const first = validation.errors[0];
+    return {
+      ok: false,
+      reason: first ? first.message : "the design failed validation",
+    };
+  }
+  // Lay it out and stamp the resolved project so the canvas opens grounded.
+  return { ok: true, doc: { ...docFromSpec(spec), projectId: opts.projectId } };
 }
 
 /**
