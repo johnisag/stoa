@@ -19,6 +19,7 @@ import {
   FileText,
   Workflow,
   Columns3,
+  BarChart3,
 } from "lucide-react";
 import {
   Tooltip,
@@ -158,6 +159,7 @@ export function DesktopTabBar({
   const getTabName = (tab: TabData) => {
     if (tab.view === "workflows") return "Workflows";
     if (tab.view === "fleet-board") return "Fleet Board";
+    if (tab.view === "analytics") return "Insight";
     if (tab.sessionId) {
       const s = sessions.find((sess) => sess.id === tab.sessionId);
       return s?.name || tab.attachedTmux || "Session";
@@ -198,6 +200,9 @@ export function DesktopTabBar({
               {tab.view === "workflows" && <Workflow className="h-3.5 w-3.5" />}
               {tab.view === "fleet-board" && (
                 <Columns3 className="h-3.5 w-3.5" />
+              )}
+              {tab.view === "analytics" && (
+                <BarChart3 className="h-3.5 w-3.5" />
               )}
               <span className="max-w-[120px] truncate">{getTabName(tab)}</span>
               {tabs.length > 1 && (

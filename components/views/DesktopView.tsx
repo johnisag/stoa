@@ -57,7 +57,7 @@ export function DesktopView({
   showQuickSwitcher,
   setShowQuickSwitcher,
   setShowDispatch,
-  setShowAnalytics,
+  onOpenAnalytics,
   onOpenWorkflows,
   setShowVerdictInbox,
   onOpenFleetBoard,
@@ -268,7 +268,7 @@ export function DesktopView({
               const secondaryNav = [
                 {
                   id: "insight",
-                  onClick: () => setShowAnalytics(true),
+                  onClick: onOpenAnalytics,
                 },
                 {
                   id: "dispatch",
@@ -435,7 +435,7 @@ export function DesktopView({
         onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={() => setShowVerdictInbox(true)}
         onOpenFleetBoard={onOpenFleetBoard}
-        onOpenInsight={() => setShowAnalytics(true)}
+        onOpenInsight={onOpenAnalytics}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
           const session = sessions.find((s) => s.id === sessionId);

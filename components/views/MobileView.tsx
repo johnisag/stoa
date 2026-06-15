@@ -27,7 +27,7 @@ export function MobileView({
   showQuickSwitcher,
   setShowQuickSwitcher,
   setShowDispatch,
-  setShowAnalytics,
+  onOpenAnalytics,
   onOpenWorkflows,
   setShowVerdictInbox,
   onOpenFleetBoard,
@@ -104,7 +104,7 @@ export function MobileView({
               setSidebarOpen(false);
             }}
             onShowAnalytics={() => {
-              setShowAnalytics(true);
+              onOpenAnalytics();
               setSidebarOpen(false);
             }}
             onShowDispatch={() => {
@@ -178,7 +178,7 @@ export function MobileView({
         onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={() => setShowVerdictInbox(true)}
         onOpenFleetBoard={onOpenFleetBoard}
-        onOpenInsight={() => setShowAnalytics(true)}
+        onOpenInsight={onOpenAnalytics}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
           const session = sessions.find((s) => s.id === sessionId);
