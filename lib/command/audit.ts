@@ -21,7 +21,12 @@ export type CommandAuditType =
   | "command_proposed"
   | "command_executed"
   | "command_rejected"
-  | "command_failed";
+  | "command_failed"
+  // Assisted workflow generator (generation-only — these never imply execution):
+  // a design was produced, rejected by the validator, or the spawn/run failed.
+  | "workflow_proposed"
+  | "workflow_rejected"
+  | "workflow_failed";
 
 // Cap the stored payload: a rejected event records (bounded) client/agent input,
 // and an unbounded `name` etc. would otherwise write an arbitrarily large row per
