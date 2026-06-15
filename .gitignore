@@ -63,6 +63,8 @@ agent-os.db-shm
 docs/*
 !docs/setup/
 !docs/issues/
+!docs/ROADMAP.md
+!docs/swarm-findings.md
 .mcp.json
 .git-evening
 
