@@ -458,6 +458,7 @@ export class HostClient {
     move(this.exitListeners);
     move(this.sizingCounts);
     move(this.lastSize);
+    move(this.attachingKeys); // keep the in-flight-attach mark under the new key
     // Update the detach closures of any in-flight attaches so they use the new
     // key for sizing and daemon detach.
     for (const ref of this.attachKeyRefs) {

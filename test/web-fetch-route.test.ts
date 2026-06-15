@@ -135,6 +135,19 @@ describe("POST /api/web-fetch", () => {
     expect(written[0].content).toContain("hello world");
   });
 
+  it("fetches through a pinned dispatcher (DNS-rebinding guard wired)", async () => {
+    mockedLookup.mockResolvedValue(publicAddr());
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      okResponse("<p>ok</p>")
+    );
+    await POST(makeRequest({ url: "http://example.com/page" }));
+    // The fetch must be given a dispatcher (the IP-pinned undici Agent) — a
+    // regression that drops it would silently reopen the rebinding TOCTOU.
+    const init = (global.fetch as ReturnType<typeof vi.fn>).mock
+      .calls[0][1] as { dispatcher?: unknown };
+    expect(init?.dispatcher).toBeDefined();
+  });
+
   it("follows a redirect and re-validates the new host", async () => {
     mockedLookup.mockResolvedValueOnce(publicAddr());
     mockedLookup.mockResolvedValueOnce(privateAddr("169.254.169.254"));
