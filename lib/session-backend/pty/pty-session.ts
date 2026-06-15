@@ -352,8 +352,11 @@ export class PtySession {
     try {
       process.kill(pid, 0);
       return true;
-    } catch {
-      return false;
+    } catch (e) {
+      // ESRCH = no such process (gone). EPERM = the process EXISTS but is owned by
+      // another user (common on Windows for a foreign/recycled pid) — treat that as
+      // "still exists" rather than misreading it as dead.
+      return (e as NodeJS.ErrnoException).code === "EPERM";
     }
   }
 }

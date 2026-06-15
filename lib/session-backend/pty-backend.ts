@@ -119,9 +119,12 @@ export class PtyBackend implements SessionBackend {
     text: string,
     opts?: SendOptions
   ): Promise<void> {
-    // Bracketed paste so multi-line input isn't submitted line-by-line.
-    this.transport.write(name, `\x1b[200~${text}\x1b[201~`);
-    if (opts?.enter) this.transport.write(name, "\r");
+    // Bracketed paste so multi-line input isn't submitted line-by-line. Send the
+    // body AND the trailing Enter as ONE write: on the Tier-2 host transport each
+    // write is a separate fire-and-forget frame, so two writes could drop the body
+    // on a dying socket while the Enter lands — submitting an empty/truncated prompt.
+    const payload = `\x1b[200~${text}\x1b[201~${opts?.enter ? "\r" : ""}`;
+    this.transport.write(name, payload);
   }
 }
 

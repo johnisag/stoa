@@ -238,7 +238,14 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         : (xtermRef.current?.getSelection() ?? "");
       const text = formatTerminalTextForAgent(raw);
       if (!text) {
-        toast.error("Select some terminal text first");
+        // Outside select mode, xterm has no selection when a full-screen TUI is
+        // capturing the mouse (it forwards drags to the app) — point the user at
+        // select mode, which reads the rendered buffer instead.
+        toast.error(
+          selectMode
+            ? "Select some terminal text first"
+            : "No selection — use the select-text button to copy from a full-screen app"
+        );
         return false;
       }
       setSelectMode(false);
@@ -270,7 +277,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
       const term = xtermRef.current;
       const buffer = term.buffer.active;
-      const startRow = Math.max(0, buffer.baseY - 500);
+      // Include the FULL scrollback (not just the last 500 lines) so a user can
+      // select/copy older output — select mode is an explicit, on-demand action.
+      const startRow = 0;
       const endRow = buffer.baseY + term.rows;
       const lines: string[] = [];
 

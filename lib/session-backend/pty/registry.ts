@@ -127,16 +127,21 @@ export function spawnSession(key: string, spec: SpawnSpec): PtySession {
   const session = new PtySession({ key, pty: proc, cwd, cols, rows });
   // Reap from the registry when the process exits. Delete by identity (not by
   // the original key) so a renamed session is still removed from its new key.
-  session.onExit(() => {
-    for (const [k, v] of sessions) {
-      if (v === session) {
-        sessions.delete(k);
-        break;
-      }
-    }
-  });
+  session.onExit(() => deleteByIdentity(session));
   sessions.set(key, session);
   return session;
+}
+
+/** Remove a session from the registry by IDENTITY, whatever key it now lives
+ * under — so a rename (possibly racing an async kill) can't leave it leaked or
+ * make a delete-by-stale-key clobber a different session reusing that key. */
+function deleteByIdentity(session: PtySession): void {
+  for (const [k, v] of sessions) {
+    if (v === session) {
+      sessions.delete(k);
+      return;
+    }
+  }
 }
 
 /**
@@ -164,7 +169,7 @@ export function killSession(key: string): void {
   const session = sessions.get(key);
   if (session) {
     session.kill();
-    sessions.delete(key);
+    deleteByIdentity(session);
   }
 }
 
@@ -179,7 +184,10 @@ export async function killSessionAndWait(
     // is about to be deleted from the registry.
     session.markDying();
     await session.killAndWait(timeoutMs);
-    sessions.delete(key);
+    // Delete by identity — a rename during the await could move it to a new key,
+    // and a delete-by-original-key would miss it (or clobber a session that
+    // reused the key).
+    deleteByIdentity(session);
   }
 }
 

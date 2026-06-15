@@ -880,6 +880,26 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 37,
+    name: "dedupe_repo_lessons_and_unique_index",
+    up: (db) => {
+      // The lesson INSERT…WHERE NOT EXISTS dedup wasn't atomic, so concurrent
+      // captures could double-insert. Collapse any existing duplicates (keep the
+      // earliest row per repo_id+text) then enforce uniqueness, so INSERT OR
+      // IGNORE is a true idempotent dedup going forward. Guarded + idempotent.
+      if (!hasTable(db, "repo_lessons")) return;
+      db.exec(
+        `DELETE FROM repo_lessons
+         WHERE rowid NOT IN (
+           SELECT MIN(rowid) FROM repo_lessons GROUP BY repo_id, text
+         )`
+      );
+      db.exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_repo_lessons_unique ON repo_lessons(repo_id, text)`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
