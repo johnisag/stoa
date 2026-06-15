@@ -60,7 +60,7 @@ export function DesktopView({
   setShowAnalytics,
   onOpenWorkflows,
   setShowVerdictInbox,
-  setShowFleetBoard,
+  onOpenFleetBoard,
   setShowChat,
   onShowShortcuts,
   onShowGuide,
@@ -281,7 +281,7 @@ export function DesktopView({
                 },
                 {
                   id: "fleet-board",
-                  onClick: () => setShowFleetBoard(true),
+                  onClick: onOpenFleetBoard,
                   count: attentionCount,
                 },
               ];
@@ -434,7 +434,7 @@ export function DesktopView({
         onOpenDispatch={() => setShowDispatch(true)}
         onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={() => setShowVerdictInbox(true)}
-        onOpenFleetBoard={() => setShowFleetBoard(true)}
+        onOpenFleetBoard={onOpenFleetBoard}
         onOpenInsight={() => setShowAnalytics(true)}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {

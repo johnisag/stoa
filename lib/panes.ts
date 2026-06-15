@@ -14,13 +14,30 @@ export interface PaneLayoutSplit {
   sizes: number[];
 }
 
+/** The kind of content a tab hosts. "terminal" is a session/shell; the rest are
+ * fleet "views" that open as first-class pane tabs (like a session) instead of a
+ * modal — added incrementally as each view is decoupled from its dialog. */
+export type ViewKind =
+  | "terminal"
+  | "workflows"
+  | "dispatch"
+  | "analytics"
+  | "verdict-inbox"
+  | "fleet-board"
+  | "ask";
+
 export interface TabData {
   id: string;
   sessionId: string | null;
   attachedTmux: string | null;
   /** Non-terminal tab kind. Undefined is treated as "terminal" for backward
    * compatibility with persisted pane state from before view tabs existed. */
-  view?: "terminal" | "workflows";
+  view?: ViewKind;
+}
+
+/** A non-terminal view tab (opens a fleet view as a pane, not a modal). */
+export function isViewTab(view: TabData["view"]): boolean {
+  return view != null && view !== "terminal";
 }
 
 export interface PaneData {

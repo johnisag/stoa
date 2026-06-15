@@ -42,8 +42,8 @@ export interface ViewProps {
   onOpenWorkflows: () => void;
   showVerdictInbox: boolean;
   setShowVerdictInbox: (show: boolean) => void;
-  showFleetBoard: boolean;
-  setShowFleetBoard: (show: boolean) => void;
+  /** Open the Fleet Board as a pane tab (it's a window now, not a dialog). */
+  onOpenFleetBoard: () => void;
   showChat: boolean;
   setShowChat: (show: boolean) => void;
   onShowShortcuts: () => void;

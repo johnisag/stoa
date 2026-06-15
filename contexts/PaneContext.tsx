@@ -13,6 +13,7 @@ import {
   type PaneState,
   type PaneData,
   type TabData,
+  type ViewKind,
   createInitialPaneState,
   createPaneData,
   createTab,
@@ -40,6 +41,9 @@ interface PaneContextValue {
   addTab: (paneId: string, view?: TabData["view"]) => void;
   closeTab: (paneId: string, tabId: string) => void;
   switchTab: (paneId: string, tabId: string) => void;
+  /** Open a fleet VIEW (workflows/fleet-board/…) as a pane tab — focusing the
+   * existing one if this pane already has it, else creating it. */
+  addViewTab: (paneId: string, view: ViewKind) => void;
   addWorkflowsTab: (paneId: string) => void;
   // Session management (operates on active tab)
   attachSession: (paneId: string, sessionId: string, tmuxName: string) => void;
@@ -146,24 +150,24 @@ export function PaneProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const addWorkflowsTab = useCallback((paneId: string) => {
+  // Open a fleet view as a pane tab. At most one tab of a given view per pane:
+  // if it already exists, just focus it; else append + activate a new one. (The
+  // workflows-as-a-tab dedupe, generalized to every view.)
+  const addViewTab = useCallback((paneId: string, view: ViewKind) => {
     setState((prev) => {
       const pane = prev.panes[paneId];
       if (!pane) return prev;
-      const existing = pane.tabs.find((t) => t.view === "workflows");
+      const existing = pane.tabs.find((t) => t.view === view);
       if (existing) {
         return {
           ...prev,
           panes: {
             ...prev.panes,
-            [paneId]: {
-              ...pane,
-              activeTabId: existing.id,
-            },
+            [paneId]: { ...pane, activeTabId: existing.id },
           },
         };
       }
-      const newTab = createTab("workflows");
+      const newTab = createTab(view);
       return {
         ...prev,
         panes: {
@@ -177,6 +181,12 @@ export function PaneProvider({ children }: { children: ReactNode }) {
       };
     });
   }, []);
+
+  // Back-compat shim: the workflows tab is just a view tab.
+  const addWorkflowsTab = useCallback(
+    (paneId: string) => addViewTab(paneId, "workflows"),
+    [addViewTab]
+  );
 
   const closeTab = useCallback((paneId: string, tabId: string) => {
     setState((prev) => {
@@ -337,6 +347,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
       addTab,
       closeTab,
       switchTab,
+      addViewTab,
       addWorkflowsTab,
       attachSession,
       detachSession,
@@ -356,6 +367,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
       addTab,
       closeTab,
       switchTab,
+      addViewTab,
       addWorkflowsTab,
       attachSession,
       detachSession,

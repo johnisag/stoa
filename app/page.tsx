@@ -24,6 +24,7 @@ if (typeof window !== "undefined") {
   };
 }
 import { PaneProvider, usePanes } from "@/contexts/PaneContext";
+import type { ViewKind } from "@/lib/panes";
 import { Pane } from "@/components/Pane";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useViewport } from "@/hooks/useViewport";
@@ -50,7 +51,6 @@ import { DispatchView } from "@/components/views/DispatchView";
 import { AnalyticsView } from "@/components/views/AnalyticsView";
 
 import { VerdictInboxView } from "@/components/views/VerdictInboxView";
-import { FleetBoardView } from "@/components/views/FleetBoardView";
 import { ChatView } from "@/components/views/ChatView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
@@ -192,7 +192,6 @@ function HomeContent() {
   const [showAnalytics, setShowAnalytics] = useState(false);
 
   const [showVerdictInbox, setShowVerdictInbox] = useState(false);
-  const [showFleetBoard, setShowFleetBoard] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
@@ -211,6 +210,7 @@ function HomeContent() {
     getActiveTab,
     addTab,
     addWorkflowsTab,
+    addViewTab,
     splitHorizontal,
     reconcileSessions,
   } = usePanes();
@@ -705,7 +705,8 @@ function HomeContent() {
     else if (action === "open-dispatch") setShowDispatch(true);
     else if (action === "open-workflows") addWorkflowsTab(focusedPaneId);
     else if (action === "open-verdict-inbox") setShowVerdictInbox(true);
-    else if (action === "open-fleet-board") setShowFleetBoard(true);
+    else if (action === "open-fleet-board")
+      addViewTab(focusedPaneId, "fleet-board");
     else if (action === "open-insight") setShowAnalytics(true);
   });
 
@@ -722,7 +723,7 @@ function HomeContent() {
         onDispatchClick={() => setShowDispatch(true)}
         onWorkflowsClick={() => addWorkflowsTab(paneId)}
         onVerdictInboxClick={() => setShowVerdictInbox(true)}
-        onFleetBoardClick={() => setShowFleetBoard(true)}
+        onFleetBoardClick={() => addViewTab(paneId, "fleet-board")}
         onAskStoaClick={isMobile ? () => setShowChat(true) : undefined}
         onSelectSession={handleSelectSession}
         onOpenSessionInNewTab={handleOpenSessionInNewTab}
@@ -737,7 +738,7 @@ function HomeContent() {
       handleOpenSessionInNewTab,
       setShowDispatch,
       setShowVerdictInbox,
-      setShowFleetBoard,
+      addViewTab,
       addWorkflowsTab,
     ]
   );
@@ -829,13 +830,15 @@ function HomeContent() {
     ? (projects.find((p) => p.id === startDevServerProjectId) ?? null)
     : null;
 
-  // Close a fleet dialog and open a workflows tab in the focused pane.
-  const openWorkflowsTabFrom = useCallback(
-    (close: (open: boolean) => void) => () => {
+  // Close a fleet dialog and open a fleet VIEW as a tab in the focused pane — the
+  // cross-link from a still-modal view (Dispatch/Verdict Inbox) to a now-windowed
+  // one (Workflows, Fleet Board).
+  const openViewTabFrom = useCallback(
+    (close: (open: boolean) => void, view: ViewKind) => () => {
       close(false);
-      addWorkflowsTab(focusedPaneId);
+      addViewTab(focusedPaneId, view);
     },
-    [addWorkflowsTab, focusedPaneId]
+    [addViewTab, focusedPaneId]
   );
 
   // View props
@@ -863,8 +866,7 @@ function HomeContent() {
     onOpenWorkflows: () => addWorkflowsTab(focusedPaneId),
     showVerdictInbox,
     setShowVerdictInbox,
-    showFleetBoard,
-    setShowFleetBoard,
+    onOpenFleetBoard: () => addViewTab(focusedPaneId, "fleet-board"),
     showChat,
     setShowChat,
     onShowShortcuts: () => setShowHelp(true),
@@ -935,9 +937,9 @@ function HomeContent() {
       <DispatchView
         open={showDispatch}
         onOpenChange={setShowDispatch}
-        onOpenWorkflows={openWorkflowsTabFrom(setShowDispatch)}
+        onOpenWorkflows={openViewTabFrom(setShowDispatch, "workflows")}
         onOpenVerdictInbox={switchFleet(setShowDispatch, setShowVerdictInbox)}
-        onOpenFleetBoard={switchFleet(setShowDispatch, setShowFleetBoard)}
+        onOpenFleetBoard={openViewTabFrom(setShowDispatch, "fleet-board")}
       />
       {/* Insight / analytics over the audit ledger. Self-contained dialog;
           opened from the Desktop/Mobile nav via setShowAnalytics. */}
@@ -950,19 +952,11 @@ function HomeContent() {
         onOpenChange={setShowVerdictInbox}
         onOpenSession={openSessionFrom(setShowVerdictInbox)}
         onOpenDispatch={switchFleet(setShowVerdictInbox, setShowDispatch)}
-        onOpenWorkflows={openWorkflowsTabFrom(setShowVerdictInbox)}
-        onOpenFleetBoard={switchFleet(setShowVerdictInbox, setShowFleetBoard)}
+        onOpenWorkflows={openViewTabFrom(setShowVerdictInbox, "workflows")}
+        onOpenFleetBoard={openViewTabFrom(setShowVerdictInbox, "fleet-board")}
       />
-      {/* Fleet Board — the autonomous fleet as a lifecycle kanban (reuses the
-          inbox read model + cards). Self-contained; opened via setShowFleetBoard. */}
-      <FleetBoardView
-        open={showFleetBoard}
-        onOpenChange={setShowFleetBoard}
-        onOpenSession={openSessionFrom(setShowFleetBoard)}
-        onOpenDispatch={switchFleet(setShowFleetBoard, setShowDispatch)}
-        onOpenWorkflows={openWorkflowsTabFrom(setShowFleetBoard)}
-        onOpenVerdictInbox={switchFleet(setShowFleetBoard, setShowVerdictInbox)}
-      />
+      {/* Fleet Board is now a first-class pane TAB (see addViewTab), not a dialog —
+          opened from the nav / cross-links via onOpenFleetBoard. */}
       {/* Ask Stoa — a read-only NL chatbox over the fleet's own data, answered by
           the user-selected agent. Self-contained; opened via setShowChat. */}
       <ChatView open={showChat} onOpenChange={setShowChat} />
