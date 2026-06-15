@@ -13,6 +13,12 @@
  */
 
 import { sanitizeDigest } from "@/lib/summarize";
+import {
+  WORKFLOW_ROLES,
+  ROLE_GUIDANCE,
+  MAX_GENERATED_STEPS,
+} from "./workflow-roles";
+import { STOA_DEFAULT_OUTPUT_FILE } from "@/lib/pipeline/engine";
 
 /** A project the planner may target (the agent picks an id from this list; the
  * executor derives the directory from it server-side — the agent never supplies a
@@ -104,11 +110,104 @@ export function buildCommandPrompt({
   return parts.join("\n");
 }
 
-/** The parsed reply: either a question answer (prose) or a raw proposal object
- * still to be validated by the allowlist. */
+/** Inputs for the assisted-workflow generator prompt. The project grounds the
+ * design (name/dir for the agent's reasoning only — the server sets the actual
+ * workingDirectory from the resolved project, never the agent). */
+export interface GenerateWorkflowPromptInput {
+  /** The user's high-level description of what they want built. */
+  summary: string;
+  projectName: string;
+  projectDir: string;
+  /** Optional grounded fleet/context, same as the planner. */
+  context?: string;
+}
+
+const GENERATE_WORKFLOW_PREAMBLE = [
+  "You are Stoa's workflow DESIGNER. Given a high-level goal, you DESIGN a",
+  "multi-agent workflow — a DAG of role-based agent steps — and output it as a",
+  "single JSON object. You do NOT build or run anything: your entire job is to",
+  "populate the design. The user reviews and edits it in a visual canvas, then",
+  "decides whether to run it. Nothing you emit is ever executed automatically.",
+  "",
+  "Output EXACTLY ONE JSON object and NOTHING else (no prose, no code fences):",
+  '  {"kind":"workflow","spec":{"name":"<short title>","steps":[ <step>, ... ]}}',
+  "",
+  "Each <step> is:",
+  '  {"id":"<unique-kebab-id, no spaces>",',
+  '   "role":"<one of the ROLES below>",',
+  '   "name":"<short human label, e.g. \\"Researcher: data model\\">",',
+  '   "task":"<the full, specific instructions for this agent>",',
+  '   "dependsOn":["<id>", ...],   // steps that must finish first (omit for roots)',
+  '   "outputFile":"<relative file the step writes, e.g. STOA_OUTPUT.md>"}',
+  "",
+  "Do NOT emit `agent`, `model`, or `workingDirectory` — the server assigns the",
+  "agent from the role and sets the directory from the project.",
+].join("\n");
+
+function renderRoles(): string {
+  return WORKFLOW_ROLES.map((r) => `  - ${r}: ${ROLE_GUIDANCE[r]}`).join("\n");
+}
+
+const GENERATE_WORKFLOW_RULES = [
+  "RULES (a design that breaks these is rejected):",
+  "- Use the canonical fleet, SCALED to the goal — a richer goal earns more nodes:",
+  "  ~3 researchers → 2 architects (architecture + components) → ~3 software-engineers",
+  "  + ~2 ui-ux → ~2 testers → 1 integrator → exactly 1 review-gate (the sink).",
+  `- Keep it to at most ${MAX_GENERATED_STEPS} steps total.`,
+  "- Every step id is unique and has no leading/trailing spaces. Every step has a",
+  "  clear, self-contained task. Every role is one of the listed roles.",
+  "- dependsOn ids must reference steps that exist. The graph must be ACYCLIC.",
+  "- To feed one step's result into a later step, put the upstream id in the later",
+  "  step's dependsOn AND reference it in that step's task as",
+  "  {{steps.<upstreamId>.output}} (only ids in its dependency chain are allowed).",
+  `- Any step whose result a later step reads MUST end its task by instructing it to`,
+  `  write its deliverable to its outputFile (default ${STOA_DEFAULT_OUTPUT_FILE}).`,
+  "- The single review-gate step depends on the integrator and judges the whole",
+  "  result on three dimensions — correctness/security, conventions/cross-platform,",
+  "  and simplicity/UX — signing off only if all three pass.",
+].join("\n");
+
+/**
+ * Build the prompt that asks an agent to DESIGN a workflow (and only design it).
+ * Pure → unit-tested. The summary/context are sanitized so a stray control byte
+ * can't ride back into the prompt; the project grounds the design but the server
+ * owns the real working directory.
+ */
+export function buildGenerateWorkflowPrompt({
+  summary,
+  projectName,
+  projectDir,
+  context,
+}: GenerateWorkflowPromptInput): string {
+  const parts: string[] = [
+    GENERATE_WORKFLOW_PREAMBLE,
+    "",
+    "=== ROLES ===",
+    renderRoles(),
+    "",
+    GENERATE_WORKFLOW_RULES,
+    "",
+    "=== PROJECT (for grounding only — do not output a path) ===",
+    `name: ${sanitizeDigest(projectName)} — dir: ${sanitizeDigest(projectDir)}`,
+  ];
+  if (context && context.trim()) {
+    parts.push("", "=== CONTEXT ===", context);
+  }
+  parts.push(
+    "",
+    "=== GOAL TO DESIGN A WORKFLOW FOR ===",
+    sanitizeDigest(summary)
+  );
+  return parts.join("\n");
+}
+
+/** The parsed reply: a question answer (prose), a raw proposal object, or a raw
+ * workflow-design object — the latter two still to be validated by the allowlist
+ * / the workflow validator. */
 export type ParsedReply =
   | { kind: "answer"; text: string }
-  | { kind: "proposal"; data: unknown };
+  | { kind: "proposal"; data: unknown }
+  | { kind: "workflow"; data: unknown };
 
 /** If `text` is wrapped in a ``` or ```json fence, return the inner body. */
 function stripCodeFence(text: string): string {
@@ -146,10 +245,11 @@ function extractFirstJsonObject(text: string): string | null {
 }
 
 /**
- * Parse an agent reply into an answer or a proposal. CONSERVATIVE: only a parseable
- * JSON object whose `kind` is exactly "proposal" becomes a proposal; everything
- * else (prose, malformed JSON, JSON without that marker) is an answer. This is the
- * fail-safe seam — a misfire degrades to showing prose, never to a spurious action.
+ * Parse an agent reply into an answer, a proposal, or a workflow design.
+ * CONSERVATIVE: only a parseable JSON object whose `kind` is exactly "proposal"
+ * or "workflow" becomes that; everything else (prose, malformed JSON, JSON without
+ * a known marker) is an answer. This is the fail-safe seam — a misfire degrades to
+ * showing prose, never to a spurious action or a bogus generated canvas.
  */
 export function parseAgentReply(raw: string): ParsedReply {
   const text = raw.trim();
@@ -157,8 +257,9 @@ export function parseAgentReply(raw: string): ParsedReply {
   if (candidate) {
     try {
       const obj = JSON.parse(candidate);
-      if (obj && typeof obj === "object" && obj.kind === "proposal") {
-        return { kind: "proposal", data: obj };
+      if (obj && typeof obj === "object") {
+        if (obj.kind === "proposal") return { kind: "proposal", data: obj };
+        if (obj.kind === "workflow") return { kind: "workflow", data: obj };
       }
     } catch {
       // Not valid JSON — fall through to treating the reply as a prose answer.

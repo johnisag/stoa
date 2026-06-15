@@ -2,9 +2,15 @@ import { describe, it, expect } from "vitest";
 import {
   validateProposal,
   validateCreateSessionParams,
+  validateWorkflowProposal,
   describeProposal,
   SESSION_AGENT_IDS,
 } from "@/lib/command/actions";
+import {
+  ROLE_TO_AGENT,
+  WORKFLOW_ROLES,
+  MAX_GENERATED_STEPS,
+} from "@/lib/command/workflow-roles";
 
 describe("validateProposal — fail-closed allowlist", () => {
   it("accepts a well-formed create_session proposal", () => {
@@ -133,6 +139,174 @@ describe("validateCreateSessionParams — per-field rules", () => {
       "kilo",
       "kimi",
     ]);
+  });
+});
+
+describe("validateWorkflowProposal — generation-only, fail-closed", () => {
+  const OPTS = { projectId: "proj_1", projectDir: "/home/u/proj" };
+
+  // A small but valid generated design (passes the same validateSpec gate).
+  const validDesign = {
+    kind: "workflow",
+    spec: {
+      name: "Build the thing",
+      steps: [
+        {
+          id: "r1",
+          role: "researcher",
+          name: "Researcher: data model",
+          task: "Investigate the data model. Write findings to STOA_OUTPUT.md",
+          outputFile: "STOA_OUTPUT.md",
+        },
+        {
+          id: "eng",
+          role: "software-engineer",
+          task: "Implement using {{steps.r1.output}}. Write to STOA_OUTPUT.md",
+          dependsOn: ["r1"],
+          outputFile: "STOA_OUTPUT.md",
+        },
+        {
+          id: "review",
+          role: "review-gate",
+          task: "Review {{steps.eng.output}} on all 3 dimensions and sign off.",
+          dependsOn: ["eng"],
+        },
+      ],
+    },
+  };
+
+  it("accepts a well-formed design, maps roles→agents, and stamps the project", () => {
+    const res = validateWorkflowProposal(validDesign, OPTS);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.doc.nodes).toHaveLength(3);
+    const byId = Object.fromEntries(
+      res.doc.nodes.map((n) => [n.step.id, n.step])
+    );
+    expect(byId.r1.agent).toBe("claude"); // researcher → claude
+    expect(byId.eng.agent).toBe("codex"); // software-engineer → codex
+    expect(byId.review.agent).toBe("claude"); // review-gate → claude
+    // Working directory is the SERVER-resolved project dir; projectId stamped.
+    expect(res.doc.workingDirectory).toBe(OPTS.projectDir);
+    expect(res.doc.projectId).toBe(OPTS.projectId);
+  });
+
+  it("fails closed on an unknown role (never coerces to a default agent)", () => {
+    const res = validateWorkflowProposal(
+      {
+        kind: "workflow",
+        spec: { name: "X", steps: [{ id: "a", role: "ceo", task: "lead" }] },
+      },
+      OPTS
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/unknown role/i);
+  });
+
+  it("DROPS any LLM-supplied agent / model / workingDirectory / worktreePolicy", () => {
+    const res = validateWorkflowProposal(
+      {
+        kind: "workflow",
+        spec: {
+          name: "X",
+          steps: [
+            {
+              id: "only",
+              role: "researcher",
+              task: "do the thing",
+              agent: "hermes", // must be ignored — agent comes from the role
+              model: "$(rm -rf /)", // must be dropped (no shell payload reaches a launch)
+              workingDirectory: "/etc; evil", // must be dropped (server owns the dir)
+              worktreePolicy: "shared", // must be dropped (default parallel)
+            },
+          ],
+        },
+      },
+      OPTS
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const step = res.doc.nodes[0].step;
+    expect(step.agent).toBe("claude"); // from role, NOT the injected hermes
+    expect(step.model).toBeUndefined();
+    expect(step.workingDirectory).toBeUndefined();
+    expect(step.worktreePolicy).toBeUndefined();
+  });
+
+  it("rejects an out-of-closure output reference (degrade, not a broken canvas)", () => {
+    const res = validateWorkflowProposal(
+      {
+        kind: "workflow",
+        spec: {
+          name: "X",
+          steps: [
+            { id: "a", role: "researcher", task: "research" },
+            {
+              id: "b",
+              role: "architect",
+              // references a's output but does NOT depend on it
+              task: "use {{steps.a.output}}",
+            },
+          ],
+        },
+      },
+      OPTS
+    );
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects a dependency cycle", () => {
+    const res = validateWorkflowProposal(
+      {
+        kind: "workflow",
+        spec: {
+          name: "X",
+          steps: [
+            { id: "a", role: "researcher", task: "t", dependsOn: ["b"] },
+            { id: "b", role: "architect", task: "t", dependsOn: ["a"] },
+          ],
+        },
+      },
+      OPTS
+    );
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects a design with more than the step cap", () => {
+    const steps = Array.from({ length: MAX_GENERATED_STEPS + 1 }, (_, i) => ({
+      id: `s${i}`,
+      role: "researcher",
+      task: "t",
+    }));
+    const res = validateWorkflowProposal(
+      { kind: "workflow", spec: { name: "X", steps } },
+      OPTS
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/too many steps/i);
+  });
+
+  it("rejects a non-object / missing-spec / empty-steps design", () => {
+    expect(validateWorkflowProposal(null, OPTS).ok).toBe(false);
+    expect(validateWorkflowProposal({ kind: "workflow" }, OPTS).ok).toBe(false);
+    expect(
+      validateWorkflowProposal(
+        { kind: "workflow", spec: { name: "X", steps: [] } },
+        OPTS
+      ).ok
+    ).toBe(false);
+  });
+});
+
+describe("ROLE_TO_AGENT — every role maps to a spawnable, shell-inert agent", () => {
+  it("covers every role and only maps to claude|codex (⊆ SESSION_AGENT_IDS)", () => {
+    for (const role of WORKFLOW_ROLES) {
+      const agent = ROLE_TO_AGENT[role];
+      // claude|codex only — the free-text-model agents are deliberately excluded.
+      expect(["claude", "codex"]).toContain(agent);
+      // …and that's a subset of the agents a session may actually run.
+      expect([...SESSION_AGENT_IDS]).toContain(agent);
+    }
   });
 });
 
