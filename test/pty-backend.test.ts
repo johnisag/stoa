@@ -138,4 +138,24 @@ describe("PtyBackend control bytes", () => {
       ["s1", "\x1b"],
     ]);
   });
+
+  it("pasteText sends the bracketed body + Enter as ONE write (no split)", async () => {
+    const writes: Array<[string, string]> = [];
+    const spy = {
+      write: (key: string, data: string) => writes.push([key, data]),
+    } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
+    const backend = new PtyBackend(spy);
+    await backend.pasteText("s1", "hello", { enter: true });
+    // Single frame — body + Enter can't be split across the Tier-2 socket.
+    expect(writes).toEqual([["s1", "\x1b[200~hello\x1b[201~\r"]]);
+  });
+
+  it("pasteText without enter omits the CR (still one write)", async () => {
+    const writes: Array<[string, string]> = [];
+    const spy = {
+      write: (key: string, data: string) => writes.push([key, data]),
+    } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
+    await new PtyBackend(spy).pasteText("s1", "hi");
+    expect(writes).toEqual([["s1", "\x1b[200~hi\x1b[201~"]]);
+  });
 });

@@ -724,7 +724,9 @@ export const queries = {
   insertLessonIfNew: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT INTO repo_lessons (id, repo_id, lens, text)
+      // OR IGNORE + the UNIQUE(repo_id,text) index (migration 37) make a concurrent
+      // insert that races past the NOT EXISTS check a silent no-op, not a duplicate.
+      `INSERT OR IGNORE INTO repo_lessons (id, repo_id, lens, text)
        SELECT ?, ?, ?, ?
        WHERE NOT EXISTS (
          SELECT 1 FROM repo_lessons WHERE repo_id = ? AND text = ?
@@ -771,7 +773,8 @@ export const queries = {
   insertManualLesson: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT INTO repo_lessons (id, repo_id, lens, text, source)
+      // OR IGNORE backstops the non-atomic NOT EXISTS against the UNIQUE index.
+      `INSERT OR IGNORE INTO repo_lessons (id, repo_id, lens, text, source)
        SELECT ?, ?, ?, ?, 'manual'
        WHERE NOT EXISTS (
          SELECT 1 FROM repo_lessons WHERE repo_id = ? AND text = ?

@@ -338,8 +338,14 @@ export function PipelineCanvas({
 
   function onPortPointerUp(e: ReactPointerEvent) {
     e.stopPropagation();
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+    // Always attempt the release (don't gate on hasPointerCapture): if the source
+    // node was removed mid-gesture the element is detached, hasPointerCapture reads
+    // false, and the capture would leak. releasePointerCapture throws on a detached
+    // element, so swallow it.
+    try {
       e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // detached element / capture already lost — safe to ignore
     }
     if (connecting) {
       const p = toUser(e);
