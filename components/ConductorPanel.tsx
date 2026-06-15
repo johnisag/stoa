@@ -148,11 +148,12 @@ export function ConductorPanel({
 
   const handleSendMessage = async (workerId: string, message: string) => {
     try {
-      await fetch(`/api/orchestrate/workers/${workerId}`, {
+      const res = await fetch(`/api/orchestrate/workers/${workerId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "send", message }),
       });
+      if (!res.ok) throw new Error(`Failed to send message: ${res.status}`);
       // Refresh output after sending
       setTimeout(() => fetchWorkerOutput(workerId), 1000);
     } catch (error) {

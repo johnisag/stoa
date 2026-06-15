@@ -248,19 +248,22 @@ export function GitPanel({
     const repoPath =
       "repoPath" in file && file.repoPath ? file.repoPath : primaryRepoPath;
     try {
-      await fetch("/api/git/stage", {
+      const res = await fetch("/api/git/stage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: repoPath, files: [file.path] }),
       });
+      // Don't optimistically mark the row staged on a failed POST (a non-2xx
+      // resolves, it doesn't reject) — that would lie about the git state.
+      if (!res.ok) throw new Error(`Failed to stage file: ${res.status}`);
       // Invalidate queries to refresh
       queryClient.invalidateQueries({ queryKey: gitKeys.all });
       // Update selected file's staged status if it's the same file
       if (selectedFile?.file.path === file.path) {
         setSelectedFile({ ...selectedFile, file: { ...file, staged: true } });
       }
-    } catch {
-      // Ignore errors
+    } catch (err) {
+      console.error("Failed to stage file:", err);
     }
   };
 
@@ -269,11 +272,13 @@ export function GitPanel({
     const repoPath =
       "repoPath" in file && file.repoPath ? file.repoPath : primaryRepoPath;
     try {
-      await fetch("/api/git/unstage", {
+      const res = await fetch("/api/git/unstage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: repoPath, files: [file.path] }),
       });
+      // Don't optimistically flip the row to unstaged on a failed POST.
+      if (!res.ok) throw new Error(`Failed to unstage file: ${res.status}`);
       // Invalidate queries to refresh
       queryClient.invalidateQueries({ queryKey: gitKeys.all });
       // Update selected file's staged status if it's the same file
@@ -283,8 +288,8 @@ export function GitPanel({
           file: { ...file, staged: false },
         });
       }
-    } catch {
-      // Ignore errors
+    } catch (err) {
+      console.error("Failed to unstage file:", err);
     }
   };
 
@@ -308,19 +313,21 @@ export function GitPanel({
     const repoPath =
       "repoPath" in file && file.repoPath ? file.repoPath : primaryRepoPath;
     try {
-      await fetch("/api/git/discard", {
+      const res = await fetch("/api/git/discard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: repoPath, file: file.path }),
       });
+      // A failed discard must not present as done (close the diff / drop the row).
+      if (!res.ok) throw new Error(`Failed to discard changes: ${res.status}`);
       // Close the diff if we just discarded the file it was showing.
       if (selectedFile?.file.path === file.path) {
         setSelectedFile(null);
       }
       // Refetch git status so the row disappears.
       queryClient.invalidateQueries({ queryKey: gitKeys.all });
-    } catch {
-      // Ignore errors
+    } catch (err) {
+      console.error("Failed to discard changes:", err);
     }
   };
 
