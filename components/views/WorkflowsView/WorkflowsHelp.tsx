@@ -68,6 +68,25 @@ export function WorkflowsHelp({ onClose }: { onClose: () => void }) {
           amber dot on the Saved button means you have unsaved changes.
         </li>
         <li>
+          <span className="text-foreground font-medium">
+            Let AI design it for you.
+          </span>{" "}
+          The <span className="text-foreground">Build</span> tab&apos;s{" "}
+          <span className="text-foreground">Design a workflow with AI</span> bar
+          turns a one-line goal into a full role-fleet DAG —{" "}
+          <span className="text-foreground">
+            researchers → architects → engineers
+          </span>{" "}
+          + ui/ux → testers → integrator → a final review gate — each node
+          pre-filled with its task, inputs, outputs, and dependencies. Pick a{" "}
+          <span className="text-foreground">Project context</span>, describe
+          what to build, and tap{" "}
+          <span className="text-foreground">Generate</span>: an agent{" "}
+          <span className="text-foreground">designs</span> the workflow and
+          loads it onto the canvas. It only ever <em>designs</em> — nothing runs
+          until you review, tweak the 20% that needs your touch, and hit Start.
+        </li>
+        <li>
           <span className="text-foreground font-medium">Or go Custom.</span> The{" "}
           <span className="text-foreground">Custom</span> tab lets you author a
           pipeline by hand — paste a spec (a name, a working directory, and a

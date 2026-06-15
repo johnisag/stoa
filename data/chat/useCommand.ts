@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ChatProvider } from "@/lib/chat-settings";
 import { sessionKeys } from "@/data/sessions/keys";
+import type { BuilderDoc } from "@/lib/pipeline/builder-model";
 
 /** One turn in the chat conversation, as replayed to the backend as history. */
 export interface ChatMessage {
@@ -57,6 +58,51 @@ export function useProposeCommand() {
       if (!res.ok)
         throw new Error(data.error || "Failed to reach the assistant");
       return data as ProposeReply;
+    },
+  });
+}
+
+export interface GenerateWorkflowInput {
+  summary: string;
+  projectId: string;
+  provider?: "claude" | "codex";
+  /** A getModelOptions(provider) token, or omitted for the agent's default. */
+  model?: string;
+}
+
+/** The /api/command/generate-workflow envelope: the designer either returned a
+ * laid-out draft workflow, or answered in prose (a clarifying question / a reason
+ * the design couldn't be produced). Generation-only — nothing has run. */
+export type GenerateWorkflowReply =
+  | { kind: "answer"; text: string }
+  | {
+      kind: "workflow";
+      doc: BuilderDoc;
+      project: { id: string; name: string };
+    };
+
+/**
+ * Ask an agent to DESIGN a workflow from a one-line goal. POSTs to
+ * /api/command/generate-workflow, which runs the agent one-shot and returns a
+ * VALIDATED draft BuilderDoc (or a prose answer). NEVER runs anything — the
+ * caller loads the draft into the canvas for review. No auto-retry (a stuck retry
+ * would respawn a CLI; the summary is cheap to resend).
+ */
+export function useGenerateWorkflow() {
+  return useMutation({
+    retry: 0,
+    mutationFn: async (
+      input: GenerateWorkflowInput
+    ): Promise<GenerateWorkflowReply> => {
+      const res = await fetch("/api/command/generate-workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok)
+        throw new Error(data.error || "Failed to generate the workflow");
+      return data as GenerateWorkflowReply;
     },
   });
 }
