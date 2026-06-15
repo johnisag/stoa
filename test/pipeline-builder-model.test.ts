@@ -23,6 +23,7 @@ import {
   setDependsOn,
   connect,
   outputRefToken,
+  insertOutputRef,
   disconnect,
   removeStep,
   renameStep,
@@ -1014,5 +1015,50 @@ describe("outputRefToken", () => {
   it("works for ids with the allowed punctuation (dot/dash/underscore)", () => {
     const id = "step-1_a.b";
     expect(interpolateTask(outputRefToken(id), { [id]: "X" })).toBe("X");
+  });
+});
+
+describe("insertOutputRef", () => {
+  it("splices the token at the caret AND wires the dependency in one transform", () => {
+    const doc = docFromSpec(
+      spec([
+        step({ id: "research" }),
+        step({ id: "implement", task: "use  here" }),
+      ])
+    );
+    // caret at index 4 ("use |") with no selection
+    const next = insertOutputRef(doc, "implement", "research", 4, 4);
+    const impl = next.nodes.find((n) => n.step.id === "implement")!;
+    expect(impl.step.task).toBe(`use ${outputRefToken("research")} here`);
+    expect(impl.step.dependsOn).toContain("research");
+  });
+
+  it("replaces a selected range and doesn't duplicate an existing dependency", () => {
+    const doc = docFromSpec(
+      spec([
+        step({ id: "a" }),
+        step({ id: "b", task: "XXXX", dependsOn: ["a"] }),
+      ])
+    );
+    const next = insertOutputRef(doc, "b", "a", 0, 4); // select all of "XXXX"
+    const b = next.nodes.find((n) => n.step.id === "b")!;
+    expect(b.step.task).toBe(outputRefToken("a"));
+    expect(b.step.dependsOn).toEqual(["a"]);
+  });
+
+  it("clamps an out-of-range caret to the task length", () => {
+    const doc = docFromSpec(
+      spec([step({ id: "a" }), step({ id: "b", task: "hi" })])
+    );
+    const next = insertOutputRef(doc, "b", "a", 999, 999);
+    expect(next.nodes.find((n) => n.step.id === "b")!.step.task).toBe(
+      `hi${outputRefToken("a")}`
+    );
+  });
+
+  it("no-ops for a self-reference or an unknown target", () => {
+    const doc = docFromSpec(spec([step({ id: "a", task: "hi" })]));
+    expect(insertOutputRef(doc, "a", "a", 0, 0)).toBe(doc);
+    expect(insertOutputRef(doc, "missing", "a", 0, 0)).toBe(doc);
   });
 });

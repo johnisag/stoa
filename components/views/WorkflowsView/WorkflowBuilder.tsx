@@ -37,6 +37,7 @@ import {
   docToSpec,
   duplicateNodes,
   duplicateStep,
+  insertOutputRef,
   moveNode,
   moveNote,
   nextAutoPosition,
@@ -133,7 +134,7 @@ const EXAMPLE_DOC: BuilderDoc = docFromSpec({
     {
       id: "implement",
       agent: "claude",
-      task: "Using these findings:\n{{steps.research.output}}\nimplement the fix.",
+      task: `Using these findings:\n${outputRefToken("research")}\nimplement the fix.`,
       dependsOn: ["research"],
       exitCriteria: "The change MUST pass the test suite. Open a PR when done.",
     },
@@ -752,29 +753,22 @@ export function WorkflowBuilder({
     setDoc((d) => d);
   }
 
-  // Splice `{{steps.<id>.output}}` into the Task field at the caret AND wire the
-  // dependency (connect is idempotent + cycle-permissive, like the dependsOn
-  // checklist) so the reference actually resolves at runtime — one undoable edit.
-  function insertOutputRef(stepId: string) {
+  // Insert an upstream step's output reference at the Task caret + wire the
+  // dependency. The splice itself lives in builder-model (insertOutputRef reads the
+  // task from the doc, so a concurrent keystroke can't make it stale); here we just
+  // capture the caret, commit it as one undoable edit, and restore focus.
+  function handleInsertRef(refId: string) {
     const node = primaryNode;
     if (!node) return;
-    const token = outputRefToken(stepId);
     const el = taskRef.current;
-    const task = node.step.task ?? "";
-    const start = el?.selectionStart ?? task.length;
+    const fallback = (node.step.task ?? "").length;
+    const start = el?.selectionStart ?? fallback;
     const end = el?.selectionEnd ?? start;
-    const nextTask = task.slice(0, start) + token + task.slice(end);
-    setDoc((d) =>
-      connect(
-        updateStep(d, node.step.id, { task: nextTask }),
-        stepId,
-        node.step.id
-      )
-    );
+    setDoc((d) => insertOutputRef(d, node.step.id, refId, start, end));
     setShowRefMenu(false);
     // Restore focus + place the caret right after the inserted token.
     requestAnimationFrame(() => {
-      const caret = start + token.length;
+      const caret = start + outputRefToken(refId).length;
       el?.focus();
       el?.setSelectionRange(caret, caret);
     });
@@ -1431,13 +1425,16 @@ export function WorkflowBuilder({
                 </button>
                 {showRefMenu && (
                   <div className="flex flex-col gap-0.5 rounded-md border p-1">
+                    <span className="text-muted-foreground px-2 py-1 text-[11px]">
+                      Inserts the reference and adds the step as a dependency.
+                    </span>
                     {doc.nodes
                       .filter((n) => n.step.id !== primaryNode.step.id)
                       .map((n) => (
                         <button
                           key={n.step.id}
                           type="button"
-                          onClick={() => insertOutputRef(n.step.id)}
+                          onClick={() => handleInsertRef(n.step.id)}
                           title={`Insert ${outputRefToken(n.step.id)} and depend on this step`}
                           className="hover:bg-accent flex items-center gap-2 rounded px-2 py-1 text-left text-xs"
                         >
