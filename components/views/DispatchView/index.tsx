@@ -101,7 +101,9 @@ export function DispatchView({
         </div>
       </div>
 
-      <div className="px-4 pb-2">
+      {/* overflow-x-auto so the 4-tab strip scrolls (not clips) in a narrow split
+          pane — the root is overflow-hidden. */}
+      <div className="overflow-x-auto px-4 pb-2">
         <SegmentedTabs
           ariaLabel="Dispatch sections"
           value={tab}

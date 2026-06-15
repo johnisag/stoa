@@ -826,8 +826,8 @@ function HomeContent() {
     : null;
 
   // Close a fleet dialog and open a fleet VIEW as a tab in the focused pane — the
-  // cross-link from a still-modal view (Dispatch/Verdict Inbox) to a now-windowed
-  // one (Workflows, Fleet Board).
+  // cross-link from a still-modal view (the Verdict Inbox) to a now-windowed one
+  // (Workflows, Fleet Board, Dispatch, …).
   const openViewTabFrom = useCallback(
     (close: (open: boolean) => void, view: ViewKind) => () => {
       close(false);
