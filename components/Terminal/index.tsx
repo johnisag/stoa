@@ -244,7 +244,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         toast.error(
           selectMode
             ? "Select some terminal text first"
-            : "No selection — tap Select to copy from a full-screen app"
+            : "No selection — use the select-text button to copy from a full-screen app"
         );
         return false;
       }
