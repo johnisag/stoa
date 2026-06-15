@@ -86,12 +86,15 @@ describe("saved-workflows service", () => {
     expect(() => createSavedWorkflow({ name: "   ", doc: doc() })).toThrow(
       /name is required/i
     );
-    // update also trims.
+    // update also trims, and rejects a whitespace-only name (symmetric w/ create).
     const up = updateSavedWorkflow(created.id, {
       name: "  Renamed  ",
       doc: doc(),
     });
     expect(up?.name).toBe("Renamed");
+    expect(() =>
+      updateSavedWorkflow(created.id, { name: "   ", doc: doc() })
+    ).toThrow(/name is required/i);
   });
 
   it("lists newest-first", () => {
