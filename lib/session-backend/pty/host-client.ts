@@ -62,6 +62,13 @@ export class HostClient {
   // at the browser's real dimensions instead of registering the client at the
   // pty's current size (which can wrongly shrink the pty via applyMinSize).
   private lastSize = new Map<string, { cols: number; rows: number }>();
+  // Per-key count of attaches whose request is IN FLIGHT. resubscribeAll skips
+  // these: an attach already adds the key to outputListeners before its request,
+  // so a (re)connect triggered DURING that request would otherwise resubscribe
+  // the same key — double-attaching it on the daemon and replaying a stray RIS+
+  // snapshot reset. The attach's own request (and its one retry) re-establishes
+  // it instead.
+  private attachingKeys = new Map<string, number>();
   private spawnedThisCycle = false;
   // Mutable key refs for active attaches. rename() updates these so detach()
   // always targets the current key for sizing and daemon-detach.
@@ -234,6 +241,10 @@ export class HostClient {
   /** Re-send attach for every subscribed key and repaint from the snapshot. */
   private async resubscribeAll(): Promise<void> {
     for (const key of [...this.outputListeners.keys()]) {
+      // An attach for this key is mid-flight — its own request re-establishes it
+      // on the fresh socket; resubscribing here would double-attach + replay a
+      // stray reset into the live terminal.
+      if (this.attachingKeys.has(key)) continue;
       try {
         const size = this.lastSize.get(key);
         const res = await this.requestNoRetry<{ snapshot: string }>({
@@ -364,6 +375,11 @@ export class HostClient {
       this.lastSize.set(key, { cols, rows });
     }
 
+    // Mark this attach in flight so a (re)connect DURING the request below doesn't
+    // resubscribe the same key (the request itself re-establishes it). Cleared in
+    // the finally regardless of success/failure.
+    this.attachingKeys.set(key, (this.attachingKeys.get(key) ?? 0) + 1);
+
     try {
       const res = await this.request<{ snapshot: string }>({
         t: "attach",
@@ -406,6 +422,11 @@ export class HostClient {
       // Drop the size we recorded above — there's no detach for a failed attach.
       if (outSet.size === 0) this.lastSize.delete(key);
       throw err;
+    } finally {
+      // Clear the in-flight mark (whether the attach succeeded or failed).
+      const n = (this.attachingKeys.get(key) ?? 1) - 1;
+      if (n <= 0) this.attachingKeys.delete(key);
+      else this.attachingKeys.set(key, n);
     }
   }
 
