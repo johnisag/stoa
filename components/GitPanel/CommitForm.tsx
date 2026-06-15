@@ -120,8 +120,8 @@ export function CommitForm({
 
       const data = await res.json();
 
-      if (data.error) {
-        setError(data.error);
+      if (!res.ok || data.error) {
+        setError(data.error || "Push failed");
         return;
       }
 

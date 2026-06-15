@@ -166,7 +166,7 @@ export function FileEditDialog({
         body: JSON.stringify({ path: filePath, content: modifiedContent }),
       });
       const data = await res.json();
-      if (data.error) setError(data.error);
+      if (!res.ok || data.error) setError(data.error || "Failed to save");
       else {
         setInitialModified(modifiedContent);
         onSave();

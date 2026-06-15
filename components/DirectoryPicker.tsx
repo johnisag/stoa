@@ -70,8 +70,8 @@ export function DirectoryPicker({
     try {
       const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
       const data = await res.json();
-      if (data.error) {
-        setError(data.error);
+      if (!res.ok || data.error) {
+        setError(data.error || "Failed to load directory");
         return { dirs: [], expandedPath: path };
       }
       // Store the home path if we're at ~

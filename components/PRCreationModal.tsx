@@ -53,8 +53,8 @@ export function PRCreationModal({
         );
         const data = await res.json();
 
-        if (data.error) {
-          setError(data.error);
+        if (!res.ok || data.error) {
+          setError(data.error || "Failed to fetch PR data");
         } else {
           setPrData(data);
           setTitle(data.suggestedTitle);
@@ -93,8 +93,8 @@ export function PRCreationModal({
 
       const data = await res.json();
 
-      if (data.error) {
-        setError(data.error);
+      if (!res.ok || data.error) {
+        setError(data.error || "Failed to create PR");
         return;
       }
 

@@ -32,7 +32,17 @@ afterEach(() => {
 });
 
 function okResponse(backend: string) {
-  return { json: async () => ({ backend }) } as unknown as Response;
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ backend }),
+  } as unknown as Response;
+}
+
+// A non-2xx that still returns JSON. getActiveBackend must treat this as a
+// failed probe (NOT cache it), the same as a thrown/network error.
+function errorResponse(status = 500) {
+  return { ok: false, status, json: async () => ({}) } as unknown as Response;
 }
 
 describe("getActiveBackend — transient failure must not lock the client (B006)", () => {
@@ -69,6 +79,21 @@ describe("getActiveBackend — transient failure must not lock the client (B006)
     expect(await getActiveBackend()).toBe("tmux");
     expect(await getActiveBackend()).toBe("tmux");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT cache a non-2xx probe that still returns JSON (re-probes next)", async () => {
+    const { getActiveBackend } = await import("@/lib/client/backend");
+
+    // A 500 carrying valid JSON used to be read as a "successful" probe and
+    // cached, locking the client to the fallback for the page lifetime.
+    fetchMock.mockResolvedValueOnce(errorResponse(500));
+    expect(await getActiveBackend()).toBe("tmux");
+
+    // The failure was not cached, so the next call re-probes and gets pty.
+    fetchMock.mockResolvedValueOnce(okResponse("pty"));
+    expect(await getActiveBackend()).toBe("pty");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("repeated transient failures keep re-probing (never gets stuck)", async () => {

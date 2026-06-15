@@ -230,6 +230,7 @@ export function GitPanel({
       });
 
       const res = await fetch(`/api/git/status?${params}`);
+      if (!res.ok) throw new Error("Failed to load diff");
       const data = await res.json();
 
       if (data.diff !== undefined) {
