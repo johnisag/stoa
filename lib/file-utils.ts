@@ -12,6 +12,47 @@ export interface FileNode {
 }
 
 /**
+ * Flatten a (possibly nested) file tree to just its FILE nodes, depth-first.
+ * Used by the recursive file search in the picker: directories are dropped and
+ * each returned node keeps its absolute `path`. Pure → unit-tested.
+ */
+export function flattenFileNodes(nodes: FileNode[]): FileNode[] {
+  const out: FileNode[] = [];
+  const walk = (list: FileNode[]) => {
+    for (const node of list) {
+      if (node.type === "directory") {
+        if (node.children) walk(node.children);
+      } else {
+        out.push(node);
+      }
+    }
+  };
+  walk(nodes);
+  return out;
+}
+
+/**
+ * The display path of `fullPath` relative to `base` (forward-slashed), or the
+ * bare name when it isn't under `base`. Lets the recursive picker disambiguate
+ * same-named files (e.g. two `index.ts`) by where they live, cross-platform.
+ */
+export function relativeDisplayPath(base: string, fullPath: string): string {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const b = norm(base);
+  const f = norm(fullPath);
+  // Windows paths are case-insensitive, so compare the boundary case-folded when
+  // either side used backslashes (e.g. a DB-stored cwd `C:\Repo` vs an OS-resolved
+  // `C:\repo`). POSIX stays case-sensitive. The returned segment keeps real casing.
+  const winish = base.includes("\\") || fullPath.includes("\\");
+  const cb = winish ? b.toLowerCase() : b;
+  const cf = winish ? f.toLowerCase() : f;
+  if (b && (cf === cb || cf.startsWith(cb + "/"))) {
+    return f.slice(b.length + 1) || f;
+  }
+  return f.split("/").pop() || f;
+}
+
+/**
  * Get file extension for syntax highlighting
  */
 export function getLanguageFromExtension(ext: string): string {

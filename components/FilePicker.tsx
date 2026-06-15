@@ -27,7 +27,7 @@ import {
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { useViewport } from "@/hooks/useViewport";
 import { useDirectoryBrowser } from "@/hooks/useDirectoryBrowser";
-import type { FileNode } from "@/lib/file-utils";
+import { relativeDisplayPath, type FileNode } from "@/lib/file-utils";
 
 const IMAGE_EXTENSIONS = [
   "png",
@@ -72,13 +72,17 @@ export function FilePicker({
     error,
     search,
     setSearch,
+    searchingRecursively,
+    recursiveLoading,
+    recursiveMatchCount,
+    recursiveResultCap,
     pathSegments,
     navigateTo,
     navigateUp,
     navigateHome,
     pathForSegment,
     separator,
-  } = useDirectoryBrowser({ initialPath });
+  } = useDirectoryBrowser({ initialPath, recursiveSearch: true });
 
   const [uploading, setUploading] = useState(false);
   const [url, setUrl] = useState("");
@@ -424,7 +428,18 @@ export function FilePicker({
                       </span>
                     </div>
                   )}
-                  <span className="w-full truncate text-xs">{node.name}</span>
+                  <span
+                    className="w-full truncate text-xs"
+                    title={
+                      searchingRecursively
+                        ? relativeDisplayPath(currentPath, node.path)
+                        : node.name
+                    }
+                  >
+                    {searchingRecursively && isFile
+                      ? relativeDisplayPath(currentPath, node.path)
+                      : node.name}
+                  </span>
                 </button>
               );
             })}
@@ -435,7 +450,14 @@ export function FilePicker({
       {/* Footer hint */}
       <div className="border-border border-t p-3 text-center">
         <p className="text-muted-foreground text-xs">
-          Select any file or navigate into folders
+          {recursiveLoading
+            ? "Searching subfolders…"
+            : searchingRecursively
+              ? recursiveMatchCount != null &&
+                recursiveMatchCount > recursiveResultCap
+                ? `Showing top ${recursiveResultCap} of ${recursiveMatchCount} matches — refine your search`
+                : "Showing fuzzy matches across subfolders — clear search to browse"
+              : "Select any file, or type to fuzzy-search this folder + subfolders"}
         </p>
       </div>
     </div>

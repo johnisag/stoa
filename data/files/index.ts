@@ -1,3 +1,3 @@
 export { fileKeys } from "./keys";
-export { useDirectoryFilesQuery } from "./queries";
+export { useDirectoryFilesQuery, useRecursiveFilesQuery } from "./queries";
 export type { DirectoryData } from "./queries";
