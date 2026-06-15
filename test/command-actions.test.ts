@@ -286,6 +286,33 @@ describe("validateWorkflowProposal — generation-only, fail-closed", () => {
     if (!res.ok) expect(res.reason).toMatch(/too many steps/i);
   });
 
+  it("rejects a step with a missing/blank id (clear reason, before validateSpec)", () => {
+    const res = validateWorkflowProposal(
+      {
+        kind: "workflow",
+        spec: { name: "X", steps: [{ role: "researcher", task: "t" }] },
+      },
+      OPTS
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/id/i);
+  });
+
+  it("rejects a step with an empty task (after control-byte sanitization)", () => {
+    const res = validateWorkflowProposal(
+      {
+        kind: "workflow",
+        spec: {
+          name: "X",
+          steps: [{ id: "a", role: "researcher", task: "   " }],
+        },
+      },
+      OPTS
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/task/i);
+  });
+
   it("rejects a non-object / missing-spec / empty-steps design", () => {
     expect(validateWorkflowProposal(null, OPTS).ok).toBe(false);
     expect(validateWorkflowProposal({ kind: "workflow" }, OPTS).ok).toBe(false);

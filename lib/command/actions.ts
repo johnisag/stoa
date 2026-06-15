@@ -252,6 +252,9 @@ export function validateWorkflowProposal(
       return { ok: false, reason: `unknown role "${String(r.role)}"` };
     }
     const id = typeof r.id === "string" ? r.id.trim() : "";
+    if (!id) {
+      return { ok: false, reason: "a step is missing its id" };
+    }
     const step: PipelineStep = {
       id,
       agent: ROLE_TO_AGENT[r.role],

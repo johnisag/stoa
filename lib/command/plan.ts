@@ -149,22 +149,25 @@ function renderRoles(): string {
 }
 
 const GENERATE_WORKFLOW_RULES = [
-  "RULES (a design that breaks these is rejected):",
+  "HARD RULES (a design that breaks one of these is rejected):",
+  "- Every step id is unique and has no leading/trailing spaces; every step has a",
+  "  non-empty task and a role from the list above.",
+  "- Every dependsOn id must reference a step that exists, and the graph must be ACYCLIC.",
+  "- A {{steps.<upstreamId>.output}} placeholder may appear in a step's task ONLY if",
+  "  <upstreamId> is in that step's dependency chain (add it to dependsOn).",
+  `- At most ${MAX_GENERATED_STEPS} steps total.`,
+  "",
+  "DESIGN GUIDANCE (for a workflow that's actually good to run):",
   "- Use the canonical fleet, SCALED to the goal — a richer goal earns more nodes:",
   "  ~3 researchers → 2 architects (architecture + components) → ~3 software-engineers",
   "  + ~2 ui-ux → ~2 testers → 1 integrator → exactly 1 review-gate (the sink).",
-  `- Keep it to at most ${MAX_GENERATED_STEPS} steps total.`,
-  "- Every step id is unique and has no leading/trailing spaces. Every step has a",
-  "  clear, self-contained task. Every role is one of the listed roles.",
-  "- dependsOn ids must reference steps that exist. The graph must be ACYCLIC.",
-  "- To feed one step's result into a later step, put the upstream id in the later",
-  "  step's dependsOn AND reference it in that step's task as",
-  "  {{steps.<upstreamId>.output}} (only ids in its dependency chain are allowed).",
-  `- Any step whose result a later step reads MUST end its task by instructing it to`,
-  `  write its deliverable to its outputFile (default ${STOA_DEFAULT_OUTPUT_FILE}).`,
-  "- The single review-gate step depends on the integrator and judges the whole",
-  "  result on three dimensions — correctness/security, conventions/cross-platform,",
-  "  and simplicity/UX — signing off only if all three pass.",
+  "- For one step's result to reach a later step, the later step references",
+  `  {{steps.<upstreamId>.output}} AND the producing step should write its deliverable`,
+  `  to its outputFile (default ${STOA_DEFAULT_OUTPUT_FILE}) — otherwise the reference`,
+  "  resolves to empty.",
+  "- The review-gate depends on the integrator and judges the whole result on three",
+  "  dimensions — correctness/security, conventions/cross-platform, simplicity/UX —",
+  "  signing off only if all three pass.",
 ].join("\n");
 
 /**
@@ -191,7 +194,7 @@ export function buildGenerateWorkflowPrompt({
     `name: ${sanitizeDigest(projectName)} — dir: ${sanitizeDigest(projectDir)}`,
   ];
   if (context && context.trim()) {
-    parts.push("", "=== CONTEXT ===", context);
+    parts.push("", "=== CONTEXT ===", sanitizeDigest(context));
   }
   parts.push(
     "",
