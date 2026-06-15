@@ -75,6 +75,20 @@ export function defaultInteractiveShell(): string {
 }
 
 /**
+ * The argv to tear down a spawned process TREE, or null when a plain kill of the
+ * single process suffices. On Windows an agent CLI is launched through a `.cmd`
+ * shim under a `cmd.exe` (or conpty) wrapper — killing only the wrapper orphans
+ * the shim → node → agent descendants, which keep running. `taskkill /T` reaps the
+ * whole tree, `/F` forces it (SIGTERM is unreliable for `.cmd` shims). POSIX kills
+ * the process group via a plain kill, so it returns null. The SINGLE source for
+ * the tree-kill argv — used by lib/ask, the pty session, and process-manager so
+ * they can't drift. Pure → tested.
+ */
+export function killTreeArgs(pid: number, onWindows: boolean): string[] | null {
+  return onWindows ? ["taskkill", "/PID", String(pid), "/T", "/F"] : null;
+}
+
+/**
  * Locate an executable on PATH, cross-platform (`where` on Windows, `which`
  * elsewhere). Returns the first match, or null if not found.
  * On Windows this resolves .cmd/.exe/.ps1 shims via PATHEXT.

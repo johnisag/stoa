@@ -48,6 +48,25 @@ describe("TmuxBackend command construction (macOS/Linux path)", () => {
     );
   });
 
+  it("create: escapes shell metacharacters in the session name (q hardening)", async () => {
+    // Names are internally generated (provider-uuid) today, so this is contract
+    // hardening — but the backend must escape the chars active inside double quotes
+    // (\\ \" $ `) so a hypothetical metachar name can't break out of the -s "..." wrapper.
+    await tb.create({ name: 'a$b`c"d\\e', cwd: "~", command: "claude" });
+    expect(last()).toContain(String.raw`-s "a\$b\`c\"d\\e"`);
+  });
+
+  it("create: a normal provider-uuid name is unchanged (escaping is a no-op)", async () => {
+    await tb.create({
+      name: "claude-1",
+      cwd: "~/proj",
+      command: "claude --foo",
+    });
+    expect(last()).toBe(
+      'tmux set -g mouse on 2>/dev/null; tmux new-session -d -s "claude-1" -c "$HOME/proj" "claude --foo"'
+    );
+  });
+
   it("capture: visible screen vs N scrollback lines", async () => {
     await tb.capture("claude-1");
     expect(last()).toBe('tmux capture-pane -t "claude-1" -p 2>/dev/null');

@@ -20,7 +20,7 @@
  */
 
 import { spawn, type ChildProcess } from "child_process";
-import { resolveBinary, isWindows } from "./platform";
+import { resolveBinary, isWindows, killTreeArgs } from "./platform";
 import { sanitizeDigest } from "./summarize";
 import { getAnalyticsReport } from "./analytics/queries";
 import { computeManagedStatuses } from "./session-status";
@@ -211,18 +211,6 @@ export interface RunAskOptions {
 }
 
 const DEFAULT_ASK_TIMEOUT_MS = 60_000;
-
-/**
- * The argv to tear down a spawned process TREE, or null when a plain
- * `child.kill()` suffices. On Windows the ask spawn uses `shell: true`, so the
- * child is `cmd.exe` → it launches the `.cmd` shim → node → the agent; killing only
- * cmd.exe orphans those descendants (they keep running and hold the request's
- * resources). `taskkill /T` reaps the whole tree (mirrors scripts/stoa.js cmdStop).
- * POSIX kills the process group via child.kill(), so it returns null. Pure → tested.
- */
-export function killTreeArgs(pid: number, onWindows: boolean): string[] | null {
-  return onWindows ? ["taskkill", "/PID", String(pid), "/T", "/F"] : null;
-}
 
 /** Kill a spawned ask child — its whole tree on Windows, else child.kill(). */
 function killChildTree(child: ChildProcess): void {

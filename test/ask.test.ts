@@ -10,7 +10,8 @@ vi.mock("@/lib/platform", async (importOriginal) => {
   return { ...actual, resolveBinary: () => null };
 });
 
-import { buildAskArgs, buildAskPrompt, killTreeArgs } from "@/lib/ask";
+import { buildAskArgs, buildAskPrompt } from "@/lib/ask";
+import { killTreeArgs } from "@/lib/platform";
 
 const PROMPT = "What is happening in my fleet?";
 
