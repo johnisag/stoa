@@ -23,6 +23,7 @@ import {
   loadPaneState,
   MAX_PANES,
 } from "@/lib/panes";
+import { clearWorkflowsViewState } from "@/lib/workflows-view-state";
 import { useViewport } from "@/hooks/useViewport";
 
 interface PaneContextValue {
@@ -185,6 +186,11 @@ export function PaneProvider({ children }: { children: ReactNode }) {
       const newTabs = pane.tabs.filter((t) => t.id !== tabId);
       const newActiveTabId =
         pane.activeTabId === tabId ? newTabs[0].id : pane.activeTabId;
+
+      // The tab is really closing — drop any persisted Workflows view state so
+      // closed tabs don't accumulate stale localStorage keys (no-op for a
+      // terminal tab id; removeItem is idempotent under StrictMode re-invoke).
+      clearWorkflowsViewState(tabId);
 
       return {
         ...prev,
@@ -350,6 +356,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
       addTab,
       closeTab,
       switchTab,
+      addWorkflowsTab,
       attachSession,
       detachSession,
       reconcileSessions,

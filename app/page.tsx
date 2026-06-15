@@ -625,6 +625,21 @@ function HomeContent() {
     [sessions, attachToSession]
   );
 
+  // Open a worker session in a NEW tab beside the current one. Used by the
+  // Workflows view so opening a run's worker sits side-by-side with the
+  // workflows tab instead of replacing it.
+  const handleOpenSessionInNewTab = useCallback(
+    (sessionId: string) => {
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) {
+        toast.error("Session not found — it may have been deleted.");
+        return;
+      }
+      openSessionInNewTab(session);
+    },
+    [sessions, openSessionInNewTab]
+  );
+
   // Cycle to the next/previous individually-navigable session (wraps around),
   // over the shared sidebar order (getSwitchableSessionOrder) so Alt+arrows,
   // mobile chevrons, and the pane swipe all agree. Workers are excluded — they
@@ -710,6 +725,7 @@ function HomeContent() {
         onFleetBoardClick={() => setShowFleetBoard(true)}
         onAskStoaClick={isMobile ? () => setShowChat(true) : undefined}
         onSelectSession={handleSelectSession}
+        onOpenSessionInNewTab={handleOpenSessionInNewTab}
       />
     ),
     [
@@ -718,6 +734,7 @@ function HomeContent() {
       registerTerminalRef,
       isMobile,
       handleSelectSession,
+      handleOpenSessionInNewTab,
       setShowDispatch,
       setShowVerdictInbox,
       setShowFleetBoard,
@@ -811,20 +828,6 @@ function HomeContent() {
   const startDevServerProject = startDevServerProjectId
     ? (projects.find((p) => p.id === startDevServerProjectId) ?? null)
     : null;
-
-  // Open a worker session referenced from the workflows tab in a new terminal
-  // tab so the workflows tab stays open and the worker gets a proper attach.
-  const handleWorkflowsOpenSession = useCallback(
-    (sessionId: string) => {
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session) {
-        toast.error("Session not found — it may have been deleted.");
-        return;
-      }
-      openSessionInNewTab(session);
-    },
-    [sessions, openSessionInNewTab]
-  );
 
   // Close a fleet dialog and open a workflows tab in the focused pane.
   const openWorkflowsTabFrom = useCallback(

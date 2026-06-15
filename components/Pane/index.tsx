@@ -86,6 +86,9 @@ interface PaneProps {
   onFleetBoardClick?: () => void;
   onAskStoaClick?: () => void;
   onSelectSession?: (sessionId: string) => void;
+  /** Open a session in a new tab (side-by-side). Used by Workflows to surface a
+   * run's worker next to the workflows tab rather than replacing it. */
+  onOpenSessionInNewTab?: (sessionId: string) => void;
 }
 
 type ViewMode = "terminal" | "files" | "git" | "workers";
@@ -102,6 +105,7 @@ export const Pane = memo(function Pane({
   onFleetBoardClick,
   onAskStoaClick,
   onSelectSession,
+  onOpenSessionInNewTab,
 }: PaneProps) {
   const { isMobile } = useViewport();
   const {
@@ -546,9 +550,11 @@ export const Pane = memo(function Pane({
                   className={isActive ? "h-full w-full" : "hidden"}
                 >
                   <WorkflowsView
+                    tabId={tab.id}
                     sessions={sessions}
                     activeSessionId={activeTab?.sessionId ?? undefined}
                     onOpenSession={onSelectSession}
+                    onOpenSessionInNewTab={onOpenSessionInNewTab}
                     onOpenDispatch={onDispatchClick}
                     onOpenVerdictInbox={onVerdictInboxClick}
                     onOpenFleetBoard={onFleetBoardClick}
@@ -658,9 +664,11 @@ export const Pane = memo(function Pane({
                           className={isActive ? "h-full" : "hidden"}
                         >
                           <WorkflowsView
+                            tabId={tab.id}
                             sessions={sessions}
                             activeSessionId={activeTab?.sessionId ?? undefined}
                             onOpenSession={onSelectSession}
+                            onOpenSessionInNewTab={onOpenSessionInNewTab}
                             onOpenDispatch={onDispatchClick}
                             onOpenVerdictInbox={onVerdictInboxClick}
                             onOpenFleetBoard={onFleetBoardClick}
