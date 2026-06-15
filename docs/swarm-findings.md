@@ -11,15 +11,17 @@ _Generated 2026-06-15 — replaces the 35 raw `.kimi/swarm/` files (removed in t
 > still true and still worth keeping is retained here. (`competitor-wins-kimi.md` is gitignored /
 > local-only, not present in a fresh clone.)
 >
-> **Bottom line:** of ~154 reported bug findings, **7 remain genuinely open** (all LOW or
-> MEDIUM; several latent / needs-human-check) — the 4 workflow-builder papercuts were fixed in
-> **#271** (unsaved-edit guard, whitespace-name reject, get-after-insert guard, PipelineGraph
-> marker id), the MEDIUM Codex-MCP re-attach drift was fixed in **#273** (single
-> `parseMcpLaunchArgs`, both spawn paths converged), and the multi-repo git `res.ok` item turned
-> out to be a 26-site **bug class** (handlers trusting a response body without checking
-> `res.ok`) — all fixed in **#275** (a sweep+verify workflow found 21, the 3-agent review found
-> 5 more). Of ~77 research wins across 15 competitor areas, **0 are net-new** — they are already
-> captured verbatim in `competitor-wins-kimi.md`.
+> **Bottom line:** of ~154 reported bug findings, **2 remain open — and both are deliberate
+> human-decision items, not unfixed defects** (`spawnWorker` Codex-worker MCP wiring = a product
+> decision on nested conductors; the installer `curl|bash` = an accepted trust boundary already
+> gated by an opt-in guard). Everything cleanly fixable is now closed: the 4 workflow-builder
+> papercuts in **#271**; the MEDIUM Codex-MCP re-attach drift in **#273** (single
+> `parseMcpLaunchArgs`); the multi-repo git `res.ok` item, which turned out to be a 26-site
+> **bug class**, in **#275** (sweep+verify workflow found 21, review found 5 more); and the final
+> 5 latent cross-platform items in **#277** (Windows pty tree-kill, per-user pty-host socket
+> name, `sun_path` length, `TmuxBackend.q()` escaping, `server.ts` POSIX hygiene). Of ~77
+> research wins across 15 competitor areas, **0 are net-new** — they are already captured
+> verbatim in `competitor-wins-kimi.md`.
 
 ---
 
@@ -31,31 +33,24 @@ requires live-OS confirmation).
 
 ### core-backend
 
-- **[MEDIUM / needs-human-check] Windows `.cmd`/`.bat` agent spawn can orphan the child process tree on kill (pty path).**
-  `lib/session-backend/pty/registry.ts:67-69` (`resolveSpawn` wraps `.cmd`/`.bat` as
-  `cmd.exe /c resolved …`, so node-pty holds **cmd.exe's** PID) + `lib/session-backend/pty/pty-session.ts:336-349`
-  (`killAndWait` on Windows does only `process.kill(pid)` on that single wrapper PID — no
-  `taskkill /T` tree kill). The sibling path `ClaudeProcessManager.cancelSession`
-  (`lib/claude/process-manager.ts:241-260`) **was** fixed to `taskkill /pid <pid> /T /F`, but
-  that fix was not ported to the pty-registry kill path the `SessionBackend` actually uses.
-  conpty teardown may mitigate in common cases — needs a Windows runtime check; the asymmetry
-  vs. the `cancelSession` fix is the concrete evidence the gap was not closed here.
+- **✅ FIXED (#277). [MEDIUM] Windows `.cmd` agent spawn orphaned the child process tree on kill (pty path).**
+  `PtySession.killAndWait` did only `process.kill(pid)` on the conpty/cmd.exe wrapper PID — no
+  `taskkill /T` tree kill — so the shim → node → agent descendants survived. Now reaps the whole
+  tree via `taskkill /T /F` through the shared `killTreeArgs` helper (moved to `lib/platform.ts`;
+  `cancelSession` converged onto it too, so all three call sites share one source). Regression in
+  `test/pty-session-killtree.test.ts`.
 
-- **[LOW / likely-open] Default pty-host socket/pipe name is global (two users or two Stoa instances collide).**
-  `lib/session-backend/pty/protocol.ts:36` — `hostAddress()` defaults to a fixed basename
-  `"stoa-pty-host"` (Windows `\\.\pipe\stoa-pty-host`, POSIX `os.tmpdir()/stoa-pty-host.sock`)
-  when `STOA_PTY_HOST_NAME` is unset; no per-user qualifier (UID/username/profile hash) was
-  added. Two users on one multi-user host, or two instances, bind/connect the same global
-  address. Tests isolate via `STOA_PTY_HOST_NAME`, which masks it in CI but does not fix the
-  runtime default. (Reported as bugs-session-backend #12.)
+- **✅ FIXED (#277). [LOW] Default pty-host socket/pipe name was a fixed global (two users/instances collided).**
+  `hostAddress()` now suffixes the default name with a short per-user token (hashed uid, else
+  username) so two users on one host don't bind the same `\\.\pipe\stoa-pty-host` / `*.sock`.
+  `STOA_PTY_HOST_NAME` still overrides for test isolation. Regression in
+  `test/pty-protocol-address.test.ts`.
 
-- **[LOW / needs-human-check] `TmuxBackend.q()` does not escape shell metacharacters (`$`, backtick, `\`, `!`) inside double quotes.**
-  `lib/session-backend/tmux-backend.ts:28-30` (`q`) and its callers
-  `create()/kill()/rename()/sendKeysInterpreted()`. AGENTS.md says the backend owns escaping,
-  so the contract is unmet — but every name reaching the backend is an internally-generated
-  `sessionKey()` (`${provider}-${uuid}`, `lib/providers/registry.ts:292-295`) or a stored
-  `tmux_name`, never user-controlled. A latent contract/hardening gap, not a reachable injection
-  today; report only after confirming no caller ever passes attacker-influenced names.
+- **✅ FIXED (#277). [LOW] `TmuxBackend.q()` did not escape shell metacharacters (`\ " $ \``) inside double quotes.**
+  `q()` now backslash-escapes the chars active inside the double-quoted wrapper. Names reaching
+  the backend are internally generated (`sessionKey()` = `${provider}-${uuid}`) so it was a
+  latent contract gap (AGENTS.md: "the backend owns escaping"), not a reachable injection — and
+  the escape is a no-op for those names, so the locked tmux command strings are unchanged.
 
 ### dispatch + data + providers
 
@@ -134,24 +129,15 @@ requires live-OS confirmation).
 
 ### api + platform
 
-- **[LOW / confirmed-open] Legacy tmux WebSocket pty spawn hardcodes `/bin/zsh` + `process.env.HOME` + POSIX `PATH` fallback.**
-  `server.ts:744-761` (`handleTmuxConnection`) — verbatim:
-  `const shell = process.env.SHELL || "/bin/zsh";`,
-  `PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin"`, `HOME: process.env.HOME || "/"`,
-  and `cwd: process.env.HOME || "/"`. Violates AGENTS.md (no hardcoded `/bin`, no
-  `process.env.HOME`). **The original "will fail on Windows" framing is stale** —
-  `handleTmuxConnection` only runs when `getBackendType() !== 'pty'` (`server.ts:219-220`), i.e.
-  the macOS/Linux tmux backend (Windows always uses pty). So it's a real **POSIX-path** style/AGENTS
-  defect, not a Windows breakage. The identical sites elsewhere (`defaultInteractiveShell`,
-  pty-backend, pty/registry, process-manager) were all fixed to use
-  `defaultInteractiveShell()`/inherited PATH; this legacy path was missed.
+- **✅ FIXED (#277). [LOW] Legacy tmux WebSocket pty spawn hardcoded `/bin/zsh` + `process.env.HOME` + POSIX `PATH` fallback.**
+  `server.ts handleTmuxConnection` (POSIX-only — only runs under the tmux backend) violated
+  AGENTS.md. Now uses `defaultInteractiveShell()` + `homeDir()` + inherited `PATH` instead of the
+  hardcoded `/bin/zsh`, `process.env.HOME`, and `/usr/local/bin:/usr/bin:/bin` fallbacks.
 
-- **[LOW / likely-open] pty-host Unix domain socket placed in `os.tmpdir()` can exceed `sun_path` length limit.**
-  `lib/session-backend/pty/protocol.ts:40` (`hostAddress`) —
-  `return path.join(os.tmpdir(), `${name}.sock`);`. On macOS/Linux a deep `TMPDIR` pushes the
-  socket path past the ~104-108 char `AF_UNIX` `sun_path` limit, so `bind()` fails. POSIX-only
-  (Windows uses a named pipe at line 38). `STOA_PTY_HOST_NAME` can shorten the basename but the
-  tmpdir prefix is uncontrolled. Low-probability edge case. (bugs-platform.)
+- **✅ FIXED (#277). [LOW] pty-host Unix domain socket could exceed the `sun_path` length limit.**
+  `hostAddress()` now falls back to `/tmp` when `path.join(os.tmpdir(), name.sock)` would exceed
+  a conservative `sun_path` budget (a deep `TMPDIR` overflowing `AF_UNIX` ~104-108 bytes), and
+  warns in the pathological both-overflow case. POSIX-only (Windows uses a named pipe).
 
 ### ui + hooks
 
