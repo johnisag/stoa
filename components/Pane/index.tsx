@@ -94,6 +94,10 @@ const VerdictInboxView = dynamic(
     ),
   { ssr: false }
 );
+const ChatView = dynamic(
+  () => import("@/components/views/ChatView").then((mod) => mod.ChatView),
+  { ssr: false }
+);
 
 interface PaneProps {
   paneId: string;
@@ -537,6 +541,8 @@ export const Pane = memo(function Pane({
             onClose={() => closeTab(paneId, tab.id)}
           />
         );
+      case "ask":
+        return <ChatView onClose={() => closeTab(paneId, tab.id)} />;
       default:
         return null;
     }

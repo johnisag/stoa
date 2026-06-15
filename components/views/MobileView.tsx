@@ -31,7 +31,7 @@ export function MobileView({
   onOpenWorkflows,
   onOpenVerdictInbox,
   onOpenFleetBoard,
-  setShowChat,
+  onOpenAsk,
   showNotificationSettings,
   setShowNotificationSettings,
   notificationSettings,
@@ -128,7 +128,7 @@ export function MobileView({
               setSidebarOpen(false);
             }}
             onShowChat={() => {
-              setShowChat(true);
+              onOpenAsk();
               setSidebarOpen(false);
             }}
           />

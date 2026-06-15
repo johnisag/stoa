@@ -44,8 +44,8 @@ export interface ViewProps {
   onOpenVerdictInbox: () => void;
   /** Open the Fleet Board as a pane tab (it's a window now, not a dialog). */
   onOpenFleetBoard: () => void;
-  showChat: boolean;
-  setShowChat: (show: boolean) => void;
+  /** Open Ask Stoa (the chatbox) as a pane tab (it's a window now, not a dialog). */
+  onOpenAsk: () => void;
   onShowShortcuts: () => void;
   onShowGuide: () => void;
 

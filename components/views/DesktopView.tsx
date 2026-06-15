@@ -61,7 +61,7 @@ export function DesktopView({
   onOpenWorkflows,
   onOpenVerdictInbox,
   onOpenFleetBoard,
-  setShowChat,
+  onOpenAsk,
   onShowShortcuts,
   onShowGuide,
   notificationSettings,
@@ -372,7 +372,7 @@ export function DesktopView({
             <NavIconButton
               entry={fleetNavEntry("ask-stoa")}
               variant="header"
-              onClick={() => setShowChat(true)}
+              onClick={onOpenAsk}
               showLabel
             />
             {onShowGuide && (
