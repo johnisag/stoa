@@ -11,9 +11,11 @@ _Generated 2026-06-15 — replaces the 35 raw `.kimi/swarm/` files (removed in t
 > still true and still worth keeping is retained here. (`competitor-wins-kimi.md` is gitignored /
 > local-only, not present in a fresh clone.)
 >
-> **Bottom line:** of ~154 reported bug findings, **13 remain genuinely open** (all LOW or
-> MEDIUM; several latent / needs-human-check). Of ~77 research wins across 15 competitor
-> areas, **0 are net-new** — they are already captured verbatim in `competitor-wins-kimi.md`.
+> **Bottom line:** of ~154 reported bug findings, **9 remain genuinely open** (all LOW or
+> MEDIUM; several latent / needs-human-check) — the 4 workflow-builder papercuts were fixed in
+> **#271** (unsaved-edit guard, whitespace-name reject, get-after-insert guard, PipelineGraph
+> marker id). Of ~77 research wins across 15 competitor areas, **0 are net-new** — they are
+> already captured verbatim in `competitor-wins-kimi.md`.
 
 ---
 
@@ -81,14 +83,14 @@ requires live-OS confirmation).
 
 ### workflows + scripts + tests
 
-- **[LOW / confirmed-open] saved-workflow API accepts a whitespace-only name (no trim/reject).**
+- **✅ FIXED (#271). [LOW] saved-workflow API accepts a whitespace-only name (no trim/reject).**
   `app/api/saved-workflows/route.ts:31` (POST) and `app/api/saved-workflows/[id]/route.ts:48`
   (PATCH) only check `!name || typeof name !== "string"`; `lib/saved-workflows.ts:72-83`
   (`createSavedWorkflow`) persists `input.name` verbatim with no `.trim()`. A name like `"   "`
   is a truthy string, so it passes and is stored. The UI `saveGuard` trims before calling, but a
   direct API call (or the persisted display name) keeps whitespace names. (workflows #8.)
 
-- **[LOW / confirmed-open] `createSavedWorkflow` casts the get-after-insert row without a guard.**
+- **✅ FIXED (#271). [LOW] `createSavedWorkflow` casts the get-after-insert row without a guard.**
   `lib/saved-workflows.ts:80-82` —
   `return toSavedWorkflow(queries.getSavedWorkflow(db).get(id) as SavedWorkflowRow);`. The
   re-fetched row is cast straight through with no `if (!row) throw`; `toSavedWorkflow`
@@ -96,7 +98,7 @@ requires live-OS confirmation).
   In practice the row was just inserted in the same synchronous better-sqlite3 call, so it is
   effectively always present (hence LOW). (workflows #9.)
 
-- **[LOW / confirmed-open] "New workflow" and "Load example" discard unsaved edits with no confirmation.**
+- **✅ FIXED (#271). [LOW] "New workflow" and "Load example" discard unsaved edits with no confirmation.**
   `components/views/WorkflowsView/WorkflowBuilder.tsx:851`
   (`onSelect={() => loadDoc(EMPTY_DOC, null)}`) and `:854` (`loadDoc(EXAMPLE_DOC, null)`) call
   `loadDoc` directly with no dirty-check; `loadDoc` immediately `reset()`s the doc, losing
@@ -104,7 +106,7 @@ requires live-OS confirmation).
   `handleImportFile` at :660-668, `handlePasteImport` at :467-475); these two menu items still
   wipe a dirty draft silently. (Residual of workflows #2.)
 
-- **[LOW / likely-open] `PipelineGraph` hardcoded SVG marker id can collide across simultaneous instances.**
+- **✅ FIXED (#271). [LOW] `PipelineGraph` hardcoded SVG marker id can collide across simultaneous instances.**
   `components/views/WorkflowsView/PipelineGraph.tsx:52` (`id="stoa-graph-arrow"`) and `:83`
   (`markerEnd="url(#stoa-graph-arrow)"`). Not a `useId()`-generated value, so two `PipelineGraph`s
   mounted at once (e.g. Custom preview + a RunDetail dependency graph) both define the same id and
@@ -183,7 +185,8 @@ minimap, keyboard pan/zoom/focus, auto-scroll selected node, inline output token
   campaign), leaving only the 13 LOW/MEDIUM items above. Per-group disposition of reported
   findings: **api+platform** 41 fixed/stale → 2 open; **core-backend** 17 fixed/stale → 3 open;
   **dispatch+data+providers** 36 fixed/stale → 3 open; **ui+hooks** 18 fixed/stale → 0 open;
-  **workflows+scripts+tests** 29 fixed/stale → 5 open. Notable confirmed fixes: `/api/exec`
+  **workflows+scripts+tests** 29 fixed/stale → 1 open (4 more fixed in #271: the
+  unsaved-edit guard, whitespace-name reject, get-after-insert guard, PipelineGraph marker id). Notable confirmed fixes: `/api/exec`
   deleted; the central `lib/api-security.ts` hardening module (loopback-pinned `looksLocal` via
   server-injected `x-stoa-remote-addr`, Windows-safe `tokenizeCommand`, connection-IP rate limit,
   SHA-pinned auto-merge / manual-merge refusal of unpinned gated merges, projectId path
