@@ -26,9 +26,14 @@ export const paneCommandStore = proxy<{
   request: null,
 });
 
+// Strictly-monotonic id so two sends in the SAME millisecond still differ — a
+// Date.now() id could collide on key-repeat and the consumer effect (which keys
+// on `id`) would swallow the second command.
+let nextCommandId = 0;
+
 export const paneCommandActions = {
   send: (command: PaneCommand) => {
-    paneCommandStore.request = { command, id: Date.now() };
+    paneCommandStore.request = { command, id: ++nextCommandId };
   },
   clear: () => {
     paneCommandStore.request = null;

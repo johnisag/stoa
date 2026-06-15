@@ -452,6 +452,25 @@ describe("readySteps", () => {
     ).toEqual(["a", "b", "c"]);
   });
 
+  it("tolerates a malformed (non-array) dependsOn without throwing", () => {
+    // Defensive: readySteps now goes through safeDependsOn, so a pre-validated
+    // spec carrying a junk dependsOn doesn't crash the reducer.
+    const run = initRun(
+      spec([
+        step({ id: "a" }),
+        { id: "b", agent: "claude", task: "t", dependsOn: "nope" } as never,
+      ]),
+      { id: "r", now: NOW }
+    );
+    expect(() => readySteps(run)).not.toThrow();
+    // 'a' (real root) is ready; 'b' with junk deps resolves to no deps → ready too.
+    expect(
+      readySteps(run)
+        .map((s) => s.id)
+        .sort()
+    ).toEqual(["a", "b"]);
+  });
+
   it("does not return a step whose dep hasn't succeeded yet", () => {
     let run = initRun(
       spec([step({ id: "a" }), step({ id: "b", dependsOn: ["a"] })]),

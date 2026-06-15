@@ -184,7 +184,13 @@ export function docFromSpec(spec: PipelineSpec): BuilderDoc {
     nodes: (spec.steps ?? []).map((step) => {
       const p = placed.get(step.id);
       return {
-        step,
+        // Clone the step (incl. its dependsOn array) so the doc never aliases the
+        // source spec's objects — every op must return a fully independent doc,
+        // or a later in-place tweak could mutate the source / a prior undo frame.
+        step: {
+          ...step,
+          ...(step.dependsOn ? { dependsOn: [...step.dependsOn] } : {}),
+        },
         x: CANVAS.PAD + (p?.level ?? 0) * CANVAS.COL_W,
         y: CANVAS.PAD + (p?.row ?? 0) * CANVAS.ROW_H,
       };
@@ -234,7 +240,6 @@ export function docFromImportedJson(text: string): BuilderDoc | null {
  * rewritten to match.
  */
 export function dedupeStepIds(doc: BuilderDoc): BuilderDoc {
-  const renames = new Map<string, string>();
   const nodes: BuilderNode[] = [];
   for (const n of doc.nodes) {
     let id = n.step.id;
@@ -243,26 +248,15 @@ export function dedupeStepIds(doc: BuilderDoc): BuilderDoc {
       doc.notes.some((note) => note.id === id)
     ) {
       id = uniqueStepId({ ...doc, nodes }, id);
-      renames.set(n.step.id, id);
     }
     nodes.push({ ...n, step: { ...n.step, id } });
   }
-  const seen = new Set(nodes.map((n) => n.step.id));
-  return {
-    ...doc,
-    nodes: nodes.map((n) => {
-      if (!n.step.dependsOn) return n;
-      return {
-        ...n,
-        step: {
-          ...n.step,
-          dependsOn: n.step.dependsOn.map((d) =>
-            seen.has(d) ? d : (renames.get(d) ?? d)
-          ),
-        },
-      };
-    }),
-  };
+  // A `dependsOn` referencing a duplicated id binds to the FIRST occurrence (the
+  // one that KEPT the id); the later duplicates were renamed and the original id
+  // is ambiguous, so there is no meaningful edge to rewrite. (The previous
+  // `renames` rewrite was dead code — the first occurrence always stays in the
+  // id set, so every original dep id already resolves to it.)
+  return { ...doc, nodes };
 }
 
 /** A fresh step id not already used by any node step or note. */

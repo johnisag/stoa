@@ -138,10 +138,17 @@ function parseRelativeReset(text: string, nowMs: number): number | null {
 // occurrence of that clock time at/after now (so a "3 PM" when it's already 4 PM
 // means tomorrow). Date math is in the host local zone (the agent's clock).
 function parseAbsoluteReset(text: string, nowMs: number): number | null {
+  // The bare `at HH:MM` fallback fires ONLY when the text actually mentions a
+  // reset/retry — otherwise an unrelated clock time in the window (a log
+  // timestamp, an ETA) would hijack resetAt. Fail closed (prefer null) over a
+  // wrong resume time.
+  const resetCued =
+    /\b(?:try again|resets?|available again|come back|back)\b/i.test(text);
   const m =
     /\b(?:try again|resets?|available again|back)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(
       text
-    ) || /\bat\s+(\d{1,2}):(\d{2})\s*(am|pm)?\b/i.exec(text);
+    ) ||
+    (resetCued ? /\bat\s+(\d{1,2}):(\d{2})\s*(am|pm)?\b/i.exec(text) : null);
   if (!m) return null;
   let hour = Number(m[1]);
   const minute = m[2] != null ? Number(m[2]) : 0;

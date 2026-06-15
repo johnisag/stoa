@@ -16,9 +16,12 @@ export function parseEnv(text: string): Record<string, string> {
     const key = line.slice(0, eq).trim();
     if (!key) continue;
     let val = line.slice(eq + 1).trim();
+    // Strip matching surrounding quotes — but only a real PAIR (length >= 2), so a
+    // lone quote char as the value isn't turned into "" (matches scripts/stoa).
     if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
+      val.length >= 2 &&
+      ((val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'")))
     ) {
       val = val.slice(1, -1);
     }

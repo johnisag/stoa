@@ -280,22 +280,180 @@ function NewIssueForm({ repos }: { repos: DispatchRepo[] }) {
   );
 }
 
+/** One scheduled row. Owns its OWN dispatch mutation so its busy/spinner state is
+ * per-row — a single shared mutation across rows reflects only the most recent
+ * action, lighting the wrong row's spinner under concurrent actions. */
+function ScheduledRow({ d, repo }: { d: IssueDispatch; repo?: DispatchRepo }) {
+  const action = useDispatchAction();
+  const cancel = () =>
+    action.mutate(
+      { id: d.id, action: "cancel" },
+      {
+        onSuccess: () => toast.success("Cancelled"),
+        onError: (e) => toast.error((e as Error).message),
+      }
+    );
+  return (
+    <div className="hover:bg-muted/40 flex items-center gap-3 rounded-md border border-dashed px-3 py-2">
+      <Clock className="text-muted-foreground h-4 w-4 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span
+            className="truncate text-sm font-medium"
+            title={d.issue_title ?? undefined}
+          >
+            {taskLabel(d)}
+          </span>
+          {isLocalTask(d) && (
+            <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium">
+              local
+            </span>
+          )}
+        </div>
+        <div className="text-muted-foreground mt-0.5 text-xs">
+          {repo?.repo_slug ?? "unknown repo"}
+          {d.scheduled_at && (
+            <>
+              {" "}
+              &middot;{" "}
+              {new Date(d.scheduled_at).toLocaleString(undefined, {
+                timeZoneName: "short",
+              })}
+            </>
+          )}
+          {recurrenceLabel(d.recurrence) && (
+            <> &middot; {recurrenceLabel(d.recurrence)}</>
+          )}
+        </div>
+      </div>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label="Cancel scheduled"
+        disabled={action.isPending}
+        onClick={cancel}
+      >
+        <X className="text-muted-foreground hover:text-destructive h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
+
+/** One pending candidate row. Owns its OWN dispatch mutation (per-row busy). */
+function PendingRow({ d, repo }: { d: IssueDispatch; repo?: DispatchRepo }) {
+  const action = useDispatchAction();
+  const busy = action.isPending;
+  const act = (a: "approve" | "cancel") =>
+    action.mutate(
+      { id: d.id, action: a },
+      {
+        onSuccess: () =>
+          toast.success(a === "approve" ? "Dispatched" : "Cancelled"),
+        onError: (e) => toast.error((e as Error).message),
+      }
+    );
+  return (
+    <div className="hover:bg-muted/40 flex items-center gap-3 rounded-md border px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          {repo && (
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[11px] font-medium",
+                AGENT_BADGE[repo.agent_type]
+              )}
+            >
+              {repo.agent_type}
+            </span>
+          )}
+          {isLocalTask(d) ? (
+            <>
+              <span
+                className="truncate text-sm font-medium"
+                title={d.issue_title ?? undefined}
+              >
+                {taskLabel(d)}
+              </span>
+              <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium">
+                local
+              </span>
+              {d.maintainer_proposed === 1 && (
+                <span
+                  className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[11px] font-medium text-violet-600 dark:text-violet-300"
+                  title="Proposed by the autonomous maintainer survey — review the rationale, then Approve or Cancel."
+                >
+                  maintainer
+                </span>
+              )}
+            </>
+          ) : (
+            <>
+              <a
+                href={d.issue_url ?? (repo ? repoUrl(repo.repo_slug) : "#")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="truncate text-sm font-medium hover:underline"
+                title={d.issue_title ?? undefined}
+              >
+                {taskLabel(d)}
+              </a>
+              <ExternalLink className="text-muted-foreground h-3 w-3 shrink-0" />
+            </>
+          )}
+        </div>
+        <div className="text-muted-foreground mt-0.5 text-xs">
+          {repo?.repo_slug ?? "unknown repo"}
+          {d.issue_created_at && (
+            <> &middot; raised {timeAgo(d.issue_created_at)}</>
+          )}
+        </div>
+        {maintainerWhy(d) && (
+          <div className="text-muted-foreground mt-0.5 line-clamp-2 text-xs break-words italic">
+            why: {maintainerWhy(d)}
+          </div>
+        )}
+        {d.maintainer_proposed === 1 && d.task_body && (
+          <details className="mt-0.5">
+            <summary className="text-muted-foreground hover:text-foreground cursor-pointer text-xs select-none">
+              view brief
+            </summary>
+            <pre className="text-muted-foreground bg-muted/50 mt-1 max-h-48 overflow-auto rounded p-2 text-[11px] whitespace-pre-wrap">
+              {d.task_body}
+            </pre>
+          </details>
+        )}
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        onClick={() => act("approve")}
+      >
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Check className="h-4 w-4" />
+        )}
+        Approve
+      </Button>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label="Cancel candidate"
+        disabled={busy}
+        onClick={() => act("cancel")}
+      >
+        <X className="text-muted-foreground hover:text-destructive h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
+
 export function Backlog({ open }: { open: boolean }) {
   const { data: pending = [], isLoading, isError } = usePendingQuery(open);
   const { data: repos = [] } = useDispatchReposQuery(open);
   const { data: scheduled = [] } = useScheduledQuery(open);
-  const action = useDispatchAction();
   const repoById = new Map<string, DispatchRepo>(repos.map((r) => [r.id, r]));
-
-  const dispatchAction = (id: string, act: "approve" | "cancel") =>
-    action.mutate(
-      { id, action: act },
-      {
-        onSuccess: () =>
-          toast.success(act === "approve" ? "Dispatched" : "Cancelled"),
-        onError: (e) => toast.error((e as Error).message),
-      }
-    );
 
   return (
     <div className="space-y-3">
@@ -307,57 +465,9 @@ export function Backlog({ open }: { open: boolean }) {
             {scheduled.length} scheduled — each dispatches automatically within
             ~1 min of its time.
           </p>
-          {scheduled.map((d: IssueDispatch) => {
-            const repo = repoById.get(d.repo_id);
-            const busy = action.isPending && action.variables?.id === d.id;
-            return (
-              <div
-                key={d.id}
-                className="hover:bg-muted/40 flex items-center gap-3 rounded-md border border-dashed px-3 py-2"
-              >
-                <Clock className="text-muted-foreground h-4 w-4 shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="truncate text-sm font-medium"
-                      title={d.issue_title ?? undefined}
-                    >
-                      {taskLabel(d)}
-                    </span>
-                    {isLocalTask(d) && (
-                      <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium">
-                        local
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-muted-foreground mt-0.5 text-xs">
-                    {repo?.repo_slug ?? "unknown repo"}
-                    {d.scheduled_at && (
-                      <>
-                        {" "}
-                        &middot;{" "}
-                        {new Date(d.scheduled_at).toLocaleString(undefined, {
-                          timeZoneName: "short",
-                        })}
-                      </>
-                    )}
-                    {recurrenceLabel(d.recurrence) && (
-                      <> &middot; {recurrenceLabel(d.recurrence)}</>
-                    )}
-                  </div>
-                </div>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Cancel scheduled"
-                  disabled={busy}
-                  onClick={() => dispatchAction(d.id, "cancel")}
-                >
-                  <X className="text-muted-foreground hover:text-destructive h-4 w-4" />
-                </Button>
-              </div>
-            );
-          })}
+          {scheduled.map((d: IssueDispatch) => (
+            <ScheduledRow key={d.id} d={d} repo={repoById.get(d.repo_id)} />
+          ))}
         </div>
       )}
 
@@ -382,114 +492,9 @@ export function Backlog({ open }: { open: boolean }) {
             approval. Approving spawns a worker immediately (it bypasses the
             daily cap); cancelling drops the candidate.
           </p>
-          {pending.map((d: IssueDispatch) => {
-            const repo = repoById.get(d.repo_id);
-            const busy = action.isPending && action.variables?.id === d.id;
-            return (
-              <div
-                key={d.id}
-                className="hover:bg-muted/40 flex items-center gap-3 rounded-md border px-3 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    {repo && (
-                      <span
-                        className={cn(
-                          "rounded px-1.5 py-0.5 text-[11px] font-medium",
-                          AGENT_BADGE[repo.agent_type]
-                        )}
-                      >
-                        {repo.agent_type}
-                      </span>
-                    )}
-                    {isLocalTask(d) ? (
-                      <>
-                        <span
-                          className="truncate text-sm font-medium"
-                          title={d.issue_title ?? undefined}
-                        >
-                          {taskLabel(d)}
-                        </span>
-                        <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium">
-                          local
-                        </span>
-                        {d.maintainer_proposed === 1 && (
-                          <span
-                            className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[11px] font-medium text-violet-600 dark:text-violet-300"
-                            title="Proposed by the autonomous maintainer survey — review the rationale, then Approve or Cancel."
-                          >
-                            maintainer
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <a
-                          href={
-                            d.issue_url ??
-                            (repo ? repoUrl(repo.repo_slug) : "#")
-                          }
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="truncate text-sm font-medium hover:underline"
-                          title={d.issue_title ?? undefined}
-                        >
-                          {taskLabel(d)}
-                        </a>
-                        <ExternalLink className="text-muted-foreground h-3 w-3 shrink-0" />
-                      </>
-                    )}
-                  </div>
-                  <div className="text-muted-foreground mt-0.5 text-xs">
-                    {repo?.repo_slug ?? "unknown repo"}
-                    {d.issue_created_at && (
-                      <> &middot; raised {timeAgo(d.issue_created_at)}</>
-                    )}
-                  </div>
-                  {/* The maintainer's rationale + full brief — shown at the approve
-                      point so the operator sees WHY and exactly WHAT they'd spawn a
-                      worker for (the body is agent-authored; never approve unseen). */}
-                  {maintainerWhy(d) && (
-                    <div className="text-muted-foreground mt-0.5 line-clamp-2 text-xs break-words italic">
-                      why: {maintainerWhy(d)}
-                    </div>
-                  )}
-                  {d.maintainer_proposed === 1 && d.task_body && (
-                    <details className="mt-0.5">
-                      <summary className="text-muted-foreground hover:text-foreground cursor-pointer text-xs select-none">
-                        view brief
-                      </summary>
-                      <pre className="text-muted-foreground bg-muted/50 mt-1 max-h-48 overflow-auto rounded p-2 text-[11px] whitespace-pre-wrap">
-                        {d.task_body}
-                      </pre>
-                    </details>
-                  )}
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => dispatchAction(d.id, "approve")}
-                >
-                  {busy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Check className="h-4 w-4" />
-                  )}
-                  Approve
-                </Button>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Cancel candidate"
-                  disabled={busy}
-                  onClick={() => dispatchAction(d.id, "cancel")}
-                >
-                  <X className="text-muted-foreground hover:text-destructive h-4 w-4" />
-                </Button>
-              </div>
-            );
-          })}
+          {pending.map((d: IssueDispatch) => (
+            <PendingRow key={d.id} d={d} repo={repoById.get(d.repo_id)} />
+          ))}
         </div>
       )}
     </div>

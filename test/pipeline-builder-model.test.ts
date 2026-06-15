@@ -79,6 +79,16 @@ describe("docFromSpec / docToSpec", () => {
     expect(docToSpec(docFromSpec(original))).toEqual(original);
   });
 
+  it("does not alias the source spec's step objects (immutability)", () => {
+    const original = spec([step({ id: "a", dependsOn: ["x"] })]);
+    const doc = docFromSpec(original);
+    // Mutating the doc's node must not reach back into the source spec.
+    doc.nodes[0].step.id = "mutated";
+    doc.nodes[0].step.dependsOn!.push("y");
+    expect(original.steps[0].id).toBe("a");
+    expect(original.steps[0].dependsOn).toEqual(["x"]);
+  });
+
   it("tolerates a missing name/workingDirectory", () => {
     const doc = docFromSpec({
       steps: [step({ id: "a" })],

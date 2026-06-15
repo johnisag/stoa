@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { getDb, queries, type Session, type Group } from "@/lib/db";
 import { isValidAgentType, type AgentType } from "@/lib/providers";
 import { sessionKey, getProviderDefinition } from "@/lib/providers/registry";
-import { resolveModelForAgent } from "@/lib/model-catalog";
+import { resolveModelForAgent, isSafeModel } from "@/lib/model-catalog";
 import { createWorktree, isStoaWorktree } from "@/lib/worktrees";
 import { createWorkspace } from "@/lib/multi-repo-worktree";
 import { setupWorktree, type SetupResult } from "@/lib/env-setup";
@@ -177,6 +177,16 @@ export async function POST(request: NextRequest) {
       (typeof requestedModel === "string" && requestedModel.trim()) ||
         project?.default_model
     );
+
+    // Clamp at the write boundary: a free-text-agent model is passed through
+    // verbatim and rides into the spawn. Reject a non-empty, shell-unsafe model
+    // (an empty/default model is fine — the agent uses its own default).
+    if (model && !isSafeModel(model)) {
+      return NextResponse.json(
+        { error: `Invalid model: ${model}` },
+        { status: 400 }
+      );
+    }
 
     // Sanitize name / groupPath and bound system prompt length.
     const name =

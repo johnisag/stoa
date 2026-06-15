@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveModelForAgent } from "@/lib/model-catalog";
+import { resolveModelForAgent, isSafeModel } from "@/lib/model-catalog";
 import { isValidAgentType, type AgentType } from "@/lib/providers";
 import { spawnWorker } from "@/lib/orchestration";
 import {
@@ -37,6 +37,15 @@ export async function POST(request: Request) {
     agentType,
     typeof model === "string" ? model.trim() : model
   );
+
+  // Clamp at the write boundary: a free-text-agent model rides into the spawn.
+  // Reject a non-empty, shell-unsafe model (empty/default is fine).
+  if (resolvedModel && !isSafeModel(resolvedModel)) {
+    return NextResponse.json(
+      { error: `Invalid model: ${resolvedModel}` },
+      { status: 400 }
+    );
+  }
 
   if (!conductorSessionId || !task || !workingDirectory) {
     return NextResponse.json(

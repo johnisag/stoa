@@ -80,9 +80,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             agentType: {
               type: "string",
-              enum: ["claude", "codex", "hermes"],
+              // Derive from the single source of truth (same as run_pipeline's
+              // schema) so kilo/kimi aren't silently unreachable via MCP.
+              enum: SPAWNABLE_AGENTS,
               description:
-                "Which agent to run the worker as: claude (default), codex, or hermes. Lets a conductor delegate to a different agent than itself.",
+                "Which agent to run the worker as (default claude). Lets a conductor delegate to a different agent than itself.",
               default: "claude",
             },
             model: {

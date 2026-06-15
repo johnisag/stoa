@@ -379,15 +379,6 @@ app.prepare().then(() => {
       if (pushEnabled) {
         const events = detectPushEvents(lastPushStatusById, curr);
         lastPushStatusById = statusById(curr);
-        // Bounded memory: drop cooldown entries for sessions that are gone (the
-        // sibling lastPushStatusById is fully replaced each tick; this map is not).
-        if (lastPushAt.size) {
-          const liveIds = new Set(curr.map((s) => s.id));
-          for (const key of lastPushAt.keys()) {
-            if (!liveIds.has(key.slice(0, key.lastIndexOf("-"))))
-              lastPushAt.delete(key);
-          }
-        }
         // Fan out to every subscription, throttled per-event. FIRE-AND-FORGET:
         // never await push I/O inside the tick, or a slow/hung endpoint would
         // hold statusTickBusy and stall the live WS status broadcast. The
@@ -448,6 +439,16 @@ app.prepare().then(() => {
         if (!liveIds.has(id)) queueDispatched.delete(id);
       for (const id of [...rateLimitResumed])
         if (!liveIds.has(id)) rateLimitResumed.delete(id);
+      // Prune the push-cooldown map every tick (NOT only while a push subscription
+      // exists) so its `${id}-${kind}` keys can't outlive their sessions after the
+      // last device unsubscribes.
+      if (lastPushAt.size) {
+        for (const key of lastPushAt.keys()) {
+          if (!liveIds.has(key.slice(0, key.lastIndexOf("-")))) {
+            lastPushAt.delete(key);
+          }
+        }
+      }
       for (const s of curr) {
         const next = peekPrompt(s.id);
         if (
@@ -692,18 +693,22 @@ app.prepare().then(() => {
             url: "/",
           }).catch((err) => console.error("budget push failed:", err));
         }
-        for (const id of kill) {
-          const s = sessions.find((x) => x.id === id);
-          if (!s) continue;
-          try {
-            await getSessionBackend().kill(backendKeyForSession(s));
-          } catch (err) {
-            // A failed kill (e.g. daemon hiccup) must not be deduped away — keep
-            // this session at its prior level so the next tick retries the kill.
-            console.error("budget kill failed:", err);
-            nextLevels.set(id, lastBudgetLevels.get(id) ?? "soft");
-          }
-        }
+        // Kill breached sessions CONCURRENTLY — a slow daemon kill must not
+        // serialize behind each other and delay stopping the other sessions'
+        // burn. Each kill catches independently; a failure keeps that session at
+        // its prior level so the next tick retries it.
+        await Promise.all(
+          kill.map(async (id) => {
+            const s = sessions.find((x) => x.id === id);
+            if (!s) return;
+            try {
+              await getSessionBackend().kill(backendKeyForSession(s));
+            } catch (err) {
+              console.error("budget kill failed:", err);
+              nextLevels.set(id, lastBudgetLevels.get(id) ?? "soft");
+            }
+          })
+        );
         lastBudgetLevels = nextLevels;
       } catch (err) {
         console.error("budget tick failed:", err);

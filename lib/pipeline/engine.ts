@@ -471,7 +471,9 @@ export function readySteps(run: PipelineRun): PipelineStep[] {
   for (const step of run.spec.steps) {
     const state = run.steps[step.id];
     if (!state || state.status !== "pending") continue;
-    const deps = step.dependsOn ?? [];
+    // Use safeDependsOn (not raw step.dependsOn) so a malformed/non-array deps on
+    // a pre-validated spec can't throw here or wedge the step.
+    const deps = safeDependsOn(step);
     const allDepsSucceeded = deps.every(
       (d) => run.steps[d]?.status === "succeeded"
     );
@@ -589,7 +591,7 @@ function cascadeSkip(
       ) {
         continue;
       }
-      const blocked = (step.dependsOn ?? []).some((d) => {
+      const blocked = safeDependsOn(step).some((d) => {
         const ds = steps[d]?.status;
         return ds === "failed" || ds === "skipped";
       });

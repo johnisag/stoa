@@ -30,9 +30,11 @@ function withInitLock<T>(fn: () => T): T {
     while (Date.now() < waitUntil) {}
   }
 
-  // Acquire lock
+  // Acquire lock EXCLUSIVELY: flag 'wx' (O_EXCL) fails if the file already
+  // exists, so a racing process actually loses the race and retries — the default
+  // 'w' flag overwrites, making this mutual-exclusion (and the retry below) a no-op.
   try {
-    fs.writeFileSync(LOCK_PATH, String(process.pid));
+    fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
   } catch {
     // Another process got it first, wait and retry
     return withInitLock(fn);
