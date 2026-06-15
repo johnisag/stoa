@@ -1,10 +1,14 @@
 "use client";
 
-import { ArrowLeft, Loader2, Terminal } from "lucide-react";
+import { useMemo } from "react";
+import { ArrowLeft, GitBranch, Loader2, Terminal } from "lucide-react";
 import { usePollRun } from "@/data/pipelines/queries";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { StepStatus } from "@/lib/pipeline/types";
+import type { Session } from "@/lib/db";
+import { describeStepWorktree } from "@/lib/pipeline/worktree-display";
+import { baseName } from "@/lib/path-display";
 import { PipelineGraph } from "./PipelineGraph";
 import {
   AGENT_BADGE,
@@ -32,6 +36,7 @@ export function RunDetail({
   open,
   onBack,
   onOpenSession,
+  sessions,
 }: {
   runId: string;
   open: boolean;
@@ -42,9 +47,21 @@ export function RunDetail({
    * in contexts that can't drive a terminal, where the affordance is hidden.
    */
   onOpenSession?: (sessionId: string) => void;
+  /**
+   * All Stoa sessions — used to surface each step's git worktree (branch +
+   * path) by joining the step's worker sessionId to its session row. Optional;
+   * the worktree line is simply omitted when absent.
+   */
+  sessions?: Session[];
 }) {
   const { data: run, isError } = usePollRun(runId, open);
   const meta = run ? RUN_STATUS_META[run.status] : null;
+
+  // sessionId → session, so each step row can show its worker's worktree.
+  const sessionsById = useMemo(
+    () => new Map((sessions ?? []).map((s) => [s.id, s])),
+    [sessions]
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -115,6 +132,14 @@ export function RunDetail({
               const st = run.steps[step.id];
               const sm = STEP_STATUS_META[st?.status ?? "pending"];
               const stepSessionId = st?.sessionId ?? null;
+              const worker = stepSessionId
+                ? sessionsById.get(stepSessionId)
+                : undefined;
+              const worktree = describeStepWorktree({
+                worktreePath: worker?.worktree_path,
+                branchName: worker?.branch_name,
+                worktreePolicy: step.worktreePolicy,
+              });
               return (
                 <li
                   key={step.id}
@@ -168,6 +193,29 @@ export function RunDetail({
                       {st.endedAt == null ? " elapsed" : ""}
                     </span>
                   )}
+                  {/* The step's git worktree — its on-disk isolation. An "own"
+                      step shows its branch + worktree folder; a shared step
+                      notes it runs in the one shared workflow worktree. */}
+                  {worktree &&
+                    (worktree.kind === "own" ? (
+                      <span
+                        className="text-muted-foreground inline-flex w-fit items-center gap-1 text-[11px]"
+                        title={worktree.path}
+                      >
+                        <GitBranch className="h-3 w-3 flex-shrink-0" />
+                        <span className="truncate">
+                          {worktree.branch ?? "(detached)"}
+                        </span>
+                        <span className="opacity-70">
+                          · {baseName(worktree.path)}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground inline-flex w-fit items-center gap-1 text-[11px]">
+                        <GitBranch className="h-3 w-3 flex-shrink-0" />
+                        shared workflow worktree
+                      </span>
+                    ))}
                   {/* Hand off to the step's spawned worker session — the only
                       produced artifact a step exposes. Shown once a worker
                       exists (sessionId set) and a jump handler is wired. */}

@@ -213,6 +213,7 @@ export function WorkflowsView({
             open={true}
             onBack={() => setOpenRunId(null)}
             onOpenSession={onOpenSessionInNewTab ?? onOpenSession}
+            sessions={sessions}
           />
         ) : (
           <RunsList open={true} onOpen={setOpenRunId} />
