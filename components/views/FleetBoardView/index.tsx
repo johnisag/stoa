@@ -153,9 +153,11 @@ export function FleetBoardView({
         ) : (
           // Mobile: lanes stack vertically (each full-width), no horizontal scroll
           // (it fights the swipe-to-open sidebar). Desktop: sm:w-max makes the row
-          // wider than the dialog so the OUTER overflow-auto scrolls both axes —
+          // wider than the pane so the OUTER overflow-auto scrolls both axes —
           // which keeps the sticky lane headers pinned (an inner overflow-x-auto
-          // would break them).
+          // would break them). NOTE: sm: keys off VIEWPORT width, so a narrow split
+          // pane on a wide screen still gets columns + horizontal scroll (not the
+          // stacked layout) — a container-query limitation; the scroll still works.
           <div className="flex flex-col gap-4 sm:w-max sm:flex-row sm:gap-3">
             {LANES.map((lane) => {
               const all = lanes[lane.id];
