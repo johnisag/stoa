@@ -8,7 +8,11 @@
  * structured spawn params the pty attach protocol needs from a Session.
  */
 
-import { getProvider, buildAgentArgs } from "@/lib/providers";
+import {
+  getProvider,
+  buildAgentArgs,
+  parseMcpLaunchArgs,
+} from "@/lib/providers";
 import { resolveModelForAgent } from "@/lib/model-catalog";
 import type { Session } from "@/lib/db";
 
@@ -57,6 +61,11 @@ export function buildSpawnForSession(
     // Resolve so a legacy row holding a foreign/non-catalog model can't reach
     // `--model <bogus>` on a fresh respawn (every other spawn site resolves too).
     model: resolveModelForAgent(session.agent_type || "claude", session.model),
+    // Replay the conductor's persisted MCP wiring (e.g. Codex's
+    // `-c mcp_servers.stoa.*`) — the pty server treats spawn as create-if-missing,
+    // so without this a Codex conductor respawned on re-attach (after a server
+    // restart) silently loses its stoa MCP server. Mirrors the server spawn path.
+    extraArgs: parseMcpLaunchArgs(session.mcp_launch_args),
     initialPrompt: opts?.initialPrompt,
   });
   return { binary, args, cwd };
