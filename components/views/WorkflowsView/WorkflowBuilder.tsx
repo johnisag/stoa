@@ -268,6 +268,35 @@ export function WorkflowBuilder({
     toast.success("Loaded earlier version");
   }
 
+  // "New workflow" / "Load example" replace the canvas — guard unsaved work the
+  // same way loadSnapshot / import do (confirm-if-dirty), so a stray click can't
+  // silently wipe an in-progress draft.
+  async function startBlankWorkflow() {
+    if (
+      dirty &&
+      !(await confirm({
+        title: "Start a new workflow?",
+        description: "Unsaved changes in the current draft will be lost.",
+      }))
+    ) {
+      return;
+    }
+    loadDoc(EMPTY_DOC, null);
+  }
+
+  async function loadExampleWorkflow() {
+    if (
+      dirty &&
+      !(await confirm({
+        title: "Load the example?",
+        description: "Unsaved changes in the current draft will be lost.",
+      }))
+    ) {
+      return;
+    }
+    loadDoc(EXAMPLE_DOC, null);
+  }
+
   function clearSelection() {
     setSelectedIds(new Set());
     setPrimaryId(null);
@@ -1009,10 +1038,10 @@ export function WorkflowBuilder({
               >
                 <Wand2 className="mr-2 h-3.5 w-3.5" /> Tidy layout
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => loadDoc(EMPTY_DOC, null)}>
+              <DropdownMenuItem onSelect={startBlankWorkflow}>
                 <Plus className="mr-2 h-3.5 w-3.5" /> New workflow
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => loadDoc(EXAMPLE_DOC, null)}>
+              <DropdownMenuItem onSelect={loadExampleWorkflow}>
                 <FileJson className="mr-2 h-3.5 w-3.5" /> Load example
               </DropdownMenuItem>
               <DropdownMenuSeparator />

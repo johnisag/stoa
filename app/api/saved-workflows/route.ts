@@ -28,7 +28,10 @@ export async function POST(request: NextRequest) {
   }
   try {
     const { name, doc } = (body ?? {}) as { name?: unknown; doc?: unknown };
-    if (!name || typeof name !== "string") {
+    // Reject a missing OR whitespace-only name (a truthy "   " would otherwise
+    // pass and persist as a blank-looking workflow).
+    const trimmedName = typeof name === "string" ? name.trim() : "";
+    if (!trimmedName) {
       return NextResponse.json({ error: "name is required" }, { status: 400 });
     }
     // Validate + sanitize the doc at the boundary — never trust the client's shape.
@@ -36,7 +39,7 @@ export async function POST(request: NextRequest) {
     if (!parsedDoc) {
       return NextResponse.json({ error: "doc is malformed" }, { status: 400 });
     }
-    const workflow = createSavedWorkflow({ name, doc: parsedDoc });
+    const workflow = createSavedWorkflow({ name: trimmedName, doc: parsedDoc });
     return NextResponse.json({ workflow }, { status: 201 });
   } catch (error) {
     console.error("Error creating saved workflow:", error);

@@ -77,6 +77,23 @@ describe("saved-workflows service", () => {
     expect(got?.doc.nodes[1].step.dependsOn).toEqual(["a"]);
   });
 
+  it("trims a padded name and rejects a whitespace-only one", () => {
+    // A padded name is stored trimmed (not verbatim).
+    const created = createSavedWorkflow({ name: "  Spaced  ", doc: doc() });
+    expect(created.name).toBe("Spaced");
+    expect(getSavedWorkflow(created.id)?.name).toBe("Spaced");
+    // A whitespace-only name is rejected rather than persisted as blank.
+    expect(() => createSavedWorkflow({ name: "   ", doc: doc() })).toThrow(
+      /name is required/i
+    );
+    // update also trims.
+    const up = updateSavedWorkflow(created.id, {
+      name: "  Renamed  ",
+      doc: doc(),
+    });
+    expect(up?.name).toBe("Renamed");
+  });
+
   it("lists newest-first", () => {
     const first = createSavedWorkflow({ name: "first", doc: doc() });
     // Bump updated_at so ordering is deterministic regardless of insert timing.
