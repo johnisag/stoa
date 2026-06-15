@@ -8,12 +8,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockRunAsk = vi.hoisted(() => vi.fn());
-const mockGather = vi.hoisted(() => vi.fn(async () => ""));
 const mockGetAllProjects = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/ask", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ask")>();
-  return { ...actual, runAsk: mockRunAsk, gatherStoaContext: mockGather };
+  return { ...actual, runAsk: mockRunAsk };
 });
 vi.mock("@/lib/projects", () => ({ getAllProjects: mockGetAllProjects }));
 
@@ -60,7 +59,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.STOA_AUDIT = "0"; // audit no-op → no DB
   mockGetAllProjects.mockReturnValue([PROJECT]);
-  mockGather.mockResolvedValue("");
 });
 
 afterEach(() => {
@@ -99,8 +97,10 @@ describe("POST /api/command/generate-workflow", () => {
     expect(j.doc.workingDirectory).toBe(PROJECT.working_directory);
     expect(j.doc.projectId).toBe("proj_1");
     expect(j.project).toEqual({ id: "proj_1", name: "the-grid" });
-    // The generator runs the agent in one-shot mode with a generous timeout.
+    // The generator runs the agent in one-shot mode with a generous timeout
+    // (a fleet design is bigger than a one-line answer).
     expect(mockRunAsk).toHaveBeenCalledTimes(1);
+    expect(mockRunAsk.mock.calls[0][2]).toMatchObject({ timeoutMs: 120_000 });
   });
 
   it("degrades to an answer when the agent replies in prose", async () => {

@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  ASK_PROVIDERS,
-  gatherStoaContext,
-  runAsk,
-  type AskProvider,
-} from "@/lib/ask";
+import { ASK_PROVIDERS, runAsk, type AskProvider } from "@/lib/ask";
 import { getModelOptions } from "@/lib/model-catalog";
 import { getAllProjects } from "@/lib/projects";
 import {
@@ -96,12 +91,13 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const context = await gatherStoaContext();
+    // No fleet context here: a workflow DESIGN is grounded by the goal + project +
+    // role list, not by what the fleet is doing right now — and gatherStoaContext()
+    // does a live capture of every terminal (latency, zero design signal). Skip it.
     const prompt = buildGenerateWorkflowPrompt({
       summary,
       projectName: project.name,
       projectDir: project.working_directory,
-      context,
     });
 
     let reply: string;
@@ -124,8 +120,9 @@ export async function POST(request: NextRequest) {
 
     const parsed = parseAgentReply(reply);
     if (parsed.kind !== "workflow") {
-      // The agent answered in prose (or proposed something else) instead of
-      // designing — surface the prose; never fabricate a canvas.
+      // Not a design: surface the agent's prose (kind "answer") so a clarifying
+      // question reaches the user. The only other case is a stray create_session-
+      // shaped "proposal" in a design context — treat it as a failed design.
       const text =
         parsed.kind === "answer"
           ? parsed.text
