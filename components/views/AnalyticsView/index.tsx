@@ -3,8 +3,8 @@
 /**
  * Analytics / Insight view — the cockpit lens over the audit-event ledger.
  *
- * A self-contained dialog (like DispatchView) with a segmented control across
- * the lenses: Overview · Performance · Behaviour · Intelligence · Trends ·
+ * A pane TAB (a window like a session, not a dialog) with a segmented control
+ * across the lenses: Overview · Performance · Behaviour · Intelligence · Trends ·
  * Issues. All data comes from one /api/analytics report (react-query); charts
  * are dependency-free inline SVG (see primitives.tsx).
  */
@@ -81,6 +81,9 @@ export function AnalyticsView({
 
   return (
     <div className="bg-background flex h-full min-h-0 w-full flex-col gap-0 overflow-hidden">
+      {/* Two-row header (intentional divergence from the 1-row WorkflowsView /
+          FleetBoardView headers): a title/close row, then the wider segmented
+          lens control + window-picker/refresh row that needs its own line. */}
       <div className="flex items-center justify-between gap-2 px-4 pt-2">
         <span className="flex min-w-0 items-center gap-2">
           <BarChart3 className="h-4 w-4 flex-shrink-0" />
@@ -147,7 +150,7 @@ export function AnalyticsView({
           </div>
           <Button
             variant="ghost"
-            size="icon"
+            size="icon-sm"
             aria-label="Refresh"
             title="Refresh"
             onClick={() => refetch()}
@@ -158,7 +161,7 @@ export function AnalyticsView({
           </Button>
           <Button
             variant="ghost"
-            size="icon"
+            size="icon-sm"
             aria-label="How Insight works"
             title="How Insight works"
             aria-pressed={showHelp}
