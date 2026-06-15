@@ -546,6 +546,25 @@ export function buildAgentArgs(
 }
 
 /**
+ * Parse a session's persisted `mcp_launch_args` (a JSON string-array, e.g. Codex's
+ * conductor `-c mcp_servers.stoa.*` wiring) into clean argv tokens for `extraArgs`.
+ * Defensive: a null/absent/malformed/non-array value yields [] so a spawn proceeds
+ * WITHOUT the conductor flags rather than failing. The SINGLE parser — every spawn
+ * site (the server path in app/page.tsx AND buildSpawnForSession's pty re-attach)
+ * must go through this so they can't drift (the bug that lost a Codex conductor's
+ * MCP wiring on re-attach was exactly that drift).
+ */
+export function parseMcpLaunchArgs(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Backslash-escape the chars that stay active inside a double-quoted POSIX shell
  * string (`\ " $ \``). The SINGLE source for double-quote escaping — used by
  * shellQuoteArg below AND by the tmux init-script fallback in app/page.tsx, where

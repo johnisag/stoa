@@ -5,6 +5,7 @@ import {
   isValidAgentType,
   buildAgentArgs,
   shellQuoteArg,
+  parseMcpLaunchArgs,
 } from "@/lib/providers";
 import {
   PROVIDER_IDS,
@@ -19,6 +20,46 @@ import {
 } from "@/lib/providers/registry";
 import { AGENT_OPTIONS } from "@/components/NewSessionDialog/NewSessionDialog.types";
 import { isFreeTextModelAgent, getModelOptions } from "@/lib/model-catalog";
+
+describe("parseMcpLaunchArgs — the single mcp_launch_args parser", () => {
+  it("parses a JSON string-array into clean tokens", () => {
+    const raw = JSON.stringify(["-c", "mcp_servers.stoa.command=stoa"]);
+    expect(parseMcpLaunchArgs(raw)).toEqual([
+      "-c",
+      "mcp_servers.stoa.command=stoa",
+    ]);
+  });
+
+  it("coerces non-string array entries to strings", () => {
+    expect(parseMcpLaunchArgs(JSON.stringify(["-c", 42]))).toEqual([
+      "-c",
+      "42",
+    ]);
+  });
+
+  it("returns [] for null/empty/malformed/non-array (spawn proceeds, no flags)", () => {
+    expect(parseMcpLaunchArgs(null)).toEqual([]);
+    expect(parseMcpLaunchArgs(undefined)).toEqual([]);
+    expect(parseMcpLaunchArgs("")).toEqual([]);
+    expect(parseMcpLaunchArgs("{not json")).toEqual([]);
+    expect(parseMcpLaunchArgs(JSON.stringify({ not: "an array" }))).toEqual([]);
+  });
+
+  it("feeds buildAgentArgs as extraArgs (before the positional prompt)", () => {
+    const extraArgs = parseMcpLaunchArgs(
+      JSON.stringify(["-c", "mcp_servers.stoa.x=y"])
+    );
+    const { args } = buildAgentArgs("codex", {
+      extraArgs,
+      initialPrompt: "do it",
+    });
+    const ci = args.indexOf("-c");
+    expect(ci).toBeGreaterThanOrEqual(0);
+    expect(args[ci + 1]).toBe("mcp_servers.stoa.x=y");
+    // Conductor wiring lands before the positional prompt.
+    expect(ci).toBeLessThan(args.indexOf("do it"));
+  });
+});
 
 describe("Hermes provider wiring", () => {
   it("has the expected registry definition", () => {

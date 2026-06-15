@@ -41,6 +41,7 @@ import {
   shellQuoteArg,
   escapeForDoubleQuotes,
   buildTmuxFlags,
+  parseMcpLaunchArgs,
 } from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
@@ -363,16 +364,9 @@ function HomeContent() {
 
       // Conductor MCP wiring persisted on the session (e.g. Codex's
       // `-c mcp_servers.stoa.*`), replayed verbatim on every spawn. NULL for
-      // non-conductors and file-configured providers (Claude's .mcp.json).
-      let extraArgs: string[] = [];
-      if (session.mcp_launch_args) {
-        try {
-          const parsed = JSON.parse(session.mcp_launch_args);
-          if (Array.isArray(parsed)) extraArgs = parsed.map(String);
-        } catch {
-          // Malformed — spawn without the conductor flags rather than fail.
-        }
-      }
+      // non-conductors and file-configured providers (Claude's .mcp.json). Parsed
+      // via the shared helper so this and buildSpawnForSession can't drift.
+      const extraArgs = parseMcpLaunchArgs(session.mcp_launch_args);
 
       const buildFlagsOptions = {
         sessionId: session.claude_session_id,
