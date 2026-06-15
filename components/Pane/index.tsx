@@ -87,6 +87,13 @@ const DispatchView = dynamic(
     import("@/components/views/DispatchView").then((mod) => mod.DispatchView),
   { ssr: false }
 );
+const VerdictInboxView = dynamic(
+  () =>
+    import("@/components/views/VerdictInboxView").then(
+      (mod) => mod.VerdictInboxView
+    ),
+  { ssr: false }
+);
 
 interface PaneProps {
   paneId: string;
@@ -516,6 +523,16 @@ export const Pane = memo(function Pane({
           <DispatchView
             onOpenWorkflows={onWorkflowsClick}
             onOpenVerdictInbox={onVerdictInboxClick}
+            onOpenFleetBoard={onFleetBoardClick}
+            onClose={() => closeTab(paneId, tab.id)}
+          />
+        );
+      case "verdict-inbox":
+        return (
+          <VerdictInboxView
+            onOpenSession={onOpenSessionInNewTab ?? onSelectSession}
+            onOpenDispatch={onDispatchClick}
+            onOpenWorkflows={onWorkflowsClick}
             onOpenFleetBoard={onFleetBoardClick}
             onClose={() => closeTab(paneId, tab.id)}
           />
