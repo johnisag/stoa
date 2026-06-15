@@ -88,10 +88,13 @@ export async function captureLessons(
   repo: DispatchRepo,
   d: IssueDispatch
 ): Promise<void> {
-  if (d.pr_number == null || !d.worktree_path) return;
+  if (d.pr_number == null) return;
   try {
+    // Read from the STABLE main checkout, not the per-task worktree, which may
+    // have been reclaimed (a gone worktree makes gh's spawn ENOENT, silently
+    // dropping the lesson). Mirrors aggregatePanelVerdict / the merge path.
     const findings = await readReviewerFindings(
-      expandHome(d.worktree_path),
+      expandHome(repo.repo_path),
       d.pr_number
     );
     const db = getDb();

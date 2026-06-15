@@ -4,6 +4,7 @@ import {
   isGitRepo,
   isMainBranch,
   createBranch,
+  isValidBranchName,
   getGitStatus,
   expandPath,
 } from "@/lib/git-status";
@@ -33,6 +34,10 @@ export async function POST(request: NextRequest) {
       { error: "Commit message is required" },
       { status: 400 }
     );
+  }
+
+  if (branchName !== undefined && !isValidBranchName(branchName)) {
+    return NextResponse.json({ error: "Invalid branch name" }, { status: 400 });
   }
 
   const expandedPath = expandPath(rawPath);

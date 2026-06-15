@@ -28,8 +28,13 @@ export function useGlobalKeybindings(
 ): void {
   const { capture = false, stopPropagation = false } = options;
   const onActionRef = useRef(onAction);
+  // Hold `bindings` in a ref too, so a caller passing an inline array (the
+  // docstring says they needn't memoize) doesn't re-bind the window listener on
+  // every render — the effect below depends only on the stable options.
+  const bindingsRef = useRef(bindings);
   useEffect(() => {
     onActionRef.current = onAction;
+    bindingsRef.current = bindings;
   });
 
   useEffect(() => {
@@ -49,7 +54,7 @@ export function useGlobalKeybindings(
             closest?: (s: string) => unknown;
           } | null,
         },
-        bindings,
+        bindingsRef.current,
         isMac
       );
       if (!hit) return;
@@ -59,5 +64,5 @@ export function useGlobalKeybindings(
     };
     window.addEventListener("keydown", handler, capture);
     return () => window.removeEventListener("keydown", handler, capture);
-  }, [bindings, capture, stopPropagation]);
+  }, [capture, stopPropagation]);
 }

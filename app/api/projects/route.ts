@@ -6,6 +6,7 @@ import {
   InvalidModelError,
 } from "@/lib/projects";
 import { parseJsonBody } from "@/lib/api-security";
+import { isValidAgentType, type AgentType } from "@/lib/providers";
 
 // GET /api/projects - List all projects with dev server configs
 export async function GET() {
@@ -55,18 +56,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Validate the agent against the provider registry — an unknown value would be
+  // stored verbatim and later throw in getProviderDefinition / leave the project
+  // on a non-existent provider. (Every other creation path guards the same way.)
+  if (agentType !== undefined && !isValidAgentType(agentType)) {
+    return NextResponse.json(
+      { error: `Invalid agent type: ${agentType}` },
+      { status: 400 }
+    );
+  }
+
   try {
     const project = createProject({
       name,
       workingDirectory,
-      agentType: agentType as
-        | "claude"
-        | "codex"
-        | "hermes"
-        | "kilo"
-        | "kimi"
-        | "shell"
-        | undefined,
+      agentType: agentType as AgentType | undefined,
       defaultModel,
       devServers: devServers as
         | import("@/lib/projects").CreateDevServerOptions[]

@@ -40,6 +40,27 @@ function getConductorId(
   );
 }
 
+/** Require a non-empty string arg, else throw a clear error (handleToolCall's
+ * catch turns it into an "Error: …" response). Prevents `String(undefined)` from
+ * building a request to `/workers/undefined`. */
+export function requireString(
+  args: Record<string, unknown> | undefined,
+  key: string
+): string {
+  const v = args?.[key];
+  if (typeof v !== "string" || !v.trim()) {
+    throw new Error(`${key} is required`);
+  }
+  return v;
+}
+
+/** Coerce a tool's `lines` arg to a bounded positive integer (defaults to 50). */
+export function clampLines(value: unknown): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return 50;
+  return Math.min(n, 10000);
+}
+
 export async function handleToolCall(request: {
   params: { name: string; arguments?: Record<string, unknown> };
 }) {
@@ -135,7 +156,7 @@ export async function handleToolCall(request: {
 
       case "get_worker_output": {
         const result = await apiCall(
-          `/api/orchestrate/workers/${encodeURIComponent(String(args?.workerId))}?lines=${args?.lines || 50}`
+          `/api/orchestrate/workers/${encodeURIComponent(requireString(args, "workerId"))}?lines=${clampLines(args?.lines)}`
         );
         return {
           content: [
@@ -151,7 +172,7 @@ export async function handleToolCall(request: {
 
       case "send_to_worker": {
         const result = await apiCall(
-          `/api/orchestrate/workers/${encodeURIComponent(String(args?.workerId))}`,
+          `/api/orchestrate/workers/${encodeURIComponent(requireString(args, "workerId"))}`,
           {
             method: "POST",
             body: JSON.stringify({
@@ -174,7 +195,7 @@ export async function handleToolCall(request: {
 
       case "complete_worker": {
         const result = await apiCall(
-          `/api/orchestrate/workers/${encodeURIComponent(String(args?.workerId))}`,
+          `/api/orchestrate/workers/${encodeURIComponent(requireString(args, "workerId"))}`,
           {
             method: "POST",
             body: JSON.stringify({ action: "complete" }),
@@ -195,7 +216,7 @@ export async function handleToolCall(request: {
       case "kill_worker": {
         const cleanup = args?.cleanupWorktree ? "?cleanup=true" : "";
         const result = await apiCall(
-          `/api/orchestrate/workers/${encodeURIComponent(String(args?.workerId))}${cleanup}`,
+          `/api/orchestrate/workers/${encodeURIComponent(requireString(args, "workerId"))}${cleanup}`,
           { method: "DELETE" }
         );
         return {

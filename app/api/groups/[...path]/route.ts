@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, queries, type Group } from "@/lib/db";
-import { parseJsonBody } from "@/lib/api-security";
+import { parseJsonBody, sanitizeSessionName } from "@/lib/api-security";
 
 // GET /api/groups/[...path] - Get a single group
 export async function GET(
@@ -45,7 +45,22 @@ export async function PATCH(
   if (!parsed.ok) return parsed.response;
 
   try {
-    const { name, expanded, sort_order } = parsed.data;
+    const { name: rawName, expanded, sort_order } = parsed.data;
+
+    // Sanitize the rename: strip control chars + cap length (a group label is
+    // rendered in the session tree and must not carry ANSI/oversized junk). A
+    // provided-but-empty/all-control name is a 400, not a silent write.
+    let name: string | undefined;
+    if (rawName !== undefined) {
+      const clean = sanitizeSessionName(rawName);
+      if (clean === null) {
+        return NextResponse.json(
+          { error: "Invalid group name" },
+          { status: 400 }
+        );
+      }
+      name = clean;
+    }
 
     // Check if group exists
     const group = queries.getGroup(db).get(path) as Group | undefined;

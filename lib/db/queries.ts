@@ -623,11 +623,20 @@ export const queries = {
     ),
 
   // Daily cap: rows DISPATCHED today (calendar day, UTC) for a repo.
+  // Daily-cap count. A sargable range on dispatched_at (text 'YYYY-MM-DD HH:MM:SS'
+  // in UTC, so it compares correctly against the date strings) instead of wrapping
+  // the column in date() — the latter defeats idx_dispatch_dispatched_at and scans
+  // the repo's whole history every tick. Excludes 'failed' rows so a transient
+  // spawn failure (which leaves dispatched_at set) doesn't burn the day's quota.
   countDispatchesToday: (db: Database.Database) =>
     getStmt(
       db,
       `SELECT COUNT(*) AS n FROM issue_dispatches
-       WHERE repo_id = ? AND dispatched_at IS NOT NULL AND date(dispatched_at) = date('now')`
+       WHERE repo_id = ?
+         AND dispatched_at IS NOT NULL
+         AND status != 'failed'
+         AND dispatched_at >= date('now')
+         AND dispatched_at < date('now', '+1 day')`
     ),
 
   // Concurrency cap: workers still actively coding (status 'dispatched'). Once a

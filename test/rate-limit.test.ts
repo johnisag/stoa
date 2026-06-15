@@ -144,6 +144,17 @@ describe("parseResetTime — absolute forms", () => {
     const got = parseResetTime("try again at 3pm", NOW)!;
     expect(new Date(got).getHours()).toBe(15);
   });
+
+  it("ignores a bare 'at HH:MM' with no reset cue (no hijack by a stray timestamp)", () => {
+    // Regression: an unrelated clock time must NOT pin resetAt.
+    expect(
+      parseResetTime("job started at 14:30 and is running", NOW)
+    ).toBeNull();
+    // But a reset-cued line elsewhere in the text still allows the colon form.
+    const got = parseResetTime("usage limit reached. resets — at 14:30", NOW)!;
+    expect(new Date(got).getHours()).toBe(14);
+    expect(new Date(got).getMinutes()).toBe(30);
+  });
 });
 
 describe("parseResetTime — fail-closed", () => {

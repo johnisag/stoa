@@ -75,6 +75,38 @@ describe("StreamParser", () => {
     expect(events).toHaveLength(1);
   });
 
+  it("emits tool_start for tool_use blocks inside an assistant message", () => {
+    const parser = new StreamParser("s1");
+    const events: Array<{ type: string; data?: Record<string, unknown> }> = [];
+    parser.on("event", (e) => events.push(e));
+    parser.write(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "running a command" },
+            {
+              type: "tool_use",
+              id: "t1",
+              name: "Bash",
+              input: { command: "ls" },
+            },
+          ],
+        },
+      }) + "\n"
+    );
+    parser.end();
+    const types = events.map((e) => e.type);
+    expect(types).toContain("text");
+    expect(types).toContain("tool_start");
+    const tool = events.find((e) => e.type === "tool_start")!;
+    expect(tool.data).toMatchObject({
+      toolName: "Bash",
+      input: { command: "ls" },
+    });
+  });
+
   it("does not crash on a legacy message missing content", () => {
     const parser = new StreamParser("s1");
     const events: unknown[] = [];

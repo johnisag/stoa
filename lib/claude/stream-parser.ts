@@ -7,6 +7,7 @@ import type {
   StreamMessageResult,
   ClientEvent,
   TextContent,
+  ToolUseContent,
 } from "./types";
 
 export class StreamParser extends EventEmitter {
@@ -62,8 +63,9 @@ export class StreamParser extends EventEmitter {
   private parseLine(line: string): void {
     try {
       const message: StreamMessage = JSON.parse(line);
-      const event = this.transformToClientEvent(message);
-      if (event) {
+      // One message can yield MULTIPLE client events — an assistant message can
+      // carry both text and in-line tool_use blocks.
+      for (const event of this.transformToClientEvent(message)) {
         this.emit("event", event);
       }
     } catch (err) {
@@ -74,7 +76,7 @@ export class StreamParser extends EventEmitter {
 
   static readonly MAX_BUFFER = 4 * 1024 * 1024; // 4 MiB
 
-  private transformToClientEvent(message: StreamMessage): ClientEvent | null {
+  private transformToClientEvent(message: StreamMessage): ClientEvent[] {
     const timestamp = new Date().toISOString();
 
     switch (message.type) {
@@ -82,28 +84,34 @@ export class StreamParser extends EventEmitter {
       case "system": {
         const sysMsg = message as StreamMessageSystem;
         if (sysMsg.subtype === "init") {
-          return {
-            type: "init",
-            sessionId: this.sessionId,
-            timestamp,
-            data: { claudeSessionId: sysMsg.session_id || "" },
-          };
+          return [
+            {
+              type: "init",
+              sessionId: this.sessionId,
+              timestamp,
+              data: { claudeSessionId: sysMsg.session_id || "" },
+            },
+          ];
         }
-        return null;
+        return [];
       }
 
-      // Handle assistant message (actual Claude response)
+      // Handle assistant message (actual Claude response). Claude emits tool calls
+      // as `tool_use` blocks INSIDE the content array (not as top-level messages),
+      // so surface BOTH the text and a tool_start per tool_use block — otherwise
+      // all tool activity is invisible to clients.
       case "assistant": {
         const assistantMsg = message as StreamMessageAssistant;
         const msg = assistantMsg.message;
-        if (!msg?.content) return null;
+        if (!msg?.content) return [];
+
+        const events: ClientEvent[] = [];
 
         const textBlocks = msg.content
           .filter((c) => c.type === "text" && c.text)
           .map((c) => c.text || "");
-
         if (textBlocks.length > 0) {
-          return {
+          events.push({
             type: "text",
             sessionId: this.sessionId,
             timestamp,
@@ -114,15 +122,28 @@ export class StreamParser extends EventEmitter {
                 (c): c is TextContent => c.type === "text" && !!c.text
               ),
             },
-          };
+          });
         }
-        return null;
+
+        for (const c of msg.content) {
+          if (c.type === "tool_use") {
+            const tool = c as unknown as ToolUseContent;
+            events.push({
+              type: "tool_start",
+              sessionId: this.sessionId,
+              timestamp,
+              data: { toolName: tool.name, input: tool.input },
+            });
+          }
+        }
+
+        return events;
       }
 
       // Legacy message format (if used)
       case "message": {
         const content = (message as StreamMessageContent).content;
-        if (!content) return null;
+        if (!content) return [];
 
         const textBlocks = content
           .filter(
@@ -132,69 +153,78 @@ export class StreamParser extends EventEmitter {
           .map((c) => c.text);
 
         if (textBlocks.length > 0) {
-          return {
-            type: "text",
-            sessionId: this.sessionId,
-            timestamp,
-            data: {
-              role: (message as StreamMessageContent).role,
-              text: textBlocks.join(""),
-              content,
+          return [
+            {
+              type: "text",
+              sessionId: this.sessionId,
+              timestamp,
+              data: {
+                role: (message as StreamMessageContent).role,
+                text: textBlocks.join(""),
+                content,
+              },
             },
-          };
+          ];
         }
-        return null;
+        return [];
       }
 
       case "tool_use":
-        return {
-          type: "tool_start",
-          sessionId: this.sessionId,
-          timestamp,
-          data: {
-            toolName: message.tool_name,
-            input: message.tool_input,
+        return [
+          {
+            type: "tool_start",
+            sessionId: this.sessionId,
+            timestamp,
+            data: {
+              toolName: message.tool_name,
+              input: message.tool_input,
+            },
           },
-        };
+        ];
 
       case "tool_result":
-        return {
-          type: "tool_end",
-          sessionId: this.sessionId,
-          timestamp,
-          data: {
-            toolName: message.tool_name,
-            output: message.output,
-            status: message.status,
+        return [
+          {
+            type: "tool_end",
+            sessionId: this.sessionId,
+            timestamp,
+            data: {
+              toolName: message.tool_name,
+              output: message.output,
+              status: message.status,
+            },
           },
-        };
+        ];
 
       case "result": {
         const resultMsg = message as StreamMessageResult;
         if (resultMsg.subtype === "success" || resultMsg.status === "success") {
-          return {
-            type: "complete",
-            sessionId: this.sessionId,
-            timestamp,
-            data: {
-              durationMs: resultMsg.duration_ms,
-              output: resultMsg.result || resultMsg.output,
+          return [
+            {
+              type: "complete",
+              sessionId: this.sessionId,
+              timestamp,
+              data: {
+                durationMs: resultMsg.duration_ms,
+                output: resultMsg.result || resultMsg.output,
+              },
             },
-          };
-        } else {
-          return {
+          ];
+        }
+        return [
+          {
             type: "error",
             sessionId: this.sessionId,
             timestamp,
             data: {
               error: resultMsg.error || "Unknown error",
             },
-          };
-        }
+          },
+        ];
       }
 
       default:
-        return null;
+        return [];
     }
   }
 }

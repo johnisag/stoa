@@ -416,7 +416,27 @@ export function isMainBranch(workingDir: string): boolean {
 /**
  * Create a new branch and switch to it
  */
+/**
+ * Conservative git branch-name validation. Rejects an option-shaped name (leading
+ * `-`, which `git checkout -b` would read as a flag), whitespace/control chars,
+ * `..`, a trailing `/` or `.lock`, and git's forbidden chars (`~^:?*[` + backslash).
+ * Pure — unit-testable.
+ */
+export function isValidBranchName(name: string): boolean {
+  if (!name || name.startsWith("-")) return false;
+  if (name.includes("..") || name.endsWith("/") || name.endsWith(".lock")) {
+    return false;
+  }
+  // eslint-disable-next-line no-control-regex
+  return !/[\x00-\x20~^:?*[\\]/.test(name);
+}
+
 export function createBranch(workingDir: string, branchName: string): void {
+  // Defense in depth: a `-`-leading name would be parsed by git as a flag even
+  // though execFile uses an argv array. Reject it before spawning git.
+  if (!isValidBranchName(branchName)) {
+    throw new Error(`Invalid branch name: ${branchName}`);
+  }
   git(["checkout", "-b", branchName], workingDir);
 }
 

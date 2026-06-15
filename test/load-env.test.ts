@@ -26,4 +26,13 @@ describe("parseEnv (.env parser)", () => {
   it("keeps '=' that appear inside the value", () => {
     expect(parseEnv("TOKEN=a=b=c")).toEqual({ TOKEN: "a=b=c" });
   });
+
+  it("does not strip a LONE quote char into an empty string", () => {
+    // Regression: a one-char value of just `"` satisfied startsWith+endsWith and
+    // sliced to "". A real pair needs length >= 2.
+    expect(parseEnv('FOO="')).toEqual({ FOO: '"' });
+    expect(parseEnv("BAR='")).toEqual({ BAR: "'" });
+    // A real quoted pair still strips.
+    expect(parseEnv('BAZ="x"')).toEqual({ BAZ: "x" });
+  });
 });
