@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { lookup } from "dns/promises";
+import { Agent } from "undici";
 import { tmpDir } from "@/lib/platform";
 import { isHttpUrl, htmlToText, isPrivateAddress } from "@/lib/web-fetch";
 import { formatTerminalTextForAgent } from "@/lib/path-display";
@@ -23,15 +24,18 @@ const TIMEOUT_MS = clampInteger(
 );
 const MAX_REDIRECTS = 5;
 
+type VettedAddr = { address: string; family: number };
+
 /**
- * SSRF host guard: reject when the URL's host resolves to ANY loopback /
- * private / link-local / metadata address. Throws on an unsafe or unresolvable
- * host. (Server-side fetch can reach things the phone driving the UI can't —
- * localhost, the LAN, 169.254.169.254 — so this is enforced, not waved through.)
+ * SSRF host guard: resolve the URL's host and reject if ANY address is loopback /
+ * private / link-local / metadata. Returns the VETTED addresses so the caller can
+ * PIN the connection to them — closing the DNS-rebinding TOCTOU where a second,
+ * independent resolution by `fetch` could return a private IP after this check
+ * passed. Throws on an unsafe or unresolvable host.
  */
-async function assertPublicHost(u: URL): Promise<void> {
+async function resolveVettedHost(u: URL): Promise<VettedAddr[]> {
   const host = u.hostname.replace(/^\[|\]$/g, ""); // strip IPv6 brackets
-  let addrs: { address: string }[];
+  let addrs: VettedAddr[];
   try {
     addrs = await lookup(host, { all: true });
   } catch {
@@ -40,33 +44,72 @@ async function assertPublicHost(u: URL): Promise<void> {
   if (addrs.length === 0 || addrs.some((a) => isPrivateAddress(a.address))) {
     throw new Error("That host isn't allowed (private/loopback address)");
   }
+  return addrs;
 }
 
 /**
- * Fetch, following redirects MANUALLY and re-validating the host at every hop —
- * so an allowed public URL can't 302 to a private one (the SSRF bypass that
- * `redirect: "follow"` would permit). Returns the final response.
+ * An undici dispatcher whose DNS lookup is PINNED to the pre-vetted addresses —
+ * so the actual socket connects only to an IP we already verified is public, and
+ * cannot re-resolve to a rebound private IP. The original hostname is still used
+ * for the TLS SNI / Host header (undici only takes the IP from `lookup`).
+ */
+function pinnedDispatcher(vetted: VettedAddr[]): Agent {
+  return new Agent({
+    connect: {
+      lookup: (
+        _hostname: string,
+        options: { all?: boolean },
+        cb: (
+          err: NodeJS.ErrnoException | null,
+          address: string | VettedAddr[],
+          family?: number
+        ) => void
+      ) => {
+        if (options?.all) cb(null, vetted);
+        else cb(null, vetted[0].address, vetted[0].family);
+      },
+    },
+  });
+}
+
+/**
+ * Fetch, following redirects MANUALLY and re-validating + IP-pinning the host at
+ * every hop — so an allowed public URL can't 302 to a private one, AND a rebinding
+ * host can't resolve public for the check then private for the connection. Returns
+ * the final response together with its dispatcher (the caller closes it after the
+ * body is read; intermediate redirect dispatchers are closed here).
  */
 async function safeFetch(
   start: string,
   signal: AbortSignal
-): Promise<Response> {
+): Promise<{ res: Response; dispatcher: Agent }> {
   let url = start;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     if (!isHttpUrl(url)) throw new Error("Only http(s) URLs are allowed");
-    await assertPublicHost(new URL(url));
-    const res = await fetch(url, {
-      signal,
-      redirect: "manual",
-      headers: { "User-Agent": "Stoa-WebFetch/1.0" },
-    });
+    const vetted = await resolveVettedHost(new URL(url));
+    const dispatcher = pinnedDispatcher(vetted);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        signal,
+        redirect: "manual",
+        headers: { "User-Agent": "Stoa-WebFetch/1.0" },
+        // Node's fetch reads `dispatcher`; it isn't in the DOM RequestInit type.
+        dispatcher,
+      } as RequestInit & { dispatcher: Agent });
+    } catch (err) {
+      await dispatcher.close().catch(() => {});
+      throw err;
+    }
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location");
+      // Redirect response body is never consumed — close this hop's dispatcher.
+      await dispatcher.close().catch(() => {});
       if (!loc) throw new Error("Redirect without a location");
       url = new URL(loc, url).toString(); // resolve a relative redirect
       continue;
     }
-    return res;
+    return { res, dispatcher };
   }
   throw new Error("Too many redirects");
 }
@@ -157,8 +200,9 @@ export async function POST(request: Request) {
 
   let res: Response;
   let raw: string;
+  let dispatcher: Agent | undefined;
   try {
-    res = await safeFetch(url, controller.signal);
+    ({ res, dispatcher } = await safeFetch(url, controller.signal));
     if (!res.ok) {
       return NextResponse.json(
         { error: `Fetch failed with status ${res.status}` },
@@ -180,6 +224,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 502 });
   } finally {
     clearTimeout(timer);
+    // Close the pinned dispatcher now the body is fully read (or we errored).
+    if (dispatcher) await dispatcher.close().catch(() => {});
   }
 
   // Reduce → strip → write. Each step can throw (htmlToText on pathological
