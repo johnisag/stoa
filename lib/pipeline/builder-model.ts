@@ -411,6 +411,43 @@ export function connect(doc: BuilderDoc, from: string, to: string): BuilderDoc {
   return setDependsOn(doc, to, [...deps, from]);
 }
 
+/**
+ * The template token that interpolates a step's output into another step's task.
+ * The SINGLE source for that syntax — used by the builder's placeholder hint AND
+ * its "insert reference" menu so they can't drift from what the engine resolves.
+ */
+export function outputRefToken(stepId: string): string {
+  return `{{steps.${stepId}.output}}`;
+}
+
+/**
+ * Splice `{{steps.<refId>.output}}` into `targetId`'s task at [start, end) AND wire
+ * `targetId` to depend on `refId`, in one transform — so the inserted reference
+ * actually resolves at run time. The task is read from `doc` (not a caller snapshot)
+ * so a concurrent keystroke can't make the splice stale; connect is idempotent and
+ * cycle-permissive (a bad ref just validates red, like the dependsOn checklist).
+ * No-op if `targetId` is missing or refId === targetId.
+ */
+export function insertOutputRef(
+  doc: BuilderDoc,
+  targetId: string,
+  refId: string,
+  start: number,
+  end: number
+): BuilderDoc {
+  const target = doc.nodes.find((n) => n.step.id === targetId);
+  if (!target || refId === targetId) return doc;
+  const task = target.step.task ?? "";
+  const s = Math.max(0, Math.min(start, task.length));
+  const e = Math.max(s, Math.min(end, task.length));
+  const nextTask = task.slice(0, s) + outputRefToken(refId) + task.slice(e);
+  return connect(
+    updateStep(doc, targetId, { task: nextTask }),
+    refId,
+    targetId
+  );
+}
+
 /** Remove the dependency edge `from → to`. No-op if the target or edge is absent. */
 export function disconnect(
   doc: BuilderDoc,
@@ -470,7 +507,7 @@ export function renameStep(
   const rewrite = (text: string | undefined) =>
     // Use a replacer function so special `$` sequences in the new id are treated
     // as literal text, not as String.prototype.replace substitution patterns.
-    text?.replace(outputRef, () => `{{steps.${newId}.output}}`);
+    text?.replace(outputRef, () => outputRefToken(newId));
   return {
     ...doc,
     nodes: doc.nodes.map((n) => ({

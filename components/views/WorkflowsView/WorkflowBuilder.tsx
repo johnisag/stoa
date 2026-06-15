@@ -37,9 +37,11 @@ import {
   docToSpec,
   duplicateNodes,
   duplicateStep,
+  insertOutputRef,
   moveNode,
   moveNote,
   nextAutoPosition,
+  outputRefToken,
   relayout,
   renameStep,
   serializeBuilderDoc,
@@ -132,7 +134,7 @@ const EXAMPLE_DOC: BuilderDoc = docFromSpec({
     {
       id: "implement",
       agent: "claude",
-      task: "Using these findings:\n{{steps.research.output}}\nimplement the fix.",
+      task: `Using these findings:\n${outputRefToken("research")}\nimplement the fix.`,
       dependsOn: ["research"],
       exitCriteria: "The change MUST pass the test suite. Open a PR when done.",
     },
@@ -204,6 +206,12 @@ export function WorkflowBuilder({
   useEffect(() => {
     if (primaryId) editRef.current?.scrollIntoView({ block: "nearest" });
   }, [primaryId]);
+
+  // The Task field's "insert an upstream step's output" affordance.
+  const taskRef = useRef<HTMLTextAreaElement>(null);
+  const [showRefMenu, setShowRefMenu] = useState(false);
+  // Collapse the menu whenever the selected step changes.
+  useEffect(() => setShowRefMenu(false), [primaryId]);
   const [conductorId, setConductorId] = useState<string>(
     defaultConductorId && sessions.some((s) => s.id === defaultConductorId)
       ? defaultConductorId
@@ -743,6 +751,27 @@ export function WorkflowBuilder({
 
   function commit() {
     setDoc((d) => d);
+  }
+
+  // Insert an upstream step's output reference at the Task caret + wire the
+  // dependency. The splice itself lives in builder-model (insertOutputRef reads the
+  // task from the doc, so a concurrent keystroke can't make it stale); here we just
+  // capture the caret, commit it as one undoable edit, and restore focus.
+  function handleInsertRef(refId: string) {
+    const node = primaryNode;
+    if (!node) return;
+    const el = taskRef.current;
+    const fallback = (node.step.task ?? "").length;
+    const start = el?.selectionStart ?? fallback;
+    const end = el?.selectionEnd ?? start;
+    setDoc((d) => insertOutputRef(d, node.step.id, refId, start, end));
+    setShowRefMenu(false);
+    // Restore focus + place the caret right after the inserted token.
+    requestAnimationFrame(() => {
+      const caret = start + outputRefToken(refId).length;
+      el?.focus();
+      el?.setSelectionRange(caret, caret);
+    });
   }
 
   function commitRename(oldId: string, raw: string) {
@@ -1373,6 +1402,7 @@ export function WorkflowBuilder({
               Task <span className="text-red-500">*</span>
             </span>
             <Textarea
+              ref={taskRef}
               value={primaryNode.step.task}
               spellCheck={false}
               placeholder="What this agent should do. Reference an upstream step's output with {{steps.<id>.output}}."
@@ -1382,6 +1412,44 @@ export function WorkflowBuilder({
               onBlur={commit}
               className="min-h-[80px]"
             />
+            {/* Insert a valid {{steps.<id>.output}} reference (no hand-typing /
+                typos) — picking a step also adds it as a dependency. */}
+            {doc.nodes.length > 1 && (
+              <div className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={() => setShowRefMenu((v) => !v)}
+                  className="text-muted-foreground hover:text-foreground self-start text-xs underline-offset-2 hover:underline"
+                >
+                  + Insert an upstream step&apos;s output
+                </button>
+                {showRefMenu && (
+                  <div className="flex flex-col gap-0.5 rounded-md border p-1">
+                    <span className="text-muted-foreground px-2 py-1 text-[11px]">
+                      Inserts the reference and adds the step as a dependency.
+                    </span>
+                    {doc.nodes
+                      .filter((n) => n.step.id !== primaryNode.step.id)
+                      .map((n) => (
+                        <button
+                          key={n.step.id}
+                          type="button"
+                          onClick={() => handleInsertRef(n.step.id)}
+                          title={`Insert ${outputRefToken(n.step.id)} and depend on this step`}
+                          className="hover:bg-accent flex items-center gap-2 rounded px-2 py-1 text-left text-xs"
+                        >
+                          <span className="truncate font-medium">
+                            {n.step.name || n.step.id}
+                          </span>
+                          <span className="text-muted-foreground truncate font-mono">
+                            {outputRefToken(n.step.id)}
+                          </span>
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </div>
+            )}
           </label>
 
           {/* dependsOn — a checklist of the other step ids (the house multi-select

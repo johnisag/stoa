@@ -22,6 +22,8 @@ import {
   updateStep,
   setDependsOn,
   connect,
+  outputRefToken,
+  insertOutputRef,
   disconnect,
   removeStep,
   renameStep,
@@ -41,6 +43,7 @@ import {
   type BuilderNote,
 } from "@/lib/pipeline/builder-model";
 import type { PipelineSpec, PipelineStep } from "@/lib/pipeline/types";
+import { interpolateTask } from "@/lib/pipeline/engine";
 
 function step(over: Partial<PipelineStep> & { id: string }): PipelineStep {
   return { agent: "claude", task: `do ${over.id}`, ...over };
@@ -993,5 +996,69 @@ describe("wrapNoteText", () => {
     const lines = wrapNoteText("a\nb\nc\nd\ne\nf", 24, 4);
     expect(lines).toHaveLength(4);
     expect(lines[3].endsWith("…")).toBe(true);
+  });
+});
+
+describe("outputRefToken", () => {
+  it("produces the exact {{steps.<id>.output}} template", () => {
+    expect(outputRefToken("research")).toBe("{{steps.research.output}}");
+  });
+
+  it("round-trips with the engine's interpolateTask resolver", () => {
+    // The whole point of the builder's insert menu: the token it splices in is the
+    // one the engine actually resolves at run time.
+    expect(
+      interpolateTask(outputRefToken("research"), { research: "FINDINGS" })
+    ).toBe("FINDINGS");
+  });
+
+  it("works for ids with the allowed punctuation (dot/dash/underscore)", () => {
+    const id = "step-1_a.b";
+    expect(interpolateTask(outputRefToken(id), { [id]: "X" })).toBe("X");
+  });
+});
+
+describe("insertOutputRef", () => {
+  it("splices the token at the caret AND wires the dependency in one transform", () => {
+    const doc = docFromSpec(
+      spec([
+        step({ id: "research" }),
+        step({ id: "implement", task: "use  here" }),
+      ])
+    );
+    // caret at index 4 ("use |") with no selection
+    const next = insertOutputRef(doc, "implement", "research", 4, 4);
+    const impl = next.nodes.find((n) => n.step.id === "implement")!;
+    expect(impl.step.task).toBe(`use ${outputRefToken("research")} here`);
+    expect(impl.step.dependsOn).toContain("research");
+  });
+
+  it("replaces a selected range and doesn't duplicate an existing dependency", () => {
+    const doc = docFromSpec(
+      spec([
+        step({ id: "a" }),
+        step({ id: "b", task: "XXXX", dependsOn: ["a"] }),
+      ])
+    );
+    const next = insertOutputRef(doc, "b", "a", 0, 4); // select all of "XXXX"
+    const b = next.nodes.find((n) => n.step.id === "b")!;
+    expect(b.step.task).toBe(outputRefToken("a"));
+    expect(b.step.dependsOn).toEqual(["a"]);
+  });
+
+  it("clamps an out-of-range caret to the task length", () => {
+    const doc = docFromSpec(
+      spec([step({ id: "a" }), step({ id: "b", task: "hi" })])
+    );
+    const next = insertOutputRef(doc, "b", "a", 999, 999);
+    expect(next.nodes.find((n) => n.step.id === "b")!.step.task).toBe(
+      `hi${outputRefToken("a")}`
+    );
+  });
+
+  it("no-ops for a self-reference or an unknown target", () => {
+    const doc = docFromSpec(spec([step({ id: "a", task: "hi" })]));
+    expect(insertOutputRef(doc, "a", "a", 0, 0)).toBe(doc);
+    expect(insertOutputRef(doc, "missing", "a", 0, 0)).toBe(doc);
   });
 });
