@@ -11,11 +11,12 @@ _Generated 2026-06-15 — replaces the 35 raw `.kimi/swarm/` files (removed in t
 > still true and still worth keeping is retained here. (`competitor-wins-kimi.md` is gitignored /
 > local-only, not present in a fresh clone.)
 >
-> **Bottom line:** of ~154 reported bug findings, **9 remain genuinely open** (all LOW or
+> **Bottom line:** of ~154 reported bug findings, **8 remain genuinely open** (all LOW or
 > MEDIUM; several latent / needs-human-check) — the 4 workflow-builder papercuts were fixed in
 > **#271** (unsaved-edit guard, whitespace-name reject, get-after-insert guard, PipelineGraph
-> marker id). Of ~77 research wins across 15 competitor areas, **0 are net-new** — they are
-> already captured verbatim in `competitor-wins-kimi.md`.
+> marker id), and the MEDIUM Codex-MCP re-attach drift was fixed in **#273** (single
+> `parseMcpLaunchArgs`, both spawn paths converged). Of ~77 research wins across 15 competitor
+> areas, **0 are net-new** — they are already captured verbatim in `competitor-wins-kimi.md`.
 
 ---
 
@@ -55,15 +56,16 @@ requires live-OS confirmation).
 
 ### dispatch + data + providers
 
-- **[MEDIUM / confirmed-open] `buildSpawnForSession` drops `mcp_launch_args` on Pane re-attach (Codex conductors lose stoa MCP wiring).**
-  `lib/client/backend.ts:44-63` builds the pty spawn via `buildAgentArgs` with only
-  sessionId/parentSessionId/autoApprove/model/initialPrompt — it never reads
-  `session.mcp_launch_args`. The parallel server path (`app/page.tsx:374-398`) **does** parse
-  it into `extraArgs`. `components/Pane/index.tsx:330` (re-attach) and `:360` (attach-to-worker)
-  both call `buildSpawnForSession`, and the pty server treats spawn as create-if-missing, so a
-  Codex conductor session respawned after a server restart re-launches **without** its persisted
-  `-c mcp_servers.stoa.*` flags. Fix is to mirror `page.tsx`'s parse. Windows/pty-only (tmux
-  reuses the live session). (Provider report #1.)
+- **✅ FIXED (#273). [MEDIUM] `buildSpawnForSession` dropped `mcp_launch_args` on Pane re-attach (Codex conductors lost stoa MCP wiring).**
+  `lib/client/backend.ts` built the pty spawn via `buildAgentArgs` without ever reading
+  `session.mcp_launch_args`, while the parallel server path (`app/page.tsx`) **did** parse it
+  into `extraArgs`. Since the pty server treats spawn as create-if-missing, a Codex conductor
+  respawned on re-attach (e.g. after a server restart) silently relaunched **without** its
+  persisted `-c mcp_servers.stoa.*` flags. Root cause = the two spawn paths had drifted; fixed
+  by a single shared `parseMcpLaunchArgs` (`lib/providers.ts`) that both paths now route through
+  (so they can't drift again), with a `console.warn` on malformed input. Regression locked by
+  `test/client-backend.test.ts`. Was Windows/pty-only (tmux reuses the live session).
+  (Provider report #1.)
 
 - **[LOW / confirmed-open] Multi-repo stage/unstage mutations ignore HTTP status.**
   `data/git/queries.ts:393-394` (`useMultiRepoStageFiles`) and `416-417`
