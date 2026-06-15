@@ -11,12 +11,15 @@ _Generated 2026-06-15 — replaces the 35 raw `.kimi/swarm/` files (removed in t
 > still true and still worth keeping is retained here. (`competitor-wins-kimi.md` is gitignored /
 > local-only, not present in a fresh clone.)
 >
-> **Bottom line:** of ~154 reported bug findings, **8 remain genuinely open** (all LOW or
+> **Bottom line:** of ~154 reported bug findings, **7 remain genuinely open** (all LOW or
 > MEDIUM; several latent / needs-human-check) — the 4 workflow-builder papercuts were fixed in
 > **#271** (unsaved-edit guard, whitespace-name reject, get-after-insert guard, PipelineGraph
-> marker id), and the MEDIUM Codex-MCP re-attach drift was fixed in **#273** (single
-> `parseMcpLaunchArgs`, both spawn paths converged). Of ~77 research wins across 15 competitor
-> areas, **0 are net-new** — they are already captured verbatim in `competitor-wins-kimi.md`.
+> marker id), the MEDIUM Codex-MCP re-attach drift was fixed in **#273** (single
+> `parseMcpLaunchArgs`, both spawn paths converged), and the multi-repo git `res.ok` item turned
+> out to be a 26-site **bug class** (handlers trusting a response body without checking
+> `res.ok`) — all fixed in **#275** (a sweep+verify workflow found 21, the 3-agent review found
+> 5 more). Of ~77 research wins across 15 competitor areas, **0 are net-new** — they are already
+> captured verbatim in `competitor-wins-kimi.md`.
 
 ---
 
@@ -67,11 +70,15 @@ requires live-OS confirmation).
   `test/client-backend.test.ts`. Was Windows/pty-only (tmux reuses the live session).
   (Provider report #1.)
 
-- **[LOW / confirmed-open] Multi-repo stage/unstage mutations ignore HTTP status.**
-  `data/git/queries.ts:393-394` (`useMultiRepoStageFiles`) and `416-417`
-  (`useMultiRepoUnstageFiles`) only do `const data = await res.json(); if (data.error) throw`.
-  The single-repo hooks were fixed to `!res.ok || data.error` (lines 188, 209); the two
-  multi-repo variants were missed. A 5xx with no `error` field is treated as success.
+- **✅ FIXED (#275). [LOW→class] Multi-repo stage/unstage mutations ignored HTTP status — the
+  tip of a 26-site bug class.**
+  The two flagged sites (`useMultiRepoStageFiles`/`useMultiRepoUnstageFiles`) did
+  `const data = await res.json(); if (data.error) throw`, treating a 5xx with no `error` field
+  as success. A sweep+verify workflow found the same class (response body trusted without
+  `res.ok`) in **21** handlers across `data/`, `components/`, `lib/`, and the client `app/`; the
+  3-agent review found **5** more (`.then(r => r.json())` chains + fire-and-forget mutations).
+  All fixed with the repo's `if (!res.ok || data.error)` template, adapted per handler.
+  Regression locked by `test/git-queries-res-ok.test.tsx` + `test/bugfix-b006.test.ts`.
   (data-queries #6.)
 
 - **[LOW / needs-human-check] `spawnWorker` does not wire orchestration MCP args / `mcp_launch_args` for Codex workers.**
