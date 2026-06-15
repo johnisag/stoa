@@ -13,9 +13,10 @@ import { VerdictInboxHelp } from "./VerdictInboxHelp";
 type Filter = "all" | "needs-me" | "in-review" | "approved";
 
 /**
- * Verdict Inbox — a fleet-wide review queue (dispatch PRs + auto-mode sessions),
- * self-contained dialog opened from the nav. Each card carries the critic verdict;
- * expand for per-lens findings; merge / dismiss / retry in place.
+ * Verdict Inbox — a fleet-wide review queue (dispatch PRs + auto-mode sessions).
+ * Now a first-class pane TAB (like a session), not a dialog — so it sits
+ * side-by-side with terminals. Each card carries the critic verdict; expand for
+ * per-lens findings; merge / dismiss / retry in place.
  */
 export function VerdictInboxView({
   onOpenSession,

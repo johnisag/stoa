@@ -3,7 +3,7 @@
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-/** A short in-dialog primer on the review queue. */
+/** A short primer on the review queue. */
 export function VerdictInboxHelp({ onClose }: { onClose: () => void }) {
   return (
     <div
