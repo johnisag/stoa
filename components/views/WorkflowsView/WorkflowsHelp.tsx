@@ -51,6 +51,25 @@ export function WorkflowsHelp({ onClose }: { onClose: () => void }) {
           precondition.
         </li>
         <li>
+          <span className="text-foreground font-medium">
+            Or let AI design it.
+          </span>{" "}
+          On the <span className="text-foreground">Build</span> tab, the{" "}
+          <span className="text-foreground">Design a workflow with AI</span> bar
+          turns a one-line goal into a full role-fleet DAG —{" "}
+          <span className="text-foreground">
+            researchers → architects → engineers
+          </span>{" "}
+          + ui/ux → testers → integrator → a final review gate — each node
+          pre-filled with its task, inputs, outputs, and dependencies. Pick a{" "}
+          <span className="text-foreground">Project context</span>, describe
+          what to build, and tap{" "}
+          <span className="text-foreground">Generate</span>: an agent{" "}
+          <span className="text-foreground">designs</span> the workflow and
+          loads it onto the canvas. It only ever <em>designs</em> — nothing runs
+          until you review, tweak the 20% that needs your touch, and hit Start.
+        </li>
+        <li>
           <span className="text-foreground font-medium">Or build it.</span> The{" "}
           <span className="text-foreground">Build</span> tab is a visual canvas
           — tap <span className="text-foreground">Add step</span> to drop a
