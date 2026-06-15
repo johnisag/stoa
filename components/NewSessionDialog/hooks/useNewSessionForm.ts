@@ -130,6 +130,9 @@ export function useNewSessionForm({
         body: JSON.stringify({ path }),
       });
       const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Failed to check git repository");
+      }
       setGitInfo(data);
       if (data.defaultBranch) {
         setBaseBranch(data.defaultBranch);

@@ -70,6 +70,7 @@ export function FileTree({
         const res = await fetch(
           `/api/files?path=${encodeURIComponent(dirPath)}`
         );
+        if (!res.ok) throw new Error(`Failed to load directory: ${res.status}`);
         const data = await res.json();
         if (data.files) {
           setLoadedChildren((prev) => new Map(prev).set(dirPath, data.files));

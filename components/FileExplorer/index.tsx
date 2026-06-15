@@ -70,8 +70,8 @@ export function FileExplorer({
           `/api/files?path=${encodeURIComponent(workingDirectory)}`
         );
         const data = await res.json();
-        if (data.error) {
-          setError(data.error);
+        if (!res.ok || data.error) {
+          setError(data.error || "Failed to load directory");
         } else {
           setFiles(data.files || []);
         }

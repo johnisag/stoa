@@ -68,7 +68,8 @@ export function FileExplorerDrawer({
         );
         const data = await res.json();
         if (token?.cancelled) return;
-        if (data.error) setError(data.error);
+        if (!res.ok || data.error)
+          setError(data.error || "Failed to load directory");
         else setFiles(data.files || []);
       } catch {
         if (!token?.cancelled) setError("Failed to load directory");

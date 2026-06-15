@@ -22,6 +22,10 @@ export async function getActiveBackend(): Promise<"pty" | "tmux"> {
   if (cached) return cached;
   try {
     const res = await fetch("/api/backend");
+    // A non-2xx that still returns JSON would otherwise be read as a "successful"
+    // probe and cached for the page lifetime — defeating the contract below. Treat
+    // it as a transient failure (falls to the catch, returns the fallback uncached).
+    if (!res.ok) throw new Error("backend probe failed");
     const data = await res.json();
     // Only cache on a successful probe; a transient failure must not lock the
     // client to the fallback for the page lifetime.

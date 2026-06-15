@@ -132,23 +132,34 @@ export function FileEditDialog({
     // Use baseDir for git operations (repo path for multi-repo, working directory otherwise)
     const gitBasePath = baseDir;
 
+    // Capture res.ok alongside the body: a non-2xx that still returns JSON (a 500
+    // with `{}`) must NOT be read as success — otherwise the editor opens blank and
+    // a save would overwrite the real file with empty content.
+    const readJson = (r: Response) =>
+      r.json().then(
+        (body) => ({ ok: r.ok, body }),
+        () => ({ ok: r.ok, body: {} as Record<string, unknown> })
+      );
+
     Promise.all([
       fetch(`/api/files/content?path=${encodeURIComponent(filePath)}`).then(
-        (r) => r.json()
+        readJson
       ),
       fetch(
         `/api/git/file-content?path=${encodeURIComponent(gitBasePath)}&file=${encodeURIComponent(file.path)}`
-      ).then((r) => r.json()),
+      ).then(readJson),
     ])
-      .then(([modData, origData]) => {
-        if (modData.error) {
-          setError(modData.error);
+      .then(([mod, orig]) => {
+        const modData = mod.body as { error?: string; content?: string };
+        const origData = orig.body as { error?: string; content?: string };
+        if (!mod.ok || modData.error) {
+          setError(modData.error || "Failed to load file");
           return;
         }
         setModifiedContent(modData.content || "");
         setInitialModified(modData.content || "");
         setOriginalContent(
-          origData.error || file.status === "untracked"
+          !orig.ok || origData.error || file.status === "untracked"
             ? ""
             : origData.content || ""
         );
@@ -166,7 +177,7 @@ export function FileEditDialog({
         body: JSON.stringify({ path: filePath, content: modifiedContent }),
       });
       const data = await res.json();
-      if (data.error) setError(data.error);
+      if (!res.ok || data.error) setError(data.error || "Failed to save");
       else {
         setInitialModified(modifiedContent);
         onSave();

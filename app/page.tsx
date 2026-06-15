@@ -245,6 +245,7 @@ function HomeContent() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ agentCommand }),
         });
+        if (!res.ok) return safeFallback;
         const data = await res.json();
         return data.command || safeFallback;
       } catch {
@@ -740,8 +741,8 @@ function HomeContent() {
       await fetchSessions();
 
       const res = await fetch(`/api/sessions/${sessionId}`);
-      const data = await res.json();
-      if (!data.session) return;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.session) return;
 
       setTimeout(() => attachToSession(data.session), 100);
     },
@@ -760,7 +761,11 @@ function HomeContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, workingDirectory, agentType }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.error("Failed to create project:", data.error || res.status);
+        return null;
+      }
       if (data.project) {
         await fetchProjects();
         return data.project.id;
@@ -788,8 +793,8 @@ function HomeContent() {
         }),
       });
 
-      const data = await res.json();
-      if (!data.session) return;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.session) return;
 
       await fetchSessions();
 

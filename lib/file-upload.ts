@@ -24,12 +24,14 @@ export async function uploadFileToTemp(file: File): Promise<string | null> {
     }),
   });
 
-  const data = await res.json();
-  if (data.path) {
+  // Parse defensively and gate on res.ok (mirrors fetchUrlToTemp below): a non-2xx
+  // whose body lacks `path` must be a failure, not silently treated as success.
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.path) {
     return data.path;
   }
 
-  console.error("Upload failed:", data.error);
+  console.error("Upload failed:", data.error || res.statusText);
   return null;
 }
 

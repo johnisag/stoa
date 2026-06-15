@@ -62,6 +62,7 @@ export function ConductorPanel({
       const res = await fetch(
         `/api/orchestrate/workers?conductorId=${conductorSessionId}`
       );
+      if (!res.ok) throw new Error(`Failed to fetch workers: ${res.status}`);
       const data = await res.json();
       if (data.workers) {
         setWorkers(data.workers);
@@ -76,6 +77,7 @@ export function ConductorPanel({
       const res = await fetch(
         `/api/orchestrate/workers?conductorId=${conductorSessionId}&summary=true`
       );
+      if (!res.ok) throw new Error(`Failed to fetch summary: ${res.status}`);
       const data = await res.json();
       if (data.summary) {
         setSummary(data.summary);
@@ -88,6 +90,8 @@ export function ConductorPanel({
   const fetchWorkerOutput = useCallback(async (workerId: string) => {
     try {
       const res = await fetch(`/api/orchestrate/workers/${workerId}?lines=30`);
+      if (!res.ok)
+        throw new Error(`Failed to fetch worker output: ${res.status}`);
       const data = await res.json();
       if (data.output) {
         setWorkerOutputs((prev) => ({ ...prev, [workerId]: data.output }));
@@ -144,11 +148,12 @@ export function ConductorPanel({
 
   const handleSendMessage = async (workerId: string, message: string) => {
     try {
-      await fetch(`/api/orchestrate/workers/${workerId}`, {
+      const res = await fetch(`/api/orchestrate/workers/${workerId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "send", message }),
       });
+      if (!res.ok) throw new Error(`Failed to send message: ${res.status}`);
       // Refresh output after sending
       setTimeout(() => fetchWorkerOutput(workerId), 1000);
     } catch (error) {

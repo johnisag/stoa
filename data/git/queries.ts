@@ -391,7 +391,8 @@ export function useMultiRepoStageFiles(repoPath: string) {
         body: JSON.stringify({ path: repoPath, files }),
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!res.ok || data.error)
+        throw new Error(data.error || "Failed to stage files");
       return data;
     },
     onSuccess: () => {
@@ -414,7 +415,8 @@ export function useMultiRepoUnstageFiles(repoPath: string) {
         body: JSON.stringify({ path: repoPath, files }),
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!res.ok || data.error)
+        throw new Error(data.error || "Failed to unstage files");
       return data;
     },
     onSuccess: () => {
