@@ -14,6 +14,7 @@ import {
   type BuilderDoc,
 } from "@/lib/pipeline/builder-model";
 import { cn } from "@/lib/utils";
+import { useSpacePan } from "@/hooks/useSpacePan";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -55,6 +56,7 @@ export function PipelineCanvas({
   onCopyId,
   onGoToDefinitions,
   scrollRef,
+  panEnabled = false,
 }: {
   doc: BuilderDoc;
   selectedIds: Set<string>;
@@ -84,8 +86,21 @@ export function PipelineCanvas({
   onGoToDefinitions?: (id: string) => void;
   /** Ref to the scrollable container, used by the parent to recenter/fit-all. */
   scrollRef?: RefObject<HTMLDivElement | null>;
+  /** When true, hold-Space turns a drag into a canvas pan (builder tab only). */
+  panEnabled?: boolean;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  // Hold-Space-to-pan: while Space is held the cursor is a grab hand and a drag
+  // scrolls the wrapper instead of lassoing/moving nodes (Figma/Miro gesture).
+  const spaceHeld = useSpacePan(panEnabled);
+  // Active pan drag: pointer origin + the wrapper scroll offset at press, in px.
+  const pan = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    scrollLeft: number;
+    scrollTop: number;
+  } | null>(null);
   // Active drag: pointer start in SVG user space, plus the original position of
   // every selected item (steps + notes). A ref, not state, so a drag in flight
   // doesn't re-render on every pointermove (only onMoveItems does).
@@ -137,6 +152,9 @@ export function PipelineCanvas({
   }
 
   function onSvgPointerDown(e: ReactPointerEvent) {
+    // Space held = pan mode: let the press bubble to the wrapper pan handler
+    // instead of starting a lasso selection here.
+    if (spaceHeld) return;
     if (e.button !== 0) return;
     if (e.pointerType !== "mouse") return;
     if (e.target !== svgRef.current) return;
@@ -218,6 +236,9 @@ export function PipelineCanvas({
   }
 
   function onNodePointerDown(e: ReactPointerEvent, id: string) {
+    // Space held = pan mode: don’t grab the node; let it bubble to the wrapper
+    // pan handler (so a Space-drag started over a node still pans).
+    if (spaceHeld) return;
     // Only the primary button starts a drag / long-press.
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -331,6 +352,7 @@ export function PipelineCanvas({
 
   // Output-port drag → connect. stopPropagation so it doesn't start a node move.
   function onPortPointerDown(e: ReactPointerEvent, id: string) {
+    if (spaceHeld) return;
     e.stopPropagation();
     const node = doc.nodes.find((n) => n.step.id === id);
     if (!node) return;
@@ -402,11 +424,58 @@ export function PipelineCanvas({
     ) +
     PAD;
 
+  // Space-drag pan: move the wrapper scroll by the pointer delta. Pointer capture
+  // keeps the drag alive even if the cursor leaves the element.
+  function onWrapperPointerDown(e: ReactPointerEvent) {
+    if (!spaceHeld) return;
+    // Primary button only — a middle/right press while Space is held must not
+    // start a pan (and the context menu is already prevented above).
+    if (e.button !== 0) return;
+    const el = scrollRef?.current;
+    if (!el) return;
+    pan.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      scrollLeft: el.scrollLeft,
+      scrollTop: el.scrollTop,
+    };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+
+  function onWrapperPointerMove(e: ReactPointerEvent) {
+    // Also require spaceHeld so a leaked capture (no pointerup/cancel) can’t
+    // keep panning on a plain no-button mouse move.
+    if (!pan.current || !spaceHeld) return;
+    const el = scrollRef?.current;
+    if (!el) return;
+    el.scrollLeft = pan.current.scrollLeft - (e.clientX - pan.current.startX);
+    el.scrollTop = pan.current.scrollTop - (e.clientY - pan.current.startY);
+  }
+
+  function onWrapperPointerUp(e: ReactPointerEvent) {
+    if (!pan.current) return;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // capture already lost — safe to ignore
+    }
+    pan.current = null;
+  }
+
   return (
     <div
       ref={scrollRef}
-      className="bg-muted/20 h-full w-full overflow-auto"
+      className={cn(
+        "bg-muted/20 h-full w-full overflow-auto",
+        spaceHeld && "cursor-grab"
+      )}
       onContextMenu={(e) => e.preventDefault()}
+      onPointerDown={onWrapperPointerDown}
+      onPointerMove={onWrapperPointerMove}
+      onPointerUp={onWrapperPointerUp}
+      onPointerCancel={onWrapperPointerUp}
     >
       <svg
         ref={svgRef}
