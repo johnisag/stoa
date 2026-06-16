@@ -1265,6 +1265,7 @@ export function WorkflowBuilder({
             onCopyId={handleContextCopyId}
             onGoToDefinitions={handleGoToDefinitions}
             scrollRef={canvasScrollRef}
+            panEnabled
           />
           <Minimap
             doc={doc}
