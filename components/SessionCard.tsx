@@ -630,9 +630,11 @@ function SessionCardComponent({
         </span>
       )}
 
-      {/* Time ago — yields the space to quick actions when they're present */}
+      {/* Time ago — hidden at rest so the name owns the row (scanning names
+          is the primary need); revealed on row hover, and still yields to the
+          quick actions when those are present. */}
       {!hasQuickActions && (
-        <span className="text-muted-foreground hidden flex-shrink-0 text-[10px] group-hover:hidden sm:block">
+        <span className="text-muted-foreground hidden flex-shrink-0 text-[10px] sm:group-hover:block">
           <TimeAgo updatedAt={session.updated_at} />
         </span>
       )}
@@ -738,14 +740,16 @@ function getTimeAgo(dateStr: string): string {
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
 
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
+  // Compact single-token labels ("now"/"44m"/"2h"/"1d") — the sidebar row is
+  // narrow, so dropping " ago" hands those pixels back to the session name.
+  if (diffMins < 1) return "now";
+  if (diffMins < 60) return `${diffMins}m`;
 
   const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffHours < 24) return `${diffHours}h`;
 
   const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 7) return `${diffDays}d`;
 
   return date.toLocaleDateString();
 }

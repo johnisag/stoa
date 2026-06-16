@@ -40,7 +40,9 @@ export function SessionListHeader({
         <svg
           xmlns="http://www.w3.org/2000/svg"
           viewBox="0 0 24 24"
-          className="h-5 w-5"
+          role="img"
+          aria-label="Stoa"
+          className="text-foreground h-5 w-5"
           stroke="currentColor"
           strokeWidth="2"
           strokeLinecap="round"
@@ -54,7 +56,6 @@ export function SessionListHeader({
           <path d="M15 13v2" />
           <path d="M9 13v2" />
         </svg>
-        <h2 className="font-semibold">Stoa</h2>
         {attentionCount > 0 && (
           <Tooltip>
             <TooltipTrigger asChild>
