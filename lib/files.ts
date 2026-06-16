@@ -31,9 +31,9 @@ const DEFAULT_EXCLUDES = [
   "venv",
   ".DS_Store",
   "*.log",
-  ".env",
-  ".env.local",
-  ".env.*.local",
+  // NOTE: .env files are intentionally NOT excluded — users manage them in the
+  // explorer (as they would in VS Code), and the content API already serves a
+  // known .env path anyway, so hiding it from the tree was cosmetic, not a guard.
   "*.db",
   "*.db-wal",
   "*.db-shm",

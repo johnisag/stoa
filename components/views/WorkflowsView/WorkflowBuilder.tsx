@@ -1245,12 +1245,12 @@ export function WorkflowBuilder({
       </div>
 
       {doc.nodes.length === 0 && doc.notes.length === 0 ? (
-        <div className="text-muted-foreground flex flex-1 items-center justify-center rounded-md border border-dashed px-3 text-center text-xs">
+        <div className="text-muted-foreground flex min-h-[180px] flex-1 items-center justify-center rounded-md border border-dashed px-3 text-center text-xs">
           No steps yet — tap <span className="font-medium">Add step</span> to
           add your first node.
         </div>
       ) : (
-        <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border">
+        <div className="relative min-h-[360px] flex-1 overflow-hidden rounded-md border">
           <PipelineCanvas
             doc={doc}
             selectedIds={selectedIds}
