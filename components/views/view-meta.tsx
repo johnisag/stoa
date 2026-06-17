@@ -5,6 +5,7 @@ import {
   Rocket,
   Inbox,
   Sparkles,
+  Layers,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import type { ViewKind } from "@/lib/panes";
@@ -27,6 +28,7 @@ export const VIEW_META: Partial<Record<ViewKind, ViewMeta>> = {
   dispatch: { label: "Dispatch", Icon: Rocket },
   "verdict-inbox": { label: "Verdict Inbox", Icon: Inbox },
   ask: { label: "Ask Stoa", Icon: Sparkles },
+  "best-of-n": { label: "Best of N", Icon: Layers },
 };
 
 /** The display metadata for a tab's view, or undefined for a terminal/unknown one. */
