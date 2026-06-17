@@ -345,10 +345,12 @@ export function addStep(
  */
 export function addPresetStep(
   doc: BuilderDoc,
-  preset: { id: string; agent: AgentType; task: string; exitCriteria?: string }
+  preset: { id: string; agent: AgentType; task: string; exitCriteria?: string },
+  dropX?: number,
+  dropY?: number
 ): BuilderDoc {
   const id = uniqueStepId(doc, preset.id);
-  const { x, y } = nextAutoPosition(doc);
+  const { x, y } = dropX != null && dropY != null ? { x: dropX, y: dropY } : nextAutoPosition(doc);
   const step: PipelineStep = { id, agent: preset.agent, task: preset.task };
   if (preset.exitCriteria) step.exitCriteria = preset.exitCriteria;
   return { ...doc, nodes: [...doc.nodes, { step, x, y }] };

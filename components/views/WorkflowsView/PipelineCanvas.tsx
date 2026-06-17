@@ -57,6 +57,7 @@ export function PipelineCanvas({
   onGoToDefinitions,
   scrollRef,
   panEnabled = false,
+  onDropSnippet,
 }: {
   doc: BuilderDoc;
   selectedIds: Set<string>;
@@ -88,6 +89,7 @@ export function PipelineCanvas({
   scrollRef?: RefObject<HTMLDivElement | null>;
   /** When true, hold-Space turns a drag into a canvas pan (builder tab only). */
   panEnabled?: boolean;
+  onDropSnippet?: (snippetId: string, x: number, y: number) => void;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   // Hold-Space-to-pan: while Space is held the cursor is a grab hand and a drag
@@ -123,6 +125,7 @@ export function PipelineCanvas({
     x1: number;
     y1: number;
   } | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   // Long-press state: fire a synthetic context-menu event on touch after 500ms.
   const longPress = useRef<{
     id: string;
@@ -476,6 +479,8 @@ export function PipelineCanvas({
       onPointerMove={onWrapperPointerMove}
       onPointerUp={onWrapperPointerUp}
       onPointerCancel={onWrapperPointerUp}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes("workflow-snippet-id")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
+      onDrop={(e) => { const snippetId = e.dataTransfer.getData("workflow-snippet-id"); if (!snippetId || !onDropSnippet) return; e.preventDefault(); const r = svgRef.current?.getBoundingClientRect(); const el = scrollRef?.current; const x = e.clientX - (r?.left ?? 0) + (el?.scrollLeft ?? 0); const y = e.clientY - (r?.top ?? 0) + (el?.scrollTop ?? 0); onDropSnippet(snippetId, Math.max(0, x - 80), Math.max(0, y - 24)); }}
     >
       <svg
         ref={svgRef}
@@ -644,6 +649,8 @@ export function PipelineCanvas({
                   onPointerMove={onNodePointerMove}
                   onPointerUp={onNodePointerUp}
                   onPointerCancel={onNodePointerUp}
+                  onMouseEnter={() => setHoveredNodeId(n.step.id)}
+                  onMouseLeave={() => setHoveredNodeId(null)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
@@ -699,6 +706,21 @@ export function PipelineCanvas({
                         className="stroke-background fill-red-500"
                         strokeWidth={1.5}
                       />
+                    </g>
+                  )}
+                  {(hoveredNodeId === n.step.id || selected) && (
+                    <g
+                      transform={"translate(" + (NODE_W - 10) + ", -10)"}
+                      style={{ cursor: "pointer" }}
+                      onClick={(e) => { e.stopPropagation(); onDeleteItem(n.step.id); }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      role="button"
+                      aria-label={"Delete " + (n.step.name || n.step.id)}
+                    >
+                      <title>Delete this step</title>
+                      <circle r={8} className="fill-destructive" />
+                      <line x1="-3.5" y1="-3.5" x2="3.5" y2="3.5" stroke="white" strokeWidth={1.5} strokeLinecap="round" />
+                      <line x1="3.5" y1="-3.5" x2="-3.5" y2="3.5" stroke="white" strokeWidth={1.5} strokeLinecap="round" />
                     </g>
                   )}
                 </g>

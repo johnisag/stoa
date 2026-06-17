@@ -212,9 +212,63 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
     // Paste the clipboard into the terminal through xterm so bracketed-paste
     // mode is honored (multi-line text goes in as one paste, not executed line
-    // by line). Used by the desktop Paste button.
+    // by line). Handles images by uploading them to a temp path and injecting
+    // the path string, then falls back to plain text. Used by both the desktop
+    // floating Paste button and the mobile TerminalToolbar paste button.
     const handlePasteFromClipboard = useCallback(async () => {
       try {
+        if (navigator.clipboard?.read) {
+          const items = await navigator.clipboard.read();
+          // Collect image blobs from all clipboard items
+          const imageFiles: File[] = [];
+          for (const item of items) {
+            for (const type of ["image/png", "image/jpeg", "image/gif", "image/webp"]) {
+              if (item.types.includes(type)) {
+                const blob = await item.getType(type);
+                const ext = type.split("/")[1];
+                imageFiles.push(new File([blob], `clipboard.${ext}`, { type }));
+                break;
+              }
+            }
+          }
+          if (imageFiles.length > 0) {
+            setIsUploading(true);
+            try {
+              const settled = await Promise.allSettled(
+                imageFiles.map((file) => uploadFileToTemp(file))
+              );
+              const { paths, failures } = partitionUploads(settled);
+              if (failures > 0) {
+                toast.error(
+                  failures === 1
+                    ? "1 image failed to upload"
+                    : `${failures} images failed to upload`
+                );
+              }
+              if (paths.length > 0) {
+                sendInput(formatPathsForAgent(paths));
+                focus();
+              }
+            } finally {
+              setIsUploading(false);
+            }
+            return;
+          }
+          // No images — check for plain text
+          for (const item of items) {
+            if (item.types.includes("text/plain")) {
+              const blob = await item.getType("text/plain");
+              const text = await blob.text();
+              if (text) {
+                paste(text);
+                focus();
+              }
+              return;
+            }
+          }
+          return;
+        }
+        // Fallback: clipboard.read() unavailable, try readText()
         const text = await navigator.clipboard?.readText?.();
         if (text) {
           paste(text);
@@ -223,7 +277,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       } catch {
         // Clipboard read blocked/unavailable — no-op (user can still ⌘V).
       }
-    }, [paste, focus]);
+    }, [paste, focus, sendInput, setIsUploading]);
 
     // Grab the current selection and inject it into the agent's prompt as
     // context — kills the copy-the-stack-trace-then-paste dance. In select mode
@@ -491,6 +545,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             selectMode={selectMode}
             onSelectModeChange={setSelectMode}
             visible={true}
+            onPasteFromClipboard={handlePasteFromClipboard}
           />
         )}
 
