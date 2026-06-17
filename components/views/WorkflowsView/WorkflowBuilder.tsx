@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
 import {
   Check,
+  ChevronDown,
   ClipboardPaste,
   Copy,
   Download,
@@ -12,6 +13,7 @@ import {
   Fullscreen,
   GitBranch,
   HelpCircle,
+  Layers,
   Loader2,
   Play,
   Plus,
@@ -75,7 +77,7 @@ import { cn } from "@/lib/utils";
 import { PipelineCanvas } from "./PipelineCanvas";
 import { Minimap } from "./Minimap";
 import { WorkflowsShortcuts } from "./WorkflowsShortcuts";
-import { SnippetsPanel } from "./SnippetsPanel";
+import { AgentsPanel } from "./SnippetsPanel";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -160,6 +162,41 @@ function availableWorktrees(
   return worktrees.filter((w) => w.projectId === base);
 }
 
+function CollapsibleSection({
+  title,
+  icon: Icon,
+  children,
+  defaultOpen = true,
+}: {
+  title: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="flex-shrink-0 rounded-md border">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-sm font-medium"
+      >
+        <div className="flex items-center gap-1.5">
+          {Icon && <Icon className="text-muted-foreground h-4 w-4" />}
+          <span>{title}</span>
+        </div>
+        <ChevronDown
+          className={cn(
+            "text-muted-foreground h-4 w-4 transition-transform",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+      {open && <div className="px-3 pb-3 pt-1">{children}</div>}
+    </div>
+  );
+}
+
 /**
  * Visual workflow builder (Phase 3): compose a pipeline by dragging nodes on a
  * canvas and editing the selected step in a form, instead of hand-writing JSON.
@@ -189,6 +226,7 @@ export function WorkflowBuilder({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const canvasScrollRef = useRef<HTMLDivElement | null>(null);
+  const editPanelRef = useRef<HTMLDivElement | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
@@ -200,18 +238,18 @@ export function WorkflowBuilder({
   // design one). Shown inline (not a fleeting toast) so the user can act on it.
   const [genAnswer, setGenAnswer] = useState<string | null>(null);
   const generate = useGenerateWorkflow();
-  // Bring the edit panel into view when a node is selected — on a phone it sits
-  // below a tall canvas, so tapping a node would otherwise open a form off-screen.
-  const editRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (primaryId) editRef.current?.scrollIntoView({ block: "nearest" });
-  }, [primaryId]);
-
   // The Task field's "insert an upstream step's output" affordance.
   const taskRef = useRef<HTMLTextAreaElement>(null);
   const [showRefMenu, setShowRefMenu] = useState(false);
   // Collapse the menu whenever the selected step changes.
   useEffect(() => setShowRefMenu(false), [primaryId]);
+  // On narrow screens (< lg) the edit panel stacks below the canvas; scroll it
+  // into view when a node or note is selected so the user doesn't have to hunt.
+  useEffect(() => {
+    if (!primaryId || !editPanelRef.current) return;
+    if (window.innerWidth >= 1024) return; // lg breakpoint — side-by-side, no scroll needed
+    editPanelRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [primaryId]);
   const [conductorId, setConductorId] = useState<string>(
     defaultConductorId && sessions.some((s) => s.id === defaultConductorId)
       ? defaultConductorId
@@ -312,11 +350,6 @@ export function WorkflowBuilder({
 
   function handleGoToDefinitions(id: string) {
     handleSelectNode(id);
-    // The useEffect keyed on primaryId scrolls automatically on a new selection,
-    // but only when the value changes. Force a scroll for repeated menu clicks.
-    requestAnimationFrame(() => {
-      editRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
   }
 
   function handleSelectNode(
@@ -416,7 +449,7 @@ export function WorkflowBuilder({
     if (
       !(await confirm({
         title: "Delete this item?",
-        description: "This can’t be undone.",
+        description: "This can't be undone.",
       }))
     ) {
       return;
@@ -432,7 +465,7 @@ export function WorkflowBuilder({
     if (
       !(await confirm({
         title: "Delete selected items?",
-        description: `Delete ${ids.length} selected item${ids.length === 1 ? "" : "s"}? This can’t be undone.`,
+        description: `Delete ${ids.length} selected item${ids.length === 1 ? "" : "s"}? This can't be undone.`,
       }))
     ) {
       return;
@@ -509,7 +542,7 @@ export function WorkflowBuilder({
 
   async function handlePasteImport() {
     if (!parsedImport) {
-      toast.error("That JSON isn’t a valid workflow.");
+      toast.error("That JSON isn't a valid workflow.");
       return;
     }
     if (
@@ -622,7 +655,7 @@ export function WorkflowBuilder({
     }
     if (!name) {
       toast.error(
-        "Give the workflow a name first (the “Workflow name” field)."
+        `Give the workflow a name first (the “Workflow name” field).`
       );
       return null;
     }
@@ -641,7 +674,7 @@ export function WorkflowBuilder({
         setSavedId(created.id);
       }
       setSavedSnapshot(snapshot); // now persisted = no unsaved changes
-      toast.success(`Saved “${name}”`);
+      toast.success(`Saved "${name}"`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save");
     }
@@ -657,7 +690,7 @@ export function WorkflowBuilder({
       const created = await createWf.mutateAsync({ name, doc });
       setSavedId(created.id);
       setSavedSnapshot(snapshot);
-      toast.success(`Saved a copy as “${name}”`);
+      toast.success(`Saved a copy as "${name}"`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save");
     }
@@ -702,7 +735,7 @@ export function WorkflowBuilder({
     reader.onload = async () => {
       const next = docFromImportedJson(String(reader.result ?? ""));
       if (!next) {
-        toast.error("That file isn’t a valid workflow JSON.");
+        toast.error("That file isn't a valid workflow JSON.");
         return;
       }
       if (
@@ -717,7 +750,7 @@ export function WorkflowBuilder({
       loadDoc(next, null); // imported = a fresh unsaved draft
       toast.success("Imported workflow");
     };
-    reader.onerror = () => toast.error("Couldn’t read that file.");
+    reader.onerror = () => toast.error("Couldn't read that file.");
     reader.readAsText(file);
   }
 
@@ -727,7 +760,7 @@ export function WorkflowBuilder({
     if (
       !(await confirm({
         title: "Delete this saved workflow?",
-        description: `“${target?.name ?? doc.name}” will be removed. This can't be undone.`,
+        description: `"${target?.name ?? doc.name}" will be removed. This can't be undone.`,
       }))
     ) {
       return;
@@ -779,7 +812,7 @@ export function WorkflowBuilder({
     if (!newId || newId === oldId) return;
     const next = renameStep(doc, oldId, newId);
     if (next === doc) {
-      toast.error(`Step id “${newId}” is already taken`);
+      toast.error(`Step id "${newId}" is already taken`);
       return;
     }
     setDoc(next);
@@ -789,7 +822,7 @@ export function WorkflowBuilder({
 
   async function handleContextCopyId(id: string) {
     if (await copyText(id)) {
-      toast.success(`Copied id “${id}”`);
+      toast.success(`Copied id "${id}"`);
     } else {
       toast.error("Could not copy to clipboard");
     }
@@ -799,6 +832,16 @@ export function WorkflowBuilder({
     const snippet = WORKFLOW_SNIPPETS.find((s) => s.id === snippetId);
     if (!snippet) return;
     const next = addPresetStep(doc, snippet);
+    setDoc(next);
+    const id = next.nodes[next.nodes.length - 1].step.id;
+    setSelectedIds(new Set([id]));
+    setPrimaryId(id);
+  }
+
+  function handleSnippetDrop(snippetId: string, x: number, y: number) {
+    const snippet = WORKFLOW_SNIPPETS.find((s) => s.id === snippetId);
+    if (!snippet) return;
+    const next = addPresetStep(doc, snippet, x, y);
     setDoc(next);
     const id = next.nodes[next.nodes.length - 1].step.id;
     setSelectedIds(new Set([id]));
@@ -860,7 +903,7 @@ export function WorkflowBuilder({
         spec,
         conductorSessionId: conductorId,
       });
-      toast.success(`Started “${spec.name}”`);
+      toast.success(`Started "${spec.name}"`);
       onStarted(run.id);
     } catch (e) {
       toast.error(
@@ -870,719 +913,758 @@ export function WorkflowBuilder({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      {/* Assisted generator: describe a goal → an agent DESIGNS the workflow and
-          loads it onto the canvas for review. Nothing runs until you hit Start. */}
-      <div
-        className="bg-card/40 flex flex-shrink-0 flex-col gap-2 rounded-md border p-3"
-        aria-busy={generate.isPending}
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      {/* 1. Design with AI — collapsible, closed by default */}
+      <CollapsibleSection
+        title="Design with AI"
+        icon={Sparkles}
+        defaultOpen={false}
       >
-        <div className="flex items-center gap-1.5">
-          <Sparkles className="text-primary h-4 w-4" />
-          <span className="text-sm font-medium">Design a workflow with AI</span>
-        </div>
-        <Textarea
-          value={genSummary}
-          onChange={(e) => setGenSummary(e.target.value)}
-          placeholder="Describe what to build — e.g. “a Stripe billing page with full tests and a review gate”. An agent designs the workflow; you review and edit before anything runs."
-          rows={2}
-          disabled={generate.isPending}
-          aria-label="Describe what to build"
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <Select
-            value={genProvider}
-            onValueChange={(v) => {
-              setGenProvider(v as "claude" | "codex");
-              setGenModel(""); // model catalog is per-provider; reset to default
-            }}
-            disabled={generate.isPending}
-          >
-            <SelectTrigger className="w-28" aria-label="Designer agent">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="claude">Claude</SelectItem>
-              <SelectItem value="codex">Codex</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select
-            value={genModel || "default"}
-            onValueChange={(v) => setGenModel(v === "default" ? "" : v)}
-            disabled={generate.isPending}
-          >
-            <SelectTrigger className="w-40" aria-label="Designer model">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="default">
-                <span className="text-muted-foreground">Default model</span>
-              </SelectItem>
-              {getModelOptions(genProvider).map((m) => (
-                <SelectItem key={m.value} value={m.value}>
-                  {m.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            size="sm"
-            onClick={handleGenerate}
-            disabled={
-              generate.isPending || !genSummary.trim() || !doc.projectId
-            }
-            title={
-              !doc.projectId
-                ? "Pick a Project context below first"
-                : "Design a workflow for this goal"
-            }
-          >
-            {generate.isPending ? (
-              <>
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />{" "}
-                Designing…
-              </>
-            ) : (
-              <>
-                <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Generate
-              </>
-            )}
-          </Button>
-          {!doc.projectId && (
-            <span className="text-muted-foreground text-[11px]">
-              Pick a <span className="font-medium">Project context</span> below
-              first.
-            </span>
-          )}
-        </div>
-        {genAnswer && (
-          <div className="bg-muted/50 text-muted-foreground flex items-start justify-between gap-2 rounded-md border px-3 py-2 text-xs leading-relaxed">
-            <p className="min-w-0 whitespace-pre-wrap">{genAnswer}</p>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Dismiss reply"
-              className="-mt-1 -mr-1 flex-shrink-0"
-              onClick={() => setGenAnswer(null)}
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        )}
-      </div>
-
-      <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label="Undo"
-            title="Undo"
-            disabled={!canUndo}
-            onClick={handleUndo}
-          >
-            <Undo2 className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label="Redo"
-            title="Redo"
-            disabled={!canRedo}
-            onClick={handleRedo}
-          >
-            <Redo2 className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label="Center all items"
-            title="Center all items"
-            disabled={doc.nodes.length === 0 && doc.notes.length === 0}
-            onClick={handleFitAll}
-          >
-            <Fullscreen className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label="Keyboard shortcuts"
-            title="Keyboard shortcuts"
-            onClick={() => setShortcutsOpen(true)}
-          >
-            <HelpCircle className="h-3.5 w-3.5" />
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button type="button" variant="outline" size="sm">
-                <FolderOpen className="mr-1.5 h-3.5 w-3.5" /> Saved
-                {dirty && (
-                  <span
-                    className="ml-1 inline-block h-2 w-2 rounded-full bg-amber-500"
-                    title="Unsaved changes"
-                    aria-label="Unsaved changes"
-                  />
-                )}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="max-h-80 w-56 overflow-y-auto"
-            >
-              {/* Save stays ENABLED even when not ready — handleSave's toast then
-                  teaches why (a disabled item gives a phone tap no feedback). */}
-              <DropdownMenuItem
-                onSelect={handleSave}
-                disabled={createWf.isPending || updateWf.isPending}
-              >
-                <Save className="mr-2 h-3.5 w-3.5" />
-                {savedId ? "Save" : "Save as new"}
-              </DropdownMenuItem>
-              {savedId && (
-                <DropdownMenuItem
-                  onSelect={handleSaveCopy}
-                  disabled={createWf.isPending}
-                >
-                  <Copy className="mr-2 h-3.5 w-3.5" /> Save a copy
-                </DropdownMenuItem>
-              )}
-              {savedId && (
-                <DropdownMenuItem
-                  onSelect={handleDeleteSaved}
-                  className="text-red-600 dark:text-red-400"
-                >
-                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete current
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onSelect={handleTidy}
-                disabled={doc.nodes.length === 0}
-              >
-                <Wand2 className="mr-2 h-3.5 w-3.5" /> Tidy layout
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={startBlankWorkflow}>
-                <Plus className="mr-2 h-3.5 w-3.5" /> New workflow
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={loadExampleWorkflow}>
-                <FileJson className="mr-2 h-3.5 w-3.5" /> Load example
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => fileRef.current?.click()}>
-                <Upload className="mr-2 h-3.5 w-3.5" /> Import workflow…
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setPasteOpen(true)}>
-                <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> Paste JSON
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={handleExport}
-                disabled={doc.nodes.length === 0 && doc.notes.length === 0}
-              >
-                <Download className="mr-2 h-3.5 w-3.5" /> Export workflow
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={handleCopyJson}
-                disabled={doc.nodes.length === 0 && doc.notes.length === 0}
-              >
-                <Copy className="mr-2 h-3.5 w-3.5" /> Copy JSON
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel>Saved workflows</DropdownMenuLabel>
-              {savedList.data && savedList.data.length > 0 ? (
-                savedList.data.map((wf) => (
-                  <DropdownMenuItem
-                    key={wf.id}
-                    onSelect={() => loadDoc(wf.doc, wf.id)}
-                    className="flex items-center gap-2"
-                  >
-                    <Check
-                      className={cn(
-                        "h-3.5 w-3.5 flex-shrink-0",
-                        wf.id === savedId ? "opacity-100" : "opacity-0"
-                      )}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{wf.name}</span>
-                    <span className="text-muted-foreground flex-shrink-0 text-[10px]">
-                      {wf.doc.nodes.length} step
-                      {wf.doc.nodes.length === 1 ? "" : "s"}
-                    </span>
-                  </DropdownMenuItem>
-                ))
-              ) : (
-                <DropdownMenuItem disabled>
-                  No saved workflows yet
-                </DropdownMenuItem>
-              )}
-              {currentSaved && currentSaved.history.length > 0 && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>History</DropdownMenuLabel>
-                  {currentSaved.history.map((snapshot) => (
-                    <DropdownMenuItem
-                      key={snapshot.id}
-                      onSelect={() => loadSnapshot(snapshot)}
-                      className="flex flex-col items-start gap-0.5"
-                    >
-                      <span className="truncate text-xs">{snapshot.name}</span>
-                      <span className="text-muted-foreground text-[10px]">
-                        {formatSnapshotTime(snapshot.createdAt)}
-                      </span>
-                    </DropdownMenuItem>
-                  ))}
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={handleImportFile}
-          />
-          <Button type="button" variant="outline" size="sm" onClick={handleAdd}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" /> Add step
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleAddNote}
-          >
-            <StickyNote className="mr-1.5 h-3.5 w-3.5" /> Add note
-          </Button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted-foreground text-xs">Workflow name</span>
-          <Input
-            value={doc.name}
-            onChange={(e) =>
-              setDoc((d) => ({ ...d, name: e.target.value }), {
-                transient: true,
-              })
-            }
-            onBlur={commit}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted-foreground text-xs">Project context</span>
-          <Select
-            value={doc.projectId || "none"}
-            onValueChange={(v) => {
-              const id = v === "none" ? null : v;
-              const project = projects.find((p) => p.id === id);
-              setDoc((d) => setProject(d, id, project?.working_directory));
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Pick a project" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">
-                <span className="text-muted-foreground">No project</span>
-              </SelectItem>
-              {projects
-                .filter((p) => !p.is_uncategorized)
-                .map((project) => (
-                  <SelectItem key={project.id} value={project.id}>
-                    {project.name}
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted-foreground text-xs">Worktree</span>
-          <Select
-            value={doc.worktreePath || "new"}
-            onValueChange={(v) => {
-              const wt = worktrees.find((w) => w.path === v);
-              setDoc((d) => setWorktree(d, wt?.path ?? null, wt?.projectId));
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="new">
-                <span className="text-muted-foreground">New worktree</span>
-              </SelectItem>
-              {availableWorktrees(
-                doc,
-                worktrees,
-                selectedProject?.working_directory
-              ).map((w) => (
-                <SelectItem key={w.path} value={w.path}>
-                  {worktreeLabel(w)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted-foreground text-xs">
-            Working directory
-          </span>
-          <Input
-            value={doc.workingDirectory}
-            onChange={(e) =>
-              setDoc((d) => ({ ...d, workingDirectory: e.target.value }), {
-                transient: true,
-              })
-            }
-            onBlur={commit}
-          />
-        </label>
-      </div>
-
-      {doc.nodes.length === 0 && doc.notes.length === 0 ? (
-        <div className="text-muted-foreground flex min-h-[180px] flex-1 items-center justify-center rounded-md border border-dashed px-3 text-center text-xs">
-          No steps yet — tap <span className="font-medium">Add step</span> to
-          add your first node.
-        </div>
-      ) : (
-        <div className="relative min-h-[360px] flex-1 overflow-hidden rounded-md border">
-          <PipelineCanvas
-            doc={doc}
-            selectedIds={selectedIds}
-            errorIds={errorIds}
-            onSelectNode={handleSelectNode}
-            onMoveItems={handleMoveItems}
-            onMoveEnd={handleMoveEnd}
-            onConnect={(from, to) => setDoc((d) => connect(d, from, to))}
-            onDisconnect={(from, to) => setDoc((d) => disconnect(d, from, to))}
-            onDuplicateNode={handleDuplicate}
-            onDeleteItem={handleConfirmDeleteItem}
-            onCopyId={handleContextCopyId}
-            onGoToDefinitions={handleGoToDefinitions}
-            scrollRef={canvasScrollRef}
-            panEnabled
-          />
-          <Minimap
-            doc={doc}
-            selectedIds={selectedIds}
-            scrollRef={canvasScrollRef}
-            className="absolute top-2 right-2 z-10"
-          />
-        </div>
-      )}
-
-      {selectedIds.size > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-muted-foreground text-xs">
-            {selectedIds.size} selected
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={
-              ![...selectedIds].some((id) =>
-                doc.nodes.some((n) => n.step.id === id)
-              )
-            }
-            onClick={() => handleDuplicate()}
-          >
-            <Copy className="mr-1.5 h-3.5 w-3.5" /> Duplicate
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleDeleteSelected}
-          >
-            <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
-          </Button>
-        </div>
-      )}
-
-      <SnippetsPanel onSelectSnippet={handleSnippetSelect} />
-
-      {/* Edit panel for the selected item (node or note). */}
-      {primaryNode && (
         <div
-          ref={editRef}
-          key={primaryNode.step.id}
-          className="bg-card flex flex-col gap-3 rounded-md border p-3"
+          className="flex flex-col gap-2"
+          aria-busy={generate.isPending}
         >
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">Edit step</span>
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => handleDuplicate()}
-                title="Duplicate step (Ctrl/Cmd+D)"
-              >
-                <Copy className="mr-1.5 h-3.5 w-3.5" /> Duplicate
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="text-red-600 hover:text-red-600 dark:text-red-400"
-                onClick={() => handleConfirmDeleteItem(primaryNode.step.id)}
-              >
-                <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
-              </Button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-muted-foreground text-xs">
-                Step id <span className="text-red-500">*</span>
-              </span>
-              <Input
-                key={primaryNode.step.id}
-                defaultValue={primaryNode.step.id}
-                spellCheck={false}
-                // Commit on blur (so we don't rename on every keystroke) — and on
-                // Enter, which blurs, so a phone user who taps straight to Start
-                // doesn't lose the edit.
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") e.currentTarget.blur();
-                }}
-                onBlur={(e) =>
-                  commitRename(primaryNode.step.id, e.target.value)
-                }
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-muted-foreground text-xs">
-                Name (optional)
-              </span>
-              <Input
-                value={primaryNode.step.name ?? ""}
-                onChange={(e) =>
-                  patchTransient(primaryNode.step.id, {
-                    name: e.target.value || undefined,
-                  })
-                }
-                onBlur={commit}
-              />
-            </label>
-          </div>
-
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-muted-foreground text-xs">Agent</span>
+          <Textarea
+            value={genSummary}
+            onChange={(e) => setGenSummary(e.target.value)}
+            placeholder={'Describe what to build — e.g. “a Stripe billing page with full tests and a review gate”. An agent designs the workflow; you review and edit before anything runs.'}
+            rows={2}
+            disabled={generate.isPending}
+            aria-label="Describe what to build"
+          />
+          <div className="flex flex-wrap items-center gap-2">
             <Select
-              value={primaryNode.step.agent}
-              onValueChange={(v) =>
-                patch(primaryNode.step.id, { agent: v as AgentType })
-              }
+              value={genProvider}
+              onValueChange={(v) => {
+                setGenProvider(v as "claude" | "codex");
+                setGenModel(""); // model catalog is per-provider; reset to default
+              }}
+              disabled={generate.isPending}
             >
-              <SelectTrigger>
+              <SelectTrigger className="w-28" aria-label="Designer agent">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {AGENT_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    <span className="font-medium">{o.label}</span>
-                    <span className="text-muted-foreground ml-2 text-xs">
-                      {o.description}
-                    </span>
+                <SelectItem value="claude">Claude</SelectItem>
+                <SelectItem value="codex">Codex</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={genModel || "default"}
+              onValueChange={(v) => setGenModel(v === "default" ? "" : v)}
+              disabled={generate.isPending}
+            >
+              <SelectTrigger className="w-40" aria-label="Designer model">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">
+                  <span className="text-muted-foreground">Default model</span>
+                </SelectItem>
+                {getModelOptions(genProvider).map((m) => (
+                  <SelectItem key={m.value} value={m.value}>
+                    {m.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </label>
-
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-muted-foreground text-xs">
-              Task <span className="text-red-500">*</span>
-            </span>
-            <Textarea
-              ref={taskRef}
-              value={primaryNode.step.task}
-              spellCheck={false}
-              placeholder="What this agent should do. Reference an upstream step's output with {{steps.<id>.output}}."
-              onChange={(e) =>
-                patchTransient(primaryNode.step.id, { task: e.target.value })
-              }
-              onBlur={commit}
-              className="min-h-[80px]"
-            />
-            {/* Insert a valid {{steps.<id>.output}} reference (no hand-typing /
-                typos) — picking a step also adds it as a dependency. */}
-            {doc.nodes.length > 1 && (
-              <div className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  onClick={() => setShowRefMenu((v) => !v)}
-                  className="text-muted-foreground hover:text-foreground self-start text-xs underline-offset-2 hover:underline"
-                >
-                  + Insert an upstream step&apos;s output
-                </button>
-                {showRefMenu && (
-                  <div className="flex flex-col gap-0.5 rounded-md border p-1">
-                    <span className="text-muted-foreground px-2 py-1 text-[11px]">
-                      Inserts the reference and adds the step as a dependency.
-                    </span>
-                    {doc.nodes
-                      .filter((n) => n.step.id !== primaryNode.step.id)
-                      .map((n) => (
-                        <button
-                          key={n.step.id}
-                          type="button"
-                          onClick={() => handleInsertRef(n.step.id)}
-                          title={`Insert ${outputRefToken(n.step.id)} and depend on this step`}
-                          className="hover:bg-accent flex items-center gap-2 rounded px-2 py-1 text-left text-xs"
-                        >
-                          <span className="truncate font-medium">
-                            {n.step.name || n.step.id}
-                          </span>
-                          <span className="text-muted-foreground truncate font-mono">
-                            {outputRefToken(n.step.id)}
-                          </span>
-                        </button>
-                      ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </label>
-
-          {/* dependsOn — a checklist of the other step ids (the house multi-select
-              idiom; the same edges you can draw by dragging a node's port). */}
-          {doc.nodes.length > 1 && (
-            <div className="flex flex-col gap-1 text-sm">
-              <span className="text-muted-foreground text-xs">Depends on</span>
-              <div className="flex flex-col gap-1 rounded-md border p-2">
-                {doc.nodes
-                  .filter((n) => n.step.id !== primaryNode.step.id)
-                  .map((n) => {
-                    const checked =
-                      primaryNode.step.dependsOn?.includes(n.step.id) ?? false;
-                    return (
-                      <div
-                        key={n.step.id}
-                        className="flex items-center justify-between gap-2 text-xs"
-                      >
-                        <label className="flex flex-1 cursor-pointer items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) => {
-                              const cur = primaryNode.step.dependsOn ?? [];
-                              const next = e.target.checked
-                                ? [...cur, n.step.id]
-                                : cur.filter((d) => d !== n.step.id);
-                              setDoc((d) =>
-                                setDependsOn(d, primaryNode.step.id, next)
-                              );
-                            }}
-                          />
-                          {n.step.name || n.step.id}
-                        </label>
-                        {checked && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`Remove dependency on ${n.step.name || n.step.id}`}
-                            title="Remove dependency"
-                            onClick={() =>
-                              setDoc((d) =>
-                                disconnect(d, n.step.id, primaryNode.step.id)
-                              )
-                            }
-                          >
-                            <X className="h-3 w-3" />
-                          </Button>
-                        )}
-                      </div>
-                    );
-                  })}
-              </div>
-            </div>
-          )}
-
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-muted-foreground text-xs">
-              Exit criteria (optional)
-            </span>
-            <Textarea
-              value={primaryNode.step.exitCriteria ?? ""}
-              spellCheck={false}
-              placeholder="Unbreakable rules the step must satisfy, e.g. “must pass tests; open a PR”."
-              onChange={(e) =>
-                patchTransient(primaryNode.step.id, {
-                  exitCriteria: e.target.value || undefined,
-                })
-              }
-              onBlur={commit}
-              className="min-h-[60px]"
-            />
-          </label>
-
-          <label className="flex items-center justify-between gap-2 text-sm">
-            <span className="flex flex-col">
-              <span className="text-xs font-medium">Shared worktree</span>
-              <span className="text-muted-foreground text-[11px]">
-                Reuse one checkout for all shared steps (runs them serially).
-              </span>
-            </span>
-            <Switch
-              checked={primaryNode.step.worktreePolicy === "shared"}
-              onCheckedChange={(c) =>
-                patch(primaryNode.step.id, {
-                  worktreePolicy: c ? "shared" : undefined,
-                })
-              }
-            />
-          </label>
-        </div>
-      )}
-
-      {primaryNote && (
-        <div
-          ref={editRef}
-          key={primaryNote.id}
-          className="bg-card flex flex-col gap-3 rounded-md border p-3"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">Edit note</span>
             <Button
               type="button"
-              variant="ghost"
               size="sm"
-              className="text-red-600 hover:text-red-600 dark:text-red-400"
-              onClick={() => handleConfirmDeleteItem(primaryNote.id)}
+              onClick={handleGenerate}
+              disabled={
+                generate.isPending || !genSummary.trim() || !doc.projectId
+              }
+              title={
+                !doc.projectId
+                  ? "Pick a Project context below first"
+                  : "Design a workflow for this goal"
+              }
+            >
+              {generate.isPending ? (
+                <>
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />{" "}
+                  Designing…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Generate
+                </>
+              )}
+            </Button>
+            {!doc.projectId && (
+              <span className="text-muted-foreground text-[11px]">
+                Pick a <span className="font-medium">Project context</span>{" "}
+                below first.
+              </span>
+            )}
+          </div>
+          {genAnswer && (
+            <div className="bg-muted/50 text-muted-foreground flex items-start justify-between gap-2 rounded-md border px-3 py-2 text-xs leading-relaxed">
+              <p className="min-w-0 whitespace-pre-wrap">{genAnswer}</p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Dismiss reply"
+                className="-mt-1 -mr-1 flex-shrink-0"
+                onClick={() => setGenAnswer(null)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
+        </div>
+      </CollapsibleSection>
+
+      {/* 2. Toolbar */}
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label="Undo"
+          title="Undo"
+          disabled={!canUndo}
+          onClick={handleUndo}
+        >
+          <Undo2 className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label="Redo"
+          title="Redo"
+          disabled={!canRedo}
+          onClick={handleRedo}
+        >
+          <Redo2 className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label="Center all items"
+          title="Center all items"
+          disabled={doc.nodes.length === 0 && doc.notes.length === 0}
+          onClick={handleFitAll}
+        >
+          <Fullscreen className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label="Keyboard shortcuts"
+          title="Keyboard shortcuts"
+          onClick={() => setShortcutsOpen(true)}
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="outline" size="sm">
+              <FolderOpen className="mr-1.5 h-3.5 w-3.5" /> Saved
+              {dirty && (
+                <span
+                  className="ml-1 inline-block h-2 w-2 rounded-full bg-amber-500"
+                  title="Unsaved changes"
+                  aria-label="Unsaved changes"
+                />
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="max-h-80 w-56 overflow-y-auto"
+          >
+            {/* Save stays ENABLED even when not ready — handleSave's toast then
+                teaches why (a disabled item gives a phone tap no feedback). */}
+            <DropdownMenuItem
+              onSelect={handleSave}
+              disabled={createWf.isPending || updateWf.isPending}
+            >
+              <Save className="mr-2 h-3.5 w-3.5" />
+              {savedId ? "Save" : "Save as new"}
+            </DropdownMenuItem>
+            {savedId && (
+              <DropdownMenuItem
+                onSelect={handleSaveCopy}
+                disabled={createWf.isPending}
+              >
+                <Copy className="mr-2 h-3.5 w-3.5" /> Save a copy
+              </DropdownMenuItem>
+            )}
+            {savedId && (
+              <DropdownMenuItem
+                onSelect={handleDeleteSaved}
+                className="text-red-600 dark:text-red-400"
+              >
+                <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete current
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={handleTidy}
+              disabled={doc.nodes.length === 0}
+            >
+              <Wand2 className="mr-2 h-3.5 w-3.5" /> Tidy layout
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={startBlankWorkflow}>
+              <Plus className="mr-2 h-3.5 w-3.5" /> New workflow
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={loadExampleWorkflow}>
+              <FileJson className="mr-2 h-3.5 w-3.5" /> Load example
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => fileRef.current?.click()}>
+              <Upload className="mr-2 h-3.5 w-3.5" /> Import workflow…
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setPasteOpen(true)}>
+              <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> Paste JSON
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={handleExport}
+              disabled={doc.nodes.length === 0 && doc.notes.length === 0}
+            >
+              <Download className="mr-2 h-3.5 w-3.5" /> Export workflow
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={handleCopyJson}
+              disabled={doc.nodes.length === 0 && doc.notes.length === 0}
+            >
+              <Copy className="mr-2 h-3.5 w-3.5" /> Copy JSON
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Saved workflows</DropdownMenuLabel>
+            {savedList.data && savedList.data.length > 0 ? (
+              savedList.data.map((wf) => (
+                <DropdownMenuItem
+                  key={wf.id}
+                  onSelect={() => loadDoc(wf.doc, wf.id)}
+                  className="flex items-center gap-2"
+                >
+                  <Check
+                    className={cn(
+                      "h-3.5 w-3.5 flex-shrink-0",
+                      wf.id === savedId ? "opacity-100" : "opacity-0"
+                    )}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{wf.name}</span>
+                  <span className="text-muted-foreground flex-shrink-0 text-[10px]">
+                    {wf.doc.nodes.length} step
+                    {wf.doc.nodes.length === 1 ? "" : "s"}
+                  </span>
+                </DropdownMenuItem>
+              ))
+            ) : (
+              <DropdownMenuItem disabled>No saved workflows yet</DropdownMenuItem>
+            )}
+            {currentSaved && currentSaved.history.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>History</DropdownMenuLabel>
+                {currentSaved.history.map((snapshot) => (
+                  <DropdownMenuItem
+                    key={snapshot.id}
+                    onSelect={() => loadSnapshot(snapshot)}
+                    className="flex flex-col items-start gap-0.5"
+                  >
+                    <span className="truncate text-xs">{snapshot.name}</span>
+                    <span className="text-muted-foreground text-[10px]">
+                      {formatSnapshotTime(snapshot.createdAt)}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={handleImportFile}
+        />
+        <Button type="button" variant="outline" size="sm" onClick={handleAdd}>
+          <Plus className="mr-1.5 h-3.5 w-3.5" /> Add step
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleAddNote}
+        >
+          <StickyNote className="mr-1.5 h-3.5 w-3.5" /> Add note
+        </Button>
+        {selectedIds.size > 0 && (
+          <>
+            <span className="text-muted-foreground text-xs">
+              {selectedIds.size} selected
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={
+                ![...selectedIds].some((id) =>
+                  doc.nodes.some((n) => n.step.id === id)
+                )
+              }
+              onClick={() => handleDuplicate()}
+            >
+              <Copy className="mr-1.5 h-3.5 w-3.5" /> Duplicate
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleDeleteSelected}
             >
               <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
             </Button>
-          </div>
-          <Textarea
-            value={primaryNote.text}
-            spellCheck={false}
-            placeholder="Write a note…"
-            onChange={(e) => patchNote(primaryNote.id, e.target.value)}
-            onBlur={commit}
-            className="min-h-[80px]"
-          />
-        </div>
-      )}
+          </>
+        )}
+      </div>
 
-      {/* Validation — green when runnable, the full error list otherwise. */}
+      {/* 3. Main split area: canvas top/left, edit panel bottom/right.
+           Stacks vertically on mobile (< lg) and side-by-side on lg+. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-2 lg:flex-row">
+        {/* LEFT column */}
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          {/* 3a. Settings collapsible */}
+          <CollapsibleSection title="Settings" defaultOpen={false}>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground text-xs">
+                  Workflow name
+                </span>
+                <Input
+                  value={doc.name}
+                  onChange={(e) =>
+                    setDoc((d) => ({ ...d, name: e.target.value }), {
+                      transient: true,
+                    })
+                  }
+                  onBlur={commit}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground text-xs">
+                  Project context
+                </span>
+                <Select
+                  value={doc.projectId || "none"}
+                  onValueChange={(v) => {
+                    const id = v === "none" ? null : v;
+                    const project = projects.find((p) => p.id === id);
+                    setDoc((d) =>
+                      setProject(d, id, project?.working_directory)
+                    );
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pick a project" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">
+                      <span className="text-muted-foreground">No project</span>
+                    </SelectItem>
+                    {projects
+                      .filter((p) => !p.is_uncategorized)
+                      .map((project) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground text-xs">Worktree</span>
+                <Select
+                  value={doc.worktreePath || "new"}
+                  onValueChange={(v) => {
+                    const wt = worktrees.find((w) => w.path === v);
+                    setDoc((d) =>
+                      setWorktree(d, wt?.path ?? null, wt?.projectId)
+                    );
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="new">
+                      <span className="text-muted-foreground">
+                        New worktree
+                      </span>
+                    </SelectItem>
+                    {availableWorktrees(
+                      doc,
+                      worktrees,
+                      selectedProject?.working_directory
+                    ).map((w) => (
+                      <SelectItem key={w.path} value={w.path}>
+                        {worktreeLabel(w)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground text-xs">
+                  Working directory
+                </span>
+                <Input
+                  value={doc.workingDirectory}
+                  onChange={(e) =>
+                    setDoc(
+                      (d) => ({ ...d, workingDirectory: e.target.value }),
+                      { transient: true }
+                    )
+                  }
+                  onBlur={commit}
+                />
+              </label>
+            </div>
+          </CollapsibleSection>
+
+          {/* 3b. Canvas */}
+          {doc.nodes.length === 0 && doc.notes.length === 0 ? (
+            <div className="text-muted-foreground flex min-h-[180px] flex-1 items-center justify-center rounded-md border border-dashed px-3 text-center text-xs">
+              No steps yet — tap{" "}
+              <span className="font-medium">Add step</span> to add your first
+              node.
+            </div>
+          ) : (
+            <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border">
+              <PipelineCanvas
+                doc={doc}
+                selectedIds={selectedIds}
+                errorIds={errorIds}
+                onSelectNode={handleSelectNode}
+                onMoveItems={handleMoveItems}
+                onMoveEnd={handleMoveEnd}
+                onConnect={(from, to) => setDoc((d) => connect(d, from, to))}
+                onDisconnect={(from, to) =>
+                  setDoc((d) => disconnect(d, from, to))
+                }
+                onDuplicateNode={handleDuplicate}
+                onDeleteItem={handleConfirmDeleteItem}
+                onCopyId={handleContextCopyId}
+                onGoToDefinitions={handleGoToDefinitions}
+                onDropSnippet={handleSnippetDrop}
+                scrollRef={canvasScrollRef}
+                panEnabled
+              />
+              <Minimap
+                doc={doc}
+                selectedIds={selectedIds}
+                scrollRef={canvasScrollRef}
+                className="absolute top-2 right-2 z-10"
+              />
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT column — edit panel (node or note), only when something is selected.
+             On mobile (< lg) it fills the full width and appears below the canvas;
+             the scrollIntoView effect above brings it into view on selection. */}
+        {(primaryNode || primaryNote) && (
+          <div
+            ref={editPanelRef}
+            key={primaryId ?? undefined}
+            className="bg-card flex w-full flex-shrink-0 flex-col gap-3 overflow-y-auto rounded-md border p-3 lg:w-72"
+          >
+            {primaryNode && (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">Edit step</span>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDuplicate()}
+                      title="Duplicate step (Ctrl/Cmd+D)"
+                    >
+                      <Copy className="mr-1.5 h-3.5 w-3.5" /> Duplicate
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-red-600 hover:text-red-600 dark:text-red-400"
+                      onClick={() =>
+                        handleConfirmDeleteItem(primaryNode.step.id)
+                      }
+                    >
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-muted-foreground text-xs">
+                      Step id <span className="text-red-500">*</span>
+                    </span>
+                    <Input
+                      key={primaryNode.step.id}
+                      defaultValue={primaryNode.step.id}
+                      spellCheck={false}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                      }}
+                      onBlur={(e) =>
+                        commitRename(primaryNode.step.id, e.target.value)
+                      }
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-muted-foreground text-xs">
+                      Name (optional)
+                    </span>
+                    <Input
+                      value={primaryNode.step.name ?? ""}
+                      onChange={(e) =>
+                        patchTransient(primaryNode.step.id, {
+                          name: e.target.value || undefined,
+                        })
+                      }
+                      onBlur={commit}
+                    />
+                  </label>
+                </div>
+
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-muted-foreground text-xs">Agent</span>
+                  <Select
+                    value={primaryNode.step.agent}
+                    onValueChange={(v) =>
+                      patch(primaryNode.step.id, { agent: v as AgentType })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AGENT_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          <span className="font-medium">{o.label}</span>
+                          <span className="text-muted-foreground ml-2 text-xs">
+                            {o.description}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-muted-foreground text-xs">
+                    Task <span className="text-red-500">*</span>
+                  </span>
+                  <Textarea
+                    ref={taskRef}
+                    value={primaryNode.step.task}
+                    spellCheck={false}
+                    placeholder="What this agent should do. Reference an upstream step's output with {{steps.<id>.output}}."
+                    onChange={(e) =>
+                      patchTransient(primaryNode.step.id, {
+                        task: e.target.value,
+                      })
+                    }
+                    onBlur={commit}
+                    className="min-h-[80px]"
+                  />
+                  {doc.nodes.length > 1 && (
+                    <div className="flex flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowRefMenu((v) => !v)}
+                        className="text-muted-foreground hover:text-foreground self-start text-xs underline-offset-2 hover:underline"
+                      >
+                        + Insert an upstream step&apos;s output
+                      </button>
+                      {showRefMenu && (
+                        <div className="flex flex-col gap-0.5 rounded-md border p-1">
+                          <span className="text-muted-foreground px-2 py-1 text-[11px]">
+                            Inserts the reference and adds the step as a
+                            dependency.
+                          </span>
+                          {doc.nodes
+                            .filter((n) => n.step.id !== primaryNode.step.id)
+                            .map((n) => (
+                              <button
+                                key={n.step.id}
+                                type="button"
+                                onClick={() => handleInsertRef(n.step.id)}
+                                title={`Insert ${outputRefToken(n.step.id)} and depend on this step`}
+                                className="hover:bg-accent flex items-center gap-2 rounded px-2 py-1 text-left text-xs"
+                              >
+                                <span className="truncate font-medium">
+                                  {n.step.name || n.step.id}
+                                </span>
+                                <span className="text-muted-foreground truncate font-mono">
+                                  {outputRefToken(n.step.id)}
+                                </span>
+                              </button>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </label>
+
+                {doc.nodes.length > 1 && (
+                  <div className="flex flex-col gap-1 text-sm">
+                    <span className="text-muted-foreground text-xs">
+                      Depends on
+                    </span>
+                    <div className="flex flex-col gap-1 rounded-md border p-2">
+                      {doc.nodes
+                        .filter((n) => n.step.id !== primaryNode.step.id)
+                        .map((n) => {
+                          const checked =
+                            primaryNode.step.dependsOn?.includes(n.step.id) ??
+                            false;
+                          return (
+                            <div
+                              key={n.step.id}
+                              className="flex items-center justify-between gap-2 text-xs"
+                            >
+                              <label className="flex flex-1 cursor-pointer items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    const cur =
+                                      primaryNode.step.dependsOn ?? [];
+                                    const next = e.target.checked
+                                      ? [...cur, n.step.id]
+                                      : cur.filter((d) => d !== n.step.id);
+                                    setDoc((d) =>
+                                      setDependsOn(
+                                        d,
+                                        primaryNode.step.id,
+                                        next
+                                      )
+                                    );
+                                  }}
+                                />
+                                {n.step.name || n.step.id}
+                              </label>
+                              {checked && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label={`Remove dependency on ${n.step.name || n.step.id}`}
+                                  title="Remove dependency"
+                                  onClick={() =>
+                                    setDoc((d) =>
+                                      disconnect(
+                                        d,
+                                        n.step.id,
+                                        primaryNode.step.id
+                                      )
+                                    )
+                                  }
+                                >
+                                  <X className="h-3 w-3" />
+                                </Button>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-muted-foreground text-xs">
+                    Exit criteria (optional)
+                  </span>
+                  <Textarea
+                    value={primaryNode.step.exitCriteria ?? ""}
+                    spellCheck={false}
+                    placeholder={'Unbreakable rules the step must satisfy, e.g. "must pass tests; open a PR".'}
+                    onChange={(e) =>
+                      patchTransient(primaryNode.step.id, {
+                        exitCriteria: e.target.value || undefined,
+                      })
+                    }
+                    onBlur={commit}
+                    className="min-h-[60px]"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between gap-2 text-sm">
+                  <span className="flex flex-col">
+                    <span className="text-xs font-medium">Shared worktree</span>
+                    <span className="text-muted-foreground text-[11px]">
+                      Reuse one checkout for all shared steps (runs them
+                      serially).
+                    </span>
+                  </span>
+                  <Switch
+                    checked={primaryNode.step.worktreePolicy === "shared"}
+                    onCheckedChange={(c) =>
+                      patch(primaryNode.step.id, {
+                        worktreePolicy: c ? "shared" : undefined,
+                      })
+                    }
+                  />
+                </label>
+              </>
+            )}
+
+            {primaryNote && (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">Edit note</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-600 hover:text-red-600 dark:text-red-400"
+                    onClick={() => handleConfirmDeleteItem(primaryNote.id)}
+                  >
+                    <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
+                  </Button>
+                </div>
+                <Textarea
+                  value={primaryNote.text}
+                  spellCheck={false}
+                  placeholder="Write a note…"
+                  onChange={(e) => patchNote(primaryNote.id, e.target.value)}
+                  onBlur={commit}
+                  className="min-h-[80px]"
+                />
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 4. Agents panel — collapsible, open by default */}
+      <CollapsibleSection title="Agents" icon={Layers} defaultOpen={true}>
+        <AgentsPanel onSelectSnippet={handleSnippetSelect} />
+      </CollapsibleSection>
+
+      {/* 5. Validation */}
       {doc.nodes.length > 0 &&
         (valid ? (
-          <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+          <p className="flex-shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400">
             ✓ Valid — {doc.nodes.length} step
             {doc.nodes.length === 1 ? "" : "s"}.
           </p>
         ) : (
-          <ul className="flex flex-col gap-1 rounded-md bg-red-500/10 p-2.5 text-xs text-red-600 dark:text-red-400">
+          <ul className="flex flex-shrink-0 flex-col gap-1 rounded-md bg-red-500/10 p-2.5 text-xs text-red-600 dark:text-red-400">
             {errors.map((e, i) => (
               <li key={i}>
                 {e.stepId ? (
@@ -1594,7 +1676,8 @@ export function WorkflowBuilder({
           </ul>
         ))}
 
-      <label className="flex flex-col gap-1 text-sm">
+      {/* 6. Conductor session */}
+      <label className="flex flex-shrink-0 flex-col gap-1 text-sm">
         <span className="text-muted-foreground text-xs">
           Conductor session <span className="text-red-500">*</span>
         </span>
@@ -1619,15 +1702,17 @@ export function WorkflowBuilder({
         )}
       </label>
 
-      <p className="text-muted-foreground rounded-md bg-amber-500/10 px-3 py-2 text-xs leading-relaxed">
+      {/* 7. Amber tip */}
+      <p className="text-muted-foreground flex-shrink-0 rounded-md bg-amber-500/10 px-3 py-2 text-xs leading-relaxed">
         Any step that writes code runs in its own throwaway git worktree off the
         base branch, so it never touches your checkout.
       </p>
 
+      {/* 8. Start pipeline */}
       <Button
         onClick={handleStart}
         disabled={!canStart}
-        className="w-full sm:w-auto sm:self-start"
+        className="flex-shrink-0 w-full sm:w-auto sm:self-start"
       >
         {start.isPending ? (
           <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
@@ -1637,6 +1722,7 @@ export function WorkflowBuilder({
         Start pipeline
       </Button>
 
+      {/* 9. Dialogs */}
       <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
         <DialogContent showCloseButton={false}>
           <DialogTitle className="sr-only">
@@ -1680,7 +1766,7 @@ export function WorkflowBuilder({
               )}
             >
               {pastePreview.ok === false
-                ? "That JSON doesn’t look like a workflow."
+                ? "That JSON doesn't look like a workflow."
                 : pastePreview.ok === true
                   ? `${pastePreview.count} step${pastePreview.count === 1 ? "" : "s"} ready to import${pastePreview.name ? ` (${pastePreview.name})` : ""}`
                   : "Paste JSON above to preview"}

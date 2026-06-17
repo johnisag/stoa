@@ -31,9 +31,9 @@ describe("useDrawerAnimation", () => {
       initialProps: { open: true },
     });
 
-    expect(result.current).toBe(false);
+    expect(result.current.isAnimatingIn).toBe(false);
     act(() => flushRafs());
-    expect(result.current).toBe(true);
+    expect(result.current.isAnimatingIn).toBe(true);
   });
 
   it("does not set isAnimatingIn if open flips false before the inner rAF fires", () => {
@@ -53,7 +53,7 @@ describe("useDrawerAnimation", () => {
 
     rerender({ open: false });
     act(() => flushRafs());
-    expect(result.current).toBe(false);
+    expect(result.current.isAnimatingIn).toBe(false);
   });
 
   it("does not set state after the component unmounts", () => {
@@ -64,6 +64,6 @@ describe("useDrawerAnimation", () => {
 
     unmount();
     act(() => flushRafs());
-    expect(result.current).toBe(false);
+    expect(result.current.isAnimatingIn).toBe(false);
   });
 });

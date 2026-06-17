@@ -1,11 +1,17 @@
 import { useState, useEffect, useRef } from "react";
 
 /**
- * Hook for smooth drawer enter animations.
- * Uses double requestAnimationFrame to trigger CSS transition after mount.
+ * Hook for smooth drawer enter/exit animations.
+ * Returns { isAnimatingIn, isClosing }.
+ * The caller should keep the drawer mounted while isClosing is true and
+ * apply the inverse of the enter transform classes.
  */
-export function useDrawerAnimation(open: boolean) {
+export function useDrawerAnimation(
+  open: boolean,
+  exitDurationMs = 200
+) {
   const [isAnimatingIn, setIsAnimatingIn] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
   const hasAnimated = useRef(false);
   const openRef = useRef(open);
   openRef.current = open;
@@ -14,25 +20,32 @@ export function useDrawerAnimation(open: boolean) {
   useEffect(() => {
     mountedRef.current = true;
 
-    if (open && !hasAnimated.current) {
-      hasAnimated.current = true;
-      requestAnimationFrame(() => {
+    if (open) {
+      setIsClosing(false);
+      if (!hasAnimated.current) {
+        hasAnimated.current = true;
         requestAnimationFrame(() => {
-          if (mountedRef.current && openRef.current) {
-            setIsAnimatingIn(true);
-          }
+          requestAnimationFrame(() => {
+            if (mountedRef.current && openRef.current) {
+              setIsAnimatingIn(true);
+            }
+          });
         });
-      });
-    }
-    if (!open) {
+      }
+    } else {
       hasAnimated.current = false;
       setIsAnimatingIn(false);
+      setIsClosing(true);
+      const t = setTimeout(() => {
+        if (mountedRef.current) setIsClosing(false);
+      }, exitDurationMs);
+      return () => clearTimeout(t);
     }
 
     return () => {
       mountedRef.current = false;
     };
-  }, [open]);
+  }, [open, exitDurationMs]);
 
-  return isAnimatingIn;
+  return { isAnimatingIn, isClosing };
 }

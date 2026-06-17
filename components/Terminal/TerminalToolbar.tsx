@@ -39,6 +39,7 @@ interface TerminalToolbarProps {
   selectMode?: boolean;
   onSelectModeChange?: (enabled: boolean) => void;
   visible?: boolean;
+  onPasteFromClipboard?: () => Promise<void>;
 }
 
 // Paste modal for when clipboard API isn't available
@@ -113,6 +114,7 @@ export function TerminalToolbar({
   selectMode = false,
   onSelectModeChange,
   visible = true,
+  onPasteFromClipboard,
 }: TerminalToolbarProps) {
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [showSnippetsModal, setShowSnippetsModal] = useState(false);
@@ -217,7 +219,11 @@ export function TerminalToolbar({
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();
-            handlePaste();
+            if (onPasteFromClipboard) {
+              void onPasteFromClipboard();
+            } else {
+              void handlePaste();
+            }
           }}
           className="bg-secondary text-secondary-foreground active:bg-primary active:text-primary-foreground flex-shrink-0 rounded-md px-2.5 py-1.5 text-xs font-medium"
         >

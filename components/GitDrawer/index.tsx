@@ -174,7 +174,7 @@ export function GitDrawer({
   const [discarding, setDiscarding] = useState(false);
 
   // Animation
-  const isAnimatingIn = useDrawerAnimation(open);
+  const { isAnimatingIn, isClosing } = useDrawerAnimation(open);
 
   // Clear selected file when drawer opens
   const handleFileClick = (file: GitFile | MultiRepoGitFile) => {
@@ -313,14 +313,14 @@ export function GitDrawer({
 
   const multipleReposHaveStagedChanges = reposWithStagedChanges.length > 1;
 
-  if (!open) return null;
+  if (!open && !isClosing) return null;
 
   return (
     <>
       <div
         className={cn(
           "bg-muted/30 flex h-full flex-col transition-all duration-200 ease-out",
-          isAnimatingIn
+          isAnimatingIn && !isClosing
             ? "translate-x-0 opacity-100"
             : "translate-x-4 opacity-0"
         )}

@@ -49,12 +49,14 @@ export function SessionListHeader({
           strokeLinejoin="round"
           fill="none"
         >
-          <path d="M12 8V4H8" />
-          <rect width="16" height="12" x="4" y="8" rx="2" />
-          <path d="M2 14h2" />
-          <path d="M20 14h2" />
-          <path d="M15 13v2" />
-          <path d="M9 13v2" />
+          <path d="M7 20c-3-2-4.5-5.5-2.5-8.5C5 13 6 13.5 7 13c-.5-3 1-5.5 3-7.5C10.5 8 11 10.5 10.5 13c-.2 1.2.3 2.5 1.5 3C10.5 18.5 9 20.5 7 20z" />
+          <path d="M12.5 12h3.5" />
+          <path d="M14.5 10.5l1.5 1.5-1.5 1.5" />
+          <rect x="17" y="8.5" width="5.5" height="5" rx="1.5" />
+          <path d="M19.75 8.5V7" />
+          <circle cx="18.8" cy="11" r="0.5" fill="currentColor" stroke="none" />
+          <circle cx="20.7" cy="11" r="0.5" fill="currentColor" stroke="none" />
+          <path d="M18 13.5v1.5M21.5 13.5v1.5" />
         </svg>
         {attentionCount > 0 && (
           <Tooltip>
