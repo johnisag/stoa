@@ -332,6 +332,202 @@ export function validateProposal(raw: unknown): ProposalValidation {
   }
 }
 
+// ─── Plan schema ──────────────────────────────────────────────────────────────
+
+/** The result of executing one step in a plan. Defined here (pure, no server
+ * deps) so client-side code can import the type without pulling in server-only
+ * modules such as better-sqlite3 or lib/db. */
+export interface StepResult {
+  stepId: string;
+  ok: boolean;
+  summary: string;
+  sessionId?: string;
+  dispatchId?: string;
+  error?: string;
+}
+
+/** The actions a plan step may perform (a strict subset of COMMAND_ACTION_IDS —
+ * open_view and list_sessions produce no meaningful sequential work). */
+export const PLAN_STEP_ACTION_IDS = [
+  "create_session",
+  "dispatch_issue",
+] as const;
+export type PlanStepActionId = (typeof PLAN_STEP_ACTION_IDS)[number];
+
+/** One step in a multi-step plan proposed by the LLM. */
+export interface PlanStep {
+  /** Unique within the plan. Alphanum + hyphens only, max 32 chars. */
+  stepId: string;
+  /** Human-readable label shown in the plan card. Max 200 chars. */
+  description: string;
+  action: PlanStepActionId;
+  params: CreateSessionParams | DispatchIssueParams;
+}
+
+/** A validated plan ready to present in the UI. */
+export interface ExecutePlanParams {
+  name: string;
+  steps: PlanStep[];
+}
+
+export type PlanValidation =
+  | { ok: true; name: string; steps: PlanStep[] }
+  | { ok: false; reason: string };
+
+const PLAN_NAME_MAX = 120;
+const PLAN_STEP_DESCRIPTION_MAX = 200;
+const PLAN_STEP_ID_MAX = 32;
+const PLAN_MIN_STEPS = 2;
+const PLAN_MAX_STEPS = 10;
+
+/** Valid step id: alphanum chars plus hyphens and underscores, non-empty. */
+function isValidStepId(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value) && value.length <= PLAN_STEP_ID_MAX;
+}
+
+/**
+ * Validate an LLM- or client-supplied plan. Fail-closed: every step must have a
+ * known action and params that pass the per-action validator; any unknown field,
+ * out-of-range count, or invalid stepId → { ok: false, reason }.
+ *
+ * Plans travel a PARALLEL path to single proposals: execute_plan is NOT on
+ * COMMAND_ACTION_IDS, so this validator is called only when `kind === "plan"` is
+ * detected. It reuses the existing per-action validators for each step's params,
+ * keeping the validation contract identical.
+ */
+export function validatePlan(raw: unknown): PlanValidation {
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, reason: "the plan was not an object" };
+  }
+  const obj = raw as Record<string, unknown>;
+
+  if (obj.kind !== "plan") {
+    return { ok: false, reason: 'the plan object is missing "kind":"plan"' };
+  }
+
+  const name = sanitizeText(obj.name, PLAN_NAME_MAX);
+  if (!name) {
+    return { ok: false, reason: "the plan is missing a non-empty name" };
+  }
+
+  if (!Array.isArray(obj.steps)) {
+    return { ok: false, reason: "steps must be an array" };
+  }
+  if (obj.steps.length < PLAN_MIN_STEPS) {
+    return {
+      ok: false,
+      reason: `a plan needs at least ${PLAN_MIN_STEPS} steps (got ${obj.steps.length})`,
+    };
+  }
+  if (obj.steps.length > PLAN_MAX_STEPS) {
+    return {
+      ok: false,
+      reason: `a plan may have at most ${PLAN_MAX_STEPS} steps (got ${obj.steps.length})`,
+    };
+  }
+
+  const steps: PlanStep[] = [];
+  const seenStepIds = new Set<string>();
+  for (let i = 0; i < obj.steps.length; i++) {
+    const stepRaw = obj.steps[i];
+    if (!stepRaw || typeof stepRaw !== "object") {
+      return { ok: false, reason: `step ${i + 1} is not an object` };
+    }
+    const s = stepRaw as Record<string, unknown>;
+
+    // stepId: alphanum+hyphens, non-empty, max 32 chars
+    const stepId = typeof s.stepId === "string" ? s.stepId.trim() : "";
+    if (!stepId) {
+      return { ok: false, reason: `step ${i + 1} is missing a stepId` };
+    }
+    if (!isValidStepId(stepId)) {
+      return {
+        ok: false,
+        reason: `step ${i + 1} has an invalid stepId "${stepId}" (only alphanum + hyphens/underscores, max ${PLAN_STEP_ID_MAX} chars)`,
+      };
+    }
+    // Duplicate stepId would corrupt the client progress map — reject the whole plan.
+    if (seenStepIds.has(stepId)) {
+      return {
+        ok: false,
+        reason: `duplicate stepId "${stepId}" at step ${i + 1} — stepIds must be unique within the plan`,
+      };
+    }
+    seenStepIds.add(stepId);
+
+    const description = sanitizeText(s.description, PLAN_STEP_DESCRIPTION_MAX);
+    if (!description) {
+      return {
+        ok: false,
+        reason: `step ${i + 1} (${stepId}) is missing a non-empty description`,
+      };
+    }
+
+    // action: only the plan-step allowlist (not the full COMMAND_ACTION_IDS)
+    if (
+      typeof s.action !== "string" ||
+      !(PLAN_STEP_ACTION_IDS as readonly string[]).includes(s.action)
+    ) {
+      return {
+        ok: false,
+        reason: `step ${i + 1} (${stepId}) has an unsupported action "${String(s.action)}" — only ${PLAN_STEP_ACTION_IDS.join(", ")} are allowed in a plan`,
+      };
+    }
+    const action = s.action as PlanStepActionId;
+
+    const paramsRaw =
+      s.params && typeof s.params === "object"
+        ? (s.params as Record<string, unknown>)
+        : {};
+
+    if (action === "create_session") {
+      const res = validateCreateSessionParams(paramsRaw);
+      if (!res.ok) {
+        return {
+          ok: false,
+          reason: `step ${i + 1} (${stepId}) create_session params invalid: ${res.reason}`,
+        };
+      }
+      steps.push({ stepId, description, action, params: res.params });
+    } else {
+      // dispatch_issue
+      const res = validateDispatchIssueParams(paramsRaw);
+      if (!res.ok) {
+        return {
+          ok: false,
+          reason: `step ${i + 1} (${stepId}) dispatch_issue params invalid: ${res.reason}`,
+        };
+      }
+      steps.push({ stepId, description, action, params: res.params });
+    }
+  }
+
+  return { ok: true, name, steps };
+}
+
+/**
+ * A human-readable summary of what a plan will do, for display in history or
+ * audit logs. Lists each step on its own line.
+ */
+export function describePlan(
+  name: string,
+  steps: PlanStep[],
+  /** Optional map of projectId → projectName for create_session steps. */
+  projectNames?: Record<string, string>
+): string {
+  const header = `Plan: "${name}" — ${steps.length} step${steps.length === 1 ? "" : "s"}`;
+  const lines = steps.map((step, i) => {
+    let where = "";
+    if (step.action === "create_session") {
+      const p = step.params as CreateSessionParams;
+      const projName = projectNames?.[p.projectId];
+      where = projName ? ` in ${projName}` : "";
+    }
+    return `  ${i + 1}. [${step.action}] ${step.description}${where}`;
+  });
+  return [header, ...lines].join("\n");
+}
+
 // Caps for generated-step free text (control bytes stripped, length-bounded so a
 // crafted reply can't bloat the canvas/DB row). Tasks are multi-line prompts.
 const TASK_MAX = 6000;

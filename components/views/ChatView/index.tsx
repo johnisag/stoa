@@ -29,11 +29,14 @@ import { useViewport } from "@/hooks/useViewport";
 import {
   useProposeCommand,
   useExecuteCommand,
+  useExecutePlan,
   type ChatItem,
   type ChatMessage,
+  type StepProgress,
 } from "@/data/chat/useCommand";
 import { setPendingPrompt } from "@/stores/initialPrompt";
 import { ChatHelp } from "./ChatHelp";
+import { PlanCard } from "./PlanCard";
 
 /** Renders markdown links so external URLs open in a new tab. */
 function MarkdownLink({
@@ -103,6 +106,7 @@ export function ChatView({
 
   const propose = useProposeCommand();
   const execute = useExecuteCommand();
+  const executePlan = useExecutePlan();
   const taRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Synchronous re-entrancy lock for Confirm — a ref (not state) so a fast
@@ -176,19 +180,39 @@ export function ChatView({
     if (!question || propose.isPending) return;
 
     // History = prior user turns + assistant ANSWERS, plus successful action
-    // RESULTS (so the agent knows what it already did); pending proposal cards are
-    // local UI state, not context. Snapshot BEFORE appending the new question.
+    // RESULTS (so the agent knows what it already did); pending proposal/plan
+    // cards are local UI state, not context. Snapshot BEFORE appending the new
+    // question. Confirmed plan items serialize to a human-readable summary line.
     const history: ChatMessage[] = messages
       .filter(
         (m) =>
           m.role === "user" ||
           (m.role === "assistant" && m.kind === "answer") ||
-          (m.role === "assistant" && m.kind === "result" && m.ok)
+          (m.role === "assistant" && m.kind === "result" && m.ok) ||
+          (m.role === "assistant" &&
+            m.kind === "plan" &&
+            m.status === "confirmed")
       )
-      .map((m) => ({
-        role: m.role,
-        content: (m as { content: string }).content,
-      }));
+      .map((m) => {
+        if (m.role === "assistant" && m.kind === "plan") {
+          const succeeded = (m.progress ?? []).filter(
+            (p: StepProgress) => p.status === "done"
+          ).length;
+          const total = m.steps.length;
+          // Intentionally terse — a one-liner tells the LLM what happened
+          // without bloating the context window. Step-level detail lives in
+          // the result bubble below the card; the LLM doesn't need it for
+          // follow-up turns.
+          return {
+            role: m.role as "assistant",
+            content: `Plan "${m.name}" confirmed. ${succeeded}/${total} steps succeeded.`,
+          };
+        }
+        return {
+          role: m.role,
+          content: (m as { content: string }).content,
+        };
+      });
 
     // Keep a reference to the optimistic turn so onError can remove exactly IT,
     // not "the last message" — a concurrent execute may append a result first.
@@ -205,6 +229,18 @@ export function ChatView({
             setMessages((prev) => [
               ...prev,
               { role: "assistant", kind: "answer", content: reply.text },
+            ]);
+          } else if (reply.kind === "plan") {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                kind: "plan",
+                name: reply.name,
+                steps: reply.steps,
+                projectNames: reply.projectNames,
+                status: "pending" as const,
+              },
             ]);
           } else {
             // Destructure the discriminated proposal (kind omitted) so TS
@@ -346,6 +382,115 @@ export function ChatView({
     );
   }
 
+  // Confirm a pending plan: run all steps sequentially via the execute endpoint.
+  // Uses the same re-entrancy guard as handleConfirm. The card flips to
+  // "executing" synchronously; on completion each step shows its result icon.
+  function handleConfirmPlan(index: number) {
+    if (executingRef.current) return;
+    const item = messages[index];
+    if (
+      !item ||
+      item.role !== "assistant" ||
+      item.kind !== "plan" ||
+      item.status !== "pending"
+    ) {
+      return;
+    }
+    executingRef.current = true;
+    const { name, steps } = item;
+
+    const setPlanStatus = (
+      status: "executing" | "confirmed" | "pending",
+      progress?: StepProgress[]
+    ) =>
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === index && m.role === "assistant" && m.kind === "plan"
+            ? { ...m, status, ...(progress !== undefined ? { progress } : {}) }
+            : m
+        )
+      );
+
+    // Initialize all steps as "waiting" and flip card to executing.
+    setPlanStatus("executing", steps.map((s) => ({ stepId: s.stepId, status: "waiting" as const })));
+
+    executePlan.mutate(
+      { kind: "plan", name, steps },
+      {
+        onSuccess: (res) => {
+          const progress: StepProgress[] = res.results.map((r) => ({
+            stepId: r.stepId,
+            status: r.ok ? ("done" as const) : ("failed" as const),
+            summary: r.summary,
+          }));
+          const succeeded = res.results.filter((r) => r.ok).length;
+          const total = res.results.length;
+
+          // Deliver initialPrompts for any created sessions.
+          for (const r of res.results) {
+            if (r.ok && r.sessionId) {
+              const extR = r as typeof r & { initialPrompt?: string };
+              if (extR.initialPrompt) {
+                setPendingPrompt(r.sessionId, extR.initialPrompt);
+              }
+            }
+          }
+
+          // Use "- " list markers with a blank line separator so ReactMarkdown
+          // (remarkGfm) renders them as a proper unordered list, not flat prose.
+          const resultLines = res.results.map((r) => {
+            const icon = r.ok ? "✓" : "✗";
+            return `- ${icon} ${r.summary}`;
+          });
+          const content = [
+            `Plan complete: ${succeeded}/${total} step${total === 1 ? "" : "s"} succeeded.`,
+            "",
+            ...resultLines,
+          ].join("\n");
+
+          setMessages((prev) => [
+            ...prev.map((m, i) =>
+              i === index && m.role === "assistant" && m.kind === "plan"
+                ? { ...m, status: "confirmed" as const, progress }
+                : m
+            ),
+            { role: "assistant", kind: "result", ok: succeeded === total, content },
+          ]);
+        },
+        onError: (err) => {
+          setPlanStatus("pending");
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              kind: "result",
+              ok: false,
+              content:
+                err instanceof Error ? err.message : "Failed to execute the plan",
+            },
+          ]);
+        },
+        onSettled: () => {
+          executingRef.current = false;
+        },
+      }
+    );
+  }
+
+  // Decline a pending plan — nothing runs; mark it cancelled.
+  function handleCancelPlan(index: number) {
+    setMessages((prev) =>
+      prev.map((m, i) =>
+        i === index &&
+        m.role === "assistant" &&
+        m.kind === "plan" &&
+        m.status === "pending"
+          ? { ...m, status: "cancelled" as const }
+          : m
+      )
+    );
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Enter sends; Shift+Enter inserts a newline.
     if (e.key === "Enter" && !e.shiftKey) {
@@ -357,11 +502,11 @@ export function ChatView({
   const canSend = input.trim().length > 0 && !propose.isPending;
   // Only one action runs at a time (executingRef). Surface that on the cards: a
   // pending Confirm disables while ANOTHER card is executing, so it never looks
-  // tappable-but-dead.
+  // tappable-but-dead. Includes both proposal and plan cards.
   const anyExecuting = messages.some(
     (m) =>
       m.role === "assistant" &&
-      m.kind === "proposal" &&
+      (m.kind === "proposal" || m.kind === "plan") &&
       m.status === "executing"
   );
 
@@ -528,6 +673,23 @@ export function ChatView({
                         {message.content}
                       </ReactMarkdown>
                     </div>
+                  </div>
+                );
+              }
+              // Plan — a multi-step confirm card. Nothing runs until the user confirms.
+              if (message.kind === "plan") {
+                return (
+                  <div key={i} className="flex justify-start">
+                    <PlanCard
+                      name={message.name}
+                      steps={message.steps}
+                      projectNames={message.projectNames}
+                      status={message.status}
+                      progress={message.progress}
+                      onConfirm={() => handleConfirmPlan(i)}
+                      onCancel={() => handleCancelPlan(i)}
+                      confirmDisabled={anyExecuting}
+                    />
                   </div>
                 );
               }
