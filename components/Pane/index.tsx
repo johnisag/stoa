@@ -154,6 +154,7 @@ export const Pane = memo(function Pane({
     getActiveTab,
     addTab,
     addViewTab,
+    addBonRunTab,
     closeTab,
     switchTab,
     detachSession,
@@ -557,6 +558,7 @@ export const Pane = memo(function Pane({
               else if (view === "verdict-inbox") onVerdictInboxClick?.();
               else if (view === "fleet-board") onFleetBoardClick?.();
             }}
+            onOpenBonRun={(runId) => addBonRunTab(paneId, runId)}
           />
         );
       case "best-of-n":

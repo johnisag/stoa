@@ -237,8 +237,8 @@ export async function pickBonWinner(
   const run = queries.getBonRun(db).get(runId) as BestOfNRun | undefined;
   if (!run) throw new Error(`Best-of-N run not found: ${runId}`);
 
-  if (run.status === "failed") {
-    throw new Error("Cannot pick a winner for a failed run");
+  if (run.status === "failed" || run.status === "done") {
+    throw new Error("Cannot pick a winner for a run that is already terminal");
   }
 
   const candidates = queries
@@ -254,10 +254,16 @@ export async function pickBonWinner(
 
   const winnerSessionId = winner.session_id;
 
-  // Mark the winner row (and clear is_winner on all others in this run).
-  queries.markBonWinner(db).run(candidateId, runId);
+  // Mark the winner and update run status in a single atomic transaction so
+  // the DB is never left in an inconsistent state if the process is killed
+  // between the two writes.
+  db.transaction(() => {
+    queries.markBonWinner(db).run(candidateId, runId);
+    queries.updateBonRunStatus(db).run("done", winnerSessionId ?? null, runId);
+  })();
 
-  // Kill and clean up all non-winner candidates.
+  // Kill and clean up all non-winner candidates (async, after the DB is
+  // already in a consistent terminal state).
   const losers = candidates.filter((c) => c.id !== candidateId);
   await Promise.allSettled(
     losers.map((c) => {
@@ -265,9 +271,6 @@ export async function pickBonWinner(
       return killWorker(c.session_id, true /* cleanupWorktree */, "failed");
     })
   );
-
-  // Mark the run done.
-  queries.updateBonRunStatus(db).run("done", winnerSessionId ?? null, runId);
 
   return getBonRunStatus(runId);
 }
