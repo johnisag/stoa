@@ -436,6 +436,7 @@ export function DesktopView({
         onOpenVerdictInbox={onOpenVerdictInbox}
         onOpenFleetBoard={onOpenFleetBoard}
         onOpenInsight={onOpenAnalytics}
+        onOpenAskStoa={onOpenAsk}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
           const session = sessions.find((s) => s.id === sessionId);

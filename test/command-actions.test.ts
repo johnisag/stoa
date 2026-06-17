@@ -2,9 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   validateProposal,
   validateCreateSessionParams,
+  validateDispatchIssueParams,
+  validateOpenViewParams,
+  validateListSessionsParams,
   validateWorkflowProposal,
   describeProposal,
   SESSION_AGENT_IDS,
+  COMMAND_VIEWS,
 } from "@/lib/command/actions";
 import {
   ROLE_TO_AGENT,
@@ -349,6 +353,203 @@ describe("describeProposal", () => {
       expect(summary).toContain("Codex");
       expect(summary).toContain("Bugfix");
       expect(summary).toContain("the-grid");
+    }
+  });
+
+  it("includes a truncated initialPrompt in the description when present", () => {
+    const longPrompt = "a".repeat(100);
+    const res = validateProposal({
+      action: "create_session",
+      params: { projectId: "p", agentType: "claude", initialPrompt: longPrompt },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const summary = describeProposal(res.proposal, "proj");
+      expect(summary).toContain("initial prompt");
+      // The description truncates at 60 chars and appends "..." (3 ASCII dots).
+      expect(summary).toContain("...");
+    }
+  });
+
+  it("describes dispatch_issue with the title and context name", () => {
+    const res = validateProposal({
+      action: "dispatch_issue",
+      params: { repoId: "repo_1", title: "Fix the login bug" },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const summary = describeProposal(res.proposal, "owner/repo");
+      expect(summary).toContain("Fix the login bug");
+      expect(summary).toContain("owner/repo");
+    }
+  });
+
+  it("describes open_view with the view name", () => {
+    const res = validateProposal({
+      action: "open_view",
+      params: { view: "analytics" },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const summary = describeProposal(res.proposal, "");
+      expect(summary).toContain("analytics");
+    }
+  });
+
+  it("describes list_sessions without a status filter", () => {
+    const res = validateProposal({
+      action: "list_sessions",
+      params: {},
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const summary = describeProposal(res.proposal, "");
+      expect(summary).toContain("session");
+    }
+  });
+});
+
+describe("validateCreateSessionParams — initialPrompt field", () => {
+  it("accepts and sanitizes an initialPrompt", () => {
+    const res = validateCreateSessionParams({
+      projectId: "p",
+      initialPrompt: "Tell me about " + "x".repeat(5000),
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.params.initialPrompt).toBeDefined();
+      expect(res.params.initialPrompt!.length).toBeLessThanOrEqual(4000);
+    }
+  });
+
+  it("strips control bytes from initialPrompt", () => {
+    const dirty = "Hello" + String.fromCharCode(1) + "World";
+    const res = validateCreateSessionParams({ projectId: "p", initialPrompt: dirty });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.params.initialPrompt).toBe("HelloWorld");
+    }
+  });
+
+  it("omits initialPrompt when empty/whitespace", () => {
+    const res = validateCreateSessionParams({ projectId: "p", initialPrompt: "   " });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.params.initialPrompt).toBeUndefined();
+    }
+  });
+
+  it("passes through to validateProposal", () => {
+    const res = validateProposal({
+      action: "create_session",
+      params: { projectId: "p", agentType: "claude", initialPrompt: "say hello" },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.proposal.action === "create_session") {
+      expect(res.proposal.params.initialPrompt).toBe("say hello");
+    }
+  });
+});
+
+describe("validateDispatchIssueParams — fail-closed", () => {
+  it("accepts a well-formed dispatch_issue proposal", () => {
+    const res = validateDispatchIssueParams({ repoId: "repo_1", title: "Fix bug" });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.params.repoId).toBe("repo_1");
+      expect(res.params.title).toBe("Fix bug");
+    }
+  });
+
+  it("rejects a missing repoId", () => {
+    expect(validateDispatchIssueParams({ title: "x" }).ok).toBe(false);
+    expect(validateDispatchIssueParams({ repoId: "  ", title: "x" }).ok).toBe(false);
+  });
+
+  it("rejects a missing or blank title", () => {
+    expect(validateDispatchIssueParams({ repoId: "r" }).ok).toBe(false);
+    expect(validateDispatchIssueParams({ repoId: "r", title: "   " }).ok).toBe(false);
+  });
+
+  it("length-caps title at 200 chars", () => {
+    const res = validateDispatchIssueParams({ repoId: "r", title: "t".repeat(300) });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.params.title.length).toBe(200);
+  });
+
+  it("length-caps body at 10000 chars", () => {
+    const res = validateDispatchIssueParams({ repoId: "r", title: "T", body: "b".repeat(20000) });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.params.body!.length).toBe(10000);
+  });
+
+  it("omits body when blank", () => {
+    const res = validateDispatchIssueParams({ repoId: "r", title: "T", body: "  " });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.params.body).toBeUndefined();
+  });
+
+  it("flows through validateProposal correctly", () => {
+    const res = validateProposal({
+      action: "dispatch_issue",
+      params: { repoId: "repo_1", title: "Bug", body: "Details" },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.proposal.action === "dispatch_issue") {
+      expect(res.proposal.params.title).toBe("Bug");
+    }
+  });
+});
+
+describe("validateOpenViewParams — fail-closed", () => {
+  it("accepts every allowed view token", () => {
+    for (const view of COMMAND_VIEWS) {
+      const res = validateOpenViewParams({ view });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.params.view).toBe(view);
+    }
+  });
+
+  it("rejects an unknown view name (fail-closed — no arbitrary string)", () => {
+    expect(validateOpenViewParams({ view: "evil-view" }).ok).toBe(false);
+    expect(validateOpenViewParams({ view: "" }).ok).toBe(false);
+    expect(validateOpenViewParams({}).ok).toBe(false);
+  });
+
+  it("flows through validateProposal correctly", () => {
+    const res = validateProposal({ action: "open_view", params: { view: "dispatch" } });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.proposal.action === "open_view") {
+      expect(res.proposal.params.view).toBe("dispatch");
+    }
+  });
+});
+
+describe("validateListSessionsParams — fail-closed", () => {
+  it("accepts an absent status (list all sessions)", () => {
+    const res = validateListSessionsParams({});
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.params.status).toBeUndefined();
+  });
+
+  it("accepts each valid status value", () => {
+    for (const status of ["running", "idle", "waiting"] as const) {
+      const res = validateListSessionsParams({ status });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.params.status).toBe(status);
+    }
+  });
+
+  it("rejects an invalid status value (fail-closed)", () => {
+    expect(validateListSessionsParams({ status: "dispatched" }).ok).toBe(false);
+    expect(validateListSessionsParams({ status: "evil; drop table" }).ok).toBe(false);
+  });
+
+  it("flows through validateProposal correctly", () => {
+    const res = validateProposal({ action: "list_sessions", params: { status: "running" } });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.proposal.action === "list_sessions") {
+      expect(res.proposal.params.status).toBe("running");
     }
   });
 });

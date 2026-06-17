@@ -227,54 +227,61 @@ export function ConductorPanel({
   return (
     <div className="flex h-full flex-col">
       {/* Header with summary */}
-      <div className="flex items-center justify-between border-b p-4">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Users className="text-primary h-5 w-5" />
-            <span className="font-semibold">Workers</span>
-            <span className="text-muted-foreground">
-              ({summary?.total || workers.length})
-            </span>
+      <div className="border-b">
+        <div className="flex items-center justify-between p-4 pb-1">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Users className="text-primary h-5 w-5" />
+              <span className="font-semibold">Workers</span>
+              <span className="text-muted-foreground">
+                ({summary?.total || workers.length})
+              </span>
+            </div>
+
+            {summary && (
+              <div className="flex items-center gap-3 text-sm">
+                {summary.running > 0 && (
+                  <div className="flex items-center gap-1 text-green-500">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <span>{summary.running} running</span>
+                  </div>
+                )}
+                {summary.waiting > 0 && (
+                  <div className="flex items-center gap-1 text-yellow-500">
+                    <AlertCircle className="h-3 w-3" />
+                    <span>{summary.waiting} waiting</span>
+                  </div>
+                )}
+                {summary.completed > 0 && (
+                  <div className="flex items-center gap-1 text-green-500">
+                    <CheckCircle className="h-3 w-3" />
+                    <span>{summary.completed} done</span>
+                  </div>
+                )}
+                {summary.failed > 0 && (
+                  <div className="flex items-center gap-1 text-red-500">
+                    <XCircle className="h-3 w-3" />
+                    <span>{summary.failed} failed</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {summary && (
-            <div className="flex items-center gap-3 text-sm">
-              {summary.running > 0 && (
-                <div className="flex items-center gap-1 text-green-500">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  <span>{summary.running} running</span>
-                </div>
-              )}
-              {summary.waiting > 0 && (
-                <div className="flex items-center gap-1 text-yellow-500">
-                  <AlertCircle className="h-3 w-3" />
-                  <span>{summary.waiting} waiting</span>
-                </div>
-              )}
-              {summary.completed > 0 && (
-                <div className="flex items-center gap-1 text-green-500">
-                  <CheckCircle className="h-3 w-3" />
-                  <span>{summary.completed} done</span>
-                </div>
-              )}
-              {summary.failed > 0 && (
-                <div className="flex items-center gap-1 text-red-500">
-                  <XCircle className="h-3 w-3" />
-                  <span>{summary.failed} failed</span>
-                </div>
-              )}
-            </div>
-          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={refresh}
+            disabled={refreshing}
+          >
+            <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
+          </Button>
         </div>
-
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={refresh}
-          disabled={refreshing}
-        >
-          <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
-        </Button>
+        {/* One-line primer so the panel is self-explanatory without a help doc */}
+        <p className="text-muted-foreground px-4 pb-2 text-xs">
+          Coordinates a fleet of worker agents toward a shared goal via{" "}
+          <code>spawn_worker</code>.
+        </p>
       </div>
 
       {/* Workers grid */}

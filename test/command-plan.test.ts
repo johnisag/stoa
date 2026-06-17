@@ -13,7 +13,7 @@ const PROJECTS: CommandProject[] = [
 ];
 
 describe("buildCommandPrompt", () => {
-  it("includes the context, the project ids, the action, and the message", () => {
+  it("includes the context, the project ids, all actions, and the message", () => {
     const prompt = buildCommandPrompt({
       context: "FLEET_CTX_MARKER",
       projects: PROJECTS,
@@ -23,6 +23,10 @@ describe("buildCommandPrompt", () => {
     expect(prompt).toContain("proj_a");
     expect(prompt).toContain("proj_b");
     expect(prompt).toContain("create_session");
+    expect(prompt).toContain("dispatch_issue");
+    expect(prompt).toContain("open_view");
+    expect(prompt).toContain("list_sessions");
+    expect(prompt).toContain("initialPrompt");
     expect(prompt).toContain("start a session");
   });
 

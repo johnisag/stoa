@@ -78,10 +78,11 @@ describe("FLEET_NAV", () => {
     expect(labels["quick-switch"]).toBe("Quick switch");
   });
 
-  it("only quick-switch carries a keyboard-shortcut tooltip hint", () => {
+  it("entries with keyboard-shortcut tooltip hints have the expected chords", () => {
     expect(fleetNavEntry("quick-switch").tooltipHint).toBe("⌘K");
+    expect(fleetNavEntry("ask-stoa").tooltipHint).toBe("⌘⇧C");
     for (const entry of FLEET_NAV) {
-      if (entry.id !== "quick-switch") {
+      if (entry.id !== "quick-switch" && entry.id !== "ask-stoa") {
         expect(entry.tooltipHint).toBeUndefined();
       }
     }

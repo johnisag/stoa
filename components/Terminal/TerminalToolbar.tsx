@@ -192,6 +192,8 @@ export function TerminalToolbar({
         {isMicSupported && (
           <button
             type="button"
+            title={isListening ? "Stop dictation" : "Dictate to terminal"}
+            aria-label={isListening ? "Stop dictation" : "Dictate to terminal"}
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.preventDefault();
@@ -216,6 +218,8 @@ export function TerminalToolbar({
         {/* Paste button */}
         <button
           type="button"
+          title="Paste from clipboard"
+          aria-label="Paste from clipboard"
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();
@@ -234,6 +238,8 @@ export function TerminalToolbar({
         {onSelectModeChange && (
           <button
             type="button"
+            title="Select text"
+            aria-label="Select text"
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation();
@@ -254,6 +260,8 @@ export function TerminalToolbar({
         {selectMode && onCopy && (
           <button
             type="button"
+            title="Copy selection"
+            aria-label="Copy selection"
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation();
@@ -276,6 +284,8 @@ export function TerminalToolbar({
         {selectMode && onAttachSelection && (
           <button
             type="button"
+            title="Attach selection to running agent"
+            aria-label="Attach selection to running agent"
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation();
@@ -291,6 +301,8 @@ export function TerminalToolbar({
         {onFilePicker && (
           <button
             type="button"
+            title="Attach file"
+            aria-label="Attach file"
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation();
@@ -305,6 +317,8 @@ export function TerminalToolbar({
         {/* Snippets button */}
         <button
           type="button"
+          title="Insert snippet"
+          aria-label="Insert snippet"
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();
@@ -318,9 +332,11 @@ export function TerminalToolbar({
         {/* Divider */}
         <div className="bg-border mx-1 h-6 w-px" />
 
-        {/* Shift toggle */}
+        {/* Shift toggle — tap first, then ↵ to send a newline (Shift+Enter) */}
         <button
           type="button"
+          title="Shift+Enter for newline — tap ⇧ then ↵"
+          aria-label="Shift modifier — tap then press Enter to send a newline"
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();
@@ -339,6 +355,8 @@ export function TerminalToolbar({
         {/* Enter key - sends \n if shift active, \r otherwise */}
         <button
           type="button"
+          title={shiftActive ? "Send newline (Shift+Enter)" : "Send Enter"}
+          aria-label={shiftActive ? "Send newline (Shift+Enter)" : "Send Enter"}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();

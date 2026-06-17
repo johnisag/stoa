@@ -30,12 +30,18 @@ import {
   MAX_GENERATED_STEPS,
 } from "@/lib/command/workflow-roles";
 
-/** The actions Command Stoa can perform. Phase 2 ships ONE: create_session — the
- * same capability as the New Session dialog (cheap, non-destructive, killable).
+/** The actions Command Stoa can perform. Phase 2 ships create_session; extended
+ * with dispatch_issue (local task creation), open_view (client-side navigation),
+ * and list_sessions (read-only fleet query).
  * Destructive shapes (delete/kill/run-command/keystrokes) are deliberately absent;
  * adding one means adding an entry here AND its validator below — nothing executes
  * that isn't on this list. */
-export const COMMAND_ACTION_IDS = ["create_session"] as const;
+export const COMMAND_ACTION_IDS = [
+  "create_session",
+  "dispatch_issue",
+  "open_view",
+  "list_sessions",
+] as const;
 
 /** Agents a created session may run. A subset of PROVIDER_IDS — excludes "shell"
  * (the chatbox creates AI-agent sessions, not bare terminals). Keep this in sync
@@ -52,25 +58,77 @@ export type SessionAgentId = (typeof SESSION_AGENT_IDS)[number];
 
 /** The validated, normalized params for a create_session action. Every field is
  * either a known-safe token (agentType in catalog, model a STATIC catalog token)
- * or sanitized free text (name: control bytes stripped, length-capped). The
- * directory is NOT here — the executor derives it from projectId server-side. */
+ * or sanitized free text (name/initialPrompt: control bytes stripped,
+ * length-capped). The directory is NOT here — the executor derives it from
+ * projectId server-side. */
 export interface CreateSessionParams {
   projectId: string;
   agentType: SessionAgentId;
   model?: string;
   name?: string;
+  /** Optional seed prompt — sent as the first keystroke to the session after it
+   * starts. Control bytes stripped, length-capped at INITIAL_PROMPT_MAX. */
+  initialPrompt?: string;
 }
 
-export interface CommandProposal {
-  action: "create_session";
-  params: CreateSessionParams;
+/** Views the open_view action can navigate to (client-side navigation only). */
+export type CommandView =
+  | "analytics"
+  | "dispatch"
+  | "verdict-inbox"
+  | "fleet-board";
+
+export const COMMAND_VIEWS: readonly CommandView[] = [
+  "analytics",
+  "dispatch",
+  "verdict-inbox",
+  "fleet-board",
+];
+
+/** Validated params for dispatch_issue: create a local (GitHub-free) task
+ * against a tracked dispatch repo. */
+export interface DispatchIssueParams {
+  repoId: string;
+  title: string;
+  body?: string;
 }
+
+/** Validated params for open_view: a pure client-side navigation instruction. */
+export interface OpenViewParams {
+  view: CommandView;
+}
+
+/** Validated params for list_sessions: read-only fleet query. */
+export interface ListSessionsParams {
+  status?: "running" | "idle" | "waiting";
+}
+
+/** A compact session summary returned by the list_sessions action. Shared between
+ * the server executor (lib/command/list-sessions.ts) and the client hook
+ * (data/chat/useCommand.ts) so both sides stay in sync at the type level. */
+export interface SessionSummary {
+  id: string;
+  name: string;
+  status: string;
+  agentType: string;
+  /** ISO timestamp of last update. */
+  updatedAt: string;
+}
+
+export type CommandProposal =
+  | { action: "create_session"; params: CreateSessionParams }
+  | { action: "dispatch_issue"; params: DispatchIssueParams }
+  | { action: "open_view"; params: OpenViewParams }
+  | { action: "list_sessions"; params: ListSessionsParams };
 
 export type ProposalValidation =
   | { ok: true; proposal: CommandProposal }
   | { ok: false; reason: string };
 
 const NAME_MAX = 80;
+const INITIAL_PROMPT_MAX = 4000;
+const ISSUE_TITLE_MAX = 200;
+const ISSUE_BODY_MAX = 10000;
 
 /**
  * Strip ASCII control bytes (keep tab/newline/carriage-return and any printable),
@@ -146,17 +204,86 @@ export function validateCreateSessionParams(
   }
 
   const name = sanitizeText(raw.name, NAME_MAX);
+  const initialPrompt = sanitizeText(raw.initialPrompt, INITIAL_PROMPT_MAX);
 
   const params: CreateSessionParams = { projectId, agentType };
   if (model) params.model = model;
   if (name) params.name = name;
+  if (initialPrompt) params.initialPrompt = initialPrompt;
+  return { ok: true, params };
+}
+
+/**
+ * Validate + normalize params for a dispatch_issue proposal. repoId and title
+ * are required; body is optional. Existence of repoId is left to the caller
+ * (needs the DB).
+ */
+export function validateDispatchIssueParams(
+  raw: Record<string, unknown>
+): { ok: true; params: DispatchIssueParams } | { ok: false; reason: string } {
+  const repoId = sanitizeText(raw.repoId, 128) ?? "";
+  if (!repoId) {
+    return { ok: false, reason: "no repo was specified" };
+  }
+  const title = sanitizeText(raw.title, ISSUE_TITLE_MAX);
+  if (!title) {
+    return { ok: false, reason: "a non-empty issue title is required" };
+  }
+  const body = sanitizeText(raw.body, ISSUE_BODY_MAX);
+  const params: DispatchIssueParams = { repoId, title };
+  if (body) params.body = body;
+  return { ok: true, params };
+}
+
+/**
+ * Validate params for an open_view proposal. The view must be one of the
+ * allowed COMMAND_VIEWS tokens (fail-closed — never accepts an arbitrary string).
+ */
+export function validateOpenViewParams(
+  raw: Record<string, unknown>
+): { ok: true; params: OpenViewParams } | { ok: false; reason: string } {
+  const view = raw.view;
+  if (
+    typeof view !== "string" ||
+    !(COMMAND_VIEWS as readonly string[]).includes(view)
+  ) {
+    return {
+      ok: false,
+      reason: `"${String(view)}" is not a navigable view (choose one of: ${COMMAND_VIEWS.join(", ")})`,
+    };
+  }
+  return { ok: true, params: { view: view as CommandView } };
+}
+
+/**
+ * Validate params for a list_sessions proposal. status is optional; if provided
+ * it must be one of the allowed values (fail-closed).
+ */
+export function validateListSessionsParams(
+  raw: Record<string, unknown>
+): { ok: true; params: ListSessionsParams } | { ok: false; reason: string } {
+  const STATUS_VALUES = ["running", "idle", "waiting"] as const;
+  type StatusValue = (typeof STATUS_VALUES)[number];
+  const params: ListSessionsParams = {};
+  if (raw.status !== undefined) {
+    if (
+      typeof raw.status !== "string" ||
+      !(STATUS_VALUES as readonly string[]).includes(raw.status)
+    ) {
+      return {
+        ok: false,
+        reason: `"${String(raw.status)}" is not a valid session status (choose one of: ${STATUS_VALUES.join(", ")})`,
+      };
+    }
+    params.status = raw.status as StatusValue;
+  }
   return { ok: true, params };
 }
 
 /**
  * Validate an arbitrary (agent- or client-supplied) value as a command proposal.
  * Fail-closed: the action must be exactly an allowlisted id, and its params must
- * pass that action's validator. Anything else returns { ok: false, reason }.
+ * pass that action's per-validator. Anything else returns { ok: false, reason }.
  */
 export function validateProposal(raw: unknown): ProposalValidation {
   if (!raw || typeof raw !== "object") {
@@ -164,7 +291,7 @@ export function validateProposal(raw: unknown): ProposalValidation {
   }
   const obj = raw as Record<string, unknown>;
   // Fail-closed against the allowlist const (so the validator and the id list can
-  // never drift). Today there is exactly one action: create_session.
+  // never drift).
   if (
     typeof obj.action !== "string" ||
     !(COMMAND_ACTION_IDS as readonly string[]).includes(obj.action)
@@ -178,12 +305,31 @@ export function validateProposal(raw: unknown): ProposalValidation {
     obj.params && typeof obj.params === "object"
       ? (obj.params as Record<string, unknown>)
       : {};
-  const res = validateCreateSessionParams(paramsRaw);
-  if (!res.ok) return res;
-  return {
-    ok: true,
-    proposal: { action: "create_session", params: res.params },
-  };
+
+  switch (obj.action) {
+    case "create_session": {
+      const res = validateCreateSessionParams(paramsRaw);
+      if (!res.ok) return res;
+      return { ok: true, proposal: { action: "create_session", params: res.params } };
+    }
+    case "dispatch_issue": {
+      const res = validateDispatchIssueParams(paramsRaw);
+      if (!res.ok) return res;
+      return { ok: true, proposal: { action: "dispatch_issue", params: res.params } };
+    }
+    case "open_view": {
+      const res = validateOpenViewParams(paramsRaw);
+      if (!res.ok) return res;
+      return { ok: true, proposal: { action: "open_view", params: res.params } };
+    }
+    case "list_sessions": {
+      const res = validateListSessionsParams(paramsRaw);
+      if (!res.ok) return res;
+      return { ok: true, proposal: { action: "list_sessions", params: res.params } };
+    }
+    default:
+      return { ok: false, reason: `"${String(obj.action)}" is not an action I can run` };
+  }
 }
 
 // Caps for generated-step free text (control bytes stripped, length-bounded so a
@@ -213,7 +359,7 @@ export type WorkflowValidation =
  *  - the working directory is set SERVER-SIDE from the resolved project (the
  *    agent never supplies a path);
  *  - the assembled spec must pass the SAME validateSpec gate hand-built specs
- *    pass (unique ids, acyclic, output-refs in the dependency closure, …), so a
+ *    pass (unique ids, acyclic, output-refs in the dependency closure, ...), so a
  *    near-miss DAG is rejected here rather than producing a broken canvas.
  */
 export function validateWorkflowProposal(
@@ -297,16 +443,39 @@ export function validateWorkflowProposal(
 
 /**
  * A human one-line description of what a proposal will do, for the confirm card.
- * The projectName is resolved by the caller (from the DB) — never the raw id. The
- * model is surfaced (when set) so the operator confirms exactly what will run.
+ * For create_session, the projectName is resolved by the caller (from the DB) —
+ * never the raw id. The model is surfaced (when set) so the operator confirms
+ * exactly what will run.
  */
 export function describeProposal(
   proposal: CommandProposal,
-  projectName: string
+  /** The resolved project name (for create_session / dispatch_issue) or repo name
+   * (for dispatch_issue). Pass an empty string for actions that don't need it. */
+  contextName: string
 ): string {
-  const p = proposal.params;
-  const agentLabel = getProviderDefinition(p.agentType).name;
-  const named = p.name ? ` named “${p.name}”` : "";
-  const onModel = p.model ? ` on ${p.model}` : "";
-  return `Create a new ${agentLabel} session${named}${onModel} in ${projectName}.`;
+  if (proposal.action === "create_session") {
+    const p = proposal.params;
+    const agentLabel = getProviderDefinition(p.agentType).name;
+    const named = p.name ? ` named "${p.name}"` : "";
+    const onModel = p.model ? ` on ${p.model}` : "";
+    const withPrompt = p.initialPrompt
+      ? ` with initial prompt "${p.initialPrompt.slice(0, 60)}${p.initialPrompt.length > 60 ? "..." : ""}"`
+      : "";
+    return `Create a new ${agentLabel} session${named}${onModel}${withPrompt} in ${contextName}.`;
+  }
+  if (proposal.action === "dispatch_issue") {
+    const p = proposal.params;
+    const inRepo = contextName ? ` in ${contextName}` : "";
+    return `Create a local dispatch task: "${p.title.slice(0, 60)}${p.title.length > 60 ? "..." : ""}"${inRepo}.`;
+  }
+  if (proposal.action === "open_view") {
+    return `Navigate to the ${proposal.params.view} view.`;
+  }
+  if (proposal.action === "list_sessions") {
+    const { status } = proposal.params;
+    return status
+      ? `List all ${status} sessions.`
+      : "List all current sessions.";
+  }
+  return "Run action.";
 }

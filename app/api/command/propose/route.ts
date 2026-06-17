@@ -15,6 +15,7 @@ import {
 } from "@/lib/command/plan";
 import { validateProposal, describeProposal } from "@/lib/command/actions";
 import { auditCommand } from "@/lib/command/audit";
+import { getDb, queries } from "@/lib/db";
 
 /**
  * POST /api/command/propose — the chatbox's brain. Runs the user's message
@@ -121,7 +122,8 @@ export async function POST(request: NextRequest) {
     }
 
     // A proposal: validate the SHAPE against the fail-closed allowlist, then
-    // confirm the project exists. Any failure degrades to an answer (never a card).
+    // confirm any referenced resource exists. Any failure degrades to an answer
+    // (never a card).
     const validated = validateProposal(parsed.data);
     if (!validated.ok) {
       auditCommand("command_rejected", {
@@ -131,38 +133,93 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json({
         kind: "answer",
-        text: `I can only run a small set of safe actions, and I couldn't do that one (${validated.reason}). I can create a new session for you — tell me which project and which agent.`,
+        text: `I can only run a small set of safe actions, and I couldn't do that one (${validated.reason}). I can create a new session, create a dispatch task, navigate to a view, or list your sessions — what would you like?`,
       });
     }
 
-    const project = projectRows.find(
-      (p) => p.id === validated.proposal.params.projectId
-    );
-    if (!project) {
-      auditCommand("command_rejected", {
-        stage: "propose",
-        reason: "unknown project",
-        proposal: validated.proposal,
-      });
+    const proposal = validated.proposal;
+
+    // open_view and list_sessions need no server-side resource resolution.
+    if (
+      proposal.action === "open_view" ||
+      proposal.action === "list_sessions"
+    ) {
+      const summary = describeProposal(proposal, "");
+      auditCommand("command_proposed", { proposal });
       return NextResponse.json({
-        kind: "answer",
-        text: "I couldn't match that to one of your projects. Which project should I create the session in?",
+        kind: "proposal",
+        action: proposal.action,
+        params: proposal.params,
+        summary,
+        // Provide a synthetic sentinel project so the client type contract is
+        // consistent (the client card shows summary, not project.name for these).
+        project: { id: "", name: "" },
       });
     }
 
-    const summary = describeProposal(validated.proposal, project.name);
-    auditCommand("command_proposed", {
-      proposal: validated.proposal,
-      project: { id: project.id, name: project.name },
-    });
+    // create_session: project must exist.
+    if (proposal.action === "create_session") {
+      const project = projectRows.find(
+        (p) => p.id === proposal.params.projectId
+      );
+      if (!project) {
+        auditCommand("command_rejected", {
+          stage: "propose",
+          reason: "unknown project",
+          proposal,
+        });
+        return NextResponse.json({
+          kind: "answer",
+          text: "I couldn't match that to one of your projects. Which project should I create the session in?",
+        });
+      }
 
-    return NextResponse.json({
-      kind: "proposal",
-      action: validated.proposal.action,
-      params: validated.proposal.params,
-      summary,
-      project: { id: project.id, name: project.name },
-    });
+      const summary = describeProposal(proposal, project.name);
+      auditCommand("command_proposed", {
+        proposal,
+        project: { id: project.id, name: project.name },
+      });
+
+      return NextResponse.json({
+        kind: "proposal",
+        action: proposal.action,
+        params: proposal.params,
+        summary,
+        project: { id: project.id, name: project.name },
+      });
+    }
+
+    // dispatch_issue: validate the repoId is known (read-only DB check here).
+    if (proposal.action === "dispatch_issue") {
+      const db = getDb();
+      const repo = queries.getDispatchRepo(db).get(proposal.params.repoId);
+      if (!repo) {
+        auditCommand("command_rejected", {
+          stage: "propose",
+          reason: "unknown dispatch repo",
+          proposal,
+        });
+        return NextResponse.json({
+          kind: "answer",
+          text: "I couldn't find a dispatch repo with that id. Check the Dispatch view for the configured repos.",
+        });
+      }
+
+      const repoRow = repo as { id: string; repo_slug: string };
+      const summary = describeProposal(proposal, repoRow.repo_slug);
+      auditCommand("command_proposed", { proposal, repoSlug: repoRow.repo_slug });
+
+      return NextResponse.json({
+        kind: "proposal",
+        action: proposal.action,
+        params: proposal.params,
+        summary,
+        project: { id: repoRow.id, name: repoRow.repo_slug },
+      });
+    }
+
+    // Unreachable — validateProposal is exhaustive over COMMAND_ACTION_IDS.
+    return NextResponse.json({ kind: "answer", text: "I'm not sure how to handle that action." });
   } catch (error) {
     // Unexpected throw — audit it so the ledger has no blind spot, then 500.
     console.error("Error proposing command:", error);

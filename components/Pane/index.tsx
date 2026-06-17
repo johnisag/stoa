@@ -148,6 +148,7 @@ export const Pane = memo(function Pane({
     getPaneData,
     getActiveTab,
     addTab,
+    addViewTab,
     closeTab,
     switchTab,
     detachSession,
@@ -542,7 +543,17 @@ export const Pane = memo(function Pane({
           />
         );
       case "ask":
-        return <ChatView onClose={() => closeTab(paneId, tab.id)} />;
+        return (
+          <ChatView
+            onClose={() => closeTab(paneId, tab.id)}
+            onNavigate={(view) => {
+              if (view === "dispatch") onDispatchClick?.();
+              else if (view === "analytics") addViewTab(paneId, "analytics");
+              else if (view === "verdict-inbox") onVerdictInboxClick?.();
+              else if (view === "fleet-board") onFleetBoardClick?.();
+            }}
+          />
+        );
       default:
         return null;
     }

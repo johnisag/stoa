@@ -15,6 +15,9 @@ const ASK_EXAMPLES = [
 const COMMAND_EXAMPLES = [
   "Start a new Claude session in <project>",
   "Open a Codex session on <project>",
+  "Create a dispatch task: <short title>",
+  "Show me my running sessions",
+  "Navigate to the fleet board",
 ];
 
 /**
@@ -51,8 +54,9 @@ export function ChatHelp({
 
       <p className="text-muted-foreground leading-relaxed">
         Ask Stoa is grounded in your fleet’s live state — what your sessions are
-        doing right now, plus recent activity and cost. It answers questions,
-        and it can take one safe action for you today: starting a session. It’s
+        doing right now, plus recent activity and cost. It answers questions and
+        can take four safe actions for you: starting a session, creating a
+        dispatch task, navigating to a view, or listing your sessions. It’s
         about your fleet, not a general coding chat.
       </p>
 
@@ -96,9 +100,13 @@ export function ChatHelp({
         </ul>
         <p className="text-muted-foreground text-xs leading-relaxed">
           Tap an example to drop it into the message box — swap{" "}
-          <span className="text-foreground">&lt;project&gt;</span> for one of
-          your projects, then Send. Stoa maps it to a known project (it asks if
-          it’s unsure) and proposes it as a card.
+          <span className="text-foreground">&lt;project&gt;</span> or{" "}
+          <span className="text-foreground">&lt;short title&gt;</span> for your
+          own values, then Send. Stoa proposes a card for each action —{" "}
+          <span className="text-foreground">
+            create_session, dispatch_issue, open_view, list_sessions
+          </span>{" "}
+          — and nothing runs until you confirm.
         </p>
       </section>
 
