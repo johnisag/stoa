@@ -1,5 +1,6 @@
 import { ADropdownMenu, menuItem } from "@/components/a/ADropdownMenu";
 import {
+  Bot,
   Plus,
   FolderPlus,
   FolderOpen,
@@ -37,25 +38,23 @@ export function SessionListHeader({
   return (
     <div className="flex items-center justify-between px-3 py-2">
       <div className="flex items-center gap-2">
-        {/* Agent trio — Claude (amber) · Codex (emerald) · Hermes (violet) */}
+        {/* Agent bot trio — Claude (amber) · Codex (emerald) · Hermes (violet) */}
         <div
           aria-label="Stoa"
           role="img"
-          className="relative flex h-5 items-center"
-          style={{ width: "2.75rem" }}
+          className="relative flex h-5 w-[2.75rem] items-center"
         >
-          {/* Claude — front (z-3, leftmost) */}
-          <span className="border-sidebar-background absolute left-0 z-[3] flex h-5 w-5 items-center justify-center rounded-full border-2 bg-amber-500/20 text-[10px] font-bold text-amber-500 shadow-sm">
-            C
-          </span>
-          {/* Codex — middle (z-2) */}
-          <span className="border-sidebar-background absolute left-[0.75rem] z-[2] flex h-5 w-5 items-center justify-center rounded-full border-2 bg-emerald-500/20 text-[10px] font-bold text-emerald-500 shadow-sm">
-            X
-          </span>
-          {/* Hermes — back (z-1) */}
-          <span className="border-sidebar-background absolute left-[1.5rem] z-[1] flex h-5 w-5 items-center justify-center rounded-full border-2 bg-violet-500/20 text-[10px] font-bold text-violet-500 shadow-sm">
-            H
-          </span>
+          {(
+            [
+              ["left-0",          "z-[3]", "text-amber-600 dark:text-amber-400"  ],
+              ["left-[0.75rem]",  "z-[2]", "text-emerald-600 dark:text-emerald-400"],
+              ["left-[1.5rem]",   "z-[1]", "text-violet-600 dark:text-violet-400" ],
+            ] as const
+          ).map(([left, z, color], i) => (
+            <span key={i} className={`bg-sidebar-background absolute ${left} ${z} h-5 w-5`}>
+              <Bot className={`h-5 w-5 ${color}`} />
+            </span>
+          ))}
         </div>
         {attentionCount > 0 && (
           <Tooltip>
