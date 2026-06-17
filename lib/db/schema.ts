@@ -273,6 +273,38 @@ export function createSchema(db: Database.Database): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Best-of-N: run N parallel agent sessions on the same task in isolated
+    -- worktrees, compare their diffs, and pick one winner. Loser sessions and
+    -- worktrees are cleaned up on pick.
+    CREATE TABLE IF NOT EXISTS best_of_n_runs (
+      id TEXT PRIMARY KEY,
+      task TEXT NOT NULL,
+      base_branch TEXT NOT NULL DEFAULT 'main',
+      n INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      winner_session_id TEXT,
+      project_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (winner_session_id) REFERENCES sessions(id) ON DELETE SET NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS best_of_n_candidates (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      session_id TEXT,
+      worktree_path TEXT,
+      branch_name TEXT,
+      candidate_index INTEGER NOT NULL,
+      diff TEXT,
+      is_winner INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (run_id) REFERENCES best_of_n_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+    );
+
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_repo_lessons_repo ON repo_lessons(repo_id);
     CREATE INDEX IF NOT EXISTS idx_saved_workflows_updated ON saved_workflows(updated_at DESC);
@@ -301,6 +333,8 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_project_dev_servers_project ON project_dev_servers(project_id);
     CREATE INDEX IF NOT EXISTS idx_project_repositories_project ON project_repositories(project_id);
     CREATE INDEX IF NOT EXISTS idx_dev_servers_project ON dev_servers(project_id);
+    CREATE INDEX IF NOT EXISTS idx_bon_runs_project ON best_of_n_runs(project_id);
+    CREATE INDEX IF NOT EXISTS idx_bon_candidates_run ON best_of_n_candidates(run_id);
 
     -- Default Uncategorized project
     INSERT OR IGNORE INTO projects (id, name, working_directory, is_uncategorized, sort_order)

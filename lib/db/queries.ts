@@ -972,4 +972,70 @@ export const queries = {
       db,
       `SELECT COUNT(*) AS n FROM session_events WHERE session_key = ?`
     ),
+
+  // Best-of-N
+  createBonRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO best_of_n_runs (id, task, base_branch, n, project_id)
+       VALUES (?, ?, ?, ?, ?)`
+    ),
+
+  getBonRun: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM best_of_n_runs WHERE id = ?`),
+
+  listBonRuns: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM best_of_n_runs ORDER BY created_at DESC LIMIT 50`
+    ),
+
+  listBonRunsByProject: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM best_of_n_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 50`
+    ),
+
+  updateBonRunStatus: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE best_of_n_runs
+       SET status = ?, winner_session_id = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ),
+
+  createBonCandidate: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO best_of_n_candidates
+         (id, run_id, session_id, worktree_path, branch_name, candidate_index)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ),
+
+  getBonCandidatesByRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT bc.*, s.worker_status, s.status AS session_status
+       FROM best_of_n_candidates bc
+       LEFT JOIN sessions s ON s.id = bc.session_id
+       WHERE bc.run_id = ?
+       ORDER BY bc.candidate_index`
+    ),
+
+  updateBonCandidateDiff: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE best_of_n_candidates
+       SET diff = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ),
+
+  markBonWinner: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE best_of_n_candidates
+       SET is_winner = CASE WHEN id = ? THEN 1 ELSE 0 END,
+           updated_at = datetime('now')
+       WHERE run_id = ?`
+    ),
 };
