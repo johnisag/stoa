@@ -35,9 +35,6 @@ export async function matchBaseline(
   await expect(page).toHaveScreenshot(`${name}.png`, {
     maxDiffPixelRatio: opts.maxDiffPixelRatio ?? 0.02,
     threshold: opts.threshold ?? 0.1,
-    // Store alongside test files under baselines/ for discoverability.
-    snapshotDir: BASELINE_DIR,
-    // Suppress animation jitter.
     animations: "disabled",
   });
 }
