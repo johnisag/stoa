@@ -1,0 +1,73 @@
+name: visual
+
+on:
+  pull_request:
+
+# Least privilege: read-only token matches the posture of test.yml.
+permissions:
+  contents: read
+
+jobs:
+  visual:
+    name: visual tests
+    runs-on: ubuntu-latest
+    # Informational only in v1 — never blocks merge.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        id: setup-node
+        with:
+          node-version: 24
+          cache: npm
+
+      # Reuse the same node_modules cache key as test.yml so back-to-back jobs
+      # on the same runner share the cache (better-sqlite3 / node-pty native
+      # binaries are ABI-bound to the Node version, hence the version in the key).
+      - name: Cache node_modules
+        id: node-modules-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node${{ steps.setup-node.outputs.node-version }}-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: npm install --legacy-peer-deps
+
+      # Install only Chromium — the single browser that produces deterministic
+      # pixels on ubuntu-latest (the OS where baselines were generated).
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # Production build is required: playwright.config.ts starts the server
+      # via `npm run dev` which will use Turbopack; a production-equivalent
+      # static output is more deterministic. The webServer in playwright.config.ts
+      # starts the process before tests run, so this just ensures .next/ exists.
+      - name: Build
+        run: npm run build
+
+      - name: Run visual tests
+        run: npm run test:visual
+
+      # Always upload the HTML report so reviewers can inspect results without
+      # unblocking merge (matches continue-on-error: true above).
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: playwright-visual-report
+          path: playwright-report/
+          retention-days: 14
+
+      # On failure, also upload the diff snapshots so reviewers can see exactly
+      # what pixels changed without re-running locally.
+      - name: Upload visual diff snapshots
+        if: failure()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: visual-diff-snapshots
+          path: test-results/
+          retention-days: 7

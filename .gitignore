@@ -40,6 +40,13 @@ npm-debug.log*
 # Testing
 coverage/
 .cache/
+test-results/
+playwright-report/
+
+# Visual test temp DB (the directory is tracked via tmp/.gitkeep)
+tmp/*.db
+tmp/*.db-wal
+tmp/*.db-shm
 
 # Databases (local working copies)
 .mem.db
