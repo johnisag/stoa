@@ -37,27 +37,26 @@ export function SessionListHeader({
   return (
     <div className="flex items-center justify-between px-3 py-2">
       <div className="flex items-center gap-2">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          role="img"
+        {/* Agent trio — Claude (amber) · Codex (emerald) · Hermes (violet) */}
+        <div
           aria-label="Stoa"
-          className="text-foreground h-5 w-5"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          fill="none"
+          role="img"
+          className="relative flex h-5 items-center"
+          style={{ width: "2.75rem" }}
         >
-          <path d="M7 20c-3-2-4.5-5.5-2.5-8.5C5 13 6 13.5 7 13c-.5-3 1-5.5 3-7.5C10.5 8 11 10.5 10.5 13c-.2 1.2.3 2.5 1.5 3C10.5 18.5 9 20.5 7 20z" />
-          <path d="M12.5 12h3.5" />
-          <path d="M14.5 10.5l1.5 1.5-1.5 1.5" />
-          <rect x="17" y="8.5" width="5.5" height="5" rx="1.5" />
-          <path d="M19.75 8.5V7" />
-          <circle cx="18.8" cy="11" r="0.5" fill="currentColor" stroke="none" />
-          <circle cx="20.7" cy="11" r="0.5" fill="currentColor" stroke="none" />
-          <path d="M18 13.5v1.5M21.5 13.5v1.5" />
-        </svg>
+          {/* Claude — front (z-3, leftmost) */}
+          <span className="border-sidebar-background absolute left-0 z-[3] flex h-5 w-5 items-center justify-center rounded-full border-2 bg-amber-500/20 text-[10px] font-bold text-amber-500 shadow-sm">
+            C
+          </span>
+          {/* Codex — middle (z-2) */}
+          <span className="border-sidebar-background absolute left-[0.75rem] z-[2] flex h-5 w-5 items-center justify-center rounded-full border-2 bg-emerald-500/20 text-[10px] font-bold text-emerald-500 shadow-sm">
+            X
+          </span>
+          {/* Hermes — back (z-1) */}
+          <span className="border-sidebar-background absolute left-[1.5rem] z-[1] flex h-5 w-5 items-center justify-center rounded-full border-2 bg-violet-500/20 text-[10px] font-bold text-violet-500 shadow-sm">
+            H
+          </span>
+        </div>
         {attentionCount > 0 && (
           <Tooltip>
             <TooltipTrigger asChild>
