@@ -71,6 +71,27 @@ const COMMAND_PREAMBLE = [
   '       "status":"running" | "idle" | "waiting"}}',
   "     (omit status to list all sessions)",
   "",
+  "3. PLAN a sequence of steps when the user asks for multi-step work (research then",
+  "   implement, implement then test, etc.). A plan is only appropriate when the",
+  "   steps are GENUINELY sequential — step N depends on the output of step N-1.",
+  "   To propose a plan, reply with ONLY a single JSON object and NOTHING else:",
+  '   {"kind":"plan","name":"<short plan title, max 120 chars>","steps":[',
+  '     {"stepId":"step-1","description":"<what this step does, max 200 chars>",',
+  '      "action":"create_session","params":{<same params as a single create_session>}},',
+  "     ...",
+  "   ]}",
+  "",
+  "   Rules for plans:",
+  "   - Use a plan ONLY when steps are genuinely sequential (step N depends on N-1).",
+  "   - 2 to 10 steps maximum — no more.",
+  "   - Each step's action must be 'create_session' or 'dispatch_issue' only.",
+  "     (open_view is client-side only and produces no output a later step could",
+  "      consume; list_sessions is read-only and returns data, not a durable side",
+  "      effect — neither belongs in a sequential plan.)",
+  "   - Each step's params follow the same rules as a single PROPOSE above.",
+  "   - Do NOT mix a plan and a proposal in the same reply.",
+  "   - Do NOT emit a plan for a single action — use a proposal instead.",
+  "",
   "Rules:",
   "- Only propose an action when the user clearly requests it.",
   "- For create_session: choose projectId ONLY from the PROJECTS list. If the user",
@@ -225,13 +246,14 @@ export function buildGenerateWorkflowPrompt({
   return parts.join("\n");
 }
 
-/** The parsed reply: a question answer (prose), a raw proposal object, or a raw
- * workflow-design object — the latter two still to be validated by the allowlist
- * / the workflow validator. */
+/** The parsed reply: a question answer (prose), a raw proposal object, a raw
+ * workflow-design object, or a raw plan object — the latter three still to be
+ * validated by the allowlist / the workflow validator / the plan validator. */
 export type ParsedReply =
   | { kind: "answer"; text: string }
   | { kind: "proposal"; data: unknown }
-  | { kind: "workflow"; data: unknown };
+  | { kind: "workflow"; data: unknown }
+  | { kind: "plan"; data: unknown };
 
 /** If `text` is wrapped in a ``` or ```json fence, return the inner body. */
 function stripCodeFence(text: string): string {
@@ -284,6 +306,7 @@ export function parseAgentReply(raw: string): ParsedReply {
       if (obj && typeof obj === "object") {
         if (obj.kind === "proposal") return { kind: "proposal", data: obj };
         if (obj.kind === "workflow") return { kind: "workflow", data: obj };
+        if (obj.kind === "plan") return { kind: "plan", data: obj };
       }
     } catch {
       // Not valid JSON — fall through to treating the reply as a prose answer.
