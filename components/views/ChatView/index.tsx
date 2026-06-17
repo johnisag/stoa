@@ -194,22 +194,25 @@ export function ChatView({
       { message: question, history, provider, model },
       {
         onSuccess: (reply) => {
-          setMessages((prev) => [
-            ...prev,
-            reply.kind === "answer"
-              ? { role: "assistant", kind: "answer", content: reply.text }
-              : {
-                  role: "assistant",
-                  kind: "proposal",
-                  proposal: {
-                    action: reply.action,
-                    params: reply.params,
-                    summary: reply.summary,
-                    project: reply.project,
-                  },
-                  status: "pending",
-                },
-          ]);
+          if (reply.kind === "answer") {
+            setMessages((prev) => [
+              ...prev,
+              { role: "assistant", kind: "answer", content: reply.text },
+            ]);
+          } else {
+            // Destructure the discriminated proposal (kind omitted) so TS
+            // preserves the action discriminant on the stored proposal object.
+            const { kind: _k, ...proposal } = reply;
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                kind: "proposal",
+                proposal,
+                status: "pending" as const,
+              },
+            ]);
+          }
         },
         onError: (err) => {
           // Drop the optimistic question back into the composer so it isn't lost.
@@ -250,9 +253,39 @@ export function ChatView({
       );
     setStatus("executing");
     execute.mutate(
-      { action: proposal.action, params: proposal.params },
+      {
+        action: proposal.action as
+          | "create_session"
+          | "dispatch_issue"
+          | "open_view"
+          | "list_sessions",
+        params: proposal.params,
+      },
       {
         onSuccess: (res) => {
+          let content: string;
+          if ("sessionId" in res) {
+            const prompt = res.initialPrompt
+              ? ` Seed prompt delivered: "${res.initialPrompt.slice(0, 60)}${res.initialPrompt.length > 60 ? "…" : ""}".`
+              : "";
+            content = `Created session **${res.name}** in **${res.project.name}**. Open it from the sidebar to start working.${prompt}`;
+          } else if ("clientAction" in res && res.clientAction === "open_view") {
+            content = `Navigating to the **${res.view}** view.`;
+          } else if ("dispatchId" in res) {
+            content = `Dispatch task created: **${res.title}** in ${res.repoSlug}.`;
+          } else if ("sessions" in res) {
+            if (res.total === 0) {
+              content = "No sessions found matching that filter.";
+            } else {
+              const lines = res.sessions
+                .slice(0, 10)
+                .map((s) => `- **${s.name}** (${s.agentType}, ${s.status})`);
+              if (res.total > 10) lines.push(`…and ${res.total - 10} more`);
+              content = `Found ${res.total} session${res.total === 1 ? "" : "s"}:\n\n${lines.join("\n")}`;
+            }
+          } else {
+            content = "Action completed.";
+          }
           setMessages((prev) => [
             ...prev.map((m, i) =>
               i === index && m.role === "assistant" && m.kind === "proposal"
@@ -263,7 +296,7 @@ export function ChatView({
               role: "assistant",
               kind: "result",
               ok: true,
-              content: `Created session **${res.name}** in **${res.project.name}**. Open it from the sidebar to start working.`,
+              content,
             },
           ]);
         },
@@ -498,6 +531,20 @@ export function ChatView({
                         <p className="text-muted-foreground text-sm">
                           {message.proposal.summary}
                         </p>
+                        {message.proposal.action === "create_session" &&
+                          message.proposal.params.initialPrompt && (
+                            <p className="text-muted-foreground mt-1 max-w-xs truncate text-xs">
+                              Seed prompt:{" "}
+                              <span className="italic">
+                                {message.proposal.params.initialPrompt.slice(
+                                  0,
+                                  80
+                                )}
+                                {message.proposal.params.initialPrompt.length >
+                                  80 && "…"}
+                              </span>
+                            </p>
+                          )}
                       </div>
                     </div>
                     {message.status === "pending" ||

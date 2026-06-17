@@ -29,6 +29,10 @@ export interface ResolvedProject {
 export interface CreatedSession {
   id: string;
   name: string;
+  /** The seed prompt to send as the first keystroke, if the proposal included
+   * one. Not stored in the DB — returned to the client which delivers it via
+   * the same mechanism the New Session dialog uses (first terminal input). */
+  initialPrompt?: string;
 }
 
 /** Generate a unique "Session N" name — mirrors the private helper in
@@ -77,5 +81,7 @@ export function executeCreateSession(
   );
 
   const session = queries.getSession(db).get(id) as Session;
-  return { id: session.id, name: session.name };
+  const result: CreatedSession = { id: session.id, name: session.name };
+  if (params.initialPrompt) result.initialPrompt = params.initialPrompt;
+  return result;
 }

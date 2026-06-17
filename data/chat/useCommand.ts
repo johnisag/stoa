@@ -11,20 +11,64 @@ export interface ChatMessage {
 
 /** The validated params of a create_session proposal (mirrors the server's
  * CreateSessionParams — the wire contract for /api/command). */
-export interface CommandParams {
+export interface CreateSessionCommandParams {
   projectId: string;
   agentType: string;
   model?: string;
   name?: string;
+  initialPrompt?: string;
 }
 
-/** A confirmed-pending proposal returned by /api/command/propose. */
-export interface CommandProposal {
-  action: "create_session";
-  params: CommandParams;
-  summary: string;
-  project: { id: string; name: string };
+/** Params for dispatch_issue. */
+export interface DispatchIssueCommandParams {
+  repoId: string;
+  title: string;
+  body?: string;
 }
+
+/** Params for open_view. */
+export interface OpenViewCommandParams {
+  view: "analytics" | "dispatch" | "verdict-inbox" | "fleet-board";
+}
+
+/** Params for list_sessions. */
+export interface ListSessionsCommandParams {
+  status?: "running" | "idle" | "waiting";
+}
+
+/** Union of all supported action params (discriminated by the action field). */
+export type CommandParams =
+  | CreateSessionCommandParams
+  | DispatchIssueCommandParams
+  | OpenViewCommandParams
+  | ListSessionsCommandParams;
+
+/** A confirmed-pending proposal returned by /api/command/propose. */
+export type CommandProposal =
+  | {
+      action: "create_session";
+      params: CreateSessionCommandParams;
+      summary: string;
+      project: { id: string; name: string };
+    }
+  | {
+      action: "dispatch_issue";
+      params: DispatchIssueCommandParams;
+      summary: string;
+      project: { id: string; name: string };
+    }
+  | {
+      action: "open_view";
+      params: OpenViewCommandParams;
+      summary: string;
+      project: { id: string; name: string };
+    }
+  | {
+      action: "list_sessions";
+      params: ListSessionsCommandParams;
+      summary: string;
+      project: { id: string; name: string };
+    };
 
 /** The /api/command/propose envelope: the agent either answered or proposed. */
 export type ProposeReply =
@@ -107,15 +151,28 @@ export function useGenerateWorkflow() {
   });
 }
 
-export interface ExecuteResult {
-  ok: true;
-  sessionId: string;
+export interface SessionSummary {
+  id: string;
   name: string;
-  project: { id: string; name: string };
+  status: string;
+  agentType: string;
+  updatedAt: string;
 }
 
+export type ExecuteResult =
+  | {
+      ok: true;
+      sessionId: string;
+      name: string;
+      initialPrompt?: string;
+      project: { id: string; name: string };
+    }
+  | { ok: true; dispatchId: string; title: string; repoSlug: string }
+  | { ok: true; clientAction: "open_view"; view: string }
+  | { ok: true; sessions: SessionSummary[]; total: number };
+
 export interface ExecuteInput {
-  action: "create_session";
+  action: "create_session" | "dispatch_issue" | "open_view" | "list_sessions";
   params: CommandParams;
 }
 

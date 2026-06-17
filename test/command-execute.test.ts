@@ -28,6 +28,8 @@ vi.mock("@/lib/db", async (importOriginal) => {
 import { queries } from "@/lib/db";
 import type { Session, SessionEvent } from "@/lib/db/types";
 import { executeCreateSession } from "@/lib/command/create-session";
+import { executeDispatchIssue } from "@/lib/command/dispatch-issue";
+import { executeListSessions } from "@/lib/command/list-sessions";
 import { auditCommand, COMMAND_AUDIT_KEY } from "@/lib/command/audit";
 
 function db() {
@@ -47,9 +49,15 @@ beforeAll(() => {
   state.db = memory;
 });
 
+const REPO = {
+  id: "repo_test",
+  repo_slug: "owner/test-repo",
+  repo_path: "~/repos/test-repo",
+};
+
 beforeEach(() => {
   db().exec(
-    "DELETE FROM sessions; DELETE FROM session_events; DELETE FROM projects;"
+    "DELETE FROM sessions; DELETE FROM session_events; DELETE FROM projects; DELETE FROM dispatch_repos; DELETE FROM issue_dispatches;"
   );
   // Seed the project so the sessions.project_id foreign key is satisfied.
   queries
@@ -62,6 +70,27 @@ beforeEach(() => {
       PROJECT.default_model,
       null,
       1
+    );
+  // Seed a dispatch repo for dispatch_issue tests.
+  queries
+    .createDispatchRepo(db())
+    .run(
+      REPO.id,
+      REPO.repo_path,
+      REPO.repo_slug,
+      "claude",   // agent_type
+      5,          // daily_quota
+      2,          // max_concurrency
+      null,       // label_filter
+      "main",     // base_branch
+      "auto",     // mode
+      1,          // enabled
+      0,          // review_gate
+      0,          // ci_autofix
+      0,          // merge_train
+      0,          // verify_gate
+      null,       // verify_command
+      null        // project_id
     );
 });
 
@@ -148,5 +177,129 @@ describe("auditCommand", () => {
     expect(payload.truncated).toBe(true);
     expect(payload.bytes).toBeGreaterThan(8 * 1024);
     expect((event.payload as string).length).toBeLessThan(2048);
+  });
+});
+
+// ── seed-prompt (initialPrompt) flow ─────────────────────────────────────────
+
+describe("executeCreateSession — initialPrompt seed-prompt flow", () => {
+  it("returns initialPrompt in the result when provided", () => {
+    const created = executeCreateSession(
+      {
+        projectId: PROJECT.id,
+        agentType: "claude",
+        initialPrompt: "Hello, start the refactor",
+      },
+      PROJECT
+    );
+    expect(created.initialPrompt).toBe("Hello, start the refactor");
+  });
+
+  it("omits initialPrompt from the result when not provided", () => {
+    const created = executeCreateSession(
+      { projectId: PROJECT.id, agentType: "claude" },
+      PROJECT
+    );
+    expect(created.initialPrompt).toBeUndefined();
+  });
+
+  it("does not persist initialPrompt in the DB row (ephemeral delivery only)", () => {
+    const created = executeCreateSession(
+      {
+        projectId: PROJECT.id,
+        agentType: "claude",
+        initialPrompt: "seed message",
+      },
+      PROJECT
+    );
+    const row = queries.getSession(db()).get(created.id) as unknown as Record<string, unknown>;
+    // The sessions table has no initialPrompt/seed_prompt column — it should
+    // not appear on the row (the row type has no such field).
+    expect(row.initialPrompt).toBeUndefined();
+    expect(row.seed_prompt).toBeUndefined();
+  });
+});
+
+// ── dispatch_issue executor ───────────────────────────────────────────────────
+
+describe("executeDispatchIssue", () => {
+  it("inserts a local task row with the correct repo and title", () => {
+    const result = executeDispatchIssue(
+      { repoId: REPO.id, title: "Fix the login bug", body: "Details here" },
+      { id: REPO.id, repo_slug: REPO.repo_slug }
+    );
+    expect(result.repoSlug).toBe(REPO.repo_slug);
+    expect(result.title).toBe("Fix the login bug");
+    expect(result.dispatchId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+
+    // The row should be in the DB as a local pending task.
+    const row = queries.getDispatch(db()).get(result.dispatchId) as Record<
+      string,
+      unknown
+    >;
+    expect(row).toBeTruthy();
+    expect(row.issue_title).toBe("Fix the login bug");
+    expect(row.task_body).toBe("Details here");
+    expect(row.source).toBe("local");
+    expect(row.status).toBe("pending");
+    expect(row.repo_id).toBe(REPO.id);
+  });
+
+  it("handles a missing body gracefully (sets task_body to null)", () => {
+    const result = executeDispatchIssue(
+      { repoId: REPO.id, title: "No body task" },
+      { id: REPO.id, repo_slug: REPO.repo_slug }
+    );
+    const row = queries.getDispatch(db()).get(result.dispatchId) as Record<
+      string,
+      unknown
+    >;
+    expect(row.task_body).toBeNull();
+  });
+});
+
+// ── list_sessions executor ────────────────────────────────────────────────────
+
+describe("executeListSessions", () => {
+  beforeEach(() => {
+    // Create a couple of sessions with different statuses.
+    executeCreateSession({ projectId: PROJECT.id, agentType: "claude", name: "S-running" }, PROJECT);
+    executeCreateSession({ projectId: PROJECT.id, agentType: "codex", name: "S-idle" }, PROJECT);
+    // Manually set one to running status.
+    const all = queries.getAllSessions(db()).all() as Session[];
+    const running = all.find((s) => s.name === "S-running");
+    if (running) {
+      queries.updateSessionStatus(db()).run("running", running.id);
+    }
+  });
+
+  it("returns all sessions when no status filter is given", () => {
+    const result = executeListSessions({});
+    expect(result.total).toBeGreaterThanOrEqual(2);
+    expect(result.sessions.length).toBe(result.total);
+    expect(result.sessions[0]).toHaveProperty("id");
+    expect(result.sessions[0]).toHaveProperty("name");
+    expect(result.sessions[0]).toHaveProperty("status");
+    expect(result.sessions[0]).toHaveProperty("agentType");
+  });
+
+  it("filters by status when provided", () => {
+    const running = executeListSessions({ status: "running" });
+    expect(running.sessions.every((s) => s.status === "running")).toBe(true);
+
+    const idle = executeListSessions({ status: "idle" });
+    expect(idle.sessions.every((s) => s.status === "idle")).toBe(true);
+
+    // All running + idle should sum to total (since we only have those two statuses).
+    const all = executeListSessions({});
+    expect(running.total + idle.total).toBe(all.total);
+  });
+
+  it("returns an empty list when no sessions match the filter", () => {
+    const result = executeListSessions({ status: "waiting" });
+    expect(result.total).toBe(0);
+    expect(result.sessions).toHaveLength(0);
   });
 });
