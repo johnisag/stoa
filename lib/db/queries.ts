@@ -572,8 +572,17 @@ export const queries = {
   upsertDispatchCandidate: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT OR IGNORE INTO issue_dispatches (id, repo_id, issue_number, issue_title, issue_url, issue_created_at, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending')`
+      `INSERT OR IGNORE INTO issue_dispatches (id, repo_id, issue_number, issue_title, issue_url, issue_created_at, source, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'github', 'pending')`
+    ),
+
+  // Webhook-sourced task: source='webhook', issue_number 0 (same partial-index
+  // exclusion as local tasks). Args: (id, repo_id, title, body|null, createdAt).
+  insertWebhookTask: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO issue_dispatches (id, repo_id, issue_number, issue_title, task_body, issue_created_at, source, status)
+       VALUES (?, ?, 0, ?, ?, ?, 'webhook', 'pending')`
     ),
 
   // Local (GitHub-free) task: source='local', issue_number 0 (excluded from the
@@ -1037,5 +1046,55 @@ export const queries = {
        SET is_winner = CASE WHEN id = ? THEN 1 ELSE 0 END,
            updated_at = datetime('now')
        WHERE run_id = ?`
+    ),
+
+  // ── Warm worktree pool ──
+  insertWarmWorktree: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO warm_worktrees (id, repo_id, worktree_path, branch_name, status)
+       VALUES (?, ?, ?, ?, 'warming')`
+    ),
+
+  markWarmWorktreeReady: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE warm_worktrees SET status = 'ready' WHERE id = ? AND status = 'warming'`
+    ),
+
+  // Atomically claim the oldest ready warm worktree for a repo. Returns the row or
+  // undefined (no ready entry). The DELETE is intentional: claimed worktrees are
+  // consumed and removed from the pool — the dispatcher owns the path from here.
+  claimWarmWorktree: (db: Database.Database) =>
+    getStmt(
+      db,
+      `DELETE FROM warm_worktrees
+       WHERE id = (
+         SELECT id FROM warm_worktrees
+         WHERE repo_id = ? AND status = 'ready'
+         ORDER BY created_at ASC
+         LIMIT 1
+       )
+       RETURNING id, worktree_path, branch_name`
+    ),
+
+  countWarmWorktrees: (db: Database.Database) =>
+    getStmt(db, `SELECT COUNT(*) as n FROM warm_worktrees WHERE repo_id = ?`),
+
+  deleteWarmWorktree: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM warm_worktrees WHERE id = ?`),
+
+  // Returns all 'warming' rows — used at startup to evict entries that were left
+  // mid-creation by a crash (their worktrees are partially set up and unusable).
+  listWarmingWorktrees: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT id, worktree_path FROM warm_worktrees WHERE status = 'warming'`
+    ),
+
+  listReadyWarmWorktreesForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT id, worktree_path FROM warm_worktrees WHERE repo_id = ? AND status IN ('warming','ready')`
     ),
 };

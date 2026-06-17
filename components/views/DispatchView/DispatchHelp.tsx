@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Sparkles,
   Wrench,
+  Webhook,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -254,6 +255,26 @@ export function DispatchHelp({ onClose }: { onClose: () => void }) {
           <span className="text-foreground">Merged</span>, or clears it if you
           closed it without merging. Stoa does this on its own every minute too;
           the button is just the instant version.
+        </p>
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <Webhook className="h-4 w-4" aria-hidden="true" /> Webhook Intake
+          (optional)
+        </h3>
+        <p className="text-muted-foreground">
+          The{" "}
+          <span className="text-foreground font-medium">Webhook Intake</span>{" "}
+          panel in the Allocation tab lets external systems push tasks straight
+          into Stoa&apos;s queue — no manual entry needed. Set{" "}
+          <code className="bg-muted rounded px-1">STOA_WEBHOOK_SECRET</code> in
+          your <code className="bg-muted rounded px-1">.env</code> file and
+          restart Stoa to enable it. Tasks arrive signed via HMAC-SHA256 so only
+          authorised callers can add work. GitHub webhooks on the{" "}
+          <span className="text-foreground">Issues</span> event are also
+          supported natively — Stoa accepts new issues and ignores everything
+          else.
         </p>
       </section>
 

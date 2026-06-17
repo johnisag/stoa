@@ -3,6 +3,8 @@ import { getDb, queries } from "@/lib/db";
 import { isValidAgentType } from "@/lib/providers";
 import { parseVerifySteps } from "@/lib/dispatch/verify";
 import { normalizeRecurrence } from "@/lib/dispatch/recurrence";
+import { cleanupPool } from "@/lib/dispatch/warm-pool";
+import { expandHome } from "@/lib/platform";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -161,7 +163,18 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 export async function DELETE(_request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
-    queries.deleteDispatchRepo(getDb()).run(id);
+    const db = getDb();
+    // Read the repo path before deleting so we can clean up warm worktrees on disk.
+    const repo = queries.getDispatchRepo(db).get(id) as
+      | DispatchRepo
+      | undefined;
+    queries.deleteDispatchRepo(db).run(id);
+    // Clean up any pre-warmed worktrees left on disk (DB rows already gone via CASCADE).
+    if (repo) {
+      cleanupPool(id, expandHome(repo.repo_path)).catch((err) =>
+        console.warn("warm-pool cleanup on repo delete failed:", err)
+      );
+    }
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("dispatch repo delete failed:", error);

@@ -21,9 +21,10 @@ import { resolveModelForAgent } from "../model-catalog";
 import { getProvider, buildAgentArgs, shellQuoteArg } from "../providers";
 import { sessionKey } from "../providers/registry";
 import { wrapWithBanner } from "../banner";
-import { runInBackground } from "../async-operations";
 import { getSessionBackend } from "../session-backend";
 import { expandHome } from "../platform";
+import { claimWarm, scheduleReplenish } from "./warm-pool";
+import { generateBranchName } from "../git";
 import type { DispatchRepo, IssueDispatch } from "./types";
 
 /** Seed prompt: worktree boundary note + issue/task context + "open a PR" house
@@ -120,33 +121,46 @@ export async function dispatchOne(
     const provider = getProvider(repo.agent_type);
     const model = resolveModelForAgent(repo.agent_type, undefined);
 
-    // 1. Worktree per task (createWorktree owns branch naming + uniqueness).
-    // Local tasks have no issue number, so name the worktree by the row id.
+    // 1. Worktree per task. Try to claim a pre-warmed worktree first (skips the
+    // slow git+npm setup). Fall back to on-demand creation when none is ready.
     const featureName =
       issueNumber > 0
         ? `issue-${issueNumber}`
         : `task-${candidate.id.slice(0, 8)}`;
-    const { worktreePath, branchName } = await createWorktree({
-      projectPath: expandHome(repo.repo_path),
-      featureName,
-      baseBranch: repo.base_branch,
-    });
-    createdWorktree = worktreePath;
-
-    // 2. Env setup (copy .env, install deps) BEFORE spawning so the agent doesn't
-    // race its own build/test against an unfinished setup. This is synchronous with
-    // the dispatch; the worktree is unusable until deps are ready anyway.
     const sourcePath = expandHome(repo.repo_path);
-    try {
-      await setupWorktree({ worktreePath, sourcePath });
-    } catch (setupErr) {
-      // A setup failure is logged but not fatal — the agent may still be able to
-      // install deps itself; failing here would lose the claimed dispatch.
-      console.warn(
-        `dispatch: setupWorktree failed for ${candidate.id}:`,
-        setupErr
-      );
+    const realBranchName = generateBranchName(featureName);
+
+    const warm = await claimWarm(repo.id, sourcePath, realBranchName);
+    let worktreePath: string;
+    let branchName: string;
+
+    if (warm) {
+      // Warm path: worktree already set up, no npm install needed.
+      worktreePath = warm.worktreePath;
+      branchName = warm.branchName;
+    } else {
+      // Cold path: create + setup on demand (original behavior).
+      const wt = await createWorktree({
+        projectPath: sourcePath,
+        featureName,
+        baseBranch: repo.base_branch,
+      });
+      worktreePath = wt.worktreePath;
+      branchName = wt.branchName;
+
+      // 2. Env setup (copy .env, install deps) BEFORE spawning so the agent doesn't
+      // race its own build/test against an unfinished setup.
+      try {
+        await setupWorktree({ worktreePath, sourcePath });
+      } catch (setupErr) {
+        // Non-fatal — the agent may install deps itself.
+        console.warn(
+          `dispatch: setupWorktree failed for ${candidate.id}:`,
+          setupErr
+        );
+      }
     }
+    createdWorktree = worktreePath;
 
     // 3. Conductor-free session row + link it onto the (already-claimed) dispatch
     // row BEFORE spawning, so the sweep can judge liveness even if spawn crashes.
@@ -205,6 +219,10 @@ export async function dispatchOne(
       binary,
       args,
     });
+
+    // Replenish the warm pool in the background so the next dispatch has a
+    // pre-warmed worktree ready (fire-and-forget; never blocks the caller).
+    scheduleReplenish(repo);
   } catch (err) {
     const ref = issueNumber > 0 ? `#${issueNumber}` : ` task "${issueTitle}"`;
     console.error(`dispatch failed for ${repo.repo_slug}${ref}:`, err);
