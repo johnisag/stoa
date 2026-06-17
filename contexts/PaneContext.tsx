@@ -45,6 +45,9 @@ interface PaneContextValue {
    * existing one if this pane already has it, else creating it. */
   addViewTab: (paneId: string, view: ViewKind) => void;
   addWorkflowsTab: (paneId: string) => void;
+  /** Open a Best-of-N run as a dedicated pane tab. Creates a new tab each time
+   * (a run id is unique, so there is no dedupe risk). */
+  addBonRunTab: (paneId: string, runId: string) => void;
   // Session management (operates on active tab)
   attachSession: (paneId: string, sessionId: string, tmuxName: string) => void;
   detachSession: (paneId: string) => void;
@@ -187,6 +190,28 @@ export function PaneProvider({ children }: { children: ReactNode }) {
     (paneId: string) => addViewTab(paneId, "workflows"),
     [addViewTab]
   );
+
+  // Open a Best-of-N run as a pane tab. A run id is unique so we always create
+  // a fresh tab (no dedupe). The runId is stored in tab.bonRunId.
+  const addBonRunTab = useCallback((paneId: string, runId: string) => {
+    setState((prev) => {
+      const pane = prev.panes[paneId];
+      if (!pane) return prev;
+      const newTab = createTab("best-of-n");
+      newTab.bonRunId = runId;
+      return {
+        ...prev,
+        panes: {
+          ...prev.panes,
+          [paneId]: {
+            ...pane,
+            tabs: [...pane.tabs, newTab],
+            activeTabId: newTab.id,
+          },
+        },
+      };
+    });
+  }, []);
 
   const closeTab = useCallback((paneId: string, tabId: string) => {
     setState((prev) => {
@@ -349,6 +374,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
       switchTab,
       addViewTab,
       addWorkflowsTab,
+      addBonRunTab,
       attachSession,
       detachSession,
       reconcileSessions,
@@ -369,6 +395,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
       switchTab,
       addViewTab,
       addWorkflowsTab,
+      addBonRunTab,
       attachSession,
       detachSession,
       reconcileSessions,

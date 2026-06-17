@@ -24,7 +24,8 @@ export type ViewKind =
   | "analytics"
   | "verdict-inbox"
   | "fleet-board"
-  | "ask";
+  | "ask"
+  | "best-of-n";
 
 export interface TabData {
   id: string;
@@ -33,6 +34,8 @@ export interface TabData {
   /** Non-terminal tab kind. Undefined is treated as "terminal" for backward
    * compatibility with persisted pane state from before view tabs existed. */
   view?: ViewKind;
+  /** Best-of-N run id — set when view === "best-of-n". */
+  bonRunId?: string;
 }
 
 /** A non-terminal view tab (opens a fleet view as a pane, not a modal). */

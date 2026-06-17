@@ -32,7 +32,7 @@ import {
 
 /** The actions Command Stoa can perform. Phase 2 ships create_session; extended
  * with dispatch_issue (local task creation), open_view (client-side navigation),
- * and list_sessions (read-only fleet query).
+ * list_sessions (read-only fleet query), and best_of_n (parallel N-way comparison).
  * Destructive shapes (delete/kill/run-command/keystrokes) are deliberately absent;
  * adding one means adding an entry here AND its validator below — nothing executes
  * that isn't on this list. */
@@ -41,6 +41,7 @@ export const COMMAND_ACTION_IDS = [
   "dispatch_issue",
   "open_view",
   "list_sessions",
+  "best_of_n",
 ] as const;
 
 /** Agents a created session may run. A subset of PROVIDER_IDS — excludes "shell"
@@ -103,6 +104,17 @@ export interface ListSessionsParams {
   status?: "running" | "idle" | "waiting";
 }
 
+/** Validated params for best_of_n: run N parallel sessions on the same task and
+ * compare their diffs to pick a winner. n must be exactly 2 or 3.
+ * conductorSessionId is the Stoa session that triggered this run — it is used as
+ * the FK parent for the spawned workers (required by the DB schema). */
+export interface BestOfNParams {
+  task: string;
+  n: 2 | 3;
+  projectId: string;
+  conductorSessionId: string;
+}
+
 /** A compact session summary returned by the list_sessions action. Shared between
  * the server executor (lib/command/list-sessions.ts) and the client hook
  * (data/chat/useCommand.ts) so both sides stay in sync at the type level. */
@@ -119,7 +131,8 @@ export type CommandProposal =
   | { action: "create_session"; params: CreateSessionParams }
   | { action: "dispatch_issue"; params: DispatchIssueParams }
   | { action: "open_view"; params: OpenViewParams }
-  | { action: "list_sessions"; params: ListSessionsParams };
+  | { action: "list_sessions"; params: ListSessionsParams }
+  | { action: "best_of_n"; params: BestOfNParams };
 
 export type ProposalValidation =
   | { ok: true; proposal: CommandProposal }
@@ -280,6 +293,52 @@ export function validateListSessionsParams(
   return { ok: true, params };
 }
 
+const BON_TASK_MAX = 4000;
+
+/**
+ * Validate params for a best_of_n proposal.
+ *
+ * - task: required, non-empty, control bytes stripped, max 4000 chars.
+ * - n: must be exactly 2 or 3 (integer). Fail-closed — not "up to 3".
+ * - projectId: required non-empty string (existence checked by the executor).
+ */
+export function validateBestOfNParams(
+  raw: Record<string, unknown>
+): { ok: true; params: BestOfNParams } | { ok: false; reason: string } {
+  const task = sanitizeText(raw.task, BON_TASK_MAX);
+  if (!task) {
+    return { ok: false, reason: "a non-empty task is required" };
+  }
+
+  const projectId =
+    typeof raw.projectId === "string" ? raw.projectId.trim() : "";
+  if (!projectId) {
+    return { ok: false, reason: "no project was specified" };
+  }
+
+  // n must be exactly 2 or 3 — no coercion, no other value.
+  const rawN = raw.n;
+  if (rawN !== 2 && rawN !== 3) {
+    return {
+      ok: false,
+      reason: `n must be exactly 2 or 3 (got ${JSON.stringify(rawN)})`,
+    };
+  }
+
+  const conductorSessionId =
+    typeof raw.conductorSessionId === "string"
+      ? raw.conductorSessionId.trim()
+      : "";
+  if (!conductorSessionId) {
+    return { ok: false, reason: "conductorSessionId is required" };
+  }
+
+  return {
+    ok: true,
+    params: { task, n: rawN as 2 | 3, projectId, conductorSessionId },
+  };
+}
+
 /**
  * Validate an arbitrary (agent- or client-supplied) value as a command proposal.
  * Fail-closed: the action must be exactly an allowlisted id, and its params must
@@ -326,6 +385,11 @@ export function validateProposal(raw: unknown): ProposalValidation {
       const res = validateListSessionsParams(paramsRaw);
       if (!res.ok) return res;
       return { ok: true, proposal: { action: "list_sessions", params: res.params } };
+    }
+    case "best_of_n": {
+      const res = validateBestOfNParams(paramsRaw);
+      if (!res.ok) return res;
+      return { ok: true, proposal: { action: "best_of_n", params: res.params } };
     }
     default:
       return { ok: false, reason: `"${String(obj.action)}" is not an action I can run` };
@@ -672,6 +736,13 @@ export function describeProposal(
     return status
       ? `List all ${status} sessions.`
       : "List all current sessions.";
+  }
+  if (proposal.action === "best_of_n") {
+    const { n, task } = proposal.params;
+    const truncated =
+      task.length > 60 ? `${task.slice(0, 60)}...` : task;
+    const inProject = contextName ? ` in ${contextName}` : "";
+    return `Run ${n} parallel sessions on: "${truncated}"${inProject} and compare their results.`;
   }
   return "Run action.";
 }

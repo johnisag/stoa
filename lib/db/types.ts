@@ -131,6 +131,31 @@ export interface DevServer {
   updated_at: string;
 }
 
+export interface BestOfNRun {
+  id: string;
+  task: string;
+  base_branch: string;
+  n: number;
+  status: "running" | "done" | "failed";
+  winner_session_id: string | null;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BestOfNCandidate {
+  id: string;
+  run_id: string;
+  session_id: string | null;
+  worktree_path: string | null;
+  branch_name: string | null;
+  candidate_index: number;
+  diff: string | null;
+  is_winner: number; // 0 | 1
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * One row in the append-only audit / event ledger. Independent of the sessions
  * row (no FK) so the trail outlives a deleted session — the Windows-safety moat

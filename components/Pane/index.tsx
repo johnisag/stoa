@@ -98,6 +98,11 @@ const ChatView = dynamic(
   () => import("@/components/views/ChatView").then((mod) => mod.ChatView),
   { ssr: false }
 );
+const BestOfNView = dynamic(
+  () =>
+    import("@/components/views/BestOfNView").then((mod) => mod.BestOfNView),
+  { ssr: false }
+);
 
 interface PaneProps {
   paneId: string;
@@ -554,6 +559,14 @@ export const Pane = memo(function Pane({
             }}
           />
         );
+      case "best-of-n":
+        return tab.bonRunId ? (
+          <BestOfNView
+            runId={tab.bonRunId}
+            onOpenSession={onOpenSessionInNewTab ?? onSelectSession}
+            onClose={() => closeTab(paneId, tab.id)}
+          />
+        ) : null;
       default:
         return null;
     }

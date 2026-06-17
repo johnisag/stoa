@@ -900,6 +900,56 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 38,
+    name: "add_best_of_n_tables",
+    up: (db) => {
+      // Best-of-N: run N parallel Claude sessions on the same task, each in an
+      // isolated worktree, then present a compare view so the user can pick one
+      // winner. The losing sessions and worktrees are cleaned up on pick.
+      if (!hasTable(db, "best_of_n_runs")) {
+        db.exec(`
+          CREATE TABLE best_of_n_runs (
+            id TEXT PRIMARY KEY,
+            task TEXT NOT NULL,
+            base_branch TEXT NOT NULL DEFAULT 'main',
+            n INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            winner_session_id TEXT,
+            project_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (winner_session_id) REFERENCES sessions(id) ON DELETE SET NULL,
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+          )
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_bon_runs_project ON best_of_n_runs(project_id)`
+        );
+      }
+      if (!hasTable(db, "best_of_n_candidates")) {
+        db.exec(`
+          CREATE TABLE best_of_n_candidates (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            session_id TEXT,
+            worktree_path TEXT,
+            branch_name TEXT,
+            candidate_index INTEGER NOT NULL,
+            diff TEXT,
+            is_winner INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (run_id) REFERENCES best_of_n_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+          )
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_bon_candidates_run ON best_of_n_candidates(run_id)`
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

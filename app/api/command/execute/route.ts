@@ -5,6 +5,7 @@ import { validateProposal } from "@/lib/command/actions";
 import { executeCreateSession } from "@/lib/command/create-session";
 import { executeDispatchIssue } from "@/lib/command/dispatch-issue";
 import { executeListSessions } from "@/lib/command/list-sessions";
+import { executeBestOfN } from "@/lib/command/best-of-n-action";
 import { executePlan } from "@/lib/command/execute-plan";
 import { auditCommand } from "@/lib/command/audit";
 import type { DispatchRepo } from "@/lib/dispatch/types";
@@ -205,6 +206,54 @@ export async function POST(request: NextRequest) {
       });
 
       return NextResponse.json({ ok: true, ...result });
+    }
+
+    // ── best_of_n ────────────────────────────────────────────────────────────
+    if (proposal.action === "best_of_n") {
+      const project = getProject(proposal.params.projectId);
+      if (!project) {
+        auditCommand("command_rejected", {
+          stage: "execute",
+          reason: "unknown project",
+          proposal,
+        });
+        return NextResponse.json({ error: "Unknown project" }, { status: 400 });
+      }
+
+      let result: { runId: string; n: number };
+      try {
+        result = await executeBestOfN(proposal.params, {
+          id: project.id,
+          working_directory: project.working_directory,
+        });
+      } catch (err) {
+        console.error("[command] best_of_n failed:", err);
+        auditCommand("command_failed", {
+          action: "best_of_n",
+          params: proposal.params,
+          project: { id: project.id, name: project.name },
+          error: err instanceof Error ? err.message : "unknown error",
+        });
+        return NextResponse.json(
+          { error: "Failed to start Best-of-N run" },
+          { status: 502 }
+        );
+      }
+
+      auditCommand("command_executed", {
+        action: "best_of_n",
+        params: proposal.params,
+        runId: result.runId,
+        project: { id: project.id, name: project.name },
+      });
+
+      return NextResponse.json({
+        ok: true,
+        clientAction: "open_best_of_n",
+        runId: result.runId,
+        n: result.n,
+        project: { id: project.id, name: project.name },
+      });
     }
 
     // Should never reach here — validateProposal is exhaustive over the allowlist.
