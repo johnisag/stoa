@@ -43,6 +43,7 @@ import { useProjectsQuery } from "@/data/projects";
 import { AGENT_BADGE, repoUrl } from "./shared";
 import { OpenIssuesBrowser } from "./OpenIssuesBrowser";
 import { LessonsDialog } from "./LessonsDialog";
+import { WebhookIntakePanel } from "./WebhookIntakePanel";
 
 const EMPTY: CreateRepoInput = {
   repoPath: "",
@@ -799,6 +800,7 @@ export function AllocationConsole({ open }: { open: boolean }) {
           ))}
         </div>
       )}
+      <WebhookIntakePanel />
       {/* legend */}
       <div className="text-muted-foreground flex flex-wrap gap-3 pt-1 text-[11px]">
         {AGENT_OPTIONS.map((o) => (

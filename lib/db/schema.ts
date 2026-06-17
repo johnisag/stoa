@@ -336,6 +336,21 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_bon_runs_project ON best_of_n_runs(project_id);
     CREATE INDEX IF NOT EXISTS idx_bon_candidates_run ON best_of_n_candidates(run_id);
 
+    -- Warm worktree pool: one pre-warmed worktree per dispatch repo so dispatchOne()
+    -- can claim an already-set-up worktree instead of waiting for git+npm on demand.
+    -- status: warming → ready → (deleted on claim). ON DELETE CASCADE keeps it tidy
+    -- when a repo is removed without the pool needing a separate cleanup sweep.
+    CREATE TABLE IF NOT EXISTS warm_worktrees (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL,
+      worktree_path TEXT NOT NULL,
+      branch_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'warming',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_warm_worktrees_repo_status ON warm_worktrees(repo_id, status);
+
     -- Default Uncategorized project
     INSERT OR IGNORE INTO projects (id, name, working_directory, is_uncategorized, sort_order)
     VALUES ('uncategorized', 'Uncategorized', '~', 1, 999999);

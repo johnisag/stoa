@@ -49,6 +49,7 @@ import {
 } from "./lib/error-loop";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
+import { evictStale as evictStaleWarmPool } from "./lib/dispatch/warm-pool";
 import {
   getBudgetConfig,
   budgetEnabled,
@@ -898,6 +899,9 @@ app.prepare().then(() => {
     // Dispatch startup catch-up: free slots held by workers that didn't survive
     // a Tier-1 restart, then run one reconcile pass immediately so a day missed
     // while Stoa was down is topped up now (not only on the next 60s tick).
+    void evictStaleWarmPool().catch((err) =>
+      console.error("warm-pool: stale eviction failed:", err)
+    );
     void reconcileOrphans()
       .then(() => reconcileTick())
       .catch((err) => console.error("dispatch startup reconcile failed:", err));
