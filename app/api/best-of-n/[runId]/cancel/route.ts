@@ -12,6 +12,9 @@ export async function POST(
   { params }: { params: Promise<{ runId: string }> }
 ) {
   const { runId } = await params;
+  if (!runId || runId.length > 40) {
+    return NextResponse.json({ error: "runId is invalid" }, { status: 400 });
+  }
   try {
     await cancelBonRun(runId);
     return NextResponse.json({ ok: true });

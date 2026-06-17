@@ -11,6 +11,9 @@ export async function GET(
   { params }: { params: Promise<{ runId: string }> }
 ) {
   const { runId } = await params;
+  if (!runId || runId.length > 40) {
+    return NextResponse.json({ error: "runId is invalid" }, { status: 400 });
+  }
   try {
     const result = getBonRunStatus(runId);
     return NextResponse.json(result);

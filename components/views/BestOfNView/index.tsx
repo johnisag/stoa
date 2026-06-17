@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  AlertTriangle,
   GitBranch,
   HelpCircle,
   Loader2,
@@ -77,6 +78,7 @@ function CandidatePanel({
   candidate,
   runId,
   runStatus,
+  totalCandidates,
   onPickWinner,
   onOpenSession,
   isPicking,
@@ -84,10 +86,14 @@ function CandidatePanel({
   candidate: BestOfNCandidateWithStatus;
   runId: string;
   runStatus: string;
+  /** Total number of candidates in this run — used in the discard warning. */
+  totalCandidates: number;
   onPickWinner: (candidateId: string) => void;
   onOpenSession?: (sessionId: string) => void;
   isPicking: boolean;
 }) {
+  const [confirmPick, setConfirmPick] = useState(false);
+
   const sm = workerStatusMeta(candidate.worker_status);
   const stat = parseDiffStat(candidate.diff);
   const isFailed = candidate.worker_status === "failed";
@@ -95,6 +101,7 @@ function CandidatePanel({
   const hasDiff = candidate.diff !== null;
   const isWinner = candidate.is_winner === 1;
   const canPick = runStatus !== "done" && runStatus !== "failed";
+  const losersCount = totalCandidates - 1;
 
   return (
     <div className="flex flex-col gap-3">
@@ -152,6 +159,11 @@ function CandidatePanel({
         <div className="text-muted-foreground py-6 text-sm">
           This agent did not complete successfully. No diff available.
         </div>
+      ) : isCompleted && !hasDiff ? (
+        <div className="text-muted-foreground py-6 text-sm">
+          Diff not captured — the server may have restarted while the run was
+          active.
+        </div>
       ) : (
         <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -161,16 +173,53 @@ function CandidatePanel({
 
       {/* actions */}
       <div className="flex flex-wrap gap-2 pt-1">
-        {canPick && (
+        {canPick && !confirmPick && (
           <Button
             variant="default"
             size="sm"
             className="bg-emerald-600 hover:bg-emerald-700 text-white"
             disabled={isPicking || !isCompleted}
-            onClick={() => onPickWinner(candidate.id)}
+            onClick={() => setConfirmPick(true)}
           >
             Pick this winner
           </Button>
+        )}
+        {canPick && confirmPick && (
+          <div className="flex flex-col gap-2">
+            <div className="text-muted-foreground flex items-start gap-1.5 text-xs">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-amber-500" />
+              <span>
+                This will permanently delete the other{" "}
+                {losersCount === 1 ? "worktree" : `${losersCount} worktrees`}.
+                This cannot be undone.
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="default"
+                size="sm"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                disabled={isPicking}
+                onClick={() => {
+                  setConfirmPick(false);
+                  onPickWinner(candidate.id);
+                }}
+              >
+                {isPicking ? (
+                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                ) : null}
+                Confirm
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isPicking}
+                onClick={() => setConfirmPick(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
         )}
         {isWinner && (
           <span className="text-emerald-600 dark:text-emerald-400 text-xs self-center">
@@ -223,12 +272,18 @@ export function BestOfNView({
   type TabKey = `${number}`;
   const tabs = candidates.map((c, i) => {
     const isFailed = c.worker_status === "failed";
+    const branchSuffix = c.branch_name ? ` · ${c.branch_name}` : "";
     return {
       key: String(i) as TabKey,
       label: (
         <span className={isFailed ? "text-red-400" : undefined}>
           Agent {i + 1}
           {isFailed ? " (failed)" : ""}
+          {branchSuffix && (
+            <span className="text-muted-foreground ml-1 font-normal opacity-70">
+              {branchSuffix}
+            </span>
+          )}
         </span>
       ),
     };
@@ -360,6 +415,7 @@ export function BestOfNView({
                 candidate={activeCandidate}
                 runId={runId}
                 runStatus={runStatus}
+                totalCandidates={candidates.length}
                 onPickWinner={handlePickWinner}
                 onOpenSession={onOpenSession}
                 isPicking={pickWinner.isPending}

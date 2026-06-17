@@ -85,6 +85,7 @@ const EXAMPLE_QUESTIONS = [
 export function ChatView({
   onClose,
   onNavigate,
+  onOpenBonRun,
 }: {
   /** Optional close affordance, used on mobile where the tab strip is hidden. */
   onClose?: () => void;
@@ -92,6 +93,9 @@ export function ChatView({
    * Called when the user confirms an open_view action. Without this callback the
    * open_view card is still shown but no navigation occurs. */
   onNavigate?: (view: string) => void;
+  /** Open a Best-of-N run in a dedicated pane tab.
+   * Called when the user confirms a best_of_n action. */
+  onOpenBonRun?: (runId: string) => void;
 }) {
   const [provider, setProvider] = useState<ChatProvider>(DEFAULT_CHAT_PROVIDER);
   // Defaults to Opus for Claude (the chatbox default, not the agent's Sonnet) —
@@ -315,9 +319,19 @@ export function ChatView({
               ? ` Seed prompt queued: "${res.initialPrompt.slice(0, 60)}${res.initialPrompt.length > 60 ? "…" : ""}".`
               : "";
             content = `Created session **${res.name}** in **${res.project.name}**. Open it from the sidebar to start working.${promptNote}`;
-          } else if ("clientAction" in res && res.clientAction === "open_view") {
-            onNavigate?.(res.view);
-            content = `Navigating to the **${res.view}** view.`;
+          } else if ("clientAction" in res) {
+            const ca = (res as Record<string, unknown>).clientAction;
+            if (ca === "open_view") {
+              onNavigate?.((res as { view: string }).view);
+              content = `Navigating to the **${(res as { view: string }).view}** view.`;
+            } else if (ca === "open_best_of_n") {
+              const runId = (res as Record<string, unknown>).runId as string;
+              const nAgents = ((res as Record<string, unknown>).n as number) ?? 2;
+              onOpenBonRun?.(runId);
+              content = `Started a Best-of-${nAgents} run. The comparison view is opening now.`;
+            } else {
+              content = "Action completed.";
+            }
           } else if ("dispatchId" in res) {
             content = `Dispatch task created: **${res.title}** in ${res.repoSlug}.`;
           } else if ("sessions" in res) {

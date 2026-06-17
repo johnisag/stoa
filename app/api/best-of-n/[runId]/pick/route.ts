@@ -15,6 +15,10 @@ export async function POST(
 ) {
   const { runId } = await params;
 
+  if (!runId || runId.length > 40) {
+    return NextResponse.json({ error: "runId is invalid" }, { status: 400 });
+  }
+
   let body: Record<string, unknown>;
   try {
     body = await request.json();
