@@ -238,7 +238,11 @@ export async function deleteWorktree(
   // force-deletes (discards unmerged commits), so restrict it to the
   // `feature/` prefix from generateBranchName(). A worktree manually repointed
   // to a real branch (develop / trunk / a non-`main` default) is left alone.
-  if (deleteBranch && branchName && branchName.startsWith("feature/")) {
+  if (
+    deleteBranch &&
+    branchName &&
+    (branchName.startsWith("feature/") || branchName.startsWith("warm/"))
+  ) {
     try {
       await runGit(resolvedProjectPath, ["branch", "-D", branchName], 10000);
     } catch {

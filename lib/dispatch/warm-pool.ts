@@ -46,7 +46,11 @@ export async function replenish(repo: DispatchRepo): Promise<void> {
   // astronomically unlikely with UUIDs, but guard it), skip silently.
   try {
     if (await branchExists(projectPath, branchName)) return;
-  } catch {
+  } catch (err) {
+    console.warn(
+      `warm-pool: branchExists check failed for ${repo.repo_slug}:`,
+      err
+    );
     return;
   }
 
@@ -56,8 +60,10 @@ export async function replenish(repo: DispatchRepo): Promise<void> {
   await fs.promises.mkdir(worktreeBase, { recursive: true });
 
   // Unique dir name using the warm id to avoid collisions with live worktrees.
-  // Replace '/' and Windows-illegal filename chars (<>:"|?*\) with '-'.
-  const repoSlug = repo.repo_slug.replace(/[/\\<>:"|?*]/g, "-");
+  // Replace path separators, Windows-illegal chars, and control characters.
+  const repoSlug = repo.repo_slug
+    .replace(/[\x00-\x1f]/g, "")
+    .replace(/[/\\<>:"|?*]/g, "-");
   const worktreePath = path.join(
     worktreeBase,
     `${repoSlug}-warm-${id.slice(0, 8)}`
@@ -86,7 +92,12 @@ export async function replenish(repo: DispatchRepo): Promise<void> {
     queries.markWarmWorktreeReady(db).run(id);
   } catch (err) {
     console.warn(`warm-pool: replenish failed for ${repo.repo_slug}:`, err);
-    queries.deleteWarmWorktree(db).run(id);
+    // Wrap DB cleanup separately so a DB error never blocks filesystem cleanup.
+    try {
+      queries.deleteWarmWorktree(db).run(id);
+    } catch {
+      // best-effort
+    }
     try {
       if (fs.existsSync(worktreePath)) {
         await deleteWorktree(worktreePath, projectPath, true);
@@ -166,10 +177,20 @@ export async function evictStale(): Promise<void> {
     queries.deleteWarmWorktree(db).run(row.id);
     try {
       if (fs.existsSync(row.worktree_path)) {
-        const projectPath = row.repo_path
-          ? expandHome(row.repo_path)
-          : row.worktree_path;
-        await deleteWorktree(row.worktree_path, projectPath, true);
+        if (row.repo_path) {
+          // Repo still exists — use git worktree remove so the ref is cleaned up.
+          await deleteWorktree(
+            row.worktree_path,
+            expandHome(row.repo_path),
+            true
+          );
+        } else {
+          // Repo already deleted — no git context available; remove the dir directly.
+          await fs.promises.rm(row.worktree_path, {
+            recursive: true,
+            force: true,
+          });
+        }
       }
     } catch {
       // best-effort; leftover dirs are harmless (git prune cleans refs)
@@ -178,16 +199,17 @@ export async function evictStale(): Promise<void> {
 }
 
 /**
- * Delete all warm worktrees for a repo (called when a repo is un-enrolled or
- * removed and the CASCADE hasn't run yet, e.g. from the ticker). The DB rows are
- * already gone via CASCADE; this just cleans up the filesystem.
+ * Delete all warm worktrees for a repo. Must be called BEFORE deleting the
+ * dispatch_repos row so the DB rows still exist (CASCADE would remove them
+ * first, making the filesystem cleanup unreachable). Deletes both DB rows and
+ * filesystem worktrees.
  */
 export async function cleanupPool(
   repoId: string,
   projectPath: string
 ): Promise<void> {
   const db = getDb();
-  const rows = queries.listReadyWarmWorktreesForRepo(db).all(repoId) as Array<{
+  const rows = queries.listActiveWarmWorktreesForRepo(db).all(repoId) as Array<{
     id: string;
     worktree_path: string;
   }>;

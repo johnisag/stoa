@@ -1079,20 +1079,17 @@ export const queries = {
     ),
 
   countWarmWorktrees: (db: Database.Database) =>
-    getStmt(db, `SELECT COUNT(*) as n FROM warm_worktrees WHERE repo_id = ?`),
+    getStmt(
+      db,
+      `SELECT COUNT(*) as n FROM warm_worktrees WHERE repo_id = ? AND status = 'ready'`
+    ),
 
   deleteWarmWorktree: (db: Database.Database) =>
     getStmt(db, `DELETE FROM warm_worktrees WHERE id = ?`),
 
-  // Returns all 'warming' rows — used at startup to evict entries that were left
-  // mid-creation by a crash (their worktrees are partially set up and unusable).
-  listWarmingWorktrees: (db: Database.Database) =>
-    getStmt(
-      db,
-      `SELECT id, worktree_path FROM warm_worktrees WHERE status = 'warming'`
-    ),
-
-  listReadyWarmWorktreesForRepo: (db: Database.Database) =>
+  // Returns all active (warming + ready) warm worktrees for a repo — used by
+  // cleanupPool to find filesystem paths to clean up before the repo is deleted.
+  listActiveWarmWorktreesForRepo: (db: Database.Database) =>
     getStmt(
       db,
       `SELECT id, worktree_path FROM warm_worktrees WHERE repo_id = ? AND status IN ('warming','ready')`
