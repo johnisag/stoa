@@ -48,13 +48,7 @@ export function setupResizeHandlers(config: ResizeHandlersConfig): () => void {
       }
     };
 
-    // Refit only when the grid would ACTUALLY change. On mobile the keyboard +
-    // Android's dynamic URL bar make visualViewport fire resize/scroll constantly
-    // while typing, each landing here. A fit() that lands on the same cols/rows
-    // still calls term.resize() (a full re-layout + refresh) and re-sends a resize
-    // that makes the agent TUI repaint — wasted main-thread work that stalls the
-    // keystroke echo. proposeDimensions() reads the target size WITHOUT applying,
-    // so we can skip the whole cascade when nothing changed (#116 typing lag).
+    // Refit only when the grid would ACTUALLY change.
     const fitIfChanged = () => {
       const next = fitAddon.proposeDimensions();
       if (!next || (next.cols === term.cols && next.rows === term.rows)) return;
@@ -64,16 +58,15 @@ export function setupResizeHandlers(config: ResizeHandlersConfig): () => void {
       sendResize(term.cols, term.rows);
     };
 
-    requestAnimationFrame(() => {
-      // First fit - immediate
-      fitIfChanged();
+    // Single rAF fit — handles the immediate case. The ResizeObserver already
+    // fires after the DOM settles, so the 100ms/250ms retries are unnecessary
+    // and only generate extra SIGWINCH sends on slow layouts.
+    requestAnimationFrame(fitIfChanged);
 
-      // Second fit - after 100ms (handles most delayed layout updates)
-      fitTimeouts.push(setTimeout(fitIfChanged, 100));
-
-      // Third fit - after 250ms (handles slow layout updates, e.g., DevTools toggle)
-      fitTimeouts.push(setTimeout(fitIfChanged, 250));
-    });
+    // One safety retry at 250ms for DevTools toggle and other slow layout updates
+    // that don't fire a second ResizeObserver callback. Using a single timeout
+    // instead of two eliminates the redundant intermediate sendResize call.
+    fitTimeouts.push(setTimeout(fitIfChanged, 250));
   };
 
   const handleResize = () => {

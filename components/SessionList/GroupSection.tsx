@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { cn } from "@/lib/utils";
 import { SessionCard } from "@/components/SessionCard";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +18,6 @@ import {
 } from "@/components/ui/context-menu";
 import {
   ChevronRight,
-  ChevronDown,
   FolderPlus,
   MoreHorizontal,
   Trash2,
@@ -101,11 +101,12 @@ export function GroupSection({
         onClick={() => onToggleGroup(group.path, !group.expanded)}
       >
         <button className="p-0.5">
-          {group.expanded ? (
-            <ChevronDown className="text-muted-foreground h-3 w-3" />
-          ) : (
-            <ChevronRight className="text-muted-foreground h-3 w-3" />
-          )}
+          <ChevronRight
+            className={cn(
+              "text-muted-foreground h-3 w-3 transition-transform duration-200",
+              group.expanded && "rotate-90"
+            )}
+          />
         </button>
         <span className="flex-1 truncate text-sm font-medium">
           {group.name}
@@ -194,64 +195,71 @@ export function GroupSection({
           </div>
         )}
 
-        {group.expanded && (
-          <div
-            className="border-border/50 ml-2 border-l"
-            style={{ marginLeft: indent + 10, paddingLeft: 6 }}
-          >
-            {childGroups.map((child) => renderGroup(child, level + 1))}
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows] duration-200 ease-out",
+            group.expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          )}
+        >
+          <div className="overflow-hidden">
+            <div
+              className="border-border/50 ml-2 min-h-0 border-l"
+              style={{ marginLeft: indent + 10, paddingLeft: 6 }}
+            >
+              {childGroups.map((child) => renderGroup(child, level + 1))}
 
-            {groupSessions.map((session) => {
-              const workers = workersByConduct[session.id] || [];
-              const hasWorkers = workers.length > 0;
+              {groupSessions.map((session) => {
+                const workers = workersByConduct[session.id] || [];
+                const hasWorkers = workers.length > 0;
 
-              return (
-                <div key={session.id} className="space-y-0.5">
-                  <div className="flex items-center gap-1">
-                    <div className="min-w-0 flex-1">
-                      <SessionCard
-                        session={session}
-                        isActive={session.id === activeSessionId}
-                        isSummarizing={summarizingSessionId === session.id}
-                        tmuxStatus={sessionStatuses?.[session.id]?.status}
-                        hasPrompt={sessionStatuses?.[session.id]?.hasPrompt}
-                        groups={groups}
-                        onSelect={onSelectSession}
-                        onFork={onForkSession}
-                        onSummarize={onSummarize}
-                        onDelete={onDeleteSession}
-                        onRename={onRenameSession}
-                      />
-                    </div>
-                    {hasWorkers && (
-                      <span className="bg-primary/20 text-primary flex-shrink-0 rounded-full px-1.5 py-0.5 text-xs">
-                        {workers.length}
-                      </span>
-                    )}
-                  </div>
-
-                  {hasWorkers && (
-                    <div className="border-border/30 ml-3 space-y-px border-l pl-1.5">
-                      {workers.map((worker) => (
+                return (
+                  <div key={session.id} className="space-y-0.5">
+                    <div className="flex items-center gap-1">
+                      <div className="min-w-0 flex-1">
                         <SessionCard
-                          key={worker.id}
-                          session={worker}
-                          isActive={worker.id === activeSessionId}
-                          tmuxStatus={sessionStatuses?.[worker.id]?.status}
-                          hasPrompt={sessionStatuses?.[worker.id]?.hasPrompt}
+                          session={session}
+                          isActive={session.id === activeSessionId}
+                          isSummarizing={summarizingSessionId === session.id}
+                          tmuxStatus={sessionStatuses?.[session.id]?.status}
+                          hasPrompt={sessionStatuses?.[session.id]?.hasPrompt}
                           groups={groups}
                           onSelect={onSelectSession}
+                          onFork={onForkSession}
+                          onSummarize={onSummarize}
                           onDelete={onDeleteSession}
                           onRename={onRenameSession}
                         />
-                      ))}
+                      </div>
+                      {hasWorkers && (
+                        <span className="bg-primary/20 text-primary flex-shrink-0 rounded-full px-1.5 py-0.5 text-xs">
+                          {workers.length}
+                        </span>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+
+                    {hasWorkers && (
+                      <div className="border-border/30 ml-3 space-y-px border-l pl-1.5">
+                        {workers.map((worker) => (
+                          <SessionCard
+                            key={worker.id}
+                            session={worker}
+                            isActive={worker.id === activeSessionId}
+                            tmuxStatus={sessionStatuses?.[worker.id]?.status}
+                            hasPrompt={sessionStatuses?.[worker.id]?.hasPrompt}
+                            groups={groups}
+                            onSelect={onSelectSession}
+                            onDelete={onDeleteSession}
+                            onRename={onRenameSession}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        )}
+        </div>
       </div>
     );
   };

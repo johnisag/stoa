@@ -226,6 +226,7 @@ export function WorkflowBuilder({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const canvasScrollRef = useRef<HTMLDivElement | null>(null);
+  const editPanelRef = useRef<HTMLDivElement | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
@@ -242,6 +243,13 @@ export function WorkflowBuilder({
   const [showRefMenu, setShowRefMenu] = useState(false);
   // Collapse the menu whenever the selected step changes.
   useEffect(() => setShowRefMenu(false), [primaryId]);
+  // On narrow screens (< lg) the edit panel stacks below the canvas; scroll it
+  // into view when a node or note is selected so the user doesn't have to hunt.
+  useEffect(() => {
+    if (!primaryId || !editPanelRef.current) return;
+    if (window.innerWidth >= 1024) return; // lg breakpoint — side-by-side, no scroll needed
+    editPanelRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [primaryId]);
   const [conductorId, setConductorId] = useState<string>(
     defaultConductorId && sessions.some((s) => s.id === defaultConductorId)
       ? defaultConductorId
@@ -1221,8 +1229,9 @@ export function WorkflowBuilder({
         )}
       </div>
 
-      {/* 3. Main split area: canvas on the left, edit panel on the right */}
-      <div className="flex min-h-0 flex-1 gap-2">
+      {/* 3. Main split area: canvas top/left, edit panel bottom/right.
+           Stacks vertically on mobile (< lg) and side-by-side on lg+. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-2 lg:flex-row">
         {/* LEFT column */}
         <div className="flex min-h-0 flex-1 flex-col gap-2">
           {/* 3a. Settings collapsible */}
@@ -1361,11 +1370,14 @@ export function WorkflowBuilder({
           )}
         </div>
 
-        {/* RIGHT column — edit panel (node or note), only when something is selected */}
+        {/* RIGHT column — edit panel (node or note), only when something is selected.
+             On mobile (< lg) it fills the full width and appears below the canvas;
+             the scrollIntoView effect above brings it into view on selection. */}
         {(primaryNode || primaryNote) && (
           <div
+            ref={editPanelRef}
             key={primaryId ?? undefined}
-            className="bg-card flex w-72 flex-shrink-0 flex-col gap-3 overflow-y-auto rounded-md border p-3"
+            className="bg-card flex w-full flex-shrink-0 flex-col gap-3 overflow-y-auto rounded-md border p-3 lg:w-72"
           >
             {primaryNode && (
               <>

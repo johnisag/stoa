@@ -31,7 +31,7 @@ export function ShellDrawer({
   const { copied, copy } = useCopyToClipboard();
 
   // Animation
-  const isAnimatingIn = useDrawerAnimation(open);
+  const { isAnimatingIn, isClosing } = useDrawerAnimation(open);
 
   // When the terminal connects, start a shell in the working directory.
   const handleConnected = useCallback(async () => {
@@ -64,13 +64,15 @@ export function ShellDrawer({
     }
   }, [open]);
 
-  if (!open) return null;
+  if (!open && !isClosing) return null;
 
   return (
     <div
       className={cn(
         "bg-muted/30 flex h-full flex-col transition-all duration-200 ease-out",
-        isAnimatingIn ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
+        isAnimatingIn && !isClosing
+          ? "translate-y-0 opacity-100"
+          : "translate-y-4 opacity-0"
       )}
     >
       {/* Header */}

@@ -4,7 +4,6 @@ import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import {
   ChevronRight,
-  ChevronDown,
   MoreHorizontal,
   Settings,
   Plus,
@@ -188,11 +187,12 @@ export function ProjectCard({
     >
       {/* Expand/collapse toggle */}
       <button className="flex-shrink-0 p-0.5">
-        {project.expanded ? (
-          <ChevronDown className="text-muted-foreground h-4 w-4" />
-        ) : (
-          <ChevronRight className="text-muted-foreground h-4 w-4" />
-        )}
+        <ChevronRight
+          className={cn(
+            "text-muted-foreground h-4 w-4 transition-transform duration-200",
+            project.expanded && "rotate-90"
+          )}
+        />
       </button>
 
       {/* Project name */}

@@ -4,6 +4,7 @@ import { useMemo, useCallback, useState, useEffect } from "react";
 import { useSnapshot } from "valtio";
 import { useTheme } from "next-themes";
 import { ChevronRight, Plus, SquareTerminal } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ProjectCard } from "./ProjectCard";
 import { SessionCard } from "@/components/SessionCard";
@@ -234,187 +235,203 @@ export function ProjectsSection({
               }
             />
 
-            {/* Project contents when expanded */}
-            {project.expanded && (
-              <div className="border-border/30 ml-3 space-y-px border-l pl-1.5">
-                {/* Dev servers for this project */}
-                {projectDevServers.length > 0 && (
-                  <div className="space-y-px pb-0.5">
-                    {projectDevServers.map((server) => (
-                      <DevServerCard
-                        key={server.id}
-                        server={server}
-                        onStart={
-                          onRestartDevServer
-                            ? (id) => onRestartDevServer(id)
-                            : async () => {}
-                        }
-                        onStop={onStopDevServer || (async () => {})}
-                        onRestart={onRestartDevServer || (async () => {})}
-                        onRemove={onRemoveDevServer || (async () => {})}
-                        onViewLogs={
-                          onViewDevServerLogs
-                            ? (id) => onViewDevServerLogs(id)
-                            : () => {}
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
+            {/* Project contents when expanded — animated via CSS grid-rows */}
+            <div
+              className={cn(
+                "grid transition-[grid-template-rows] duration-200 ease-out",
+                project.expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+              )}
+            >
+              <div className="overflow-hidden">
+                <div className="border-border/30 ml-3 min-h-0 space-y-px border-l pl-1.5">
+                  {/* Dev servers for this project */}
+                  {projectDevServers.length > 0 && (
+                    <div className="space-y-px pb-0.5">
+                      {projectDevServers.map((server) => (
+                        <DevServerCard
+                          key={server.id}
+                          server={server}
+                          onStart={
+                            onRestartDevServer
+                              ? (id) => onRestartDevServer(id)
+                              : async () => {}
+                          }
+                          onStop={onStopDevServer || (async () => {})}
+                          onRestart={onRestartDevServer || (async () => {})}
+                          onRemove={onRemoveDevServer || (async () => {})}
+                          onViewLogs={
+                            onViewDevServerLogs
+                              ? (id) => onViewDevServerLogs(id)
+                              : () => {}
+                          }
+                        />
+                      ))}
+                    </div>
+                  )}
 
-                {/* Project sessions */}
-                {projectSessions.length === 0 &&
-                projectDevServers.length === 0 ? (
-                  <div className="flex flex-col items-start gap-1.5 px-2 py-2">
-                    <p className="text-muted-foreground text-xs">
-                      No sessions yet
-                    </p>
-                    {onNewSession && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-muted-foreground hover:text-foreground -ml-1 h-7 px-2"
-                        onClick={() => onNewSession(project.id)}
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                        New session
-                      </Button>
-                    )}
-                  </div>
-                ) : projectSessions.length === 0 ? null : (
-                  projectSessions.map((session) => {
-                    const workers = workersByConduct[session.id] || [];
-                    const hasWorkers = workers.length > 0;
+                  {/* Project sessions */}
+                  {projectSessions.length === 0 &&
+                  projectDevServers.length === 0 ? (
+                    <div className="flex flex-col items-start gap-1.5 px-2 py-2">
+                      <p className="text-muted-foreground text-xs">
+                        No sessions yet
+                      </p>
+                      {onNewSession && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-muted-foreground hover:text-foreground -ml-1 h-7 px-2"
+                          onClick={() => onNewSession(project.id)}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          New session
+                        </Button>
+                      )}
+                    </div>
+                  ) : projectSessions.length === 0 ? null : (
+                    projectSessions.map((session) => {
+                      const workers = workersByConduct[session.id] || [];
+                      const hasWorkers = workers.length > 0;
 
-                    return (
-                      <div key={session.id} className="space-y-0.5">
-                        <div className="flex items-center gap-1">
-                          <div className="min-w-0 flex-1">
-                            <SessionCard
-                              session={session}
-                              isActive={session.id === activeSessionId}
-                              isSummarizing={
-                                summarizingSessionId === session.id
-                              }
-                              tmuxStatus={sessionStatuses?.[session.id]?.status}
-                              hasPrompt={
-                                sessionStatuses?.[session.id]?.hasPrompt
-                              }
-                              lastLine={sessionStatuses?.[session.id]?.lastLine}
-                              rateLimited={
-                                !!sessionStatuses?.[session.id]?.rateLimit
-                              }
-                              rateLimitResetAt={
-                                sessionStatuses?.[session.id]?.rateLimit
-                                  ?.resetAt ?? null
-                              }
-                              groups={groups}
-                              projects={projects}
-                              isSelected={selectedIds.has(session.id)}
-                              isInSelectMode={isInSelectMode}
-                              onToggleSelect={handleToggleSelect}
-                              onSelect={onSelectSession}
-                              onOpenInTab={onOpenSessionInTab}
-                              onMoveToProject={onMoveSession}
-                              onFork={onForkSession}
-                              onSummarize={onSummarize}
-                              onDelete={onDeleteSession}
-                              onRename={onRenameSession}
-                              onCreatePR={onCreatePR}
-                            />
+                      return (
+                        <div key={session.id} className="space-y-0.5">
+                          <div className="flex items-center gap-1">
+                            <div className="min-w-0 flex-1">
+                              <SessionCard
+                                session={session}
+                                isActive={session.id === activeSessionId}
+                                isSummarizing={
+                                  summarizingSessionId === session.id
+                                }
+                                tmuxStatus={
+                                  sessionStatuses?.[session.id]?.status
+                                }
+                                hasPrompt={
+                                  sessionStatuses?.[session.id]?.hasPrompt
+                                }
+                                lastLine={
+                                  sessionStatuses?.[session.id]?.lastLine
+                                }
+                                rateLimited={
+                                  !!sessionStatuses?.[session.id]?.rateLimit
+                                }
+                                rateLimitResetAt={
+                                  sessionStatuses?.[session.id]?.rateLimit
+                                    ?.resetAt ?? null
+                                }
+                                groups={groups}
+                                projects={projects}
+                                isSelected={selectedIds.has(session.id)}
+                                isInSelectMode={isInSelectMode}
+                                onToggleSelect={handleToggleSelect}
+                                onSelect={onSelectSession}
+                                onOpenInTab={onOpenSessionInTab}
+                                onMoveToProject={onMoveSession}
+                                onFork={onForkSession}
+                                onSummarize={onSummarize}
+                                onDelete={onDeleteSession}
+                                onRename={onRenameSession}
+                                onCreatePR={onCreatePR}
+                              />
+                            </div>
+                            {/* Workers badge */}
+                            {hasWorkers && (
+                              <span className="bg-primary/20 text-primary flex-shrink-0 rounded-full px-1.5 py-0.5 text-xs">
+                                {workers.length}
+                              </span>
+                            )}
                           </div>
-                          {/* Workers badge */}
+
+                          {/* Nested workers */}
                           {hasWorkers && (
-                            <span className="bg-primary/20 text-primary flex-shrink-0 rounded-full px-1.5 py-0.5 text-xs">
-                              {workers.length}
-                            </span>
+                            <div className="border-border/30 ml-3 space-y-px border-l pl-1.5">
+                              {workers.map((worker) => {
+                                const canPeek =
+                                  backend === "pty" && !!worker.tmux_name;
+                                const expanded = expandedWorkers.has(worker.id);
+                                return (
+                                  <div key={worker.id}>
+                                    <div className="flex items-stretch gap-1">
+                                      {canPeek && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            toggleWorkerTerminal(worker.id)
+                                          }
+                                          title={
+                                            expanded
+                                              ? "Hide live output"
+                                              : "Watch live output"
+                                          }
+                                          aria-label="Toggle live worker output"
+                                          aria-expanded={expanded}
+                                          className="text-muted-foreground hover:text-foreground hover:bg-muted/50 flex w-5 flex-shrink-0 items-center justify-center rounded"
+                                        >
+                                          {expanded ? (
+                                            <SquareTerminal className="h-3.5 w-3.5" />
+                                          ) : (
+                                            <ChevronRight className="h-3.5 w-3.5" />
+                                          )}
+                                        </button>
+                                      )}
+                                      <div className="min-w-0 flex-1">
+                                        <SessionCard
+                                          session={worker}
+                                          isActive={
+                                            worker.id === activeSessionId
+                                          }
+                                          tmuxStatus={
+                                            sessionStatuses?.[worker.id]?.status
+                                          }
+                                          hasPrompt={
+                                            sessionStatuses?.[worker.id]
+                                              ?.hasPrompt
+                                          }
+                                          lastLine={
+                                            sessionStatuses?.[worker.id]
+                                              ?.lastLine
+                                          }
+                                          rateLimited={
+                                            !!sessionStatuses?.[worker.id]
+                                              ?.rateLimit
+                                          }
+                                          rateLimitResetAt={
+                                            sessionStatuses?.[worker.id]
+                                              ?.rateLimit?.resetAt ?? null
+                                          }
+                                          groups={groups}
+                                          projects={projects}
+                                          isSelected={selectedIds.has(
+                                            worker.id
+                                          )}
+                                          isInSelectMode={isInSelectMode}
+                                          onToggleSelect={handleToggleSelect}
+                                          onSelect={onSelectSession}
+                                          onOpenInTab={onOpenSessionInTab}
+                                          onDelete={onDeleteSession}
+                                          onRename={onRenameSession}
+                                        />
+                                      </div>
+                                    </div>
+                                    {canPeek && expanded && worker.tmux_name && (
+                                      <MiniTerminal
+                                        key={worker.tmux_name}
+                                        attachKey={worker.tmux_name}
+                                        theme={terminalTheme}
+                                      />
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
                           )}
                         </div>
-
-                        {/* Nested workers */}
-                        {hasWorkers && (
-                          <div className="border-border/30 ml-3 space-y-px border-l pl-1.5">
-                            {workers.map((worker) => {
-                              const canPeek =
-                                backend === "pty" && !!worker.tmux_name;
-                              const expanded = expandedWorkers.has(worker.id);
-                              return (
-                                <div key={worker.id}>
-                                  <div className="flex items-stretch gap-1">
-                                    {canPeek && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          toggleWorkerTerminal(worker.id)
-                                        }
-                                        title={
-                                          expanded
-                                            ? "Hide live output"
-                                            : "Watch live output"
-                                        }
-                                        aria-label="Toggle live worker output"
-                                        aria-expanded={expanded}
-                                        className="text-muted-foreground hover:text-foreground hover:bg-muted/50 flex w-5 flex-shrink-0 items-center justify-center rounded"
-                                      >
-                                        {expanded ? (
-                                          <SquareTerminal className="h-3.5 w-3.5" />
-                                        ) : (
-                                          <ChevronRight className="h-3.5 w-3.5" />
-                                        )}
-                                      </button>
-                                    )}
-                                    <div className="min-w-0 flex-1">
-                                      <SessionCard
-                                        session={worker}
-                                        isActive={worker.id === activeSessionId}
-                                        tmuxStatus={
-                                          sessionStatuses?.[worker.id]?.status
-                                        }
-                                        hasPrompt={
-                                          sessionStatuses?.[worker.id]
-                                            ?.hasPrompt
-                                        }
-                                        lastLine={
-                                          sessionStatuses?.[worker.id]?.lastLine
-                                        }
-                                        rateLimited={
-                                          !!sessionStatuses?.[worker.id]
-                                            ?.rateLimit
-                                        }
-                                        rateLimitResetAt={
-                                          sessionStatuses?.[worker.id]
-                                            ?.rateLimit?.resetAt ?? null
-                                        }
-                                        groups={groups}
-                                        projects={projects}
-                                        isSelected={selectedIds.has(worker.id)}
-                                        isInSelectMode={isInSelectMode}
-                                        onToggleSelect={handleToggleSelect}
-                                        onSelect={onSelectSession}
-                                        onOpenInTab={onOpenSessionInTab}
-                                        onDelete={onDeleteSession}
-                                        onRename={onRenameSession}
-                                      />
-                                    </div>
-                                  </div>
-                                  {canPeek && expanded && worker.tmux_name && (
-                                    <MiniTerminal
-                                      key={worker.tmux_name}
-                                      attachKey={worker.tmux_name}
-                                      theme={terminalTheme}
-                                    />
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
+                      );
+                    })
+                  )}
+                </div>
               </div>
-            )}
+            </div>
           </div>
         );
       })}

@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -407,25 +408,31 @@ export function PipelineCanvas({
     ? (nodeAt(connecting.x, connecting.y, connecting.from)?.step.id ?? null)
     : null;
 
-  const byId = new Map(doc.nodes.map((n) => [n.step.id, n]));
-  const width =
-    PAD +
-    Math.max(
-      NODE_W,
-      NOTE_W,
-      ...doc.nodes.map((n) => n.x + NODE_W),
-      ...doc.notes.map((n) => n.x + NOTE_W)
-    ) +
-    PAD;
-  const height =
-    PAD +
-    Math.max(
-      NODE_H,
-      NOTE_H,
-      ...doc.nodes.map((n) => n.y + NODE_H),
-      ...doc.notes.map((n) => n.y + NOTE_H)
-    ) +
-    PAD;
+  const byId = useMemo(
+    () => new Map(doc.nodes.map((n) => [n.step.id, n])),
+    [doc.nodes]
+  );
+  const { width, height } = useMemo(() => {
+    const w =
+      PAD +
+      Math.max(
+        NODE_W,
+        NOTE_W,
+        ...doc.nodes.map((n) => n.x + NODE_W),
+        ...doc.notes.map((n) => n.x + NOTE_W)
+      ) +
+      PAD;
+    const h =
+      PAD +
+      Math.max(
+        NODE_H,
+        NOTE_H,
+        ...doc.nodes.map((n) => n.y + NODE_H),
+        ...doc.notes.map((n) => n.y + NOTE_H)
+      ) +
+      PAD;
+    return { width: w, height: h };
+  }, [doc.nodes, doc.notes]);
 
   // Space-drag pan: move the wrapper scroll by the pointer delta. Pointer capture
   // keeps the drag alive even if the cursor leaves the element.
@@ -466,6 +473,11 @@ export function PipelineCanvas({
     }
     pan.current = null;
   }
+
+  const wrappedNoteLines = useMemo(
+    () => new Map(doc.notes.map((n) => [n.id, wrapNoteText(n.text || "")])),
+    [doc.notes]
+  );
 
   return (
     <div
@@ -565,7 +577,7 @@ export function PipelineCanvas({
         {/* Sticky notes. */}
         {doc.notes.map((note) => {
           const selected = selectedIds.has(note.id);
-          const lines = wrapNoteText(note.text || "");
+          const lines = wrappedNoteLines.get(note.id) ?? [];
           return (
             <ContextMenu key={note.id}>
               <ContextMenuTrigger asChild>
