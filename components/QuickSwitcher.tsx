@@ -21,6 +21,7 @@ import {
   Columns3,
   BarChart3,
   Plus,
+  Sparkles,
 } from "lucide-react";
 import { statusGlyph } from "@/components/status-glyph";
 import type { Session } from "@/lib/db";
@@ -86,6 +87,8 @@ interface QuickSwitcherProps {
   onOpenInsight?: () => void;
   /** Start a new session. */
   onNewSession?: () => void;
+  /** Open the Ask Stoa chatbox. */
+  onOpenAskStoa?: () => void;
 }
 
 /**
@@ -107,6 +110,7 @@ export function QuickSwitcher({
   onOpenFleetBoard,
   onOpenInsight,
   onNewSession,
+  onOpenAskStoa,
 }: QuickSwitcherProps) {
   const { isMobile } = useViewport();
   const [mode, setMode] = useState<"sessions" | "code">("sessions");
@@ -173,6 +177,13 @@ export function QuickSwitcher({
       onOpenWorkflows,
       <Workflow className="h-4 w-4" />
     );
+    add(
+      "open-ask-stoa",
+      "Open Ask Stoa",
+      ["chat", "ask", "question", "help", "ai", "assistant"],
+      onOpenAskStoa,
+      <Sparkles className="h-4 w-4" />
+    );
     return list;
   }, [
     onNewSession,
@@ -181,6 +192,7 @@ export function QuickSwitcher({
     onOpenFleetBoard,
     onOpenInsight,
     onOpenWorkflows,
+    onOpenAskStoa,
   ]);
 
   // Fuzzy-match + rank commands by the same query the session lane uses.
@@ -275,9 +287,16 @@ export function QuickSwitcher({
           e.preventDefault();
           onOpenChange(false);
           break;
+        case "Tab":
+          // Tab toggles between Sessions and Code Search modes (when available).
+          if (ripgrepAvailable !== false) {
+            e.preventDefault();
+            setMode((m) => (m === "sessions" ? "code" : "sessions"));
+          }
+          break;
       }
     },
-    [totalResults, activateSelected, onOpenChange]
+    [totalResults, activateSelected, onOpenChange, ripgrepAvailable]
   );
 
   // Format relative time
@@ -313,20 +332,29 @@ export function QuickSwitcher({
           <DialogTitle>Switch Session / Search Code</DialogTitle>
         </DialogHeader>
 
-        {/* Mode Toggle - only show if ripgrep is available */}
-        {ripgrepAvailable === true && (
-          <div className="border-border flex gap-2 border-b p-2">
-            <button
-              onClick={() => setMode("sessions")}
-              className={cn(
-                "rounded-full px-3 py-1 text-sm transition-colors",
-                mode === "sessions"
-                  ? "bg-primary text-primary-foreground"
-                  : "hover:bg-accent"
-              )}
+        {/* Mode Toggle — always rendered so users can discover code search.
+            When ripgrep is unavailable the Code Search tab is dimmed + disabled
+            with a tooltip explaining what to install. */}
+        <div className="border-border flex gap-2 border-b p-2">
+          <button
+            onClick={() => setMode("sessions")}
+            className={cn(
+              "rounded-full px-3 py-1 text-sm transition-colors",
+              mode === "sessions"
+                ? "bg-primary text-primary-foreground"
+                : "hover:bg-accent"
+            )}
+          >
+            Sessions
+          </button>
+          {ripgrepAvailable === false ? (
+            <span
+              title="Install ripgrep to enable code search"
+              className="cursor-not-allowed rounded-full px-3 py-1 text-sm opacity-40"
             >
-              Sessions
-            </button>
+              Code Search
+            </span>
+          ) : (
             <button
               onClick={() => setMode("code")}
               className={cn(
@@ -338,8 +366,8 @@ export function QuickSwitcher({
             >
               Code Search
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Search Input */}
         <div className="border-border border-b p-3">
@@ -352,7 +380,7 @@ export function QuickSwitcher({
             }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={mode === "sessions" ? handleKeyDown : undefined}
+            onKeyDown={handleKeyDown}
             className="h-10"
           />
         </div>
@@ -518,6 +546,11 @@ export function QuickSwitcher({
           <span>
             <kbd className="bg-muted rounded px-1.5 py-0.5">esc</kbd> close
           </span>
+          {ripgrepAvailable !== false && (
+            <span className="ml-auto">
+              <kbd className="bg-muted rounded px-1.5 py-0.5">Tab</kbd> code search
+            </span>
+          )}
         </div>
       </DialogContent>
     </Dialog>

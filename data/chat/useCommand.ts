@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ChatProvider } from "@/lib/chat-settings";
 import { sessionKeys } from "@/data/sessions/keys";
 import type { BuilderDoc } from "@/lib/pipeline/builder-model";
+import type { SessionSummary } from "@/lib/command/actions";
 
 /** One turn in the chat conversation, as replayed to the backend as history. */
 export interface ChatMessage {
@@ -151,13 +152,7 @@ export function useGenerateWorkflow() {
   });
 }
 
-export interface SessionSummary {
-  id: string;
-  name: string;
-  status: string;
-  agentType: string;
-  updatedAt: string;
-}
+export type { SessionSummary };
 
 export type ExecuteResult =
   | {

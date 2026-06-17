@@ -103,6 +103,18 @@ export interface ListSessionsParams {
   status?: "running" | "idle" | "waiting";
 }
 
+/** A compact session summary returned by the list_sessions action. Shared between
+ * the server executor (lib/command/list-sessions.ts) and the client hook
+ * (data/chat/useCommand.ts) so both sides stay in sync at the type level. */
+export interface SessionSummary {
+  id: string;
+  name: string;
+  status: string;
+  agentType: string;
+  /** ISO timestamp of last update. */
+  updatedAt: string;
+}
+
 export type CommandProposal =
   | { action: "create_session"; params: CreateSessionParams }
   | { action: "dispatch_issue"; params: DispatchIssueParams }
@@ -209,8 +221,7 @@ export function validateCreateSessionParams(
 export function validateDispatchIssueParams(
   raw: Record<string, unknown>
 ): { ok: true; params: DispatchIssueParams } | { ok: false; reason: string } {
-  const repoId =
-    typeof raw.repoId === "string" ? raw.repoId.trim() : "";
+  const repoId = sanitizeText(raw.repoId, 128) ?? "";
   if (!repoId) {
     return { ok: false, reason: "no repo was specified" };
   }

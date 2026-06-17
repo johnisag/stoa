@@ -77,6 +77,7 @@ export const FLEET_NAV: readonly FleetNavEntry[] = [
     label: "Ask Stoa",
     icon: Sparkles,
     ariaLabel: "Ask Stoa (chat about your fleet)",
+    tooltipHint: "⌘⇧C",
   },
   {
     id: "notifications",
@@ -188,8 +189,19 @@ export function NavIconButton({
       </button>
     );
 
-  // A visible label is its own affordance — skip the (now redundant) tooltip.
-  if (showLabel) return trigger;
+  // A visible label is its own affordance, but if there's a keyboard shortcut
+  // hint we still surface it in a compact tooltip so the chord is discoverable.
+  if (showLabel) {
+    if (!entry.tooltipHint) return trigger;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+        <TooltipContent side={side}>
+          <p className="text-muted-foreground text-xs">{entry.tooltipHint}</p>
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
 
   return (
     <Tooltip>

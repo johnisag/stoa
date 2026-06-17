@@ -312,17 +312,23 @@ export function StartServerDialog({
 
               {/* Port input (for Node.js only) */}
               {customType === "node" && (
-                <input
-                  type="text"
-                  placeholder="Port (optional)"
-                  value={customPort}
-                  onChange={(e) => setCustomPort(e.target.value)}
-                  className={cn(
-                    "border-border bg-background w-full rounded-md border px-3 py-2",
-                    "placeholder:text-muted-foreground text-sm",
-                    "focus:ring-primary/50 focus:ring-2 focus:outline-none"
-                  )}
-                />
+                <div className="space-y-1">
+                  <input
+                    type="text"
+                    placeholder="Port (optional)"
+                    value={customPort}
+                    onChange={(e) => setCustomPort(e.target.value)}
+                    className={cn(
+                      "border-border bg-background w-full rounded-md border px-3 py-2",
+                      "placeholder:text-muted-foreground text-sm",
+                      "focus:ring-primary/50 focus:ring-2 focus:outline-none"
+                    )}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    Set <code>PORT</code> env var in your shell to override the
+                    default port at runtime.
+                  </p>
+                </div>
               )}
 
               {/* Start custom button */}

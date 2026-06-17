@@ -15,6 +15,7 @@ import {
 } from "@/lib/command/plan";
 import { validateProposal, describeProposal } from "@/lib/command/actions";
 import { auditCommand } from "@/lib/command/audit";
+import { getDb, queries } from "@/lib/db";
 
 /**
  * POST /api/command/propose — the chatbox's brain. Runs the user's message
@@ -132,7 +133,7 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json({
         kind: "answer",
-        text: `I can only run a small set of safe actions, and I couldn't do that one (${validated.reason}). I can create a new session, navigate to a view, or list your sessions — what would you like?`,
+        text: `I can only run a small set of safe actions, and I couldn't do that one (${validated.reason}). I can create a new session, create a dispatch task, navigate to a view, or list your sessions — what would you like?`,
       });
     }
 
@@ -190,7 +191,6 @@ export async function POST(request: NextRequest) {
 
     // dispatch_issue: validate the repoId is known (read-only DB check here).
     if (proposal.action === "dispatch_issue") {
-      const { getDb, queries } = await import("@/lib/db");
       const db = getDb();
       const repo = queries.getDispatchRepo(db).get(proposal.params.repoId);
       if (!repo) {

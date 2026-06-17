@@ -7,16 +7,9 @@
 
 import { getDb, queries } from "@/lib/db";
 import type { Session } from "@/lib/db";
-import type { ListSessionsParams } from "./actions";
+import type { ListSessionsParams, SessionSummary } from "./actions";
 
-export interface SessionSummary {
-  id: string;
-  name: string;
-  status: string;
-  agentType: string;
-  /** ISO timestamp of last update. */
-  updatedAt: string;
-}
+export type { SessionSummary };
 
 export interface ListSessionsResult {
   sessions: SessionSummary[];

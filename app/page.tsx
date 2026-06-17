@@ -171,6 +171,13 @@ const NAV_KEYBINDINGS: Keybinding[] = [
     action: "open-insight",
     description: "Open Insight",
   },
+  {
+    // mod+shift+c — mnemonic "Chat". mod+shift+a is taken (next-attention).
+    // Vetted: not browser-reserved and not claimed by any other binding above.
+    chord: "mod+shift+c",
+    action: "open-ask-stoa",
+    description: "Open Ask Stoa",
+  },
 ];
 
 function HomeContent() {
@@ -694,6 +701,7 @@ function HomeContent() {
     else if (action === "open-fleet-board")
       addViewTab(focusedPaneId, "fleet-board");
     else if (action === "open-insight") addViewTab(focusedPaneId, "analytics");
+    else if (action === "open-ask-stoa") addViewTab(focusedPaneId, "ask");
   });
 
   // Pane renderer
