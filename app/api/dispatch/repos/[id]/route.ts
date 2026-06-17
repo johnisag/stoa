@@ -168,13 +168,14 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
     const repo = queries.getDispatchRepo(db).get(id) as
       | DispatchRepo
       | undefined;
-    queries.deleteDispatchRepo(db).run(id);
-    // Clean up any pre-warmed worktrees left on disk (DB rows already gone via CASCADE).
+    // Clean up warm worktrees BEFORE deleteDispatchRepo: the CASCADE would delete
+    // the warm_worktrees DB rows first, leaving orphaned directories on disk.
     if (repo) {
-      cleanupPool(id, expandHome(repo.repo_path)).catch((err) =>
+      await cleanupPool(id, expandHome(repo.repo_path)).catch((err) =>
         console.warn("warm-pool cleanup on repo delete failed:", err)
       );
     }
+    queries.deleteDispatchRepo(db).run(id);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("dispatch repo delete failed:", error);

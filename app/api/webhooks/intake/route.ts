@@ -124,18 +124,13 @@ export async function POST(request: NextRequest) {
   const db = getDb();
   let repo: DispatchRepo | undefined;
 
-  // Try direct id lookup first (fast path for native events that use the UUID).
-  const byId = queries.getDispatchRepo(db).get(task.repo) as
-    | DispatchRepo
-    | undefined;
-  if (byId) {
-    repo = byId;
-  } else {
-    // Fall back to matching repo_slug (covers "owner/repo" from GitHub events
-    // and human-readable slugs from native events).
-    const all = queries.getAllDispatchRepos(db).all() as DispatchRepo[];
-    repo = all.find((r) => r.repo_slug === task.repo);
-  }
+  // Try direct id lookup first (fast path for native events that use the UUID),
+  // then fall back to slug lookup for "owner/repo" from GitHub events.
+  repo =
+    (queries.getDispatchRepo(db).get(task.repo) as DispatchRepo | undefined) ??
+    (queries.getDispatchRepoBySlug(db).get(task.repo) as
+      | DispatchRepo
+      | undefined);
 
   if (!repo) {
     return NextResponse.json({ error: "Unknown repo" }, { status: 404 });

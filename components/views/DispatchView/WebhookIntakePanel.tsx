@@ -121,7 +121,7 @@ export function WebhookIntakePanel() {
                   ? "bg-muted"
                   : data.configured
                     ? "bg-green-500"
-                    : "bg-red-500"
+                    : "bg-yellow-500"
               )}
             />
             <span className="text-muted-foreground text-xs">

@@ -45,8 +45,8 @@ export function verifyGitHubSignature(
   signature: string,
   secret: string
 ): boolean {
-  if (!signature) return false;
-  const hex = signature.startsWith("sha256=") ? signature.slice(7) : signature;
+  if (!signature || !signature.startsWith("sha256=")) return false;
+  const hex = signature.slice(7);
   if (hex.length === 0) return false;
   const a = createHmac("sha256", secret).update(body).digest();
   const b = Buffer.from(hex, "hex");

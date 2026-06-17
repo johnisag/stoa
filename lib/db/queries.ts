@@ -1097,4 +1097,18 @@ export const queries = {
       db,
       `SELECT id, worktree_path FROM warm_worktrees WHERE repo_id = ? AND status IN ('warming','ready')`
     ),
+
+  // Like listWarmingWorktrees but also returns the source repo_path (via JOIN)
+  // so evictStale can pass the correct projectPath to deleteWorktree.
+  listStaleWarmWorktreesWithRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT ww.id, ww.worktree_path, dr.repo_path
+       FROM warm_worktrees ww
+       LEFT JOIN dispatch_repos dr ON ww.repo_id = dr.id
+       WHERE ww.status = 'warming'`
+    ),
+
+  getDispatchRepoBySlug: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM dispatch_repos WHERE repo_slug = ?`),
 };

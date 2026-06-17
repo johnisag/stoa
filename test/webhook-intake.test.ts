@@ -101,9 +101,9 @@ describe("verifyGitHubSignature", () => {
     expect(verifyGitHubSignature(body, sig, secret)).toBe(true);
   });
 
-  it("accepts bare hex (no prefix) for flexibility", () => {
+  it("rejects bare hex without sha256= prefix", () => {
     const sig = hmacHex(secret, body);
-    expect(verifyGitHubSignature(body, sig, secret)).toBe(true);
+    expect(verifyGitHubSignature(body, sig, secret)).toBe(false);
   });
 
   it("rejects a wrong sha256= signature", () => {

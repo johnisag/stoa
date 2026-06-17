@@ -49,6 +49,7 @@ export function parseStoaWebhook(raw: unknown): ParsedWebhookTask | null {
   const rawLabels = Array.isArray(obj["labels"])
     ? (obj["labels"] as unknown[])
         .filter((l): l is string => typeof l === "string")
+        .map((l) => l.slice(0, 100))
         .slice(0, 20)
     : undefined;
   const labels = rawLabels && rawLabels.length > 0 ? rawLabels : undefined;
@@ -107,11 +108,17 @@ export function parseGitHubWebhook(
   // covers issue_number > 0). Reject rather than silently creating duplicates.
   if (issueNumber <= 0) return null;
 
-  const issueUrl =
+  const rawUrl =
     typeof issueObj["html_url"] === "string" ? issueObj["html_url"] : undefined;
-  const issueCreatedAt =
+  const issueUrl =
+    rawUrl && rawUrl.startsWith("https://github.com/") ? rawUrl : undefined;
+  const rawCreatedAt =
     typeof issueObj["created_at"] === "string"
       ? issueObj["created_at"]
+      : undefined;
+  const issueCreatedAt =
+    rawCreatedAt && !isNaN(new Date(rawCreatedAt).getTime())
+      ? rawCreatedAt
       : undefined;
 
   return { repo, title, body, issueNumber, issueUrl, issueCreatedAt };

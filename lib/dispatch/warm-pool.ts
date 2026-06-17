@@ -56,7 +56,8 @@ export async function replenish(repo: DispatchRepo): Promise<void> {
   await fs.promises.mkdir(worktreeBase, { recursive: true });
 
   // Unique dir name using the warm id to avoid collisions with live worktrees.
-  const repoSlug = repo.repo_slug.replace(/\//g, "-");
+  // Replace '/' and Windows-illegal filename chars (<>:"|?*\) with '-'.
+  const repoSlug = repo.repo_slug.replace(/[/\\<>:"|?*]/g, "-");
   const worktreePath = path.join(
     worktreeBase,
     `${repoSlug}-warm-${id.slice(0, 8)}`
@@ -155,18 +156,20 @@ export async function claimWarm(
  */
 export async function evictStale(): Promise<void> {
   const db = getDb();
-  const stale = queries.listWarmingWorktrees(db).all() as Array<{
+  const stale = queries.listStaleWarmWorktreesWithRepo(db).all() as Array<{
     id: string;
     worktree_path: string;
+    repo_path: string | null;
   }>;
 
   for (const row of stale) {
     queries.deleteWarmWorktree(db).run(row.id);
     try {
       if (fs.existsSync(row.worktree_path)) {
-        // We don't know the repo path (no FK join here), so use the worktree
-        // path itself as the project path — git will find the common dir.
-        await deleteWorktree(row.worktree_path, row.worktree_path, true);
+        const projectPath = row.repo_path
+          ? expandHome(row.repo_path)
+          : row.worktree_path;
+        await deleteWorktree(row.worktree_path, projectPath, true);
       }
     } catch {
       // best-effort; leftover dirs are harmless (git prune cleans refs)
