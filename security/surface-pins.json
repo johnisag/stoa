@@ -9,6 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:visual": "playwright test",
+    "test:visual:update": "playwright test --update-snapshots",
     "setup": "node scripts/setup.js",
     "postinstall": "node scripts/postinstall.js",
     "prepare": "husky"

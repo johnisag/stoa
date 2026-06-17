@@ -41,6 +41,12 @@ npm-debug.log*
 coverage/
 .cache/
 
+# Playwright — keep baselines tracked; ignore reports and result artifacts
+playwright-report/
+test-results/
+# Playwright browser binaries (installed by `npx playwright install`)
+# are stored in the system cache, not here — nothing to ignore in the repo.
+
 # Databases (local working copies)
 .mem.db
 .mem.db-wal
