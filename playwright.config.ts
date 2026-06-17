@@ -8,6 +8,9 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./test/visual",
   testMatch: "**/*.spec.ts",
+  // Store snapshots under test/visual/baselines/ so they are co-located with
+  // the spec files and clearly committed as reference images.
+  snapshotDir: "./test/visual/baselines",
   // Parallel is fine for screenshot tests (each navigates independently).
   fullyParallel: true,
   // Don't retry on CI — mismatches are real failures.

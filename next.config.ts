@@ -14,6 +14,17 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: resolve(import.meta.dirname),
   },
+  // Browsers request /favicon.ico unconditionally before they parse the HTML
+  // <link rel="icon"> tag. Redirect to the SVG so the tab icon resolves.
+  async redirects() {
+    return [
+      {
+        source: "/favicon.ico",
+        destination: "/icon.svg",
+        permanent: false,
+      },
+    ];
+  },
 };
 
 export default withSerwist(nextConfig);
