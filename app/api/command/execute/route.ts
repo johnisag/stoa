@@ -6,6 +6,7 @@ import { executeCreateSession } from "@/lib/command/create-session";
 import { executeDispatchIssue } from "@/lib/command/dispatch-issue";
 import { executeListSessions } from "@/lib/command/list-sessions";
 import { executeBestOfN } from "@/lib/command/best-of-n-action";
+import { executePlan } from "@/lib/command/execute-plan";
 import { auditCommand } from "@/lib/command/audit";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 
@@ -27,8 +28,21 @@ import type { DispatchRepo } from "@/lib/dispatch/types";
  *   list_sessions   → { ok, sessions: SessionSummary[], total }
  */
 export async function POST(request: NextRequest) {
+  // Parse the body once, outside the try, so the catch block can include plan
+  // context in the audit entry without re-reading the already-consumed stream.
+  const body = await request.json().catch(() => ({}));
   try {
-    const body = await request.json().catch(() => ({}));
+
+    // Plan execution: body carries { kind: "plan", name, steps }. Delegate to the
+    // sequential plan executor (which re-validates all steps internally).
+    if ((body as Record<string, unknown>).kind === "plan") {
+      const result = await executePlan(body);
+      if (!result.ok) {
+        return NextResponse.json({ error: `Refused: ${result.reason}` }, { status: 400 });
+      }
+      return NextResponse.json({ ok: true, results: result.results });
+    }
+
     const { action, params } = body as { action?: unknown; params?: unknown };
 
     // Re-validate the action SHAPE (defense-in-depth — propose's pass is not
@@ -249,10 +263,14 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     // Unexpected throw before the inner handlers (e.g. a DB fault in getProject):
-    // audit it so the ledger has no blind spot, then surface a 500.
+    // audit it so the ledger has no blind spot, then surface a 500. Include the
+    // plan name/kind when the body carried a plan so the audit entry has context
+    // (body is hoisted above the try so it's in scope here).
     console.error("Error executing command:", error);
+    const b = body as Record<string, unknown>;
     auditCommand("command_failed", {
       stage: "execute",
+      ...(b.kind === "plan" ? { kind: "plan", planName: b.name } : {}),
       error: error instanceof Error ? error.message : "Unknown error",
     });
     const messageText =

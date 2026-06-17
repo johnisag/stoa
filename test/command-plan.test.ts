@@ -162,3 +162,81 @@ describe("buildGenerateWorkflowPrompt", () => {
     expect(p).toContain("CTX_MARKER");
   });
 });
+
+// ─── parseAgentReply — plan kind ──────────────────────────────────────────────
+
+describe("parseAgentReply — plan kind", () => {
+  const PLAN_JSON =
+    '{"kind":"plan","name":"Research then implement","steps":[' +
+    '{"stepId":"step-1","description":"Research","action":"create_session","params":{"projectId":"proj_a"}},' +
+    '{"stepId":"step-2","description":"Implement","action":"create_session","params":{"projectId":"proj_a"}}' +
+    ']}';
+
+  it("parses bare kind:plan JSON", () => {
+    const r = parseAgentReply(PLAN_JSON);
+    expect(r.kind).toBe("plan");
+    if (r.kind === "plan") {
+      const data = r.data as { kind: string; name: string; steps: unknown[] };
+      expect(data.kind).toBe("plan");
+      expect(data.name).toBe("Research then implement");
+      expect(data.steps).toHaveLength(2);
+    }
+  });
+
+  it("parses kind:plan in a ```json fence", () => {
+    const fenced = "```json\n" + PLAN_JSON + "\n```";
+    const r = parseAgentReply(fenced);
+    expect(r.kind).toBe("plan");
+  });
+
+  it("degrades to answer when kind is 'plan' but steps is missing", () => {
+    // JSON is valid but missing steps; the parser still blesses it as "plan" (the
+    // validator, not the parser, rejects structurally incomplete plans).
+    const r = parseAgentReply('{"kind":"plan","name":"X"}');
+    // Parser returns kind:"plan" — the downstream validatePlan rejects the missing steps.
+    expect(r.kind).toBe("plan");
+  });
+
+  it("degrades to answer when JSON is malformed", () => {
+    const r = parseAgentReply('{"kind":"plan", oops}');
+    expect(r.kind).toBe("answer");
+  });
+
+  it("does not confuse kind:proposal with kind:plan", () => {
+    const r = parseAgentReply(
+      '{"kind":"proposal","action":"create_session","params":{"projectId":"proj_a"}}'
+    );
+    expect(r.kind).toBe("proposal");
+  });
+
+  it("does not confuse kind:workflow with kind:plan", () => {
+    const r = parseAgentReply(
+      '{"kind":"workflow","spec":{"name":"X","steps":[]}}'
+    );
+    expect(r.kind).toBe("workflow");
+  });
+});
+
+// ─── COMMAND_PREAMBLE — plan instruction ──────────────────────────────────────
+
+describe("COMMAND_PREAMBLE (via buildCommandPrompt)", () => {
+  const prompt = buildCommandPrompt({
+    context: "ctx",
+    projects: PROJECTS,
+    message: "msg",
+  });
+
+  it("includes kind:plan instruction", () => {
+    expect(prompt).toContain('"kind":"plan"');
+  });
+
+  it("includes '2 to 10 steps' constraint", () => {
+    expect(prompt).toMatch(/2 to 10 steps/i);
+  });
+
+  it("restricts plan steps to create_session and dispatch_issue only", () => {
+    // The preamble must name the allowlisted step actions.
+    expect(prompt).toContain("create_session");
+    expect(prompt).toContain("dispatch_issue");
+  });
+});

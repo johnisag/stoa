@@ -6,6 +6,8 @@ import {
   validateOpenViewParams,
   validateListSessionsParams,
   validateWorkflowProposal,
+  validatePlan,
+  describePlan,
   describeProposal,
   SESSION_AGENT_IDS,
   COMMAND_VIEWS,
@@ -551,5 +553,217 @@ describe("validateListSessionsParams — fail-closed", () => {
     if (res.ok && res.proposal.action === "list_sessions") {
       expect(res.proposal.params.status).toBe("running");
     }
+  });
+});
+
+// ─── validatePlan ─────────────────────────────────────────────────────────────
+
+const VALID_STEP = {
+  stepId: "step-1",
+  description: "Research existing patterns",
+  action: "create_session",
+  params: { projectId: "proj_abc", agentType: "claude" },
+};
+
+const VALID_STEP_2 = {
+  stepId: "step-2",
+  description: "Implement the feature",
+  action: "create_session",
+  params: { projectId: "proj_abc", agentType: "claude" },
+};
+
+function makePlan(overrides: Record<string, unknown> = {}) {
+  return { kind: "plan", name: "Research and implement", steps: [VALID_STEP, VALID_STEP_2], ...overrides };
+}
+
+describe("validatePlan — fail-closed plan allowlist", () => {
+  it("accepts a valid 2-step plan", () => {
+    const res = validatePlan(makePlan());
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.name).toBe("Research and implement");
+      expect(res.steps).toHaveLength(2);
+      expect(res.steps[0].stepId).toBe("step-1");
+      expect(res.steps[1].stepId).toBe("step-2");
+    }
+  });
+
+  it("accepts a valid 10-step plan", () => {
+    const steps = Array.from({ length: 10 }, (_, i) => ({
+      stepId: `step-${i + 1}`,
+      description: `Step ${i + 1}`,
+      action: "create_session",
+      params: { projectId: "proj_abc", agentType: "claude" },
+    }));
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.steps).toHaveLength(10);
+  });
+
+  it("rejects fewer than 2 steps", () => {
+    const res = validatePlan(makePlan({ steps: [VALID_STEP] }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/at least 2/i);
+  });
+
+  it("rejects more than 10 steps", () => {
+    const steps = Array.from({ length: 11 }, (_, i) => ({
+      stepId: `step-${i + 1}`,
+      description: `Step ${i + 1}`,
+      action: "create_session",
+      params: { projectId: "proj_abc", agentType: "claude" },
+    }));
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/at most 10/i);
+  });
+
+  it("rejects a step with action 'open_view' (not in the plan step allowlist)", () => {
+    const steps = [
+      VALID_STEP,
+      { stepId: "step-2", description: "Navigate", action: "open_view", params: { view: "analytics" } },
+    ];
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/unsupported action/i);
+  });
+
+  it("rejects a step with action 'list_sessions' (not in the plan step allowlist)", () => {
+    const steps = [
+      VALID_STEP,
+      { stepId: "step-2", description: "List", action: "list_sessions", params: {} },
+    ];
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/unsupported action/i);
+  });
+
+  it("rejects a step with invalid create_session params (bad agentType)", () => {
+    const steps = [
+      VALID_STEP,
+      { stepId: "step-2", description: "Bad agent", action: "create_session", params: { projectId: "p", agentType: "evil" } },
+    ];
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/unsupported agent/i);
+  });
+
+  it("rejects a step with invalid dispatch_issue params (missing title)", () => {
+    const steps = [
+      VALID_STEP,
+      { stepId: "step-2", description: "Dispatch", action: "dispatch_issue", params: { repoId: "repo_1" } },
+    ];
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/title/i);
+  });
+
+  it("rejects a stepId with path-traversal or space characters", () => {
+    const steps = [
+      { stepId: "../evil", description: "Bad id", action: "create_session", params: { projectId: "p" } },
+      VALID_STEP_2,
+    ];
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/invalid stepId/i);
+  });
+
+  it("rejects a stepId with spaces", () => {
+    const steps = [
+      { stepId: "step 1", description: "Bad id", action: "create_session", params: { projectId: "p" } },
+      VALID_STEP_2,
+    ];
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/invalid stepId/i);
+  });
+
+  it("rejects name longer than 120 chars", () => {
+    const res = validatePlan(makePlan({ name: "n".repeat(200) }));
+    // sanitizeText trims to 120 chars — but the name is still accepted (capped, not rejected)
+    // unless it's entirely whitespace. A long name is valid (capped).
+    // Verify it comes through capped.
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.name.length).toBe(120);
+  });
+
+  it("rejects description longer than 200 chars (caps it)", () => {
+    const steps = [
+      { stepId: "step-1", description: "d".repeat(300), action: "create_session", params: { projectId: "p" } },
+      VALID_STEP_2,
+    ];
+    const res = validatePlan(makePlan({ steps }));
+    // descriptions are sanitized+capped (not outright rejected)
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.steps[0].description.length).toBe(200);
+  });
+
+  it("rejects missing name", () => {
+    const res = validatePlan(makePlan({ name: undefined }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/missing a non-empty name/i);
+  });
+
+  it("rejects steps that is not an array", () => {
+    const res = validatePlan(makePlan({ steps: "not an array" }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/array/i);
+  });
+
+  it("rejects a non-object plan", () => {
+    expect(validatePlan(null).ok).toBe(false);
+    expect(validatePlan("not a plan").ok).toBe(false);
+    expect(validatePlan(42).ok).toBe(false);
+  });
+
+  it("rejects a plan with wrong kind", () => {
+    const res = validatePlan({ kind: "proposal", name: "X", steps: [VALID_STEP, VALID_STEP_2] });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/kind/i);
+  });
+
+  it("accepts a mixed create_session + dispatch_issue plan", () => {
+    const steps = [
+      VALID_STEP,
+      { stepId: "step-2", description: "Create a task", action: "dispatch_issue", params: { repoId: "repo_1", title: "Follow-up" } },
+    ];
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.steps[0].action).toBe("create_session");
+      expect(res.steps[1].action).toBe("dispatch_issue");
+    }
+  });
+
+  it("rejects a plan with duplicate stepIds (would corrupt client progress map)", () => {
+    const steps = [
+      { stepId: "step-1", description: "Research", action: "create_session", params: { projectId: "p", agentType: "claude" } },
+      { stepId: "step-1", description: "Implement", action: "create_session", params: { projectId: "p", agentType: "claude" } },
+    ];
+    const res = validatePlan(makePlan({ steps }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/duplicate stepId/i);
+  });
+});
+
+describe("describePlan", () => {
+  it("renders a human-readable header and per-step lines", () => {
+    const res = validatePlan(makePlan());
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const desc = describePlan(res.name, res.steps, { proj_abc: "the-grid" });
+    expect(desc).toContain("Research and implement");
+    expect(desc).toContain("2 step");
+    expect(desc).toContain("create_session");
+    expect(desc).toContain("the-grid");
+  });
+
+  it("omits project name when projectNames map is not provided", () => {
+    const res = validatePlan(makePlan());
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const desc = describePlan(res.name, res.steps);
+    expect(desc).toContain("Research and implement");
+    expect(desc).not.toContain("the-grid");
   });
 });

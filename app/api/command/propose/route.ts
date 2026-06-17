@@ -13,7 +13,8 @@ import {
   parseAgentReply,
   type CommandProject,
 } from "@/lib/command/plan";
-import { validateProposal, describeProposal } from "@/lib/command/actions";
+import { validateProposal, describeProposal, validatePlan } from "@/lib/command/actions";
+import { resolveStepProjects } from "@/lib/command/plan-resolve";
 import { auditCommand } from "@/lib/command/audit";
 import { getDb, queries } from "@/lib/db";
 
@@ -119,6 +120,43 @@ export async function POST(request: NextRequest) {
     const parsed = parseAgentReply(reply);
     if (parsed.kind === "answer") {
       return NextResponse.json({ kind: "answer", text: parsed.text });
+    }
+
+    // A plan: validate all steps against the fail-closed per-action validators,
+    // then resolve project/repo ids for each step. Any failure degrades to an
+    // answer (never a card).
+    if (parsed.kind === "plan") {
+      const planValidation = validatePlan(parsed.data);
+      if (!planValidation.ok) {
+        auditCommand("command_rejected", {
+          stage: "propose",
+          reason: planValidation.reason,
+          raw: parsed.data,
+        });
+        return NextResponse.json({
+          kind: "answer",
+          text: `I couldn't form a valid plan (${planValidation.reason}). Would you like me to propose individual steps instead?`,
+        });
+      }
+      const resolved = resolveStepProjects(planValidation.steps);
+      if (!resolved.ok) {
+        auditCommand("command_rejected", {
+          stage: "propose",
+          reason: resolved.reason,
+          raw: parsed.data,
+        });
+        return NextResponse.json({
+          kind: "answer",
+          text: resolved.reason,
+        });
+      }
+      auditCommand("command_proposed", { action: "execute_plan", planName: planValidation.name });
+      return NextResponse.json({
+        kind: "plan",
+        name: planValidation.name,
+        steps: resolved.steps,
+        projectNames: resolved.projectNames,
+      });
     }
 
     // A proposal: validate the SHAPE against the fail-closed allowlist, then

@@ -2,7 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ChatProvider } from "@/lib/chat-settings";
 import { sessionKeys } from "@/data/sessions/keys";
 import type { BuilderDoc } from "@/lib/pipeline/builder-model";
-import type { SessionSummary } from "@/lib/command/actions";
+import type { SessionSummary, PlanStep, StepResult } from "@/lib/command/actions";
+import type { StepProgress } from "@/components/views/ChatView/PlanCard";
 
 /** One turn in the chat conversation, as replayed to the backend as history. */
 export interface ChatMessage {
@@ -71,10 +72,17 @@ export type CommandProposal =
       project: { id: string; name: string };
     };
 
-/** The /api/command/propose envelope: the agent either answered or proposed. */
+/** The /api/command/propose envelope: the agent either answered, proposed, or
+ * returned a multi-step plan. */
 export type ProposeReply =
   | { kind: "answer"; text: string }
-  | ({ kind: "proposal" } & CommandProposal);
+  | ({ kind: "proposal" } & CommandProposal)
+  | {
+      kind: "plan";
+      name: string;
+      steps: PlanStep[];
+      projectNames: Record<string, string>;
+    };
 
 export interface ProposeInput {
   message: string;
@@ -152,7 +160,7 @@ export function useGenerateWorkflow() {
   });
 }
 
-export type { SessionSummary };
+export type { SessionSummary, StepProgress, StepResult };
 
 export type ExecuteResult =
   | {
@@ -169,6 +177,19 @@ export type ExecuteResult =
 export interface ExecuteInput {
   action: "create_session" | "dispatch_issue" | "open_view" | "list_sessions";
   params: CommandParams;
+}
+
+/** Wire body for executing a confirmed plan. */
+export interface ExecutePlanInput {
+  kind: "plan";
+  name: string;
+  steps: PlanStep[];
+}
+
+/** Wire response from POST /api/command/execute when kind:"plan". */
+export interface ExecutePlanResult {
+  ok: true;
+  results: StepResult[];
 }
 
 /**
@@ -199,9 +220,9 @@ export function useExecuteCommand() {
 /**
  * The ChatView's local message model. A turn is the user's text, an assistant
  * answer (markdown), an assistant PROPOSAL (a confirm card with its lifecycle
- * status), or the RESULT of an executed action. `user` + `answer` turns and
- * SUCCESSFUL results are replayed to the backend as history (pending proposals
- * and failed results are not).
+ * status), an assistant PLAN (a multi-step confirm card), or the RESULT of an
+ * executed action. `user` + `answer` turns and SUCCESSFUL results are replayed
+ * to the backend as history (pending proposals/plans and failed results are not).
  */
 export type ChatItem =
   | { role: "user"; content: string }
@@ -212,4 +233,39 @@ export type ChatItem =
       proposal: CommandProposal;
       status: "pending" | "executing" | "confirmed" | "cancelled";
     }
+  | {
+      role: "assistant";
+      kind: "plan";
+      name: string;
+      steps: PlanStep[];
+      projectNames: Record<string, string>;
+      status: "pending" | "executing" | "confirmed" | "cancelled";
+      /** Populated during and after execution. */
+      progress?: StepProgress[];
+    }
   | { role: "assistant"; kind: "result"; ok: boolean; content: string };
+
+/**
+ * Run a confirmed plan. POSTs to /api/command/execute with { kind:"plan", ... },
+ * which re-validates and executes steps sequentially server-side. On success the
+ * sessions list is invalidated (plan steps may create sessions). No auto-retry.
+ */
+export function useExecutePlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    retry: 0,
+    mutationFn: async (input: ExecutePlanInput): Promise<ExecutePlanResult> => {
+      const res = await fetch("/api/command/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to execute the plan");
+      return data as ExecutePlanResult;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
+    },
+  });
+}
