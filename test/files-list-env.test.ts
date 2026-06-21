@@ -4,11 +4,12 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { listDirectory } from "@/lib/files";
 
-// Regression: .env was in DEFAULT_EXCLUDES, so the explorer never listed it even
-// though users need to see/edit it (as in VS Code) and the content API already
-// serves a known .env path. Pin that .env is now LISTED while the genuinely-noisy
-// excludes (node_modules, .git, *.log, *.db) stay hidden.
-describe("listDirectory: .env visibility", () => {
+// Regression: the explorer hid common gitignored artifacts (build dirs, logs,
+// *.db, and previously .env) behind a large DEFAULT_EXCLUDES list, so developers
+// could not see or open their own ignored files — unlike VS Code. The explorer now
+// shows that content and excludes ONLY the dependency/VCS mega-directories that are
+// pathological for the recursive directory search (node_modules, .git, venvs).
+describe("listDirectory: gitignored content is visible", () => {
   let root: string;
 
   beforeAll(() => {
@@ -19,8 +20,12 @@ describe("listDirectory: .env visibility", () => {
     writeFileSync(join(root, "app.log"), "noise\n");
     writeFileSync(join(root, "data.db"), "x\n");
     writeFileSync(join(root, "index.ts"), "export {};\n");
+    mkdirSync(join(root, "dist"));
+    mkdirSync(join(root, ".next"));
     mkdirSync(join(root, "node_modules"));
     mkdirSync(join(root, ".git"));
+    mkdirSync(join(root, ".venv"));
+    mkdirSync(join(root, "venv"));
   });
 
   afterAll(() => {
@@ -34,12 +39,20 @@ describe("listDirectory: .env visibility", () => {
     expect(names).toContain(".env.production.local");
   });
 
-  it("still hides node_modules, .git, *.log and *.db", () => {
+  it("lists previously-hidden gitignored artifacts (logs, dbs, build dirs)", () => {
+    const names = listDirectory(root).map((n) => n.name);
+    expect(names).toContain("app.log");
+    expect(names).toContain("data.db");
+    expect(names).toContain("dist");
+    expect(names).toContain(".next");
+  });
+
+  it("still hides the dependency/VCS mega-directories", () => {
     const names = listDirectory(root).map((n) => n.name);
     expect(names).not.toContain("node_modules");
     expect(names).not.toContain(".git");
-    expect(names).not.toContain("app.log");
-    expect(names).not.toContain("data.db");
+    expect(names).not.toContain(".venv");
+    expect(names).not.toContain("venv");
   });
 
   it("still lists ordinary source files", () => {
