@@ -145,8 +145,11 @@
   },
   "overrides": {
     "postcss": "^8.5.15",
-    "dompurify": "^3.4.8",
+    "dompurify": "^3.4.11",
     "esbuild": "^0.28.1",
-    "hono": "^4.12.25"
+    "hono": "^4.12.25",
+    "@babel/core": "^7.29.6",
+    "js-yaml": "^4.2.0",
+    "undici": "^7.28.0"
   }
 }

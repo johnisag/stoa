@@ -11,33 +11,22 @@ export { getLanguageFromExtension } from "./file-utils";
 import type { FileNode } from "./file-utils";
 
 /**
- * Default exclude patterns (matches common ignore patterns)
+ * Directory / file names the explorer never lists.
+ *
+ * Deliberately MINIMAL. The explorer is a developer tool, so gitignored project
+ * artifacts — build output (`dist/`, `build/`, `out/`, `.next/`), coverage,
+ * caches, logs (`*.log`), local databases (`*.db`), and `.env*` files — MUST be
+ * visible and editable, exactly as in VS Code. Hiding them behind a broad
+ * ignore list was a bug: you could not see (or open) your own ignored files.
+ *
+ * So the ONLY names excluded are the dependency / VCS mega-directories that are
+ * (a) never browsed by hand and (b) pathological to walk: the directory SEARCH
+ * lists RECURSIVELY (`data/files/queries.ts`, depth up to 8) and shares this
+ * list, so recursing into `node_modules` or a Python venv would enumerate
+ * thousands of entries. The shallow tree is lazy (expand-on-click), but the
+ * recursive search is why these stay out.
  */
-const DEFAULT_EXCLUDES = [
-  "node_modules",
-  ".git",
-  ".next",
-  "dist",
-  "build",
-  "out",
-  "coverage",
-  ".cache",
-  ".vercel",
-  ".turbo",
-  "__pycache__",
-  ".pytest_cache",
-  ".mypy_cache",
-  ".venv",
-  "venv",
-  ".DS_Store",
-  "*.log",
-  // NOTE: .env files are intentionally NOT excluded — users manage them in the
-  // explorer (as they would in VS Code), and the content API already serves a
-  // known .env path anyway, so hiding it from the tree was cosmetic, not a guard.
-  "*.db",
-  "*.db-wal",
-  "*.db-shm",
-];
+const DEFAULT_EXCLUDES = ["node_modules", ".git", ".venv", "venv"];
 
 /**
  * Check if a file/directory should be excluded
