@@ -353,6 +353,47 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["id"],
         },
       },
+      {
+        name: "channel_send",
+        description:
+          "Send a DIRECT 1:1 message to another agent's session by its session id. Use this to coordinate point-to-point with a sibling worker — e.g. tell the worker that owns the schema what column name you chose. The message lands in the recipient's inbox (read with channel_inbox); if the operator enabled push delivery it is also injected at the recipient's next turn boundary. Your own session is the sender. Distinct from memory_*/notes_* (shared, undirected) — this is addressed to one session.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            to: {
+              type: "string",
+              description:
+                "The recipient's Stoa session id (e.g. from list_workers or a message they sent you). Must be an existing session.",
+            },
+            message: {
+              type: "string",
+              description: "The message body to send.",
+            },
+          },
+          required: ["to", "message"],
+        },
+      },
+      {
+        name: "channel_inbox",
+        description:
+          "Read and CONSUME your unread direct messages from other agents (oldest first). Reading marks them read, so the next call only returns what's new — act on each message now (reply with channel_send if needed). Use channel_history to re-read a conversation without consuming it.",
+        inputSchema: { type: "object" as const, properties: {} },
+      },
+      {
+        name: "channel_history",
+        description:
+          "Review the full conversation between you and one peer session (both directions, oldest first). NON-consuming — it doesn't change unread state. Use channel_inbox to pick up new messages.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            peer: {
+              type: "string",
+              description: "The other session's id.",
+            },
+          },
+          required: ["peer"],
+        },
+      },
     ],
   };
 });

@@ -61,6 +61,12 @@ import {
   WATCHDOG_MAX_GAP_MS,
   type StuckTrack,
 } from "./lib/watchdog";
+import {
+  channelDeliverEnabled,
+  isChannelDeliveryTurn,
+  buildChannelDeliveryText,
+} from "./lib/channel-delivery";
+import { nextUnreadMessage, markDelivered } from "./lib/channels";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import { evictStale as evictStaleWarmPool } from "./lib/dispatch/warm-pool";
@@ -317,6 +323,19 @@ app.prepare().then(() => {
       `> Watchdog on (STOA_AUTO_WATCHDOG=1): a session stuck "running" continuously for ~${Math.round(WATCHDOG_STUCK_MS / 60000)}m gets ONE "may be stuck" push, then it's left for you. The terminal is never written to.`
     );
   }
+  // Inter-agent channel PUSH delivery (opt-in via STOA_AUTO_CHANNEL_DELIVER=1).
+  // Channels are always readable via the channel_* MCP tools (pull); this only
+  // adds the unattended INJECTION of one unread message into a recipient's
+  // terminal at a clean turn boundary — off by default, since writing into a
+  // session is the risky part (same stance as auto-resume). `channelDelivering`
+  // keeps one delivery in flight per session so a slow paste can't double-send.
+  const CHANNEL_DELIVER_ENABLED = channelDeliverEnabled();
+  const channelDelivering = new Set<string>();
+  if (CHANNEL_DELIVER_ENABLED) {
+    console.log(
+      `> Inter-agent channel delivery on (STOA_AUTO_CHANNEL_DELIVER=1): an unread channel message is injected into the recipient's terminal at its next idle turn boundary (one at a time, with a directive "from another agent" wrapper). Without this, channels are pull-only (channel_inbox).`
+    );
+  }
   if (SNAPSHOTS_ENABLED) {
     console.log(
       "> Per-turn snapshots on (STOA_SNAPSHOTS=1): the status ticker runs continuously and writes refs/stoa/snap/* at each turn boundary."
@@ -394,7 +413,8 @@ app.prepare().then(() => {
       !AUTO_RESUME_ENABLED &&
       !AUTO_ANSWER_ENABLED &&
       !ERROR_LOOP_ENABLED &&
-      !WATCHDOG_ENABLED
+      !WATCHDOG_ENABLED &&
+      !CHANNEL_DELIVER_ENABLED
     ) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
       if (lastPushStatusById.size) lastPushStatusById = new Map();
@@ -407,6 +427,7 @@ app.prepare().then(() => {
       if (autoAnswered.size) autoAnswered.clear();
       if (errorLoops.size) errorLoops.clear();
       if (stuckSessions.size) stuckSessions.clear();
+      if (channelDelivering.size) channelDelivering.clear();
       return;
     }
     if (statusTickBusy) return; // don't stack ticks if a capture runs slow
@@ -766,6 +787,49 @@ app.prepare().then(() => {
         }
         for (const id of [...stuckSessions.keys()])
           if (!liveIds.has(id)) stuckSessions.delete(id);
+      }
+
+      // Inter-agent channel delivery (opt-in via STOA_AUTO_CHANNEL_DELIVER=1).
+      // Channels are always pull-readable (channel_inbox); this only adds the
+      // unattended PUSH — injecting one unread message into the recipient's
+      // terminal at a clean turn boundary so a sibling doesn't have to poll.
+      // Mirrors the prompt-queue dispatch: gate on a settled, ready session (the
+      // pure isChannelDeliveryTurn), deliver the single oldest unread with a
+      // directive "from another agent" wrapper, mark it delivered on a successful
+      // paste. One delivery in flight per session (channelDelivering) so a slow
+      // paste can't double-send; the once-guard clears on success/failure so the
+      // NEXT unread is delivered on a later tick (one message at a time).
+      if (CHANNEL_DELIVER_ENABLED) {
+        for (const s of curr) {
+          if (channelDelivering.has(s.id)) continue;
+          // If the prompt-queue loop above already pasted this session's queued
+          // task this idle period, don't ALSO inject a channel message — both
+          // fire on "idle" off the same snapshot, so two pastes would interleave
+          // in one terminal. Wait for the next idle tick (mirrors the rate-limit
+          // resume loop's queueDispatched guard).
+          if (queueDispatched.has(s.id)) continue;
+          if (
+            !isChannelDeliveryTurn({ status: s.status, hasPrompt: !!s.prompt })
+          )
+            continue;
+          const msg = nextUnreadMessage(s.id);
+          if (!msg) continue;
+          channelDelivering.add(s.id);
+          const text = buildChannelDeliveryText(msg);
+          void getSessionBackend()
+            .pasteText(s.name, text, { enter: true })
+            .then(() => {
+              markDelivered(msg.id);
+            })
+            .catch((err) => {
+              console.error("channel delivery failed:", err);
+            })
+            .finally(() => {
+              channelDelivering.delete(s.id);
+            });
+        }
+        for (const id of [...channelDelivering])
+          if (!liveIds.has(id)) channelDelivering.delete(id);
       }
     } catch (err) {
       console.error("status events tick failed:", err);

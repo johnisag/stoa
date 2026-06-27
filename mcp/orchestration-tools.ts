@@ -546,6 +546,143 @@ export async function handleToolCall(request: {
         };
       }
 
+      case "channel_send": {
+        // The sender is THIS session (its own Stoa id), resolved the same way as
+        // the conductor id; `to` is an arg.
+        const from = getConductorId(args);
+        if (!from) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: can't determine your own session id (set CONDUCTOR_SESSION_ID or run inside a Stoa session).",
+              },
+            ],
+          };
+        }
+        const to = requireString(args, "to");
+        const message = requireString(args, "message");
+        const result = await apiCall("/api/channels", {
+          method: "POST",
+          body: JSON.stringify({ from, to, body: message }),
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: result.error
+                ? `Error: ${result.error}`
+                : `Message sent to ${to.slice(0, 8)}.`,
+            },
+          ],
+        };
+      }
+
+      case "channel_inbox": {
+        const session = getConductorId(args);
+        if (!session) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: can't determine your own session id (set CONDUCTOR_SESSION_ID or run inside a Stoa session).",
+              },
+            ],
+          };
+        }
+        // PATCH consumes: returns the unread messages AND marks them read.
+        const result = await apiCall("/api/channels", {
+          method: "PATCH",
+          body: JSON.stringify({ session }),
+        });
+        if (result.error) {
+          return {
+            content: [
+              { type: "text" as const, text: `Error: ${result.error}` },
+            ],
+          };
+        }
+        const messages: {
+          from_session_id: string;
+          body: string;
+          created_at: string;
+        }[] = result.messages || [];
+        if (messages.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "No new messages." }],
+          };
+        }
+        // Full bodies (the agent must act on each), and the FULL sender id on each
+        // — an agent replies with channel_send(to: <that id>), so the id has to be
+        // the complete session id, not a shortened prefix.
+        const list = messages
+          .map(
+            (m) => `From ${m.from_session_id} (${m.created_at} UTC):\n${m.body}`
+          )
+          .join("\n\n---\n\n");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `You have ${messages.length} new message(s). Reply with channel_send(to: the sender id shown on each).\n\n${list}`,
+            },
+          ],
+        };
+      }
+
+      case "channel_history": {
+        const session = getConductorId(args);
+        if (!session) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: can't determine your own session id (set CONDUCTOR_SESSION_ID or run inside a Stoa session).",
+              },
+            ],
+          };
+        }
+        const peer = requireString(args, "peer");
+        const result = await apiCall(
+          `/api/channels?session=${encodeURIComponent(session)}&peer=${encodeURIComponent(peer)}`
+        );
+        if (result.error) {
+          return {
+            content: [
+              { type: "text" as const, text: `Error: ${result.error}` },
+            ],
+          };
+        }
+        const messages: { from_session_id: string; body: string }[] =
+          result.messages || [];
+        if (messages.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `No messages with ${peer.slice(0, 8)} yet.`,
+              },
+            ],
+          };
+        }
+        // Scannable one-line-per-message overview (use channel_inbox for full,
+        // actionable bodies of NEW messages).
+        const list = messages
+          .map(
+            (m) =>
+              `- ${m.from_session_id === session ? "you" : m.from_session_id.slice(0, 8)}: ${oneLinePreview(m.body, 160)}`
+          )
+          .join("\n");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Conversation with ${peer.slice(0, 8)}:\n${list}`,
+            },
+          ],
+        };
+      }
+
       default:
         return {
           content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],

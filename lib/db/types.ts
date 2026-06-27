@@ -91,6 +91,21 @@ export interface NoteRow {
   updated_at: string;
 }
 
+/** A 1:1 inter-agent channel message (channel_messages). `pair_key` is the
+ * order-independent thread id; `delivered_at`/`read_at` are NULL until set. */
+export interface ChannelMessageRow {
+  id: string;
+  pair_key: string;
+  from_session_id: string;
+  to_session_id: string;
+  body: string;
+  created_at: string;
+  /** Set when the opt-in turn-boundary push injected it into the terminal. */
+  delivered_at: string | null;
+  /** Set when the recipient consumed it (a pull, or the opt-in push). */
+  read_at: string | null;
+}
+
 export interface ProjectDevServer {
   id: string;
   project_id: string;

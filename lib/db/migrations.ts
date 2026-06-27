@@ -989,6 +989,38 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 41,
+    name: "add_channel_messages_table",
+    up: (db) => {
+      // Inter-agent channels: an append-only 1:1 message log between sessions,
+      // read/written via /api/channels + the channel_* MCP tools. pair_key is the
+      // order-independent thread id; read_at marks a consumed message; delivered_at
+      // records the opt-in turn-boundary terminal push.
+      if (!hasTable(db, "channel_messages")) {
+        db.exec(`
+          CREATE TABLE channel_messages (
+            id TEXT PRIMARY KEY,
+            pair_key TEXT NOT NULL,
+            from_session_id TEXT NOT NULL,
+            to_session_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            delivered_at TEXT,
+            read_at TEXT
+          )
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_channel_messages_inbox
+             ON channel_messages (to_session_id, read_at, created_at)`
+        );
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_channel_messages_thread
+             ON channel_messages (pair_key, created_at)`
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
