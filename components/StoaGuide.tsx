@@ -23,6 +23,7 @@ import {
   HeartPulse,
   ScanSearch,
   TriangleAlert,
+  BrainCircuit,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -94,6 +95,12 @@ const COCKPIT: Item[] = [
     icon: Network,
     title: "Session orchestration",
     blurb: "Coordinate conductor/worker agent fleets over MCP.",
+  },
+  {
+    icon: BrainCircuit,
+    title: "Shared agent memory",
+    blurb:
+      "A fleet-wide key→value scratchpad agents read/write over MCP (and a plain /api/memory route) — to share interface contracts and gotchas across worktrees.",
   },
   {
     icon: Workflow,

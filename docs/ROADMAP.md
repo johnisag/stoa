@@ -112,8 +112,20 @@ typed, multi-provider, and cross-platform.
   in `lib/rate-limit.ts` (`nextRateLimitAction`), budget consumed only on a
   delivered nudge. **Phase 1 — "the fleet doesn't die" — complete (#1 · #2 · #9 ·
   #10).**
-- **Next (Phase 2 — "agents share an OS"):** the MCP data-tool unlock — #3 agent
-  data tools FIRST, then #4 notes → #6 channels → #5 scheduler.
+- **✅ #3 Agent data tools (MCP) — SHIPPED.** The Phase-2 unlock: agents get a data
+  store over the SAME `/api/*` seam the rest of Stoa uses — the route is the shared
+  human+agent surface (no GUI panel over it yet; that's a follow-up). Adds a fleet-wide
+  key→value **shared memory** (`agent_memory` table → `lib/agent-memory.ts` →
+  `GET/POST/DELETE /api/memory`) and four `memory_*` tools on the existing
+  orchestration MCP server (`memory_set/get/list/delete`) — so agents in separate
+  worktrees can coordinate (interface contracts, "don't touch file X", gotchas).
+  Pull-based (an agent reads a key as data; nothing is auto-injected into a
+  terminal) and distinct from the Dispatch-only `repo_lessons`. No per-tool wiring
+  needed — `lib/mcp-config.ts` already points every conductor at the server, so the
+  new tools register automatically. This is the pattern #4 notes / #6 channels /
+  #5 scheduler build on.
+- **Next (Phase 2 cont.):** #4 notes → #6 channels → #5 scheduler, each a new
+  data tool on the same MCP + `/api/*` seam.
 
 ---
 
