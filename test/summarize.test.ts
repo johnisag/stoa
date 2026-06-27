@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseClaudeTranscript,
+  extractTranscriptEntries,
   lastAssistantText,
   buildSummaryPrompt,
   sanitizeDigest,
@@ -10,6 +11,41 @@ import {
 function line(obj: unknown): string {
   return JSON.stringify(obj);
 }
+
+describe("extractTranscriptEntries", () => {
+  it("returns role-tagged user + assistant TEXT turns (drops tool_use/thinking)", () => {
+    const jsonl = [
+      line({ type: "user", message: { content: "build it" } }),
+      line({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "thinking", thinking: "hidden" },
+            { type: "text", text: "done" },
+            { type: "tool_use", name: "Bash", input: { command: "ls" } },
+          ],
+        },
+      }),
+    ].join("\n");
+    expect(extractTranscriptEntries(jsonl)).toEqual([
+      { role: "user", text: "build it" },
+      { role: "assistant", text: "done" },
+    ]);
+  });
+
+  it("stringifies structured user content and skips malformed/empty lines", () => {
+    const content = [{ type: "text", text: "hi" }];
+    const jsonl = [
+      "not json",
+      "",
+      line({ type: "user", message: {} }),
+      line({ type: "user", message: { content } }),
+    ].join("\n");
+    expect(extractTranscriptEntries(jsonl)).toEqual([
+      { role: "user", text: JSON.stringify(content) },
+    ]);
+  });
+});
 
 describe("parseClaudeTranscript", () => {
   it("flattens user (string) and assistant (text blocks) into a transcript", () => {

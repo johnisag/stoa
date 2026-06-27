@@ -21,6 +21,7 @@ import {
   Navigation,
   Brain,
   HeartPulse,
+  ScanSearch,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -55,6 +56,12 @@ const COCKPIT: Item[] = [
     icon: Search,
     title: "Code search",
     blurb: "Fast, syntax-highlighted codebase search (Cmd/Ctrl+K).",
+  },
+  {
+    icon: ScanSearch,
+    title: "Output search",
+    blurb:
+      "Search what your agents actually said across every session — find the one that hit a TypeError (Cmd/Ctrl+K → Output).",
   },
   {
     icon: FolderOpen,
