@@ -30,7 +30,13 @@ import { actionsForKind } from "./lib/notification-actions";
 import { sanitizeNotificationText } from "./lib/notification-text";
 import { captureSnapshot } from "./lib/snapshots";
 import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
-import { nextRateLimitAction, autoResumeEnabled } from "./lib/rate-limit";
+import {
+  nextRateLimitAction,
+  autoResumeEnabled,
+  RESUME_MAX_PER_DAY,
+  RESUME_FALLBACK_MS,
+} from "./lib/rate-limit";
+import { utcDay } from "./lib/utc-day";
 import {
   nextAutoAnswerAction,
   autoAnswerEnabled,
@@ -263,9 +269,17 @@ app.prepare().then(() => {
   // session is no longer rate-limited (next episode can resume again).
   const AUTO_RESUME_ENABLED = autoResumeEnabled();
   const rateLimitResumed = new Set<string>();
+  // When the limit was first seen this episode (per session) — anchors the
+  // opt-in no-reset fallback. Cleared when the limit clears.
+  const rateLimitParkedAt = new Map<string, number>();
+  // Per-session per-day resume budget: { day, count }. Reset when the UTC day
+  // rolls over; caps how many times we nudge a flapping limit in a day.
+  const rateLimitResumeDay = new Map<string, { day: string; count: number }>();
+  // Once-per-(session,day) log when the budget is spent, so we say it ONCE.
+  const rateLimitBudgetLogged = new Set<string>();
   if (AUTO_RESUME_ENABLED) {
     console.log(
-      "> Rate-limit auto-resume on (STOA_AUTO_RESUME=1): a session that hit a provider limit is nudged (queued prompt or Enter) once its reset time passes."
+      `> Rate-limit auto-resume on (STOA_AUTO_RESUME=1): a session that hit a provider limit is nudged (queued prompt or Enter) once its reset time passes — capped at ${RESUME_MAX_PER_DAY === 0 ? "unlimited" : `${RESUME_MAX_PER_DAY}/day`}, skipped while the session is actively working${RESUME_FALLBACK_MS > 0 ? `, with a ${Math.round(RESUME_FALLBACK_MS / 60000)}m fallback when no reset time is parsed` : ""}.`
     );
   }
   // Auto-steer: policy auto-answer (opt-in via STOA_AUTO_ANSWER=1; detection is
@@ -387,6 +401,9 @@ app.prepare().then(() => {
       if (lastSnapStatusById.size) lastSnapStatusById = new Map();
       if (queueDispatched.size) queueDispatched.clear();
       if (rateLimitResumed.size) rateLimitResumed.clear();
+      if (rateLimitParkedAt.size) rateLimitParkedAt.clear();
+      if (rateLimitResumeDay.size) rateLimitResumeDay.clear();
+      if (rateLimitBudgetLogged.size) rateLimitBudgetLogged.clear();
       if (autoAnswered.size) autoAnswered.clear();
       if (errorLoops.size) errorLoops.clear();
       if (stuckSessions.size) stuckSessions.clear();
@@ -464,6 +481,12 @@ app.prepare().then(() => {
         if (!liveIds.has(id)) queueDispatched.delete(id);
       for (const id of [...rateLimitResumed])
         if (!liveIds.has(id)) rateLimitResumed.delete(id);
+      for (const id of [...rateLimitParkedAt.keys()])
+        if (!liveIds.has(id)) rateLimitParkedAt.delete(id);
+      for (const id of [...rateLimitResumeDay.keys()])
+        if (!liveIds.has(id)) rateLimitResumeDay.delete(id);
+      for (const id of [...rateLimitBudgetLogged])
+        if (!liveIds.has(id)) rateLimitBudgetLogged.delete(id);
       // Prune the push-cooldown map every tick (NOT only while a push subscription
       // exists) so its `${id}-${kind}` keys can't outlive their sessions after the
       // last device unsubscribes.
@@ -518,9 +541,13 @@ app.prepare().then(() => {
       // detected state + reset time; we act only on "resume" (reset has passed)
       // and only once per episode. Clear the once-guard the moment a session is
       // no longer rate-limited so a later limit can resume again.
+      const rlNowMs = Date.now();
+      const resumeDay = utcDay(rlNowMs);
       for (const s of curr) {
         if (!s.rateLimit) {
           rateLimitResumed.delete(s.id);
+          rateLimitParkedAt.delete(s.id);
+          rateLimitBudgetLogged.delete(s.id);
           continue;
         }
         // A "rate limit exceeded" line can ALSO classify the session as `error`
@@ -528,28 +555,66 @@ app.prepare().then(() => {
         // a recoverable count-down-and-resume wait.
         if (s.status === "error" || s.status === "dead") {
           rateLimitResumed.delete(s.id);
+          rateLimitParkedAt.delete(s.id);
+          rateLimitBudgetLogged.delete(s.id);
           continue;
         }
+        // Anchor the no-reset fallback at the moment the limit was first seen.
+        if (!rateLimitParkedAt.has(s.id)) rateLimitParkedAt.set(s.id, rlNowMs);
         if (!AUTO_RESUME_ENABLED || rateLimitResumed.has(s.id)) continue;
+        // Per-day resume budget: roll the counter over when the UTC day changes.
+        let budget = rateLimitResumeDay.get(s.id);
+        if (!budget || budget.day !== resumeDay) {
+          budget = { day: resumeDay, count: 0 };
+          rateLimitResumeDay.set(s.id, budget);
+          rateLimitBudgetLogged.delete(s.id); // a fresh day may log again
+        }
         const action = nextRateLimitAction({
           detected: true,
           resetAtMs: s.rateLimit.resetAt,
-          nowMs: Date.now(),
+          nowMs: rlNowMs,
           // Never nudge a session that's showing a real prompt — the resume Enter /
           // queued task would answer the open dialog instead of re-triggering the
           // counted-down turn. Wait until the prompt clears.
           hasPrompt: !!s.prompt,
+          // Don't nudge a session that's actively working (a spinner) — it isn't
+          // idly parked at the limit, so injecting Enter would hit a live turn.
+          busy: s.status === "running",
+          parkedAtMs: rateLimitParkedAt.get(s.id) ?? null,
+          fallbackMs: RESUME_FALLBACK_MS,
+          resumesUsedToday: budget.count,
+          maxPerDay: RESUME_MAX_PER_DAY,
         });
-        if (action !== "resume") continue; // still counting down / prompt up / no reset
+        if (action !== "resume") {
+          // If the day's budget is what's holding us back — and not some other
+          // guard (busy / a real prompt), which would make "until tomorrow"
+          // misleading — say so ONCE.
+          if (
+            RESUME_MAX_PER_DAY > 0 &&
+            budget.count >= RESUME_MAX_PER_DAY &&
+            s.status !== "running" &&
+            !s.prompt &&
+            !rateLimitBudgetLogged.has(s.id)
+          ) {
+            rateLimitBudgetLogged.add(s.id);
+            console.log(
+              `rate-limit auto-resume: daily budget (${RESUME_MAX_PER_DAY}) spent for ${s.name} — holding until tomorrow.`
+            );
+          }
+          continue; // still counting down / prompt up / busy / budget spent / no reset
+        }
         // If the queue loop above already sent this session's queued prompt this
         // idle period, that IS the resume — don't also nudge (would double-send).
         if (queueDispatched.has(s.id)) {
           rateLimitResumed.add(s.id);
+          budget.count++; // the queue loop's delivered send counts against the cap
           continue;
         }
         // A queued prompt is the natural resume payload; otherwise nudge with a
         // bare Enter to re-trigger the agent's pending turn. Guard once-per-
-        // episode BEFORE the async send so a slow send can't double-fire.
+        // episode BEFORE the async send so a slow send can't double-fire; charge
+        // the daily budget only on a DELIVERED nudge (in .then), so a failed send
+        // that retries next tick doesn't burn a resume.
         rateLimitResumed.add(s.id);
         const queued = peekPrompt(s.id);
         const backend = getSessionBackend();
@@ -558,6 +623,7 @@ app.prepare().then(() => {
           : backend.sendEnter(s.name);
         void send
           .then(() => {
+            budget.count++;
             if (queued) dequeuePrompt(s.id);
           })
           .catch((err) => {

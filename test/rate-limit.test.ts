@@ -12,6 +12,10 @@ import {
   detectRateLimit,
   parseResetTime,
   nextRateLimitAction,
+  parseResumeMaxPerDay,
+  parseResumeFallbackMs,
+  RESUME_MAX_PER_DAY,
+  RESUME_FALLBACK_MS,
 } from "../lib/rate-limit";
 
 const NOW = Date.UTC(2026, 0, 1, 10, 0, 0); // fixed anchor for deterministic math
@@ -227,5 +231,127 @@ describe("nextRateLimitAction", () => {
         hasPrompt: false,
       })
     ).toBe("resume");
+  });
+
+  it("busy (actively working) → wait, even past reset (still-parked skip)", () => {
+    expect(
+      nextRateLimitAction({
+        detected: true,
+        resetAtMs: NOW - 1,
+        nowMs: NOW,
+        busy: true,
+      })
+    ).toBe("wait");
+    // Not busy → resumes (control).
+    expect(
+      nextRateLimitAction({
+        detected: true,
+        resetAtMs: NOW - 1,
+        nowMs: NOW,
+        busy: false,
+      })
+    ).toBe("resume");
+  });
+
+  it("daily budget spent → wait; under budget → resume", () => {
+    const base = {
+      detected: true,
+      resetAtMs: NOW - 1,
+      nowMs: NOW,
+      maxPerDay: 3,
+    };
+    expect(nextRateLimitAction({ ...base, resumesUsedToday: 3 })).toBe("wait");
+    expect(nextRateLimitAction({ ...base, resumesUsedToday: 4 })).toBe("wait");
+    expect(nextRateLimitAction({ ...base, resumesUsedToday: 2 })).toBe(
+      "resume"
+    );
+    // maxPerDay 0 = unlimited → never blocks on budget.
+    expect(
+      nextRateLimitAction({ ...base, maxPerDay: 0, resumesUsedToday: 999 })
+    ).toBe("resume");
+  });
+
+  it("fallback: no parsed reset → resumes only once parkedAt + fallbackMs has passed", () => {
+    const parkedAtMs = NOW - 10_000; // parked 10s ago
+    // 5-min fallback not yet elapsed → wait.
+    expect(
+      nextRateLimitAction({
+        detected: true,
+        resetAtMs: null,
+        nowMs: NOW,
+        parkedAtMs,
+        fallbackMs: 300_000,
+      })
+    ).toBe("wait");
+    // Parked long enough (parkedAt + fallback <= now) → resume.
+    expect(
+      nextRateLimitAction({
+        detected: true,
+        resetAtMs: null,
+        nowMs: NOW,
+        parkedAtMs: NOW - 300_000,
+        fallbackMs: 300_000,
+      })
+    ).toBe("resume");
+    // Fallback off (0) → never resume without a parsed reset (today's behavior).
+    expect(
+      nextRateLimitAction({
+        detected: true,
+        resetAtMs: null,
+        nowMs: NOW,
+        parkedAtMs: NOW - 999_999,
+        fallbackMs: 0,
+      })
+    ).toBe("wait");
+  });
+
+  it("a PARSED reset still wins over the fallback (fallback only fills the gap)", () => {
+    // resetAt in the future → wait, even though parkedAt+fallback already passed.
+    expect(
+      nextRateLimitAction({
+        detected: true,
+        resetAtMs: NOW + 60_000,
+        nowMs: NOW,
+        parkedAtMs: NOW - 999_999,
+        fallbackMs: 300_000,
+      })
+    ).toBe("wait");
+  });
+});
+
+describe("resume hardening env defaults", () => {
+  it("default daily cap is a generous 8, fallback is OFF (opt-in)", () => {
+    expect(RESUME_MAX_PER_DAY).toBe(8);
+    expect(RESUME_FALLBACK_MS).toBe(0);
+  });
+});
+
+describe("parseResumeMaxPerDay (fails SAFE toward the cap)", () => {
+  it("unset / empty / whitespace / garbage / negative → the safe default 8", () => {
+    for (const v of [undefined, "", "   ", "abc", "NaN", "-5", "1e999x"]) {
+      expect(parseResumeMaxPerDay(v)).toBe(8);
+    }
+  });
+
+  it("an EXPLICIT 0 is unlimited; a sub-1 positive floors to 1; an integer is kept", () => {
+    expect(parseResumeMaxPerDay("0")).toBe(0); // documented unlimited opt-out
+    expect(parseResumeMaxPerDay("0.5")).toBe(1); // NOT silently unlimited
+    expect(parseResumeMaxPerDay("0.001")).toBe(1);
+    expect(parseResumeMaxPerDay("12")).toBe(12);
+    expect(parseResumeMaxPerDay("3.9")).toBe(3); // floor
+  });
+});
+
+describe("parseResumeFallbackMs (junk only disables it)", () => {
+  it("unset / empty / garbage / negative → 0 (off)", () => {
+    for (const v of [undefined, "", "abc", "-1"]) {
+      expect(parseResumeFallbackMs(v)).toBe(0);
+    }
+  });
+
+  it("a positive value is kept (floored)", () => {
+    expect(parseResumeFallbackMs("300000")).toBe(300000);
+    expect(parseResumeFallbackMs("0")).toBe(0);
+    expect(parseResumeFallbackMs("1500.7")).toBe(1500);
   });
 });

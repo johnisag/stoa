@@ -102,8 +102,18 @@ typed, multi-provider, and cross-platform.
   sessions in _different_ dirs that alias the same checkout (a symlink, or a repo
   root vs a subdirectory) aren't grouped. The server passes the home dir + OS
   case-sensitivity so path equality matches `normalizePathForCompare`.
-- **Next:** #10 rate-limit budget hardening (Phase 1), then the MCP data-tool
-  unlock (#3 → #4 → #6 → #5).
+- **✅ #10 Rate-limit budget hardening — SHIPPED.** Makes the existing
+  `STOA_AUTO_RESUME` _safe_ (amux's lesson). On the 2.5s tick's resume branch:
+  a **per-session daily cap** (`STOA_AUTO_RESUME_MAX_PER_DAY`, default 8) so a
+  flapping limit can't be nudged endlessly overnight; a **still-parked skip** that
+  won't resume a session that's actively working (only one idly parked at the
+  limit); and an opt-in **no-reset fallback** (`STOA_AUTO_RESUME_FALLBACK_MS`) that
+  resumes a grace window after a limit with no parseable reset time. Pure decision
+  in `lib/rate-limit.ts` (`nextRateLimitAction`), budget consumed only on a
+  delivered nudge. **Phase 1 — "the fleet doesn't die" — complete (#1 · #2 · #9 ·
+  #10).**
+- **Next (Phase 2 — "agents share an OS"):** the MCP data-tool unlock — #3 agent
+  data tools FIRST, then #4 notes → #6 channels → #5 scheduler.
 
 ---
 

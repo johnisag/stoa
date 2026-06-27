@@ -13,6 +13,7 @@
  */
 
 import type { AgentType } from "../providers";
+import { utcDay } from "../utc-day";
 import type { SessionEventType } from "../db/types";
 import type {
   AnalyticsSnapshot,
@@ -87,10 +88,10 @@ function round(n: number, dp = 2): number {
   return Math.round(n * f) / f;
 }
 
-/** UTC calendar day (YYYY-MM-DD) for an epoch-ms instant. */
-export function utcDay(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
+// UTC calendar day helper now lives in the shared leaf module lib/utc-day.ts
+// (used internally above for the per-day buckets); re-exported here so existing
+// importers (`from "./engine"`) are unaffected.
+export { utcDay };
 
 // ── per-session derived facts (shared by several lenses) ─────────────────────
 
