@@ -16,12 +16,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  ChevronRight,
-  FolderPlus,
-  MoreHorizontal,
-  Trash2,
-} from "lucide-react";
+import { ChevronRight, FolderPlus, MoreHorizontal, Trash2 } from "lucide-react";
 import type { Session, Group } from "@/lib/db";
 import type { SessionStatus } from "./SessionList.types";
 
@@ -30,6 +25,8 @@ interface GroupSectionProps {
   sessions: Session[];
   activeSessionId?: string;
   sessionStatuses?: Record<string, SessionStatus>;
+  /** session id → # of sessions sharing its working dir (≥2 = clobber warning). */
+  conflictCounts?: Record<string, number>;
   summarizingSessionId: string | null;
   workersByConduct: Record<string, Session[]>;
   onToggleGroup: (path: string, expanded: boolean) => void;
@@ -47,6 +44,7 @@ export function GroupSection({
   sessions,
   activeSessionId,
   sessionStatuses,
+  conflictCounts,
   summarizingSessionId,
   workersByConduct,
   onToggleGroup,
@@ -222,6 +220,7 @@ export function GroupSection({
                           isSummarizing={summarizingSessionId === session.id}
                           tmuxStatus={sessionStatuses?.[session.id]?.status}
                           hasPrompt={sessionStatuses?.[session.id]?.hasPrompt}
+                          conflictCount={conflictCounts?.[session.id]}
                           groups={groups}
                           onSelect={onSelectSession}
                           onFork={onForkSession}

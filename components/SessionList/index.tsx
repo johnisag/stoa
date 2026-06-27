@@ -24,6 +24,7 @@ import {
   countNeedsAttention,
   nextAttentionSessionId,
 } from "@/lib/session-attention";
+import { detectSharedCheckouts } from "@/lib/worktree-conflict";
 
 // Data hooks
 import { useSessionsQuery } from "@/data/sessions";
@@ -100,6 +101,26 @@ export function SessionList({
 
   // Flatten all session IDs for bulk operations
   const allSessionIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
+
+  // Worktree-conflict map: session id → how many LIVE sessions share its working
+  // directory (≥2 = clobber risk). Computed once over the full list so a card in
+  // any project/group sees collisions across the whole fleet, not just its own.
+  // Only sessions with a live pty (status known and not "dead") count — a dead
+  // session can't clobber anything, so it must not false-flag a live co-occupant.
+  const conflictCounts = useMemo(
+    () =>
+      detectSharedCheckouts(sessions, {
+        isLive: (id) => {
+          const st = sessionStatuses?.[id]?.status;
+          return st != null && st !== "dead";
+        },
+        // The server knows the home dir + OS case-sensitivity; the browser
+        // doesn't. These let path equality match the server's normalizePathForCompare.
+        homeDir: sessionsData?.homeDir,
+        caseInsensitive: sessionsData?.isWindows,
+      }),
+    [sessions, sessionStatuses, sessionsData?.homeDir, sessionsData?.isWindows]
+  );
 
   // Separate workers from regular sessions
   const workersByConduct = useMemo(
@@ -217,6 +238,7 @@ export function SessionList({
               groups={groups}
               activeSessionId={activeSessionId}
               sessionStatuses={sessionStatuses}
+              conflictCounts={conflictCounts}
               summarizingSessionId={mutations.summarizingSessionId}
               devServers={devServers}
               onToggleProject={mutations.handleToggleProject}
@@ -253,6 +275,7 @@ export function SessionList({
                 sessions={sessions}
                 activeSessionId={activeSessionId}
                 sessionStatuses={sessionStatuses}
+                conflictCounts={conflictCounts}
                 summarizingSessionId={mutations.summarizingSessionId}
                 workersByConduct={workersByConduct}
                 onToggleGroup={mutations.handleToggleGroup}
