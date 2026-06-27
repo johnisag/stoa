@@ -7,9 +7,50 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useSessionCosts } from "@/hooks/useSessionCosts";
+import { useSessionCostHistory } from "@/hooks/useSessionCostHistory";
 
 // Only ever called with positive amounts (rows are filtered, total is gated).
 const fmt = (n: number) => (n > 0 && n < 0.01 ? "<$0.01" : `$${n.toFixed(2)}`);
+
+const HISTORY_DAYS = 14;
+
+/**
+ * Tiny dependency-free spend sparkline — one bar per UTC day, height ∝ that day's
+ * persisted fleet cost (#15). Durable history (survives session deletion), so it
+ * shows even days whose sessions are long gone. Hidden until there are ≥2 points
+ * with a non-zero total (a single bar isn't a trend).
+ */
+function SpendSparkline() {
+  const { data } = useSessionCostHistory(HISTORY_DAYS);
+  const fleet = data?.fleet ?? [];
+  const total = data?.totalUsd ?? 0;
+  const windowDays = data?.days ?? HISTORY_DAYS;
+  if (fleet.length < 2 || total <= 0) return null;
+  const max = Math.max(...fleet.map((p) => p.costUsd), 0);
+  return (
+    <div className="mt-1.5 border-t pt-1.5">
+      <div className="text-muted-foreground mb-1 flex justify-between text-[10px]">
+        <span>Last {windowDays}d spend</span>
+        <span className="tabular-nums">{fmt(total)}</span>
+      </div>
+      <div
+        className="flex h-6 items-end gap-px"
+        aria-label={`Spend over the last ${windowDays} days: ${fmt(total)} total (one bar per active day)`}
+      >
+        {fleet.map((p) => (
+          <div
+            key={p.day}
+            title={`${p.day}: ${fmt(p.costUsd)}`}
+            className="flex-1 rounded-sm bg-emerald-500/40"
+            style={{
+              height: `${max > 0 ? Math.max(8, (p.costUsd / max) * 100) : 8}%`,
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Fleet cost badge for the sidebar header: estimated total spend across sessions,
@@ -79,6 +120,7 @@ export function CostIndicator() {
             {hardUsd ? `$${hardUsd}` : "—"}
           </p>
         )}
+        <SpendSparkline />
         <p className="text-muted-foreground mt-0.5 text-[10px]">
           Rough estimate: transcript tokens × model price.
         </p>
