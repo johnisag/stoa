@@ -11,6 +11,7 @@ import {
   Sparkles,
   NotebookPen,
   LayoutGrid,
+  TerminalSquare,
 } from "lucide-react";
 import { FLEET_NAV, fleetNavEntry } from "@/components/nav/fleet-nav";
 
@@ -29,6 +30,7 @@ describe("FLEET_NAV", () => {
       "live-wall",
       "ask-stoa",
       "notes",
+      "commands",
       "notifications",
       "guide",
       "quick-switch",
@@ -45,6 +47,7 @@ describe("FLEET_NAV", () => {
     expect(icons["live-wall"]).toBe(LayoutGrid);
     expect(icons["ask-stoa"]).toBe(Sparkles);
     expect(icons.notes).toBe(NotebookPen);
+    expect(icons.commands).toBe(TerminalSquare);
     expect(icons.notifications).toBe(Bell);
     expect(icons.guide).toBe(Compass);
     expect(icons["quick-switch"]).toBe(Command);
@@ -68,6 +71,7 @@ describe("FLEET_NAV", () => {
     );
     expect(aria["ask-stoa"]).toBe("Ask Stoa (chat about your fleet)");
     expect(aria.notes).toBe("Notes (shared knowledge base)");
+    expect(aria.commands).toBe("Commands (author native slash commands)");
     expect(aria.notifications).toBe(
       "Notifications (sound, per-event toggles, push)"
     );
@@ -85,6 +89,7 @@ describe("FLEET_NAV", () => {
     expect(labels["live-wall"]).toBe("Live Wall");
     expect(labels["ask-stoa"]).toBe("Ask Stoa");
     expect(labels.notes).toBe("Notes");
+    expect(labels.commands).toBe("Commands");
     expect(labels.notifications).toBe("Notifications");
     expect(labels.guide).toBe("What Stoa can do");
     expect(labels["quick-switch"]).toBe("Quick switch");

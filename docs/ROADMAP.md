@@ -137,23 +137,23 @@ typed, multi-provider, and cross-platform.
 - **✅ #6 Inter-agent channels — SHIPPED.** Direct 1:1 messaging between sessions,
   the third data tool on the #3 seam. A `channel_messages` table (migration 41,
   order-independent `pair_key`) → `lib/channels.ts` service → `POST/GET/PATCH
-  /api/channels` → three auto-registering tools (`channel_send`, `channel_inbox`,
+/api/channels` → three auto-registering tools (`channel_send`, `channel_inbox`,
   `channel_history`). The PULL path is always on — an agent reads its inbox as data
   (consuming, so each poll returns only what's new). amux's "safe injection" is the
   opt-in PUSH (`STOA_AUTO_CHANNEL_DELIVER=1`, default-off, pure policy in
   `lib/channel-delivery.ts`): at a recipient's clean turn boundary (settled + no
   prompt — the SAME gate the prompt-queue uses) the server injects ONE unread
-  message with a directive "this is from another agent, reply with channel_send"
+  message with a directive "this is from another agent, reply with channel*send"
   wrapper, one in flight at a time, the body sanitized of control bytes before it
   becomes keystrokes. Sender is always the caller's own session (a baked id wins, so
-  it can't be spoofed); an unknown recipient is rejected. _No operator UI in v1
-  (agent-facing like #3); a read-only cross-talk viewer is a follow-up._
+  it can't be spoofed); an unknown recipient is rejected. \_No operator UI in v1
+  (agent-facing like #3); a read-only cross-talk viewer is a follow-up.*
 - **✅ #5 General-purpose scheduler — SHIPPED.** The last Phase-2 data tool: fire a
   prompt into a session on a cadence (the basis for "AI coding while you sleep" — a
   nightly run, a scheduled summary, a deferred follow-up). A `schedules` table
   (migration 42) → `lib/scheduler.ts` (reusing Stoa's own recurrence math in
   `lib/dispatch/recurrence.ts` — once / hourly / daily / weekly) → `GET/POST
-  /api/schedules` + `GET/PATCH/DELETE /api/schedules/[id]` → three auto-registering
+/api/schedules` + `GET/PATCH/DELETE /api/schedules/[id]` → three auto-registering
   tools (`schedule_create` defaulting to the caller's own session, `schedule_list`,
   `schedule_delete`). A synchronous server.ts tick fires due schedules by
   **enqueuing** the prompt into the target session's prompt queue — so it's
@@ -180,8 +180,26 @@ typed, multi-provider, and cross-platform.
   mini-preview uses), so on the legacy tmux backend the wall shows a "switch to
   the pty backend" notice instead of empty cells. _Deferred: per-cell quick
   actions._
-- **Next (Phase 3 cont.):** #8 per-provider skills · #11 all-provider fork · #15
-  token/cost persistence.
+- **✅ #8 Skills → native per-provider slash commands — SHIPPED.** Author a command
+  in the UI; Stoa writes a markdown file into the provider's NATIVE command dir
+  (Claude Code: `~/.claude/commands/<name>.md`, optional frontmatter + a prompt
+  body) so it becomes a real `/<name>` the provider's own TUI autocompletes — zero
+  custom dispatch, exactly amux's trick. "Do it better": a `commandsDir` descriptor
+  on `ProviderDefinition` ([lib/providers/registry.ts](../lib/providers/registry.ts))
+  maps each provider's convention rather than hardcoding Claude's — Claude is
+  verified + wired today; another provider is one descriptor away (no guessing —
+  the dir/format must be the provider's real one). [lib/skills.ts](../lib/skills.ts)
+  is the service (over `homeDir()`, cross-platform): strict command-NAME validation
+  (letters/digits/dash/underscore — no `.`/`/`/`\`, so no path traversal) + a
+  path-containment assertion, an escaped single-line YAML `description`, and the
+  body written verbatim. `GET/POST/DELETE /api/skills` + a **Commands dialog**
+  ([components/Commands/CommandsDialog.tsx](../components/Commands/CommandsDialog.tsx))
+  to author/list/delete, opened from a fleet-nav button + ⌘K. _Deferred: more
+  providers (as conventions are confirmed — a non-Claude file format also needs a
+  per-provider builder), command namespacing (subdirs), preserving hand-added
+  frontmatter keys beyond `description` on a Stoa re-save, and send-bar autocomplete
+  (the provider TUI already autocompletes `/`)._
+- **Next (Phase 3 cont.):** #11 all-provider fork · #15 token/cost persistence.
 
 ---
 

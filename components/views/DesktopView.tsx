@@ -66,6 +66,7 @@ export function DesktopView({
   onShowShortcuts,
   onShowGuide,
   onShowNotes,
+  onShowCommands,
   notificationSettings,
   permissionGranted,
   updateSettings,
@@ -144,6 +145,7 @@ export function DesktopView({
               onShowShortcuts={onShowShortcuts}
               onShowGuide={onShowGuide}
               onShowNotes={onShowNotes}
+              onShowCommands={onShowCommands}
             />
           </div>
         ) : (
@@ -387,6 +389,11 @@ export function DesktopView({
               variant="header"
               onClick={onShowNotes}
             />
+            <NavIconButton
+              entry={fleetNavEntry("commands")}
+              variant="header"
+              onClick={onShowCommands}
+            />
             {onShowGuide && (
               <NavIconButton
                 entry={fleetNavEntry("guide")}
@@ -450,6 +457,7 @@ export function DesktopView({
         onOpenInsight={onOpenAnalytics}
         onOpenAskStoa={onOpenAsk}
         onOpenNotes={onShowNotes}
+        onOpenCommands={onShowCommands}
         onOpenLiveWall={onOpenLiveWall}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {

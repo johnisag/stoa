@@ -42,6 +42,7 @@ export function MobileView({
   onShowShortcuts,
   onShowGuide,
   onShowNotes,
+  onShowCommands,
   attachToSession,
   openSessionInNewTab,
   handleNewSessionInProject,
@@ -137,6 +138,10 @@ export function MobileView({
               onShowNotes();
               setSidebarOpen(false);
             }}
+            onShowCommands={() => {
+              onShowCommands();
+              setSidebarOpen(false);
+            }}
           />
         </div>
       </SwipeSidebar>
@@ -187,6 +192,7 @@ export function MobileView({
         onOpenInsight={onOpenAnalytics}
         onOpenAskStoa={onOpenAsk}
         onOpenNotes={onShowNotes}
+        onOpenCommands={onShowCommands}
         onOpenLiveWall={onOpenLiveWall}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {

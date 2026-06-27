@@ -52,6 +52,19 @@ export interface ProviderDefinition {
   // (notably an older row that stored the previously-inert default).
   restoresModelOnResume?: boolean;
 
+  // Native custom slash-commands (#8 "skills"): the directory, relative to the
+  // user's home, where this provider reads markdown command files — one
+  // `<name>.md` per `/<name>`. Stoa writes/lists/deletes files there so a command
+  // authored in the UI becomes a real native command in the provider's own TUI
+  // (which already autocompletes them). UNSET = no native command convention
+  // wired for this provider yet. Only Claude Code's `~/.claude/commands/` is
+  // VERIFIED today; map another provider's convention here once confirmed (do not
+  // guess — the dir/format must be the provider's real one). NOTE: lib/skills.ts
+  // writes Claude's markdown+YAML-frontmatter FORMAT — wiring a provider with a
+  // different command-file format needs a per-provider builder there too, not just
+  // this dir descriptor.
+  commandsDir?: string; // e.g. ".claude/commands"
+
   // Initial prompt configuration
   // undefined = no support, '' = positional arg, string = flag (e.g., '--prompt')
   initialPromptFlag?: string;
@@ -84,6 +97,9 @@ export const PROVIDERS: ProviderDefinition[] = [
     restoresModelOnResume: true,
     initialPromptFlag: "", // Positional argument
     supportsOrchestration: true, // reads project .mcp.json on launch
+    // Claude Code reads ~/.claude/commands/<name>.md as native `/<name>` slash
+    // commands (optional YAML frontmatter + a markdown prompt body). Verified.
+    commandsDir: ".claude/commands",
   },
   {
     id: "codex",

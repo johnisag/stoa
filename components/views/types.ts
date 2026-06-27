@@ -52,6 +52,8 @@ export interface ViewProps {
   onShowGuide: () => void;
   /** Open the Notes / shared knowledge base dialog. */
   onShowNotes: () => void;
+  /** Open the Commands dialog (author native per-provider slash commands). */
+  onShowCommands: () => void;
 
   // Notification settings
   notificationSettings: NotificationSettings;

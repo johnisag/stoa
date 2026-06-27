@@ -28,6 +28,7 @@ import {
   MessagesSquare,
   CalendarClock,
   LayoutGrid,
+  TerminalSquare,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -123,6 +124,12 @@ const COCKPIT: Item[] = [
     title: "Scheduler",
     blurb:
       "Fire a prompt into a session on a cadence — a nightly test run, a scheduled summary, a deferred follow-up. Once or hourly/daily/weekly; created over MCP (and a plain /api/schedules route).",
+  },
+  {
+    icon: TerminalSquare,
+    title: "Commands",
+    blurb:
+      "Author a slash command in the UI — Stoa writes it to the agent's native command dir (~/.claude/commands/) so it becomes a real /name its terminal autocompletes. Claude today; more providers as their conventions are wired.",
   },
   {
     icon: LayoutGrid,

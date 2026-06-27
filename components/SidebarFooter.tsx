@@ -32,6 +32,8 @@ interface SidebarFooterProps {
   onShowChat?: () => void;
   /** Opens the Notes / shared knowledge base dialog. */
   onShowNotes?: () => void;
+  /** Opens the Commands dialog (author native slash commands). */
+  onShowCommands?: () => void;
 }
 
 export function SidebarFooter({
@@ -45,6 +47,7 @@ export function SidebarFooter({
   onShowNotifications,
   onShowChat,
   onShowNotes,
+  onShowCommands,
 }: SidebarFooterProps = {}) {
   // "Needs me" count for the Verdict Inbox / Fleet Board nav badges — a cheap 30s
   // background poll shared with the desktop header (same query key). Only run it
@@ -112,6 +115,13 @@ export function SidebarFooter({
               entry={fleetNavEntry("notes")}
               variant="footer"
               onClick={onShowNotes}
+            />
+          )}
+          {onShowCommands && (
+            <NavIconButton
+              entry={fleetNavEntry("commands")}
+              variant="footer"
+              onClick={onShowCommands}
             />
           )}
           {onShowNotifications && (
