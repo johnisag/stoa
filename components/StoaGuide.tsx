@@ -145,7 +145,7 @@ const FLEET: Item[] = [
     icon: Navigation,
     title: "Auto-steer",
     blurb:
-      "Resumes after a rate-limit, answers routine prompts, escalates risky ones, and can page you when a session is stuck in an error loop — enabled with server flags.",
+      "Resumes after a rate-limit (with a daily cap + a skip for sessions still working), answers routine prompts, escalates risky ones, and can page you when a session is stuck in an error loop — enabled with server flags.",
   },
   {
     icon: HeartPulse,
