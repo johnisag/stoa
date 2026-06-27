@@ -134,7 +134,21 @@ typed, multi-provider, and cross-platform.
     things to read"); pull-based like the memory (no terminal-inject surface).
     _Per-session namespacing + trash/restore are deferred follow-ups; v1 is
     fleet-shared + pinnable._
-- **Next (Phase 2 cont.):** #6 channels → #5 scheduler, each a new data tool on the
+- **✅ #6 Inter-agent channels — SHIPPED.** Direct 1:1 messaging between sessions,
+  the third data tool on the #3 seam. A `channel_messages` table (migration 41,
+  order-independent `pair_key`) → `lib/channels.ts` service → `POST/GET/PATCH
+  /api/channels` → three auto-registering tools (`channel_send`, `channel_inbox`,
+  `channel_history`). The PULL path is always on — an agent reads its inbox as data
+  (consuming, so each poll returns only what's new). amux's "safe injection" is the
+  opt-in PUSH (`STOA_AUTO_CHANNEL_DELIVER=1`, default-off, pure policy in
+  `lib/channel-delivery.ts`): at a recipient's clean turn boundary (settled + no
+  prompt — the SAME gate the prompt-queue uses) the server injects ONE unread
+  message with a directive "this is from another agent, reply with channel_send"
+  wrapper, one in flight at a time, the body sanitized of control bytes before it
+  becomes keystrokes. Sender is always the caller's own session (a baked id wins, so
+  it can't be spoofed); an unknown recipient is rejected. _No operator UI in v1
+  (agent-facing like #3); a read-only cross-talk viewer is a follow-up._
+- **Next (Phase 2 cont.):** #5 scheduler — the last data tool on the
   same MCP + `/api/*` seam.
 
 ---

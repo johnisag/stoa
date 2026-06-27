@@ -381,6 +381,69 @@ export const queries = {
   deleteNote: (db: Database.Database) =>
     getStmt(db, `DELETE FROM notes WHERE id = ?`),
 
+  // Inter-agent channels (append-only 1:1 messages between sessions)
+  createChannelMessage: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO channel_messages (id, pair_key, from_session_id, to_session_id, body)
+       VALUES (?, ?, ?, ?, ?)`
+    ),
+
+  getChannelMessage: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM channel_messages WHERE id = ?`),
+
+  // Unread inbox for a recipient, oldest first (the order to read/deliver in).
+  // rowid is the tiebreak: created_at has 1-second granularity, so same-second
+  // messages must fall back to insertion order (rowid), never the random UUID id.
+  listChannelInbox: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM channel_messages
+       WHERE to_session_id = ? AND read_at IS NULL
+       ORDER BY created_at ASC, rowid ASC LIMIT ?`
+    ),
+
+  // The single oldest unread message for a recipient (the opt-in delivery picks
+  // this — one message in flight at a time).
+  nextChannelInbox: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM channel_messages
+       WHERE to_session_id = ? AND read_at IS NULL
+       ORDER BY created_at ASC, rowid ASC LIMIT 1`
+    ),
+
+  // The full conversation between a pair (both directions), oldest first.
+  listChannelThread: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM channel_messages
+       WHERE pair_key = ? ORDER BY created_at ASC, rowid ASC LIMIT ?`
+    ),
+
+  // Consume on pull: mark one unread message read. Guards read_at IS NULL so a
+  // re-read can't move the timestamp.
+  markChannelRead: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE channel_messages SET read_at = datetime('now')
+       WHERE id = ? AND read_at IS NULL`
+    ),
+
+  // Opt-in push: record the terminal delivery and consume the message in one step.
+  // Idempotent AND loses to a pull: `read_at IS NULL` means a message already
+  // consumed via channel_inbox between the push's select and its paste won't be
+  // re-stamped as delivered (keeps the pulled/pushed state coherent); the
+  // delivered_at guard likewise stops a re-fire from re-stamping the push time.
+  markChannelDelivered: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE channel_messages
+       SET delivered_at = datetime('now'),
+           read_at = datetime('now')
+       WHERE id = ? AND delivered_at IS NULL AND read_at IS NULL`
+    ),
+
   // Dev servers
   createDevServer: (db: Database.Database) =>
     getStmt(

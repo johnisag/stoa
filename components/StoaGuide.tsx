@@ -25,6 +25,7 @@ import {
   TriangleAlert,
   BrainCircuit,
   NotebookPen,
+  MessagesSquare,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -108,6 +109,12 @@ const COCKPIT: Item[] = [
     title: "Notes",
     blurb:
       "A shared markdown knowledge base — handoffs, contracts, gotchas — that you edit in a dialog and your agents read/write over MCP (the same /api/notes endpoint).",
+  },
+  {
+    icon: MessagesSquare,
+    title: "Inter-agent channels",
+    blurb:
+      'Direct 1:1 messaging between agent sessions over MCP — a sibling worker can say "the column is named X". Pull by default; opt-in to push a message into the recipient\'s terminal at its next turn boundary.',
   },
   {
     icon: Workflow,

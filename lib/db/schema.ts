@@ -290,6 +290,29 @@ export function createSchema(db: Database.Database): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Inter-agent channels: persistent 1:1 messages between two sessions, an
+    -- append-only log read/written via the SAME /api/channels route the channel_*
+    -- MCP tools call. pair_key is the order-independent thread id (sorted
+    -- "a__b") so both directions group into one conversation. read_at is set when
+    -- the recipient consumes the message (a channel_inbox pull, or an opt-in
+    -- turn-boundary terminal delivery); delivered_at records that opt-in push
+    -- specifically. Distinct from agent_memory (key→value) / notes (docs): this is
+    -- directed, point-to-point coordination between sibling workers.
+    CREATE TABLE IF NOT EXISTS channel_messages (
+      id TEXT PRIMARY KEY,
+      pair_key TEXT NOT NULL,
+      from_session_id TEXT NOT NULL,
+      to_session_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      delivered_at TEXT,
+      read_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_messages_inbox
+      ON channel_messages (to_session_id, read_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_channel_messages_thread
+      ON channel_messages (pair_key, created_at);
+
     -- Saved visual-builder workflows (spec + canvas positions, as JSON)
     CREATE TABLE IF NOT EXISTS saved_workflows (
       id TEXT PRIMARY KEY,
