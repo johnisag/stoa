@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   enqueuePrompt,
+  enqueuePromptIdempotent,
+  SEEN_CLIENT_IDS_MAX,
   listQueue,
   peekPrompt,
   dequeuePrompt,
@@ -167,6 +169,61 @@ describe("prompt-queue", () => {
       enqueuePrompt("a", "one");
       enqueuePrompt("a", "two");
       expect(removeAt("a", 0)).toEqual(["two"]);
+    });
+  });
+
+  // Offline-replay idempotency (#12): a queued action replayed twice (its first POST
+  // landed but the response was lost) must enqueue ONCE.
+  describe("enqueuePromptIdempotent", () => {
+    it("with no clientId, appends on every call (same as enqueuePrompt)", () => {
+      enqueuePromptIdempotent("a", "x");
+      enqueuePromptIdempotent("a", "x");
+      expect(listQueue("a")).toEqual(["x", "x"]);
+    });
+
+    // NB: the seen-id set is process-global and not reset between tests, so each
+    // test below uses its OWN clientIds (a real replay reuses an id by design).
+    it("a duplicate clientId is a no-op (returns the queue unchanged)", () => {
+      const first = enqueuePromptIdempotent("a", "hello", "cid-dup");
+      expect(first).toEqual(["hello"]);
+      const second = enqueuePromptIdempotent("a", "hello", "cid-dup"); // replay
+      expect(second).toEqual(["hello"]); // not ["hello","hello"]
+      expect(listQueue("a")).toEqual(["hello"]);
+    });
+
+    it("distinct clientIds each enqueue (two genuine sends, even same text)", () => {
+      enqueuePromptIdempotent("a", "same", "cid-sendA");
+      enqueuePromptIdempotent("a", "same", "cid-sendB");
+      expect(listQueue("a")).toEqual(["same", "same"]);
+    });
+
+    it("dedupe is scoped PER SESSION — the same id in a different session still enqueues", () => {
+      enqueuePromptIdempotent("a", "x", "cid-shared");
+      // Same id, DIFFERENT session → a distinct (session,id) key → enqueues.
+      enqueuePromptIdempotent("b", "x", "cid-shared");
+      expect(listQueue("a")).toEqual(["x"]);
+      expect(listQueue("b")).toEqual(["x"]);
+      // But a replay within the SAME session is still a no-op.
+      enqueuePromptIdempotent("a", "x", "cid-shared");
+      expect(listQueue("a")).toEqual(["x"]);
+    });
+
+    it("ages ids out FIFO past the cap — a long-evicted id can enqueue again", () => {
+      // Fill the ring with > cap distinct ids, then replay the very first: it was
+      // evicted, so it appends again (the dedupe window is bounded by design).
+      const firstId = "evict-0";
+      enqueuePromptIdempotent("a", "first", firstId);
+      for (let i = 1; i <= SEEN_CLIENT_IDS_MAX; i++) {
+        enqueuePromptIdempotent("a", "x", `evict-${i}`);
+      }
+      const before = listQueue("a").length;
+      enqueuePromptIdempotent("a", "first-again", firstId); // evicted → enqueues
+      expect(listQueue("a").length).toBe(before + 1);
+      // A still-recent id remains deduped.
+      const recent = `evict-${SEEN_CLIENT_IDS_MAX}`;
+      const len = listQueue("a").length;
+      enqueuePromptIdempotent("a", "dupe", recent);
+      expect(listQueue("a").length).toBe(len); // no-op
     });
   });
 });

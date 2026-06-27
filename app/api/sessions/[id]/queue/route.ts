@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import {
-  enqueuePrompt,
+  enqueuePromptIdempotent,
   listQueue,
   clearQueue,
   removeAt,
@@ -26,7 +26,8 @@ export async function GET(
 }
 
 // POST /api/sessions/[id]/queue — queue a prompt to dispatch when the agent next
-// goes idle. Body: { text }.
+// goes idle. Body: { text, clientId? }. `clientId` (the offline-queue action id, #12)
+// makes the enqueue idempotent: a replayed POST carrying the same id enqueues once.
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -35,14 +36,20 @@ export async function POST(
   if (!requireSession(id)) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
-  const { text } = await request.json().catch(() => ({}));
+  const { text, clientId } = await request.json().catch(() => ({}));
   if (typeof text !== "string" || !text.trim()) {
     return NextResponse.json({ error: "Empty prompt" }, { status: 400 });
   }
   if (text.length > 100_000) {
     return NextResponse.json({ error: "Prompt too long" }, { status: 413 });
   }
-  return NextResponse.json({ queue: enqueuePrompt(id, text) });
+  // A client id only needs to be a UUID; bound its length so a caller can't bloat
+  // the in-memory seen-set with oversized keys. Over-long → ignore (no idempotency).
+  const id_ =
+    typeof clientId === "string" && clientId && clientId.length <= 200
+      ? clientId
+      : undefined;
+  return NextResponse.json({ queue: enqueuePromptIdempotent(id, text, id_) });
 }
 
 // PATCH /api/sessions/[id]/queue — reorder or drop a single queued prompt.

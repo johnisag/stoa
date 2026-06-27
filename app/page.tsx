@@ -28,6 +28,7 @@ import { Pane } from "@/components/Pane";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useViewport } from "@/hooks/useViewport";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
+import { useOfflineQueueDrain } from "@/hooks/useOfflineQueue";
 import { useSessions } from "@/hooks/useSessions";
 import { useProjects } from "@/hooks/useProjects";
 import { useDevServersManager } from "@/hooks/useDevServersManager";
@@ -277,6 +278,10 @@ function HomeContent() {
 
   // Set CSS variable for viewport height (handles mobile keyboard)
   useViewportHeight();
+
+  // Replay any actions queued while offline (e.g. a prompt sent in a dead spot)
+  // when connectivity returns — #12, mounted once here at the app root.
+  useOfflineQueueDrain();
 
   // Terminal ref management
   const registerTerminalRef = useCallback(
