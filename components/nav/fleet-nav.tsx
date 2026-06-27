@@ -10,6 +10,7 @@ import {
   Command,
   Sparkles,
   NotebookPen,
+  LayoutGrid,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,8 +21,9 @@ import {
 
 /**
  * Single source of truth for the fleet's icon-button destinations (Insight,
- * Dispatch, Workflows, Verdict Inbox, Fleet Board, Notifications, Guide, Quick
- * switch). Both the desktop header (`DesktopView`) and the sidebar footer
+ * Dispatch, Workflows, Verdict Inbox, Fleet Board, Live Wall, Ask Stoa, Notes,
+ * Notifications, Guide, Quick switch). Both the desktop header (`DesktopView`)
+ * and the sidebar footer
  * (`SidebarFooter`) render their nav from this descriptor so the two surfaces
  * can't silently drift apart again.
  *
@@ -72,6 +74,12 @@ export const FLEET_NAV: readonly FleetNavEntry[] = [
     label: "Fleet Board",
     icon: Columns3,
     ariaLabel: "Fleet Board (the fleet by lifecycle stage)",
+  },
+  {
+    id: "live-wall",
+    label: "Live Wall",
+    icon: LayoutGrid,
+    ariaLabel: "Live Wall (read-only grid of agent terminals)",
   },
   {
     id: "ask-stoa",

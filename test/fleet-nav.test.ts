@@ -10,6 +10,7 @@ import {
   Command,
   Sparkles,
   NotebookPen,
+  LayoutGrid,
 } from "lucide-react";
 import { FLEET_NAV, fleetNavEntry } from "@/components/nav/fleet-nav";
 
@@ -25,6 +26,7 @@ describe("FLEET_NAV", () => {
       "workflows",
       "verdict-inbox",
       "fleet-board",
+      "live-wall",
       "ask-stoa",
       "notes",
       "notifications",
@@ -40,6 +42,7 @@ describe("FLEET_NAV", () => {
     expect(icons.workflows).toBe(Workflow);
     expect(icons["verdict-inbox"]).toBe(Inbox);
     expect(icons["fleet-board"]).toBe(Columns3);
+    expect(icons["live-wall"]).toBe(LayoutGrid);
     expect(icons["ask-stoa"]).toBe(Sparkles);
     expect(icons.notes).toBe(NotebookPen);
     expect(icons.notifications).toBe(Bell);
@@ -60,6 +63,9 @@ describe("FLEET_NAV", () => {
     expect(aria["fleet-board"]).toBe(
       "Fleet Board (the fleet by lifecycle stage)"
     );
+    expect(aria["live-wall"]).toBe(
+      "Live Wall (read-only grid of agent terminals)"
+    );
     expect(aria["ask-stoa"]).toBe("Ask Stoa (chat about your fleet)");
     expect(aria.notes).toBe("Notes (shared knowledge base)");
     expect(aria.notifications).toBe(
@@ -76,6 +82,7 @@ describe("FLEET_NAV", () => {
     expect(labels.workflows).toBe("Workflows");
     expect(labels["verdict-inbox"]).toBe("Verdict Inbox");
     expect(labels["fleet-board"]).toBe("Fleet Board");
+    expect(labels["live-wall"]).toBe("Live Wall");
     expect(labels["ask-stoa"]).toBe("Ask Stoa");
     expect(labels.notes).toBe("Notes");
     expect(labels.notifications).toBe("Notifications");
