@@ -121,6 +121,25 @@ export interface ChannelMessageRow {
   read_at: string | null;
 }
 
+/**
+ * A persisted token/cost sample (#15). One row per (session_key, day) holding the
+ * session's cumulative usage as last sampled that UTC day. `cost_usd` is null when
+ * the model is unpriced. Written best-effort (cost badge / opt-in sampler tick).
+ */
+export interface SessionCostRow {
+  session_key: string;
+  day: string;
+  session_id: string;
+  agent_type: string;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number | null;
+  updated_at: string;
+}
+
 export interface ProjectDevServer {
   id: string;
   project_id: string;

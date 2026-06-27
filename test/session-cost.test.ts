@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseClaudeUsage,
   parseClaudeContextTokens,
+  costReaderFor,
 } from "../lib/session-cost";
 
 // A few JSONL lines like Claude Code writes: user turns (no usage) + assistant
@@ -82,5 +83,19 @@ describe("parseClaudeContextTokens", () => {
         JSON.stringify({ type: "user", message: { content: "hi" } })
       )
     ).toBe(0);
+  });
+});
+
+describe("costReaderFor (provider seam)", () => {
+  it("has a usage reader for Claude (the only parseable transcript today)", () => {
+    expect(typeof costReaderFor("claude")).toBe("function");
+  });
+
+  it("returns undefined for agents without a reader and for unknown ids", () => {
+    // These report supported:false in the cost UI — adding one is registering a
+    // reader, not a special-case in computeSessionCosts.
+    for (const a of ["codex", "hermes", "kilo", "kimi", "shell", "nope"]) {
+      expect(costReaderFor(a)).toBeUndefined();
+    }
   });
 });

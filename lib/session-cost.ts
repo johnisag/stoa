@@ -1,6 +1,7 @@
 import { ZERO_USAGE, computeCostUsd, type TokenUsage } from "./pricing";
 import { readClaudeTranscriptRaw } from "./claude-transcript";
 import type { Session } from "./db";
+import type { AgentType } from "./providers";
 
 export interface SessionCost {
   name: string;
@@ -114,6 +115,31 @@ export async function readClaudeSessionUsage(
   };
 }
 
+/** Reads a provider's on-disk transcript and returns cumulative token usage +
+ *  the live context-window occupancy, or null when it can't be read. */
+export type UsageReader = (
+  cwd: string,
+  sessionId: string
+) => Promise<{ tokens: TokenUsage; contextTokens: number } | null>;
+
+/**
+ * Per-provider transcript usage readers — the single seam for "which agents have
+ * a cost estimate". A provider with an entry here gets token tracking, the cost
+ * UI, AND persistence (#15) automatically; one without is reported supported:false
+ * (shown "—"). Claude is the only agent today that writes a parseable per-turn
+ * usage transcript (the JSONL Stoa already reads for /summarize); Codex / Hermes /
+ * Kilo / Kimi expose no comparable stream yet, so they're a reader away — register
+ * one here and the whole cost surface lights up for it. See docs/ROADMAP.md.
+ */
+const USAGE_READERS: Partial<Record<AgentType, UsageReader>> = {
+  claude: (cwd, sessionId) => readClaudeSessionUsage(cwd, sessionId),
+};
+
+/** The usage reader for a provider, or undefined when its cost isn't trackable. */
+export function costReaderFor(agentType: string): UsageReader | undefined {
+  return USAGE_READERS[agentType as AgentType];
+}
+
 /**
  * Estimated cost for every session, keyed by id (Claude-only; others
  * supported:false). Reads transcripts with BOUNDED concurrency (a large window
@@ -128,11 +154,10 @@ export async function computeSessionCosts(
 ): Promise<Record<string, SessionCost>> {
   const mapOne = async (s: Session): Promise<[string, SessionCost]> => {
     const base = { name: s.name, model: s.model };
-    if (
-      s.agent_type !== "claude" ||
-      !s.claude_session_id ||
-      !s.working_directory
-    ) {
+    const reader = costReaderFor(s.agent_type);
+    // `claude_session_id` is the stored transcript id (banner-capture providers
+    // reuse the column); a provider needs a reader AND a located transcript + cwd.
+    if (!reader || !s.claude_session_id || !s.working_directory) {
       return [
         s.id,
         {
@@ -144,10 +169,7 @@ export async function computeSessionCosts(
         },
       ];
     }
-    const usage = await readClaudeSessionUsage(
-      s.working_directory,
-      s.claude_session_id
-    );
+    const usage = await reader(s.working_directory, s.claude_session_id);
     const tokens = usage?.tokens ?? ZERO_USAGE;
     return [
       s.id,

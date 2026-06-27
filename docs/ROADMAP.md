@@ -215,7 +215,29 @@ typed, multi-provider, and cross-platform.
   for a native fork — so a non-Claude fork can never resume the parent's session or
   emit an invalid `--fork-session`. _Deferred: Codex's native `codex fork`
   subcommand once its session-id capture is wired._
-- **Next (Phase 3 cont.):** #15 token/cost persistence.
+- **✅ #15 Token/cost persistence — SHIPPED.** Cost was recomputed from the live
+  Claude transcript on every request, so there was no history and a sample died when
+  its session was deleted or its transcript scrolled off. Now a daily sample per
+  session is persisted into the `session_costs` table (migration 43, one row per
+  `(session_key, UTC day)` holding the session's cumulative usage, upserted
+  idempotently, bounded by a retention prune). Pure mappers/aggregation in
+  [lib/cost-history.ts](../lib/cost-history.ts) (`costSamplesFromComputed`,
+  `aggregateFleetHistory`, `shouldSampleCost`) + thin DB wrappers; a new
+  `GET /api/sessions/cost/history` serves the fleet spend curve, surfaced as a
+  durable sparkline in the cost badge. The curve is a true **per-day spend** —
+  `aggregateFleetHistory` takes each session's day-over-day delta of the cumulative
+  samples and sums across sessions, so the total telescopes to real spend rather
+  than double-counting (a session first seen mid-window books its prior accrual on
+  its first in-window day). Persistence is a best-effort side effect of the existing
+  cost GET (idempotent per day); an **opt-in** `STOA_AUTO_COST_SAMPLE=1` tick keeps
+  it accruing unattended. The "which agents have a cost estimate" check is now a
+  per-provider **usage-reader registry** (`costReaderFor`) instead of a
+  `=== "claude"` hardcode — Claude is the only reader today, and adding Codex /
+  Hermes / Kilo / Kimi is registering a reader (the whole cost surface + persistence
+  then lights up for it). _Deferred: the non-Claude transcript readers themselves;
+  feeding the persisted history into the Insights/analytics trend lenses._
+- **Backlog (Phase 4):** #12 offline/background-sync · #13 native mobile shells ·
+  #14 DX polish.
 
 ---
 

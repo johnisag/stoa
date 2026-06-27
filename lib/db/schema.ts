@@ -338,6 +338,30 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_schedules_due
       ON schedules (enabled, next_run_at);
 
+    -- Persisted token/cost samples (#15): cost was recomputed from the live
+    -- transcript per request, so analytics had no history and a sample died with
+    -- the session (deletion / transcript scroll-off). One row per (session_key,
+    -- day) = the session's cumulative usage as last sampled that UTC day, upserted
+    -- idempotently. session_key matches session_events.session_key (tmux_name ||
+    -- name). Best-effort: written when costs are computed (cost badge / opt-in
+    -- STOA_AUTO_COST_SAMPLE tick), never on a hot path.
+    CREATE TABLE IF NOT EXISTS session_costs (
+      session_key TEXT NOT NULL,
+      day TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      agent_type TEXT NOT NULL DEFAULT '',
+      model TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (session_key, day)
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_costs_day
+      ON session_costs (day);
+
     -- Saved visual-builder workflows (spec + canvas positions, as JSON)
     CREATE TABLE IF NOT EXISTS saved_workflows (
       id TEXT PRIMARY KEY,

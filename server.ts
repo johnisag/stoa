@@ -74,6 +74,12 @@ import {
 } from "./lib/channel-delivery";
 import { nextUnreadMessage, markDelivered } from "./lib/channels";
 import { computeSessionCosts } from "./lib/session-cost";
+import {
+  costSampleEnabled,
+  persistCostSamples,
+  shouldSampleCost,
+  COST_SAMPLE_INTERVAL_MS,
+} from "./lib/cost-history";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import { evictStale as evictStaleWarmPool } from "./lib/dispatch/warm-pool";
 import {
@@ -345,6 +351,20 @@ app.prepare().then(() => {
   if (SNAPSHOTS_ENABLED) {
     console.log(
       "> Per-turn snapshots on (STOA_SNAPSHOTS=1): the status ticker runs continuously and writes refs/stoa/snap/* at each turn boundary."
+    );
+  }
+  // Background cost sampling (opt-in via STOA_AUTO_COST_SAMPLE=1). History also
+  // accrues passively whenever the cost badge is open (that GET persists); this
+  // tick keeps it accruing for unattended/overnight runs. Read-only w.r.t. the
+  // fleet (computes cost + writes the session_costs table — never touches a
+  // session), so it's safe to leave on; it's opt-in only to keep default DB
+  // writes unchanged. `costSampleBusy` guards the slow transcript reads.
+  const COST_SAMPLE_ENABLED = costSampleEnabled();
+  let costSampleBusy = false;
+  let lastCostSampleMs: number | null = null;
+  if (COST_SAMPLE_ENABLED) {
+    console.log(
+      `> Cost sampling on (STOA_AUTO_COST_SAMPLE=1): the persisted spend history (session_costs) is refreshed every ${Math.round(COST_SAMPLE_INTERVAL_MS / 60000)}m so it keeps accruing even when no one's watching the cost badge.`
     );
   }
   const shouldPush = (ev: PushEvent): boolean => {
@@ -971,6 +991,37 @@ app.prepare().then(() => {
     }
   }, 30000);
   schedulerTimer.unref?.();
+
+  // ── cost sampler (opt-in: persist the spend history unattended) ──
+  // Off unless STOA_AUTO_COST_SAMPLE=1. Computes per-session cost (bounded
+  // transcript reads) and upserts today's samples into session_costs — idempotent
+  // per (session, UTC day), so a missed or extra tick can't double-count. The
+  // busy guard skips a tick whose predecessor's reads are still running; the
+  // shouldSampleCost gate makes the cadence interval-driven (not the raw timer
+  // period) so it survives a future timer-period change.
+  if (COST_SAMPLE_ENABLED) {
+    const costSampleTimer = setInterval(async () => {
+      if (costSampleBusy) return;
+      const now = Date.now();
+      if (!shouldSampleCost(now, lastCostSampleMs)) return;
+      costSampleBusy = true;
+      // Advance the cadence clock up front so a PERSISTENT failure backs off to the
+      // sample interval instead of retrying (and re-reading transcripts) every 60s.
+      lastCostSampleMs = now;
+      try {
+        const sessions = queries.getAllSessions(getDb()).all() as Session[];
+        const costs = await computeSessionCosts(sessions);
+        const written = persistCostSamples(getDb(), sessions, costs, now);
+        if (written > 0)
+          console.log(`cost sampler: persisted ${written} sample(s)`);
+      } catch (err) {
+        console.error("cost sampler tick failed:", err);
+      } finally {
+        costSampleBusy = false;
+      }
+    }, 60000);
+    costSampleTimer.unref?.();
+  }
 
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
   function handleTmuxConnection(ws: WebSocket) {

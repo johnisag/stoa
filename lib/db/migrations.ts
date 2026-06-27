@@ -1050,6 +1050,39 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 43,
+    name: "add_session_costs_table",
+    up: (db) => {
+      // Persisted token/cost samples (#15). Cost was recomputed from the live
+      // transcript on every request — so analytics had no HISTORY and a sample
+      // vanished when the session was deleted or its transcript scrolled off.
+      // One row per (session_key, day): the session's cumulative usage as last
+      // sampled that UTC day, upserted idempotently. Survives transcript loss.
+      if (!hasTable(db, "session_costs")) {
+        db.exec(`
+          CREATE TABLE session_costs (
+            session_key TEXT NOT NULL,
+            day TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            agent_type TEXT NOT NULL DEFAULT '',
+            model TEXT,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (session_key, day)
+          )
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_session_costs_day
+             ON session_costs (day)`
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
