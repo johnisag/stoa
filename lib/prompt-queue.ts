@@ -16,6 +16,46 @@ export function enqueuePrompt(sessionId: string, text: string): string[] {
   return [...q];
 }
 
+// Idempotency for the offline-replay path (#12). A prompt queued offline carries a
+// client-generated id; if the replay POST is delivered twice (the first succeeded
+// but its response was lost, so the client retries on the next reconnect) we must
+// enqueue it ONCE. Bounded insertion-ordered ring of recently-seen keys — a replay
+// with a known key is a no-op. The cap keeps the set from growing unbounded; keys
+// age out FIFO, which is safe because a stale replay older than the window is long
+// gone. The key is SCOPED PER SESSION (`sessionId\0clientId`) so one session's
+// id can never suppress a different session's enqueue.
+export const SEEN_CLIENT_IDS_MAX = 1000;
+const seenClientKeys = new Set<string>();
+
+/** Record a per-session client key; returns true if it's NEW (caller should
+ *  enqueue), false if it's a duplicate replay. Evicts the oldest once over cap. */
+function markClientKeySeen(key: string): boolean {
+  if (seenClientKeys.has(key)) return false;
+  seenClientKeys.add(key);
+  if (seenClientKeys.size > SEEN_CLIENT_IDS_MAX) {
+    const oldest = seenClientKeys.values().next().value;
+    if (oldest !== undefined) seenClientKeys.delete(oldest);
+  }
+  return true;
+}
+
+/**
+ * Enqueue a prompt with optional replay-idempotency. With a `clientId`, a second
+ * call carrying the same (session, id) is a no-op (returns the current queue
+ * unchanged) so an offline action replayed twice never double-sends. Without a
+ * `clientId` it behaves exactly like enqueuePrompt (every call appends).
+ */
+export function enqueuePromptIdempotent(
+  sessionId: string,
+  text: string,
+  clientId?: string
+): string[] {
+  if (clientId && !markClientKeySeen(`${sessionId}\u0000${clientId}`)) {
+    return listQueue(sessionId);
+  }
+  return enqueuePrompt(sessionId, text);
+}
+
 /** The session's queued prompts (a copy), in dispatch order. */
 export function listQueue(sessionId: string): string[] {
   return [...(queues.get(sessionId) ?? [])];

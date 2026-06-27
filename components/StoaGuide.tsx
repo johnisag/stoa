@@ -31,6 +31,7 @@ import {
   TerminalSquare,
   Split,
   LineChart,
+  WifiOff,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -60,6 +61,12 @@ const COCKPIT: Item[] = [
     icon: Mic,
     title: "Voice-to-text",
     blurb: "Dictate prompts to a session hands-free.",
+  },
+  {
+    icon: WifiOff,
+    title: "Offline queue",
+    blurb:
+      "Queue a prompt to a session even with no signal — it's stashed on-device and replayed the moment you reconnect, de-duplicated on replay so a flaky reconnect doesn't double-send. Phones drop connections; your send doesn't get lost.",
   },
   {
     icon: Search,
