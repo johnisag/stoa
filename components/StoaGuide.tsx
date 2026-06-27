@@ -29,6 +29,7 @@ import {
   CalendarClock,
   LayoutGrid,
   TerminalSquare,
+  Split,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -124,6 +125,12 @@ const COCKPIT: Item[] = [
     title: "Scheduler",
     blurb:
       "Fire a prompt into a session on a cadence — a nightly test run, a scheduled summary, a deferred follow-up. Once or hourly/daily/weekly; created over MCP (and a plain /api/schedules route).",
+  },
+  {
+    icon: Split,
+    title: "Fork conversation",
+    blurb:
+      "Branch any agent's session into a new one. Claude forks natively (the full branched conversation); every other agent forks by seeding a fresh session with the parent's recent scrollback.",
   },
   {
     icon: TerminalSquare,

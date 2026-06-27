@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session, type Message } from "@/lib/db";
-import { sessionKey } from "@/lib/providers/registry";
+import { sessionKey, backendKeyForSession } from "@/lib/providers/registry";
 import { parseJsonBody, sanitizeSessionName } from "@/lib/api-security";
+import {
+  forkModeForProvider,
+  buildForkSeed,
+  FORK_SCROLLBACK_LINES,
+} from "@/lib/fork";
+import { getSessionBackend } from "@/lib/session-backend";
+import { enqueuePrompt } from "@/lib/prompt-queue";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -63,9 +70,33 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
 
     // NOTE: We do NOT copy claude_session_id here.
-    // When the forked session is first attached, it will use --fork-session flag
-    // with the parent's claude_session_id to create a new branched conversation.
-    // The new session ID will be captured automatically.
+    // NATIVE fork (Claude): when the forked session is first attached, buildAgentArgs
+    // uses --resume <parent claude_session_id> --fork-session to branch the
+    // conversation; the new id is captured automatically.
+    // SCROLLBACK fork (Codex/Hermes/Kilo/Kimi — no fork primitive): the new session
+    // launches FRESH, so seed it with the parent's recent rendered scrollback as a
+    // "continue from here" prompt. Capture it NOW while the parent is live, then
+    // enqueue the seed; the existing status ticker delivers it at the fork's first
+    // idle turn (the same safe path the scheduler/queue use). A dead/empty parent
+    // (capture fails or returns nothing) degrades to a plain fresh session.
+    const forkMode = forkModeForProvider(agentType);
+    let seeded = false;
+    if (forkMode === "scrollback") {
+      try {
+        const scrollback = await getSessionBackend().capture(
+          backendKeyForSession(parent),
+          { lines: FORK_SCROLLBACK_LINES }
+        );
+        const seed = buildForkSeed(scrollback, parent.name);
+        if (seed) {
+          enqueuePrompt(newId, seed);
+          seeded = true;
+        }
+      } catch (err) {
+        // Parent not live / capture unsupported — fork without a seed.
+        console.warn("fork: scrollback capture failed, no seed:", err);
+      }
+    }
 
     // Copy any local messages from parent (for logging purposes)
     const parentMessages = queries
@@ -83,6 +114,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       {
         session,
         messagesCopied: parentMessages.length,
+        forkMode,
+        seeded,
       },
       { status: 201 }
     );

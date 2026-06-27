@@ -15,7 +15,6 @@ import {
   MoreHorizontal,
   FolderInput,
   Trash2,
-  Copy,
   ClipboardCopy,
   Pencil,
   Sparkles,
@@ -339,9 +338,13 @@ function SessionCardComponent({
             Rename
           </MenuItem>
         )}
-        {onFork && session.agent_type === "claude" && (
+        {/* Fork is available for every agent (not just Claude): Claude forks
+            natively (a branched conversation); other providers fork by seeding a
+            fresh session with the parent's recent scrollback. The plain shell has
+            no conversation to fork. */}
+        {onFork && session.agent_type !== "shell" && (
           <MenuItem onClick={() => onFork(session.id)}>
-            <Copy className="mr-2 h-3 w-3" />
+            <GitFork className="mr-2 h-3 w-3" />
             Fork session
           </MenuItem>
         )}

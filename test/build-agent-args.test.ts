@@ -79,11 +79,11 @@ describe("buildAgentArgs", () => {
     // best-effort: a falsy/empty id must not append --resume (mustn't break spawn)
     expect(buildAgentArgs("hermes", { sessionId: "" }).args).toEqual([]);
     expect(buildAgentArgs("hermes", { sessionId: null }).args).toEqual([]);
-    // Hermes has no --fork-session: a parentSessionId resumes but never forks
-    expect(buildAgentArgs("hermes", { parentSessionId: sid }).args).toEqual([
-      "--resume",
-      sid,
-    ]);
+    // Hermes has no native fork: a parentSessionId is IGNORED here (the fork
+    // branch is gated on supportsFork). Forking a non-fork provider is a fresh
+    // launch seeded with the parent's scrollback (#11) — never a --resume of the
+    // PARENT's id, which would hijack the parent's live session instead of branch.
+    expect(buildAgentArgs("hermes", { parentSessionId: sid }).args).toEqual([]);
   });
 
   it("kilo: fresh launch emits --model <free-text>", () => {
