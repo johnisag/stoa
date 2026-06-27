@@ -969,6 +969,26 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 40,
+    name: "add_notes_table",
+    up: (db) => {
+      // Notes / shared knowledge base: persistent markdown docs readable/writable
+      // by humans (the /api/notes route + a dialog) and agents (notes_* MCP tools).
+      if (!hasTable(db, "notes")) {
+        db.exec(`
+          CREATE TABLE notes (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL DEFAULT '',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

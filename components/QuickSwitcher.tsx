@@ -22,6 +22,7 @@ import {
   BarChart3,
   Plus,
   Sparkles,
+  NotebookPen,
 } from "lucide-react";
 import { statusGlyph } from "@/components/status-glyph";
 import type { Session } from "@/lib/db";
@@ -108,6 +109,8 @@ interface QuickSwitcherProps {
   onNewSession?: () => void;
   /** Open the Ask Stoa chatbox. */
   onOpenAskStoa?: () => void;
+  /** Open the Notes / shared knowledge base dialog. */
+  onOpenNotes?: () => void;
 }
 
 /**
@@ -130,6 +133,7 @@ export function QuickSwitcher({
   onOpenInsight,
   onNewSession,
   onOpenAskStoa,
+  onOpenNotes,
 }: QuickSwitcherProps) {
   const { isMobile } = useViewport();
   const [mode, setMode] = useState<SwitcherMode>("sessions");
@@ -203,6 +207,13 @@ export function QuickSwitcher({
       onOpenAskStoa,
       <Sparkles className="h-4 w-4" />
     );
+    add(
+      "open-notes",
+      "Open Notes",
+      ["note", "notes", "knowledge", "doc", "markdown", "scratchpad"],
+      onOpenNotes,
+      <NotebookPen className="h-4 w-4" />
+    );
     return list;
   }, [
     onNewSession,
@@ -212,6 +223,7 @@ export function QuickSwitcher({
     onOpenInsight,
     onOpenWorkflows,
     onOpenAskStoa,
+    onOpenNotes,
   ]);
 
   // Fuzzy-match + rank commands by the same query the session lane uses.

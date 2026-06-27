@@ -305,6 +305,54 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["key"],
         },
       },
+      {
+        name: "notes_list",
+        description:
+          "List the shared knowledge-base notes (id + title + a one-line preview), pinned first then most-recently-updated. Notes are longer markdown docs shared across the whole fleet — use them for handoffs, an interface contract, or anything worth reading later (vs the short key→value memory_* scratchpad). Use notes_get for a note's full body.",
+        inputSchema: { type: "object" as const, properties: {} },
+      },
+      {
+        name: "notes_get",
+        description:
+          "Read one knowledge-base note's full markdown body by its id (from notes_list).",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            id: { type: "string", description: "The note's id." },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "notes_write",
+        description:
+          "Create a knowledge-base note, or update an existing one. Omit `id` to create a new note (returns its id); pass `id` to overwrite that note's title/content. Markdown is supported. (Pinning is a human-curation action done in the UI, not here.)",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            id: {
+              type: "string",
+              description: "The note id to update; omit to create a new note.",
+            },
+            title: { type: "string", description: "The note's title." },
+            content: {
+              type: "string",
+              description: "The note's markdown body.",
+            },
+          },
+        },
+      },
+      {
+        name: "notes_delete",
+        description: "Delete a knowledge-base note by its id.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            id: { type: "string", description: "The note's id." },
+          },
+          required: ["id"],
+        },
+      },
     ],
   };
 });

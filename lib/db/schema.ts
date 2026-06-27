@@ -277,6 +277,19 @@ export function createSchema(db: Database.Database): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Notes / shared knowledge base: persistent markdown docs any agent or human
+    -- can read/write (the SAME /api/notes route the UI uses + notes_* MCP tools).
+    -- "Notes = things to read" (vs the Dispatch board = things to do). Fleet-shared
+    -- + pinnable; a handoff/scratchpad doc for cross-worktree coordination.
+    CREATE TABLE IF NOT EXISTS notes (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL DEFAULT '',
+      pinned INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     -- Saved visual-builder workflows (spec + canvas positions, as JSON)
     CREATE TABLE IF NOT EXISTS saved_workflows (
       id TEXT PRIMARY KEY,

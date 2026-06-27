@@ -356,6 +356,31 @@ export const queries = {
   deleteAgentMemory: (db: Database.Database) =>
     getStmt(db, `DELETE FROM agent_memory WHERE key = ?`),
 
+  // Notes / shared knowledge base
+  createNote: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO notes (id, title, content, pinned) VALUES (?, ?, ?, ?)`
+    ),
+
+  getNote: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM notes WHERE id = ?`),
+
+  listNotes: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC, created_at DESC LIMIT ?`
+    ),
+
+  updateNote: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE notes SET title = ?, content = ?, pinned = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  deleteNote: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM notes WHERE id = ?`),
+
   // Dev servers
   createDevServer: (db: Database.Database) =>
     getStmt(
