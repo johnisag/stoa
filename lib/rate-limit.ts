@@ -193,13 +193,25 @@ function parseAbsoluteReset(text: string, nowMs: number): number | null {
 export type RateLimitAction = "wait" | "resume" | "idle";
 
 /**
- * Pure decision for one rate-limited session each tick:
+ * Pure decision for one rate-limited session each tick. Base matrix:
  *   not detected            → "idle"   (nothing to do)
  *   detected, no resetAt     → "wait"   (count nothing; hold until the agent/user acts)
  *   detected, now <  resetAt → "wait"   (counting down)
  *   detected, now >= resetAt → "resume" (reset has passed — nudge the session)
- * Resume fires ONLY once now has reached resetAt, so we never poke a session that
- * is still inside its limit window. Unit-tested across the matrix.
+ *
+ * Hardening (amux's "make it safe, not a footgun"), all optional + backward-
+ * compatible (omit a field and the base matrix is unchanged):
+ *  - `busy`: the session is actively working (a spinner), not idly parked at the
+ *    limit — resuming would inject Enter into a live turn. amux's "still parked
+ *    where you left it" skip. → "wait".
+ *  - per-day budget (`resumesUsedToday` / `maxPerDay`): once the day's resumes are
+ *    spent, hold until tomorrow so a flapping limit can't be nudged endlessly. → "wait".
+ *  - fallback (`parkedAtMs` / `fallbackMs`): when NO reset time could be parsed,
+ *    allow a resume `fallbackMs` after the limit was first seen (amux's 5-min
+ *    fallback) instead of waiting forever. Off (0) leaves the base "wait".
+ *
+ * Resume fires ONLY once now has reached the (parsed or fallback) reset — we never
+ * poke a session still inside its limit window. Unit-tested across the matrix.
  */
 export function nextRateLimitAction(input: {
   detected: boolean;
@@ -210,11 +222,37 @@ export function nextRateLimitAction(input: {
    * dialog would answer it. So never resume while a prompt is up — keep waiting
    * until the user (or auto-answer) clears it. */
   hasPrompt?: boolean;
+  /** The session is actively working (busy spinner), not idly parked — skip. */
+  busy?: boolean;
+  /** When the limit was first detected this episode (ms) — anchors the fallback. */
+  parkedAtMs?: number | null;
+  /** Grace after parkedAtMs to resume when no resetAt was parsed (0 = never). */
+  fallbackMs?: number;
+  /** Auto-resumes already spent for this session today. */
+  resumesUsedToday?: number;
+  /** Daily resume cap (>0 enforced; 0/undefined = unlimited). */
+  maxPerDay?: number;
 }): RateLimitAction {
   if (!input.detected) return "idle";
+  if (input.busy) return "wait"; // working, not parked → don't nudge a live turn
   if (input.hasPrompt) return "wait";
-  if (input.resetAtMs == null) return "wait";
-  return input.nowMs >= input.resetAtMs ? "resume" : "wait";
+  // Per-day budget: once the cap is spent, hold until the day rolls over.
+  if (
+    input.maxPerDay != null &&
+    input.maxPerDay > 0 &&
+    (input.resumesUsedToday ?? 0) >= input.maxPerDay
+  ) {
+    return "wait";
+  }
+  // Effective reset: the parsed time, else (fallback) parkedAt + grace when no
+  // reset could be parsed and a fallback window is configured.
+  const effectiveReset =
+    input.resetAtMs ??
+    (input.parkedAtMs != null && input.fallbackMs && input.fallbackMs > 0
+      ? input.parkedAtMs + input.fallbackMs
+      : null);
+  if (effectiveReset == null) return "wait";
+  return input.nowMs >= effectiveReset ? "resume" : "wait";
 }
 
 /** Is unattended auto-resume armed? Off by default (STOA_AUTO_RESUME=1 enables).
@@ -222,3 +260,43 @@ export function nextRateLimitAction(input: {
 export function autoResumeEnabled(): boolean {
   return process.env.STOA_AUTO_RESUME === "1";
 }
+
+/**
+ * Parse `STOA_AUTO_RESUME_MAX_PER_DAY` (pure → unit-tested). The default is a
+ * generous 8 — a safety net so a flapping limit can't nudge a session endlessly
+ * overnight, high enough that legitimate use never hits it. The parse fails SAFE
+ * toward that cap: unset / EMPTY (a `FOO=` typo) / whitespace / garbage / negative
+ * all → 8. An EXPLICIT `0` is the documented "unlimited" opt-out; a sub-1 positive
+ * floors to 1 (a tiny cap, never "unlimited" by accident — `Math.floor(0.5)` is 0,
+ * which would have silently disabled the cap, the opposite of the safety intent).
+ */
+export function parseResumeMaxPerDay(raw: string | undefined): number {
+  if (raw == null || raw.trim() === "") return 8;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 8;
+  return n === 0 ? 0 : Math.max(1, Math.floor(n));
+}
+
+/** Daily cap on auto-resumes per session (`STOA_AUTO_RESUME_MAX_PER_DAY`). 0 =
+ * unlimited (the pre-hardening behavior); default 8. Read ONCE at startup. */
+export const RESUME_MAX_PER_DAY = parseResumeMaxPerDay(
+  process.env.STOA_AUTO_RESUME_MAX_PER_DAY
+);
+
+/**
+ * Parse `STOA_AUTO_RESUME_FALLBACK_MS` (pure → unit-tested). The fallback is the
+ * grace window after a limit is first seen, after which auto-resume fires even
+ * when NO reset time could be parsed (amux's 5-min fallback). OPT-IN: unset /
+ * empty / garbage / negative all → 0 (off → a no-reset limit waits for the
+ * agent/user, today's behavior) — junk can only DISABLE it, never enable it.
+ */
+export function parseResumeFallbackMs(raw: string | undefined): number {
+  if (raw == null || raw.trim() === "") return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+/** Grace window (ms) for the no-reset fallback. Off (0) by default. Read ONCE. */
+export const RESUME_FALLBACK_MS = parseResumeFallbackMs(
+  process.env.STOA_AUTO_RESUME_FALLBACK_MS
+);
