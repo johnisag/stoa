@@ -79,9 +79,19 @@ typed, multi-provider, and cross-platform.
   terminal is never written to — a false positive costs one notification, never a
   derailed agent. Pure, unit-tested core in `lib/watchdog.ts`. _Deferred to v2:
   unattended crash-restart + low-context auto-/compact as per-provider descriptors._
-- **Next:** #2 cross-session output search · #9 worktree-conflict badge · #10
-  rate-limit budget hardening (Phase 1), then the MCP data-tool unlock (#3 → #4 →
-  #6 → #5).
+- **✅ #2 Cross-session output search — SHIPPED.** "Which of my agents mentioned
+  `TypeError`?" A pure-JS matcher (`lib/output-search.ts`) scans each Claude
+  session's on-disk JSONL transcript (the same file cost/summary read) — no `grep`
+  shell-out, so it's cross-platform by construction and returns clean, role-labelled,
+  ranked snippets instead of raw ANSI scrollback. `GET /api/output-search?q=` fans
+  out over sessions with bounded concurrency + abort; surfaced as an **Output** tab
+  in the ⌘K Quick Switcher (Tab cycles Sessions · Code · Output). An on-demand scan
+  (always fresh, no index to sync), not an FTS5 cache — the `messages` table holds
+  only the seed prompt in the live terminal architecture, so the transcript is the
+  only real corpus. _Claude-only today (the only transcript Stoa reads), mirroring
+  the cost surface; per-provider transcripts are a follow-up._
+- **Next:** #9 worktree-conflict badge · #10 rate-limit budget hardening (Phase 1),
+  then the MCP data-tool unlock (#3 → #4 → #6 → #5).
 
 ---
 

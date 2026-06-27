@@ -52,6 +52,25 @@ const CodeSearchResults = dynamic(
   }
 );
 
+// Cross-session output search results — lazy, like code search (its data hook is
+// only needed once the Output tab is used).
+const OutputSearchResults = dynamic(
+  () =>
+    import("@/components/OutputSearch/OutputSearchResults").then(
+      (m) => m.OutputSearchResults
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="text-muted-foreground p-4 text-center text-sm">
+        Loading…
+      </div>
+    ),
+  }
+);
+
+type SwitcherMode = "sessions" | "code" | "output";
+
 // SQLite's datetime("now") yields a naive UTC string ("YYYY-MM-DD HH:MM:SS")
 // with no zone. `new Date()` would parse the space-separated, offset-less form
 // as LOCAL time, skewing "Xm ago" by the viewer's TZ offset. Mirror
@@ -113,7 +132,7 @@ export function QuickSwitcher({
   onOpenAskStoa,
 }: QuickSwitcherProps) {
   const { isMobile } = useViewport();
-  const [mode, setMode] = useState<"sessions" | "code">("sessions");
+  const [mode, setMode] = useState<SwitcherMode>("sessions");
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -267,9 +286,34 @@ export function QuickSwitcher({
     onOpenChange,
   ]);
 
-  // Handle keyboard navigation
+  // The modes Tab cycles through: Sessions, Code (only when ripgrep is present),
+  // and Output (cross-session transcript search, always available).
+  const availableModes = useMemo<SwitcherMode[]>(() => {
+    const m: SwitcherMode[] = ["sessions"];
+    if (ripgrepAvailable !== false) m.push("code");
+    m.push("output");
+    return m;
+  }, [ripgrepAvailable]);
+
+  // Handle keyboard navigation. ↑↓/Enter drive the sessions+commands list ONLY in
+  // "sessions" mode; in code/output mode their own results panel owns nav (its
+  // window keydown listener), so we don't also move a hidden list here.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.key === "Tab") {
+        e.preventDefault();
+        setMode((m) => {
+          const i = availableModes.indexOf(m);
+          return availableModes[(i + 1) % availableModes.length];
+        });
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onOpenChange(false);
+        return;
+      }
+      if (mode !== "sessions") return;
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
@@ -283,20 +327,9 @@ export function QuickSwitcher({
           e.preventDefault();
           activateSelected();
           break;
-        case "Escape":
-          e.preventDefault();
-          onOpenChange(false);
-          break;
-        case "Tab":
-          // Tab toggles between Sessions and Code Search modes (when available).
-          if (ripgrepAvailable !== false) {
-            e.preventDefault();
-            setMode((m) => (m === "sessions" ? "code" : "sessions"));
-          }
-          break;
       }
     },
-    [totalResults, activateSelected, onOpenChange, ripgrepAvailable]
+    [mode, availableModes, totalResults, activateSelected, onOpenChange]
   );
 
   // Format relative time
@@ -367,6 +400,18 @@ export function QuickSwitcher({
               Code Search
             </button>
           )}
+          <button
+            onClick={() => setMode("output")}
+            title="Search agent output across your Claude sessions"
+            className={cn(
+              "rounded-full px-3 py-1 text-sm transition-colors",
+              mode === "output"
+                ? "bg-primary text-primary-foreground"
+                : "hover:bg-accent"
+            )}
+          >
+            Output
+          </button>
         </div>
 
         {/* Search Input */}
@@ -374,9 +419,11 @@ export function QuickSwitcher({
           <Input
             ref={inputRef}
             placeholder={
-              mode === "sessions" || !ripgrepAvailable
-                ? "Search sessions & commands..."
-                : "Search code (min 3 chars)..."
+              mode === "output"
+                ? "Search agent output (min 2 chars)..."
+                : mode === "sessions" || !ripgrepAvailable
+                  ? "Search sessions & commands..."
+                  : "Search code (min 3 chars)..."
             }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -526,11 +573,19 @@ export function QuickSwitcher({
                 )}
               </>
             )
-          ) : (
+          ) : mode === "code" ? (
             <CodeSearchResults
               workingDirectory={activeSessionWorkingDir || "~"}
               query={query}
               onSelectFile={handleSelectFile}
+            />
+          ) : (
+            <OutputSearchResults
+              query={query}
+              onSelectSession={(id) => {
+                onSelectSession(id);
+                onOpenChange(false);
+              }}
             />
           )}
         </div>
@@ -546,11 +601,10 @@ export function QuickSwitcher({
           <span>
             <kbd className="bg-muted rounded px-1.5 py-0.5">esc</kbd> close
           </span>
-          {ripgrepAvailable !== false && (
-            <span className="ml-auto">
-              <kbd className="bg-muted rounded px-1.5 py-0.5">Tab</kbd> code search
-            </span>
-          )}
+          <span className="ml-auto">
+            <kbd className="bg-muted rounded px-1.5 py-0.5">Tab</kbd> switch
+            mode
+          </span>
         </div>
       </DialogContent>
     </Dialog>
