@@ -44,6 +44,8 @@ export interface ViewProps {
   onOpenVerdictInbox: () => void;
   /** Open the Fleet Board as a pane tab (it's a window now, not a dialog). */
   onOpenFleetBoard: () => void;
+  /** Open the Live Wall (read-only grid of agent terminals) as a pane tab. */
+  onOpenLiveWall: () => void;
   /** Open Ask Stoa (the chatbox) as a pane tab (it's a window now, not a dialog). */
   onOpenAsk: () => void;
   onShowShortcuts: () => void;

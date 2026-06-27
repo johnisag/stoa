@@ -61,6 +61,7 @@ export function DesktopView({
   onOpenWorkflows,
   onOpenVerdictInbox,
   onOpenFleetBoard,
+  onOpenLiveWall,
   onOpenAsk,
   onShowShortcuts,
   onShowGuide,
@@ -286,6 +287,10 @@ export function DesktopView({
                   onClick: onOpenFleetBoard,
                   count: attentionCount,
                 },
+                {
+                  id: "live-wall",
+                  onClick: onOpenLiveWall,
+                },
               ];
               return (
                 <>
@@ -445,6 +450,7 @@ export function DesktopView({
         onOpenInsight={onOpenAnalytics}
         onOpenAskStoa={onOpenAsk}
         onOpenNotes={onShowNotes}
+        onOpenLiveWall={onOpenLiveWall}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
           const session = sessions.find((s) => s.id === sessionId);

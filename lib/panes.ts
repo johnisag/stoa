@@ -25,7 +25,8 @@ export type ViewKind =
   | "verdict-inbox"
   | "fleet-board"
   | "ask"
-  | "best-of-n";
+  | "best-of-n"
+  | "live-wall";
 
 export interface TabData {
   id: string;

@@ -27,6 +27,7 @@ import {
   NotebookPen,
   MessagesSquare,
   CalendarClock,
+  LayoutGrid,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -122,6 +123,12 @@ const COCKPIT: Item[] = [
     title: "Scheduler",
     blurb:
       "Fire a prompt into a session on a cadence — a nightly test run, a scheduled summary, a deferred follow-up. Once or hourly/daily/weekly; created over MCP (and a plain /api/schedules route).",
+  },
+  {
+    icon: LayoutGrid,
+    title: "Live Wall",
+    blurb:
+      "A read-only grid of every agent's live terminal — the control-plane view — streamed over the same WebSockets the panes use (open it from the header, ⌘K, or ⌘⇧M). Needs the native pty backend.",
   },
   {
     icon: Workflow,
