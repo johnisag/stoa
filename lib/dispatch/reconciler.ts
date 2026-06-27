@@ -15,6 +15,8 @@ import { randomUUID } from "crypto";
 import { getDb, queries, type Session } from "../db";
 import { getSessionBackend } from "../session-backend";
 import { expandHome } from "../platform";
+import { isWorkerHung, workerMaxAgeMs } from "../watchdog";
+import { sqliteTimeToMs } from "../sqlite-time";
 import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
 import { autoMergePass, getPrReadiness } from "./auto-merge";
@@ -349,6 +351,11 @@ export async function sweepActiveWorkers(opts: {
     return; // can't enumerate sessions → don't risk false "failed" marks
   }
   const skipDeadMark = opts.guardEmptyList && liveNames.size === 0;
+  // Self-healing watchdog (opt-in via STOA_DISPATCH_WORKER_MAX_AGE_MS): age past
+  // which a still-live worker is treated as hung and reaped, freeing its slot. 0
+  // (default) = never reap by age (today's behavior). Read once per sweep.
+  const maxAgeMs = workerMaxAgeMs();
+  const nowMs = Date.now();
 
   for (const d of rows) {
     if (d.worktree_path && d.branch_name) {
@@ -372,7 +379,30 @@ export async function sweepActiveWorkers(opts: {
         continue;
       }
     }
+    // The startup guard also gates the reaper: when the live list is
+    // (ambiguously) empty right after a Tier-2 daemon restart, a worker that is
+    // actually still alive but mid-rehydration must not be reaped on age alone —
+    // that would defeat the very race the guard protects against.
     if (skipDeadMark) continue;
+    // Hung-worker reaper: a worker still 'dispatched' (no OPEN/MERGED PR above)
+    // that has been coding past the configured ceiling pins its concurrency slot
+    // forever — reap it → 'failed' so the merge train keeps flowing. We only free
+    // the slot; the pty is left alone (the operator can still inspect/resume the
+    // session). Runs before the dead-session check so a hung-but-live worker is
+    // caught (the dead check would leave a live one dispatched).
+    if (
+      isWorkerHung({
+        dispatchedAtMs: sqliteTimeToMs(d.dispatched_at),
+        nowMs,
+        maxAgeMs,
+      })
+    ) {
+      queries.updateDispatchStatus(db).run("failed", d.id);
+      console.log(
+        `dispatch: worker reaped (hung > ${Math.round(maxAgeMs / 60000)}m) → failed (${d.id})`
+      );
+      continue;
+    }
     const sess = d.session_id
       ? (queries.getSession(db).get(d.session_id) as Session | undefined)
       : undefined;

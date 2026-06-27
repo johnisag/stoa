@@ -47,6 +47,14 @@ import {
   ERROR_LOOP_WINDOW_MS,
   type LoopTrack,
 } from "./lib/error-loop";
+import {
+  nextStuckAction,
+  watchdogEnabled,
+  buildStuckPushBody,
+  WATCHDOG_STUCK_MS,
+  WATCHDOG_MAX_GAP_MS,
+  type StuckTrack,
+} from "./lib/watchdog";
 import { computeSessionCosts } from "./lib/session-cost";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
 import { evictStale as evictStaleWarmPool } from "./lib/dispatch/warm-pool";
@@ -282,6 +290,19 @@ app.prepare().then(() => {
       `> Error-loop escalation on (STOA_ERROR_LOOP=1): a session stuck on the SAME error for ~${Math.round(ERROR_LOOP_WINDOW_MS / 1000)}s gets ONE "stuck in a loop" push, then it's left for you. The terminal is never written to.`
     );
   }
+  // Self-healing watchdog: wedged-session escalation (opt-in via
+  // STOA_AUTO_WATCHDOG=1). Tracks each session's continuous-"running" wall-clock
+  // so a spinner that never settles (a hung request / frozen TUI) pages ONCE per
+  // stuck episode — the terminal is never written to, so a false positive costs
+  // only one extra notification. Any turn boundary (a non-"running" tick) resets
+  // the streak, so a normally-iterating agent never pages.
+  const WATCHDOG_ENABLED = watchdogEnabled();
+  const stuckSessions = new Map<string, StuckTrack>();
+  if (WATCHDOG_ENABLED) {
+    console.log(
+      `> Watchdog on (STOA_AUTO_WATCHDOG=1): a session stuck "running" continuously for ~${Math.round(WATCHDOG_STUCK_MS / 60000)}m gets ONE "may be stuck" push, then it's left for you. The terminal is never written to.`
+    );
+  }
   if (SNAPSHOTS_ENABLED) {
     console.log(
       "> Per-turn snapshots on (STOA_SNAPSHOTS=1): the status ticker runs continuously and writes refs/stoa/snap/* at each turn boundary."
@@ -358,7 +379,8 @@ app.prepare().then(() => {
       !queuesPending &&
       !AUTO_RESUME_ENABLED &&
       !AUTO_ANSWER_ENABLED &&
-      !ERROR_LOOP_ENABLED
+      !ERROR_LOOP_ENABLED &&
+      !WATCHDOG_ENABLED
     ) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
       if (lastPushStatusById.size) lastPushStatusById = new Map();
@@ -367,6 +389,7 @@ app.prepare().then(() => {
       if (rateLimitResumed.size) rateLimitResumed.clear();
       if (autoAnswered.size) autoAnswered.clear();
       if (errorLoops.size) errorLoops.clear();
+      if (stuckSessions.size) stuckSessions.clear();
       return;
     }
     if (statusTickBusy) return; // don't stack ticks if a capture runs slow
@@ -631,6 +654,52 @@ app.prepare().then(() => {
         }
         for (const id of [...errorLoops.keys()])
           if (!liveIds.has(id)) errorLoops.delete(id);
+      }
+
+      // Self-healing watchdog: wedged-session escalation (opt-in). A session that
+      // stays "running" continuously past the ceiling (a hung request / frozen
+      // spinner that never settles) gets ONE "may be stuck" push, then it's left
+      // for the human. ESCALATE-ONLY: like the error loop, the terminal is never
+      // written to — a false positive costs one extra notification, never a
+      // derailed agent. The pure nextStuckAction owns the decision + the next
+      // track state; any non-"running" tick (a turn boundary) clears the streak,
+      // so a normally-iterating agent never reaches the ceiling.
+      if (WATCHDOG_ENABLED) {
+        const nowMs = Date.now();
+        for (const s of curr) {
+          const { action, next } = nextStuckAction({
+            isRunning: s.status === "running",
+            // A rate-limited session's spinner/countdown can keep it "running"
+            // for the whole limit window — that's the resume loop's job, never a
+            // wedge. Exclude it so it can't false-page (mirrors the error loop).
+            rateLimited: !!s.rateLimit,
+            nowMs,
+            prev: stuckSessions.get(s.id),
+            stuckMs: WATCHDOG_STUCK_MS,
+            // Restart the streak across an unobserved gap (a starved tick, a host
+            // sleep, a clock step) so "stuck" means continuously observed running.
+            maxGapMs: WATCHDOG_MAX_GAP_MS,
+          });
+          if (next) stuckSessions.set(s.id, next);
+          else stuckSessions.delete(s.id);
+          if (action !== "escalate" || !next) continue; // track / idle → no page
+          // `next.escalated` is already true (set before the send), so a later
+          // tick still running → "track", never a second page for this streak.
+          const name = sanitizeNotificationText(s.name, { fallback: s.id });
+          console.log(
+            `watchdog: escalating ${s.name} (running ~${Math.round((next.lastMs - next.firstMs) / 60000)}m without settling)`
+          );
+          void sendPushToAll({
+            title: "Stoa",
+            body: buildStuckPushBody(name, next),
+            tag: `${s.id}-stuck`,
+            url: "/",
+            sessionId: s.id,
+            actions: actionsForKind("error"),
+          }).catch((err) => console.error("watchdog push failed:", err));
+        }
+        for (const id of [...stuckSessions.keys()])
+          if (!liveIds.has(id)) stuckSessions.delete(id);
       }
     } catch (err) {
       console.error("status events tick failed:", err);
