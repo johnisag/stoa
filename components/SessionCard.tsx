@@ -28,6 +28,7 @@ import {
   History,
   ListPlus,
   Zap,
+  TriangleAlert,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -81,6 +82,11 @@ interface SessionCardProps {
    * reset (or null when the provider didn't state one). */
   rateLimited?: boolean;
   rateLimitResetAt?: number | null;
+  /** How many sessions (this one included, so always ≥2 when set) share this
+   * session's working_directory — they edit the same files on the same branch and
+   * can clobber each other. Undefined/0/1 = isolated (worktree or lone) = no badge.
+   * A primitive so the card's React.memo still skips unchanged repaints. */
+  conflictCount?: number;
   groups?: Group[];
   projects?: ProjectWithDevServers[];
   // Selection props
@@ -158,6 +164,7 @@ function SessionCardComponent({
   lastLine,
   rateLimited,
   rateLimitResetAt,
+  conflictCount,
   groups = EMPTY_GROUPS,
   projects = EMPTY_PROJECTS,
   isSelected,
@@ -572,6 +579,20 @@ function SessionCardComponent({
       {/* Fork indicator */}
       {session.parent_session_id && (
         <GitFork className="text-muted-foreground h-3 w-3 flex-shrink-0" />
+      )}
+
+      {/* Worktree-conflict warning — this session shares its working directory
+          with other LIVE sessions, so their edits can clobber each other. Isolate
+          one in a git worktree (New session → "Use a git worktree") to fix it. */}
+      {conflictCount != null && conflictCount >= 2 && (
+        <span
+          className="flex flex-shrink-0 items-center gap-0.5 rounded bg-amber-500/20 px-1 text-[10px] text-amber-600 dark:text-amber-400"
+          title={`${conflictCount} sessions share this working directory — their edits can overwrite each other. Run agents in separate git worktrees to isolate them.`}
+          aria-label={`Warning: ${conflictCount} sessions share this working directory`}
+        >
+          <TriangleAlert className="h-2.5 w-2.5" />
+          <span>×{conflictCount}</span>
+        </span>
       )}
 
       {/* TODO: Show port indicator once auto dev server management is implemented.

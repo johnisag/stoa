@@ -30,6 +30,8 @@ interface ProjectsSectionProps {
   groups: Group[]; // For backward compatibility with SessionCard move feature
   activeSessionId?: string;
   sessionStatuses?: Record<string, SessionStatus>;
+  /** session id → # of sessions sharing its working dir (≥2 = clobber warning). */
+  conflictCounts?: Record<string, number>;
   summarizingSessionId?: string | null;
   devServers?: DevServer[];
   onToggleProject?: (projectId: string, expanded: boolean) => void;
@@ -59,6 +61,7 @@ export function ProjectsSection({
   groups,
   activeSessionId,
   sessionStatuses,
+  conflictCounts,
   summarizingSessionId,
   devServers = [],
   onToggleProject,
@@ -312,6 +315,7 @@ export function ProjectsSection({
                                 lastLine={
                                   sessionStatuses?.[session.id]?.lastLine
                                 }
+                                conflictCount={conflictCounts?.[session.id]}
                                 rateLimited={
                                   !!sessionStatuses?.[session.id]?.rateLimit
                                 }
@@ -413,13 +417,15 @@ export function ProjectsSection({
                                         />
                                       </div>
                                     </div>
-                                    {canPeek && expanded && worker.tmux_name && (
-                                      <MiniTerminal
-                                        key={worker.tmux_name}
-                                        attachKey={worker.tmux_name}
-                                        theme={terminalTheme}
-                                      />
-                                    )}
+                                    {canPeek &&
+                                      expanded &&
+                                      worker.tmux_name && (
+                                        <MiniTerminal
+                                          key={worker.tmux_name}
+                                          attachKey={worker.tmux_name}
+                                          theme={terminalTheme}
+                                        />
+                                      )}
                                   </div>
                                 );
                               })}
