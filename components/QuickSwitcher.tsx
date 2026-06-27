@@ -23,6 +23,7 @@ import {
   Plus,
   Sparkles,
   NotebookPen,
+  LayoutGrid,
 } from "lucide-react";
 import { statusGlyph } from "@/components/status-glyph";
 import type { Session } from "@/lib/db";
@@ -111,6 +112,7 @@ interface QuickSwitcherProps {
   onOpenAskStoa?: () => void;
   /** Open the Notes / shared knowledge base dialog. */
   onOpenNotes?: () => void;
+  onOpenLiveWall?: () => void;
 }
 
 /**
@@ -134,6 +136,7 @@ export function QuickSwitcher({
   onNewSession,
   onOpenAskStoa,
   onOpenNotes,
+  onOpenLiveWall,
 }: QuickSwitcherProps) {
   const { isMobile } = useViewport();
   const [mode, setMode] = useState<SwitcherMode>("sessions");
@@ -214,6 +217,13 @@ export function QuickSwitcher({
       onOpenNotes,
       <NotebookPen className="h-4 w-4" />
     );
+    add(
+      "open-live-wall",
+      "Open Live Wall",
+      ["wall", "grid", "terminals", "monitor", "live", "fleet", "watch"],
+      onOpenLiveWall,
+      <LayoutGrid className="h-4 w-4" />
+    );
     return list;
   }, [
     onNewSession,
@@ -224,6 +234,7 @@ export function QuickSwitcher({
     onOpenWorkflows,
     onOpenAskStoa,
     onOpenNotes,
+    onOpenLiveWall,
   ]);
 
   // Fuzzy-match + rank commands by the same query the session lane uses.

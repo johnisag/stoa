@@ -166,8 +166,22 @@ typed, multi-provider, and cross-platform.
   operator UI (agent-facing in v1 like #3)._
 - **✅ Phase 2 — "agents share an OS" — COMPLETE (#3 · #4 · #6 · #5).** The MCP
   data-tool seam now carries shared memory, notes, channels, and the scheduler.
-  **Next: Phase 3 — "operator superpowers": #7 live-wall grid · #8 per-provider
-  skills · #11 all-provider fork · #15 token/cost persistence.**
+- **✅ #7 Multi-session "live wall" grid — SHIPPED (Phase 3 starts).** The iconic
+  control-plane view: a read-only CSS grid of the fleet's agent terminals, one cell
+  per live session. Each cell is an observer `MiniTerminal` over Stoa's EXISTING
+  per-session WebSocket stream — no iframes, no polling (amux's wall self-embedded
+  iframes that 5×-amplified its own request load; Stoa reuses the live streams it
+  already has). Pure helpers in [lib/live-wall.ts](../lib/live-wall.ts)
+  (`liveWallSessions` filters to attachable, in-play sessions; `liveWallColumns`
+  picks a roughly-square column count); the view is
+  [components/views/LiveWallView](../components/views/LiveWallView/), opened as a
+  pane tab from a fleet-nav button, the ⌘K command palette, or ⌘⇧M. Observer
+  streaming is the native pty backend's capability (the same gate the worker
+  mini-preview uses), so on the legacy tmux backend the wall shows a "switch to
+  the pty backend" notice instead of empty cells. _Deferred: per-cell quick
+  actions._
+- **Next (Phase 3 cont.):** #8 per-provider skills · #11 all-provider fork · #15
+  token/cost persistence.
 
 ---
 

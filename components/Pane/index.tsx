@@ -99,8 +99,12 @@ const ChatView = dynamic(
   { ssr: false }
 );
 const BestOfNView = dynamic(
+  () => import("@/components/views/BestOfNView").then((mod) => mod.BestOfNView),
+  { ssr: false }
+);
+const LiveWallView = dynamic(
   () =>
-    import("@/components/views/BestOfNView").then((mod) => mod.BestOfNView),
+    import("@/components/views/LiveWallView").then((mod) => mod.LiveWallView),
   { ssr: false }
 );
 
@@ -569,6 +573,14 @@ export const Pane = memo(function Pane({
             onClose={() => closeTab(paneId, tab.id)}
           />
         ) : null;
+      case "live-wall":
+        return (
+          <LiveWallView
+            sessions={sessions}
+            onOpenSession={onOpenSessionInNewTab ?? onSelectSession}
+            onClose={() => closeTab(paneId, tab.id)}
+          />
+        );
       default:
         return null;
     }

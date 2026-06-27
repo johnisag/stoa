@@ -173,6 +173,14 @@ const NAV_KEYBINDINGS: Keybinding[] = [
     description: "Open Insight",
   },
   {
+    // mod+shift+m — mnemonic "Monitor" (the live wall). NOT mod+shift+w: on
+    // Windows/Linux Ctrl+Shift+W closes the browser tab and is not reliably
+    // cancelable via preventDefault. Vetted free of the bindings above.
+    chord: "mod+shift+m",
+    action: "open-live-wall",
+    description: "Open the Live Wall",
+  },
+  {
     // mod+shift+c — mnemonic "Chat". mod+shift+a is taken (next-attention).
     // Vetted: not browser-reserved and not claimed by any other binding above.
     chord: "mod+shift+c",
@@ -703,6 +711,8 @@ function HomeContent() {
     else if (action === "open-fleet-board")
       addViewTab(focusedPaneId, "fleet-board");
     else if (action === "open-insight") addViewTab(focusedPaneId, "analytics");
+    else if (action === "open-live-wall")
+      addViewTab(focusedPaneId, "live-wall");
     else if (action === "open-ask-stoa") addViewTab(focusedPaneId, "ask");
   });
 
@@ -851,6 +861,7 @@ function HomeContent() {
     onOpenWorkflows: () => addWorkflowsTab(focusedPaneId),
     onOpenVerdictInbox: () => addViewTab(focusedPaneId, "verdict-inbox"),
     onOpenFleetBoard: () => addViewTab(focusedPaneId, "fleet-board"),
+    onOpenLiveWall: () => addViewTab(focusedPaneId, "live-wall"),
     onOpenAsk: () => addViewTab(focusedPaneId, "ask"),
     onShowShortcuts: () => setShowHelp(true),
     onShowGuide: () => setShowGuide(true),
