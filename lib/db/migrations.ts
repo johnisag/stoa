@@ -1021,6 +1021,35 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 42,
+    name: "add_schedules_table",
+    up: (db) => {
+      // General-purpose scheduler: fire a prompt into a session on a cadence. At
+      // the due time the server enqueues the prompt into the session's prompt
+      // queue (delivered by the existing safe turn-boundary path).
+      if (!hasTable(db, "schedules")) {
+        db.exec(`
+          CREATE TABLE schedules (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            session_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            recurrence TEXT,
+            next_run_at TEXT NOT NULL,
+            last_run_at TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_schedules_due
+             ON schedules (enabled, next_run_at)`
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

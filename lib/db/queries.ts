@@ -430,6 +430,67 @@ export const queries = {
        WHERE id = ? AND read_at IS NULL`
     ),
 
+  // Scheduler (fire a prompt into a session on a cadence)
+  createSchedule: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO schedules (id, name, session_id, prompt, recurrence, next_run_at, enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ),
+
+  getSchedule: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM schedules WHERE id = ?`),
+
+  listSchedules: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM schedules ORDER BY enabled DESC, next_run_at ASC LIMIT ?`
+    ),
+
+  // Count a session's ENABLED schedules — caps how many can flood one session.
+  countEnabledSchedulesForSession: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n FROM schedules WHERE session_id = ? AND enabled = 1`
+    ),
+
+  // Due, enabled schedules (the tick fires these), oldest-due first.
+  listDueSchedules: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM schedules
+       WHERE enabled = 1 AND next_run_at <= ?
+       ORDER BY next_run_at ASC LIMIT ?`
+    ),
+
+  // Advance a recurring schedule after a fire: stamp last_run_at + the new
+  // next_run_at. (A one-shot is disabled via setScheduleEnabled instead.)
+  advanceSchedule: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE schedules
+       SET last_run_at = ?, next_run_at = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ),
+
+  setScheduleEnabled: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE schedules SET enabled = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // Mark a one-shot fired: stamp last_run_at and disable it (it won't fire again).
+  markScheduleFiredOnce: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE schedules
+       SET last_run_at = ?, enabled = 0, updated_at = datetime('now')
+       WHERE id = ?`
+    ),
+
+  deleteSchedule: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM schedules WHERE id = ?`),
+
   // Opt-in push: record the terminal delivery and consume the message in one step.
   // Idempotent AND loses to a pull: `read_at IS NULL` means a message already
   // consumed via channel_inbox between the push's select and its paste won't be
