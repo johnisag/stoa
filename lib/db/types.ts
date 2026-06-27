@@ -81,6 +81,16 @@ export interface AgentMemoryRow {
   updated_at: string;
 }
 
+/** A note in the shared knowledge base (notes). `pinned` is a SQLite 0/1. */
+export interface NoteRow {
+  id: string;
+  title: string;
+  content: string;
+  pinned: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProjectDevServer {
   id: string;
   project_id: string;

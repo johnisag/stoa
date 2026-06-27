@@ -9,6 +9,7 @@ import {
   Compass,
   Command,
   Sparkles,
+  NotebookPen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -78,6 +79,12 @@ export const FLEET_NAV: readonly FleetNavEntry[] = [
     icon: Sparkles,
     ariaLabel: "Ask Stoa (chat about your fleet)",
     tooltipHint: "⌘⇧C",
+  },
+  {
+    id: "notes",
+    label: "Notes",
+    icon: NotebookPen,
+    ariaLabel: "Notes (shared knowledge base)",
   },
   {
     id: "notifications",

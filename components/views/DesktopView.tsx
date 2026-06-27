@@ -64,6 +64,7 @@ export function DesktopView({
   onOpenAsk,
   onShowShortcuts,
   onShowGuide,
+  onShowNotes,
   notificationSettings,
   permissionGranted,
   updateSettings,
@@ -141,6 +142,7 @@ export function DesktopView({
             <SidebarFooter
               onShowShortcuts={onShowShortcuts}
               onShowGuide={onShowGuide}
+              onShowNotes={onShowNotes}
             />
           </div>
         ) : (
@@ -375,6 +377,11 @@ export function DesktopView({
               onClick={onOpenAsk}
               showLabel
             />
+            <NavIconButton
+              entry={fleetNavEntry("notes")}
+              variant="header"
+              onClick={onShowNotes}
+            />
             {onShowGuide && (
               <NavIconButton
                 entry={fleetNavEntry("guide")}
@@ -437,6 +444,7 @@ export function DesktopView({
         onOpenFleetBoard={onOpenFleetBoard}
         onOpenInsight={onOpenAnalytics}
         onOpenAskStoa={onOpenAsk}
+        onOpenNotes={onShowNotes}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
           const session = sessions.find((s) => s.id === sessionId);

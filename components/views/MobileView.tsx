@@ -40,6 +40,7 @@ export function MobileView({
   requestPermission,
   onShowShortcuts,
   onShowGuide,
+  onShowNotes,
   attachToSession,
   openSessionInNewTab,
   handleNewSessionInProject,
@@ -131,6 +132,10 @@ export function MobileView({
               onOpenAsk();
               setSidebarOpen(false);
             }}
+            onShowNotes={() => {
+              onShowNotes();
+              setSidebarOpen(false);
+            }}
           />
         </div>
       </SwipeSidebar>
@@ -180,6 +185,7 @@ export function MobileView({
         onOpenFleetBoard={onOpenFleetBoard}
         onOpenInsight={onOpenAnalytics}
         onOpenAskStoa={onOpenAsk}
+        onOpenNotes={onShowNotes}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
           const session = sessions.find((s) => s.id === sessionId);
