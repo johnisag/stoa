@@ -148,8 +148,26 @@ typed, multi-provider, and cross-platform.
   becomes keystrokes. Sender is always the caller's own session (a baked id wins, so
   it can't be spoofed); an unknown recipient is rejected. _No operator UI in v1
   (agent-facing like #3); a read-only cross-talk viewer is a follow-up._
-- **Next (Phase 2 cont.):** #5 scheduler — the last data tool on the
-  same MCP + `/api/*` seam.
+- **✅ #5 General-purpose scheduler — SHIPPED.** The last Phase-2 data tool: fire a
+  prompt into a session on a cadence (the basis for "AI coding while you sleep" — a
+  nightly run, a scheduled summary, a deferred follow-up). A `schedules` table
+  (migration 42) → `lib/scheduler.ts` (reusing Stoa's own recurrence math in
+  `lib/dispatch/recurrence.ts` — once / hourly / daily / weekly) → `GET/POST
+  /api/schedules` + `GET/PATCH/DELETE /api/schedules/[id]` → three auto-registering
+  tools (`schedule_create` defaulting to the caller's own session, `schedule_list`,
+  `schedule_delete`). A synchronous server.ts tick fires due schedules by
+  **enqueuing** the prompt into the target session's prompt queue — so it's
+  delivered by the SAME safe turn-boundary path a typed-ahead prompt uses (no new
+  injection surface); a recurring schedule advances, a one-shot disables itself, a
+  schedule whose target session is gone is stopped. The schedule itself is the
+  opt-in (no schedules → the tick is a no-op), like a Dispatch recurring task.
+  _Deferred: full cron (specific time-of-day / weekday), a closed-loop "watch the
+  output for a done-pattern" follow-up, spawn/run-a-workflow actions, and an
+  operator UI (agent-facing in v1 like #3)._
+- **✅ Phase 2 — "agents share an OS" — COMPLETE (#3 · #4 · #6 · #5).** The MCP
+  data-tool seam now carries shared memory, notes, channels, and the scheduler.
+  **Next: Phase 3 — "operator superpowers": #7 live-wall grid · #8 per-provider
+  skills · #11 all-provider fork · #15 token/cost persistence.**
 
 ---
 

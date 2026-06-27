@@ -313,6 +313,31 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_channel_messages_thread
       ON channel_messages (pair_key, created_at);
 
+    -- General-purpose scheduler: fire a prompt into a session on a cadence (once
+    -- at a time, or hourly/daily/weekly), the basis for "AI coding while you
+    -- sleep" — a nightly test run, a scheduled summary, a periodic nudge. At the
+    -- due time the server ENQUEUES the prompt into the target session's prompt
+    -- queue, so it's delivered by the SAME safe turn-boundary path a typed-ahead
+    -- prompt uses (no new injection surface). Distinct from a Dispatch scheduled
+    -- LOCAL task (a GitHub-issue→PR run): this just sends text to a live session.
+    -- No FK on session_id (like channel_messages): the scheduler tick disables a
+    -- schedule whose target session is gone (app-level lifecycle, keeping it
+    -- visible/recoverable) rather than cascade-deleting it out from under the user.
+    CREATE TABLE IF NOT EXISTS schedules (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      recurrence TEXT,
+      next_run_at TEXT NOT NULL,
+      last_run_at TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_schedules_due
+      ON schedules (enabled, next_run_at);
+
     -- Saved visual-builder workflows (spec + canvas positions, as JSON)
     CREATE TABLE IF NOT EXISTS saved_workflows (
       id TEXT PRIMARY KEY,

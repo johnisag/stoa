@@ -394,6 +394,58 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["peer"],
         },
       },
+      {
+        name: "schedule_create",
+        description:
+          'Schedule a prompt to be sent into a session on a cadence — for a nightly run, a periodic check-in, or a deferred follow-up ("re-run the tests in 1 hour"). At the due time the prompt is enqueued into the target session and delivered the moment it next goes idle. Defaults to YOUR OWN session unless you pass sessionId. Returns the schedule id (cancel with schedule_delete).',
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            prompt: {
+              type: "string",
+              description: "The prompt text to send when the schedule fires.",
+            },
+            recurrence: {
+              type: "string",
+              enum: ["once", "hourly", "daily", "weekly"],
+              description:
+                "How often to fire. Omit (or pass 'once') for a single run; the others repeat until you delete the schedule.",
+            },
+            runAt: {
+              type: "string",
+              description:
+                "Optional ISO-8601 time for the first (or only) run, e.g. '2026-06-28T02:00:00Z'. Omit to fire as soon as due (a one-shot) or one interval from now (a recurring one).",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "The session to send the prompt to. Defaults to your own session.",
+            },
+            name: {
+              type: "string",
+              description: "Optional short label for the schedule.",
+            },
+          },
+          required: ["prompt"],
+        },
+      },
+      {
+        name: "schedule_list",
+        description:
+          "List the scheduled prompts (id, target session, cadence, next run time, enabled). Use schedule_delete to cancel one.",
+        inputSchema: { type: "object" as const, properties: {} },
+      },
+      {
+        name: "schedule_delete",
+        description: "Cancel a scheduled prompt by its id.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            id: { type: "string", description: "The schedule's id." },
+          },
+          required: ["id"],
+        },
+      },
     ],
   };
 });

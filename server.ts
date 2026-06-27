@@ -29,7 +29,13 @@ import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
 import { actionsForKind } from "./lib/notification-actions";
 import { sanitizeNotificationText } from "./lib/notification-text";
 import { captureSnapshot } from "./lib/snapshots";
-import { peekPrompt, dequeuePrompt, hasAnyQueued } from "./lib/prompt-queue";
+import {
+  peekPrompt,
+  dequeuePrompt,
+  hasAnyQueued,
+  enqueuePrompt,
+} from "./lib/prompt-queue";
+import { dueSchedules, fireSchedule } from "./lib/scheduler";
 import {
   nextRateLimitAction,
   autoResumeEnabled,
@@ -929,6 +935,42 @@ app.prepare().then(() => {
   }, 60000);
   // Don't let the reconciler timer keep the process alive on its own.
   dispatchTimer.unref?.();
+
+  // ── scheduler (fire a prompt into a session on a cadence) ──
+  // Always armed but cheap when idle: one indexed "due schedules" query that
+  // returns nothing unless the user (or an agent) created a schedule whose time
+  // has come — so a fresh install with no schedules behaves identically (the
+  // schedule itself is the opt-in, like a Dispatch recurring task). When a
+  // schedule is due we ENQUEUE its prompt into the target session's prompt queue;
+  // the status ticker above then delivers it at the next idle turn boundary — the
+  // SAME safe path a typed-ahead prompt uses, so the scheduler adds no new
+  // injection surface. Fully synchronous (DB + in-memory queue), so a sync tick
+  // can't re-enter; the try/catch keeps one bad row from killing the interval.
+  const schedulerTimer = setInterval(() => {
+    const now = Date.now();
+    let due;
+    try {
+      due = dueSchedules(now);
+    } catch (err) {
+      console.error("scheduler tick: due query failed:", err);
+      return;
+    }
+    for (const row of due) {
+      // Per-row try/catch: one bad row (e.g. a transient DB write error) must not
+      // abort the rest, and a failed fire leaves the row "due" to retry next tick.
+      try {
+        const outcome = fireSchedule(row, now, enqueuePrompt);
+        console.log(
+          outcome === "session-gone"
+            ? `scheduler: target session ${row.session_id} gone — disabled schedule ${row.id}`
+            : `scheduler: enqueued scheduled prompt for session ${row.session_id} (schedule ${row.id})`
+        );
+      } catch (err) {
+        console.error(`scheduler: schedule ${row.id} failed:`, err);
+      }
+    }
+  }, 30000);
+  schedulerTimer.unref?.();
 
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
   function handleTmuxConnection(ws: WebSocket) {
