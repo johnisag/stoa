@@ -336,6 +336,26 @@ export const queries = {
   deleteSavedWorkflow: (db: Database.Database) =>
     getStmt(db, `DELETE FROM saved_workflows WHERE id = ?`),
 
+  // Agent-accessible shared memory (fleet-wide key→value scratchpad)
+  upsertAgentMemory: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO agent_memory (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+    ),
+
+  getAgentMemory: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM agent_memory WHERE key = ?`),
+
+  listAgentMemory: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM agent_memory ORDER BY updated_at DESC, key ASC LIMIT ?`
+    ),
+
+  deleteAgentMemory: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM agent_memory WHERE key = ?`),
+
   // Dev servers
   createDevServer: (db: Database.Database) =>
     getStmt(

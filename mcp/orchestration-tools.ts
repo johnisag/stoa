@@ -344,6 +344,97 @@ export async function handleToolCall(request: {
         };
       }
 
+      case "memory_set": {
+        const key = requireString(args, "key");
+        const result = await apiCall("/api/memory", {
+          method: "POST",
+          // value may be an empty string (a deliberately-blank note), so pass it
+          // through as-is rather than coercing/defaulting.
+          body: JSON.stringify({ key, value: args?.value }),
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: result.error
+                ? `Error: ${result.error}`
+                : `Saved memory "${key}".`,
+            },
+          ],
+        };
+      }
+
+      case "memory_get": {
+        const key = requireString(args, "key");
+        const result = await apiCall(
+          `/api/memory?key=${encodeURIComponent(key)}`
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              // A missing key is a 404 → { error: "not found" }; report it as
+              // "(not set)" rather than an error, since "no value yet" is normal.
+              text: result.entry
+                ? `${key}: ${result.entry.value}`
+                : `${key}: (not set)`,
+            },
+          ],
+        };
+      }
+
+      case "memory_list": {
+        const result = await apiCall("/api/memory");
+        if (result.error) {
+          return {
+            content: [
+              { type: "text" as const, text: `Error: ${result.error}` },
+            ],
+          };
+        }
+        const entries: { key: string; value: string }[] = result.entries || [];
+        if (entries.length === 0) {
+          return {
+            content: [
+              { type: "text" as const, text: "Shared memory is empty." },
+            ],
+          };
+        }
+        // One-line preview per entry (a value may be long / multi-line, which
+        // would otherwise break the "- key: value" list); read the full value
+        // with memory_get.
+        const preview = (v: string) => {
+          const oneLine = v.replace(/\s+/g, " ").trim();
+          return oneLine.length > 120 ? `${oneLine.slice(0, 117)}…` : oneLine;
+        };
+        const list = entries
+          .map((e) => `- ${e.key}: ${preview(e.value)}`)
+          .join("\n");
+        return {
+          content: [{ type: "text" as const, text: `Shared memory:\n${list}` }],
+        };
+      }
+
+      case "memory_delete": {
+        const key = requireString(args, "key");
+        const result = await apiCall(
+          `/api/memory?key=${encodeURIComponent(key)}`,
+          { method: "DELETE" }
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: result.error
+                ? `Error: ${result.error}`
+                : result.removed
+                  ? `Deleted memory "${key}".`
+                  : `No memory entry "${key}" to delete.`,
+            },
+          ],
+        };
+      }
+
       default:
         return {
           content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
