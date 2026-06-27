@@ -7,13 +7,15 @@
  * any transpiler). Mirrors the behavior of the POSIX bash CLI in
  * `scripts/stoa`, but works natively on Windows, macOS and Linux.
  *
- * Subcommands: install, start, stop, restart, status, run, logs, update, help
+ * Subcommands: install, start, stop, restart, status, run, logs, update,
+ * doctor, help
  */
 
 "use strict";
 
 const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
+const net = require("net");
 const os = require("os");
 const path = require("path");
 const { pathToFileURL } = require("url");
@@ -617,6 +619,188 @@ function cmdUpdate() {
   if (wasRunning) cmdStart();
 }
 
+// ---------------------------------------------------------------------------
+// doctor: preflight diagnostics (DX #14)
+// ---------------------------------------------------------------------------
+
+// Minimum Node the project supports (kept in sync with package.json "engines").
+const NODE_MIN_MAJOR = 24;
+const DOCTOR_ICON = { ok: "✓", warn: "!", fail: "✗" };
+
+/** Parse the major version from a Node version string ("v24.14.0" → 24). Pure. */
+function parseNodeMajor(versionString) {
+  const m = /^v?(\d+)\./.exec(String(versionString || "").trim());
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/** Check the running Node meets the minimum major. Pure → unit-tested. */
+function checkNodeVersion(versionString, minMajor = NODE_MIN_MAJOR) {
+  const major = parseNodeMajor(versionString);
+  if (major === null) {
+    return {
+      name: "Node.js",
+      status: "warn",
+      detail: `unrecognized version "${versionString}"`,
+      hint: `Stoa targets Node ${minMajor}+.`,
+    };
+  }
+  if (major < minMajor) {
+    return {
+      name: "Node.js",
+      status: "fail",
+      detail: `${versionString} (need ${minMajor}+)`,
+      hint: "Upgrade Node — https://nodejs.org or your version manager.",
+    };
+  }
+  return { name: "Node.js", status: "ok", detail: versionString };
+}
+
+/** The CLI exit code for a set of check results: 1 if ANY failed, else 0 (a warn
+ *  is advisory, not fatal). Pure → unit-tested. */
+function doctorExitCode(results) {
+  return results.some((r) => r.status === "fail") ? 1 : 0;
+}
+
+/** Format one check result as a console line (with an indented hint when not ok).
+ *  Pure → unit-tested. */
+function formatDoctorLine(r) {
+  const icon = DOCTOR_ICON[r.status] || "?";
+  const head = `  ${icon} ${r.name}: ${r.detail}`;
+  return r.hint && r.status !== "ok" ? `${head}\n      → ${r.hint}` : head;
+}
+
+/** Parse + range-check a port string → a 1..65535 integer, or null if it isn't a
+ *  clean numeric port ("3011"→3011; "0"/"99999"/"abc"/"3011x"→null). Pure. */
+function parsePort(value) {
+  const s = String(value == null ? "" : value).trim();
+  if (!/^\d+$/.test(s)) return null;
+  const n = parseInt(s, 10);
+  return n >= 1 && n <= 65535 ? n : null;
+}
+
+/** Best-effort: is `port` free to bind on `host`? Resolves true (free) / false
+ *  (in use). Never rejects. */
+function checkPortFree(port, host = "127.0.0.1") {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", () => resolve(false));
+    srv.once("listening", () => srv.close(() => resolve(true)));
+    try {
+      srv.listen(port, host);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+/** doctor: verify the environment can run Stoa, with actionable hints. Exits 1 if
+ *  any hard requirement fails (so it's usable as an install/CI preflight gate). */
+async function cmdDoctor() {
+  const results = [];
+
+  results.push(checkNodeVersion(process.version));
+
+  results.push(
+    resolveCommand("git")
+      ? { name: "git", status: "ok", detail: "found" }
+      : {
+          name: "git",
+          status: "fail",
+          detail: "not found on PATH",
+          hint: "Install Git — https://git-scm.com",
+        }
+  );
+
+  // NB: no ripgrep-on-PATH check — code search uses the ripgrep binary BUNDLED via
+  // @vscode/ripgrep (lib/code-search.ts), not a system `rg`, so a PATH check would
+  // false-warn on a perfectly healthy install. `npm install` (below) restores it.
+
+  results.push(
+    fs.existsSync(path.join(REPO_DIR, "node_modules"))
+      ? { name: "Dependencies", status: "ok", detail: "node_modules present" }
+      : {
+          name: "Dependencies",
+          status: "fail",
+          detail: "node_modules missing",
+          hint: "Run `npm install --include=dev --legacy-peer-deps`.",
+        }
+  );
+
+  results.push(
+    buildIsComplete()
+      ? { name: "Production build", status: "ok", detail: ".next present" }
+      : {
+          name: "Production build",
+          status: "warn",
+          detail: "not built",
+          hint: "Run `npm run build` (or `stoa install`) before `stoa start`.",
+        }
+  );
+
+  const agents = ["claude", "codex", "hermes", "kilo", "kimi"];
+  const foundAgents = agents.filter((a) => resolveCommand(a));
+  results.push(
+    foundAgents.length
+      ? { name: "Agent CLIs", status: "ok", detail: foundAgents.join(", ") }
+      : {
+          name: "Agent CLIs",
+          status: "warn",
+          detail: "none found",
+          hint: "Install at least one: Claude Code, Codex, Hermes, Kilo, or Kimi.",
+        }
+  );
+
+  // Port: if Stoa owns the pid file it's expected to hold the port; otherwise the
+  // port must be free to start. A foreign process on the port is a hard fail.
+  const pid = getRunningPid();
+  if (pid) {
+    results.push({
+      name: `Port ${PORT}`,
+      status: "ok",
+      detail: `Stoa is running (pid ${pid})`,
+    });
+  } else {
+    // Probe the actual bind target: the server binds STOA_HOST (default loopback),
+    // so a port held only on another interface still blocks the real start. A bad
+    // STOA_PORT (0, out of range, non-numeric) is reported as invalid — not probed,
+    // so listen() can't pick a random ephemeral port and falsely report "free".
+    const portNum = parsePort(PORT);
+    const host = process.env.STOA_HOST || "127.0.0.1";
+    if (portNum === null) {
+      results.push({
+        name: `Port ${PORT}`,
+        status: "fail",
+        detail: `invalid port "${PORT}"`,
+        hint: "Set STOA_PORT to a port in 1–65535 (default 3011).",
+      });
+    } else {
+      const free = await checkPortFree(portNum, host);
+      results.push(
+        free
+          ? { name: `Port ${PORT}`, status: "ok", detail: `free on ${host}` }
+          : {
+              name: `Port ${PORT}`,
+              status: "fail",
+              detail: `in use on ${host}`,
+              hint: `Free port ${PORT}, or set STOA_PORT to an open port.`,
+            }
+      );
+    }
+  }
+
+  console.log("");
+  console.log("Stoa doctor — preflight checks");
+  console.log("");
+  for (const r of results) console.log(formatDoctorLine(r));
+  const code = doctorExitCode(results);
+  console.log("");
+  console.log(
+    code === 0 ? "All clear." : "Some checks failed — see the hints above."
+  );
+  console.log("");
+  process.exit(code);
+}
+
 /** help: usage text. */
 function cmdHelp() {
   console.log("");
@@ -633,6 +817,7 @@ function cmdHelp() {
   console.log("  status      Show server status and URL");
   console.log("  logs        Tail server logs");
   console.log("  update      Update to the latest version");
+  console.log("  doctor      Run preflight environment checks");
   console.log("");
   console.log("Environment variables:");
   console.log("  STOA_HOME   Home directory (default: ~/.stoa)");
@@ -672,6 +857,14 @@ function main() {
     case "update":
       cmdUpdate();
       break;
+    case "doctor":
+      // Fire-and-forget async: surface any unexpected throw as a clean failure
+      // rather than an unhandled-rejection crash.
+      cmdDoctor().catch((err) => {
+        error(`doctor failed: ${err && err.message ? err.message : err}`);
+        process.exit(1);
+      });
+      break;
     case "help":
     case "--help":
     case "-h":
@@ -698,6 +891,14 @@ module.exports = {
   commandSpec,
   buildIsComplete,
   waitUntilDead,
+  // doctor (DX #14) — pure helpers, unit-tested
+  parseNodeMajor,
+  checkNodeVersion,
+  doctorExitCode,
+  formatDoctorLine,
+  parsePort,
+  checkPortFree,
+  NODE_MIN_MAJOR,
 };
 
 // PORT is read from the current env on every access so tests that reload the

@@ -113,7 +113,14 @@ stoa stop      # Stop server
 stoa status    # Show URLs
 stoa logs      # Tail logs
 stoa update    # Update to latest
+stoa doctor    # Preflight checks (Node, port, build, agents) with fix hints
 ```
+
+`stoa doctor` is a quick environment preflight — it verifies your Node version,
+that port 3011 is free (or Stoa is already running on it), the production build
+and dependencies are present, and at least one agent CLI is installed, printing an
+actionable hint for anything wrong. It exits non-zero if a hard requirement fails,
+so it doubles as an install/CI gate.
 
 ## Updating
 

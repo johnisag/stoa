@@ -261,8 +261,23 @@ typed, multi-provider, and cross-platform.
   iOS Safari — page-driven `online` replay works on every platform. Deferred:
   extending the queue beyond the prompt-send path; SW Background Sync as a progressive
   enhancement._
-- **Backlog (Phase 4):** #13 native mobile shells (needs Xcode/Android SDKs + signing
-  — out of scope for the headless build loop) · #14 DX polish.
+- **✅ #14 DX polish (`stoa doctor`) — SHIPPED.** A `stoa doctor` preflight
+  ([scripts/stoa.js](../scripts/stoa.js)) verifies the environment can run Stoa —
+  Node version (≥ the `engines` minimum), git on PATH, dependencies and the production
+  build present, at least one agent CLI installed, and that the configured port is
+  free on the bind host (or that Stoa already owns it) vs. held by a foreign process —
+  printing an actionable hint per check and exiting non-zero if a hard requirement
+  fails (so it doubles as an install/CI gate). The pure parsing/classification helpers
+  (`parseNodeMajor`, `checkNodeVersion`, `parsePort`, `doctorExitCode`,
+  `formatDoctorLine`) plus the `checkPortFree` net round-trip are unit-tested in
+  [test/stoa-cli.test.ts](../test/stoa-cli.test.ts). _#14's
+  other "cheap, optional" borrows are deferred: a hot-reload-on-save syntax/type gate
+  for `server.ts` (dev-only tooling) and fuzzy/numeric CLI session targeting (the ⌘K
+  Quick Switcher already fuzzy-matches sessions in the UI)._
+- **Backlog — needs human:** #13 native mobile shells (iOS/Android WebView wrappers)
+  needs Xcode/Android SDKs + code signing + app-store plumbing, which the headless
+  build loop has no toolchain for — left for a human. **With #13 set aside, the
+  amux-inspired backlog (#1–#12, #14, #15) is fully shipped.**
 
 ---
 
