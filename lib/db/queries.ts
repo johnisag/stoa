@@ -1151,6 +1151,42 @@ export const queries = {
       `SELECT COUNT(*) AS n FROM session_events WHERE session_key = ?`
     ),
 
+  // Persisted token/cost samples (#15). Upsert is idempotent per (session_key,
+  // day): re-sampling the same session the same UTC day overwrites that day's row
+  // with the latest cumulative numbers (never appends a duplicate).
+  upsertCostSample: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO session_costs
+         (session_key, day, session_id, agent_type, model,
+          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+          cost_usd, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(session_key, day) DO UPDATE SET
+         session_id = excluded.session_id,
+         agent_type = excluded.agent_type,
+         model = excluded.model,
+         input_tokens = excluded.input_tokens,
+         output_tokens = excluded.output_tokens,
+         cache_read_tokens = excluded.cache_read_tokens,
+         cache_write_tokens = excluded.cache_write_tokens,
+         cost_usd = excluded.cost_usd,
+         updated_at = datetime('now')`
+    ),
+
+  // Cost samples on/after a UTC day (the idx_session_costs_day range scan), for
+  // the spend-history endpoint. Ordered by day so the caller folds in order.
+  getCostSamplesSince: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM session_costs WHERE day >= ? ORDER BY day ASC, session_key ASC`
+    ),
+
+  // Bounded retention: drop samples older than the cutoff day so the table can't
+  // grow without limit on a long-lived install (the read side is windowed anyway).
+  deleteCostSamplesBefore: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM session_costs WHERE day < ?`),
+
   // Best-of-N
   createBonRun: (db: Database.Database) =>
     getStmt(

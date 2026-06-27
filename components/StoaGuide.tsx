@@ -30,6 +30,7 @@ import {
   LayoutGrid,
   TerminalSquare,
   Split,
+  LineChart,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -143,6 +144,12 @@ const COCKPIT: Item[] = [
     title: "Live Wall",
     blurb:
       "A read-only grid of every agent's live terminal — the control-plane view — streamed over the same WebSockets the panes use (open it from the header, ⌘K, or ⌘⇧M). Needs the native pty backend.",
+  },
+  {
+    icon: LineChart,
+    title: "Spend history",
+    blurb:
+      "Estimated token spend, now persisted per day — a durable per-day curve in the cost badge that survives a session being deleted or its transcript scrolling off (the live estimate can't). Accrues whenever the cost badge is open, or unattended with STOA_AUTO_COST_SAMPLE=1.",
   },
   {
     icon: Workflow,
