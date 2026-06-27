@@ -11,6 +11,7 @@ import { createRequire } from "module";
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import net from "net";
 
 // The CLI is a CommonJS script (runs under plain `node`); load it via
 // createRequire so this ESM/TS test can import its pure helpers. main() is
@@ -25,6 +26,13 @@ const {
   loadEnvFile,
   commandSpec,
   buildIsComplete,
+  parseNodeMajor,
+  checkNodeVersion,
+  doctorExitCode,
+  formatDoctorLine,
+  parsePort,
+  checkPortFree,
+  NODE_MIN_MAJOR,
 } = require(CLI_PATH) as {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
@@ -34,6 +42,21 @@ const {
     args?: string[]
   ) => { file: string; args: string[] };
   buildIsComplete: (dir?: string) => boolean;
+  parseNodeMajor: (v: string) => number | null;
+  checkNodeVersion: (
+    v: string,
+    min?: number
+  ) => { name: string; status: string; detail: string; hint?: string };
+  doctorExitCode: (results: { status: string }[]) => number;
+  formatDoctorLine: (r: {
+    name: string;
+    status: string;
+    detail: string;
+    hint?: string;
+  }) => string;
+  parsePort: (v: unknown) => number | null;
+  checkPortFree: (port: number, host?: string) => Promise<boolean>;
+  NODE_MIN_MAJOR: number;
 };
 
 function loadCliWith(env: Record<string, string | undefined>) {
@@ -247,5 +270,91 @@ describe("stoa CLI: build artifact verification", () => {
     writeFileSync(join(dir, ".next", "BUILD_ID"), "build\n");
     writeFileSync(join(dir, ".next", "prerender-manifest.json"), "{}");
     expect(buildIsComplete(dir)).toBe(true);
+  });
+});
+
+describe("stoa CLI: doctor (preflight) pure helpers", () => {
+  it("parseNodeMajor extracts the major from a version string", () => {
+    expect(parseNodeMajor("v24.14.0")).toBe(24);
+    expect(parseNodeMajor("24.0.1")).toBe(24); // no leading v
+    expect(parseNodeMajor("v20.11.1")).toBe(20);
+    expect(parseNodeMajor("")).toBeNull();
+    expect(parseNodeMajor("nonsense")).toBeNull();
+  });
+
+  it("checkNodeVersion passes at/above the minimum, fails below", () => {
+    expect(checkNodeVersion(`v${NODE_MIN_MAJOR}.0.0`).status).toBe("ok");
+    expect(checkNodeVersion(`v${NODE_MIN_MAJOR + 3}.2.0`).status).toBe("ok");
+    const low = checkNodeVersion(`v${NODE_MIN_MAJOR - 1}.0.0`);
+    expect(low.status).toBe("fail");
+    expect(low.hint).toBeTruthy(); // a failure carries an actionable hint
+    expect(low.detail).toContain(String(NODE_MIN_MAJOR)); // tells you the minimum
+  });
+
+  it("checkNodeVersion warns (not fails) on an unparseable version", () => {
+    expect(checkNodeVersion("garbage").status).toBe("warn");
+  });
+
+  it("doctorExitCode is 1 iff any check failed (a warn is advisory)", () => {
+    expect(doctorExitCode([{ status: "ok" }, { status: "warn" }])).toBe(0);
+    expect(doctorExitCode([{ status: "ok" }, { status: "fail" }])).toBe(1);
+    expect(doctorExitCode([])).toBe(0);
+  });
+
+  it("formatDoctorLine shows the icon, and the hint only when not ok", () => {
+    const ok = formatDoctorLine({
+      name: "Node.js",
+      status: "ok",
+      detail: "v24",
+    });
+    expect(ok).toContain("Node.js: v24");
+    expect(ok).not.toContain("→"); // ok lines have no hint arrow
+    const bad = formatDoctorLine({
+      name: "git",
+      status: "fail",
+      detail: "missing",
+      hint: "Install Git",
+    });
+    expect(bad).toContain("git: missing");
+    expect(bad).toContain("→ Install Git"); // hint rendered for a failure
+  });
+
+  it("formatDoctorLine renders the hint arrow for a WARN too (the common non-ok line)", () => {
+    const warn = formatDoctorLine({
+      name: "Agent CLIs",
+      status: "warn",
+      detail: "none found",
+      hint: "Install one",
+    });
+    expect(warn).toContain("Agent CLIs: none found");
+    expect(warn).toContain("→ Install one"); // warn carries its hint, like fail
+  });
+
+  it("parsePort accepts a clean 1–65535 port, rejects 0 / out-of-range / non-numeric", () => {
+    expect(parsePort("3011")).toBe(3011);
+    expect(parsePort(" 8080 ")).toBe(8080); // trimmed
+    expect(parsePort("1")).toBe(1);
+    expect(parsePort("65535")).toBe(65535);
+    expect(parsePort("0")).toBeNull(); // would bind a random ephemeral port
+    expect(parsePort("65536")).toBeNull(); // out of range
+    expect(parsePort("-1")).toBeNull();
+    expect(parsePort("3011x")).toBeNull(); // not purely numeric
+    expect(parsePort("abc")).toBeNull();
+    expect(parsePort("")).toBeNull();
+    expect(parsePort(undefined)).toBeNull();
+  });
+});
+
+describe("stoa CLI: checkPortFree (real net round-trip)", () => {
+  it("reports an occupied port not-free and a released port free", async () => {
+    const srv = net.createServer();
+    const port: number = await new Promise((resolve) => {
+      srv.listen(0, "127.0.0.1", () => {
+        resolve((srv.address() as net.AddressInfo).port);
+      });
+    });
+    expect(await checkPortFree(port, "127.0.0.1")).toBe(false); // held
+    await new Promise<void>((r) => srv.close(() => r()));
+    expect(await checkPortFree(port, "127.0.0.1")).toBe(true); // released
   });
 });
