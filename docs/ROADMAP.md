@@ -236,8 +236,33 @@ typed, multi-provider, and cross-platform.
   Hermes / Kilo / Kimi is registering a reader (the whole cost surface + persistence
   then lights up for it). _Deferred: the non-Claude transcript readers themselves;
   feeding the persisted history into the Insights/analytics trend lenses._
-- **Backlog (Phase 4):** #12 offline/background-sync · #13 native mobile shells ·
-  #14 DX polish.
+- **✅ #12 Offline command queue + reconnect replay — SHIPPED.** Stoa is mobile-first
+  and phones drop connections; a "queue this prompt to my agent" tapped in a dead
+  spot used to just fail. Now a mutating request that can't reach the server is
+  stashed in a durable on-device queue (IndexedDB, [lib/offline-queue-idb.ts](../lib/offline-queue-idb.ts),
+  in-memory fallback when IDB is blocked) and replayed the moment connectivity
+  returns. The portable core is in [lib/offline-queue.ts](../lib/offline-queue.ts): a
+  pure replay POLICY (`classifyReplay` — 2xx succeed, 408/429/5xx/network retry, other
+  4xx drop-as-stale, capped attempts) + a replay ENGINE over an injected store + fetch
+  (so it's Node-unit-tested with no browser). [hooks/useOfflineQueue.ts](../hooks/useOfflineQueue.ts)
+  drains on the `online` event (and once on mount) with toast feedback; the
+  prompt-send path ([hooks/useSessionQueue.ts](../hooks/useSessionQueue.ts)) queues on
+  a network failure and optimistically reflects it. Replay is **idempotent**: each
+  action carries a client id and `enqueuePromptIdempotent` de-dupes a twice-delivered
+  POST server-side (a per-session, bounded in-memory window). Hardened from review:
+  same-millisecond sends keep order via a monotonic `seq` tiebreaker (IndexedDB's
+  getAll is key-order), the replay engine refuses any non-same-origin `url` from the
+  page-writable store, and the idempotency key is scoped per `(session, id)` so one
+  session can't suppress another. Replay is **default-on** (not behind an
+  `STOA_AUTO_*` flag) by design: it completes the user's OWN already-tapped, already-
+  acknowledged send — offline-first completion, not autonomous origination — and
+  gating it would defeat the feature on the mobile platform it targets. _Chosen over
+  amux's Service-Worker Background-Sync tag because that is Chromium-only and absent on
+  iOS Safari — page-driven `online` replay works on every platform. Deferred:
+  extending the queue beyond the prompt-send path; SW Background Sync as a progressive
+  enhancement._
+- **Backlog (Phase 4):** #13 native mobile shells (needs Xcode/Android SDKs + signing
+  — out of scope for the headless build loop) · #14 DX polish.
 
 ---
 
