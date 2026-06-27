@@ -61,6 +61,14 @@ export function clampLines(value: unknown): number {
   return Math.min(n, 10000);
 }
 
+/** Collapse a (possibly multi-line) value to a single trimmed line, truncated to
+ * `max` chars — so a list of entries stays scannable and a stored newline can't
+ * forge fake "- " list rows. Shared by memory_list and notes_list. */
+export function oneLinePreview(value: string, max = 120): string {
+  const oneLine = value.replace(/\s+/g, " ").trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
+
 export async function handleToolCall(request: {
   params: { name: string; arguments?: Record<string, unknown> };
 }) {
@@ -403,12 +411,8 @@ export async function handleToolCall(request: {
         // One-line preview per entry (a value may be long / multi-line, which
         // would otherwise break the "- key: value" list); read the full value
         // with memory_get.
-        const preview = (v: string) => {
-          const oneLine = v.replace(/\s+/g, " ").trim();
-          return oneLine.length > 120 ? `${oneLine.slice(0, 117)}…` : oneLine;
-        };
         const list = entries
-          .map((e) => `- ${e.key}: ${preview(e.value)}`)
+          .map((e) => `- ${e.key}: ${oneLinePreview(e.value)}`)
           .join("\n");
         return {
           content: [{ type: "text" as const, text: `Shared memory:\n${list}` }],
@@ -430,6 +434,113 @@ export async function handleToolCall(request: {
                 : result.removed
                   ? `Deleted memory "${key}".`
                   : `No memory entry "${key}" to delete.`,
+            },
+          ],
+        };
+      }
+
+      case "notes_list": {
+        const result = await apiCall("/api/notes");
+        if (result.error) {
+          return {
+            content: [
+              { type: "text" as const, text: `Error: ${result.error}` },
+            ],
+          };
+        }
+        const notes: { id: string; title: string; content: string }[] =
+          result.notes || [];
+        if (notes.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "No notes yet." }],
+          };
+        }
+        const list = notes
+          .map(
+            (n) =>
+              `- ${n.id.slice(0, 8)}  ${n.title || "(untitled)"}: ${oneLinePreview(n.content, 100)}`
+          )
+          .join("\n");
+        return {
+          content: [{ type: "text" as const, text: `Notes:\n${list}` }],
+        };
+      }
+
+      case "notes_get": {
+        const id = requireString(args, "id");
+        const result = await apiCall(`/api/notes/${encodeURIComponent(id)}`);
+        if (!result.note) {
+          return {
+            content: [
+              { type: "text" as const, text: `No note with id "${id}".` },
+            ],
+          };
+        }
+        const n = result.note;
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `# ${n.title || "(untitled)"}\n\n${n.content}`,
+            },
+          ],
+        };
+      }
+
+      case "notes_write": {
+        // With an id → update that note; without → create a new one.
+        const id = typeof args?.id === "string" ? args.id : null;
+        const result = id
+          ? await apiCall(`/api/notes/${encodeURIComponent(id)}`, {
+              method: "PATCH",
+              body: JSON.stringify({
+                title: args?.title,
+                content: args?.content,
+              }),
+            })
+          : await apiCall("/api/notes", {
+              method: "POST",
+              body: JSON.stringify({
+                title: args?.title,
+                content: args?.content,
+              }),
+            });
+        if (result.error || !result.note) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: ${result.error || (id ? `no note with id "${id}"` : "failed to create note")}`,
+              },
+            ],
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: id
+                ? `Updated note ${result.note.id}.`
+                : `Created note ${result.note.id}.`,
+            },
+          ],
+        };
+      }
+
+      case "notes_delete": {
+        const id = requireString(args, "id");
+        const result = await apiCall(`/api/notes/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: result.error
+                ? `Error: ${result.error}`
+                : result.removed
+                  ? `Deleted note ${id}.`
+                  : `No note with id "${id}" to delete.`,
             },
           ],
         };

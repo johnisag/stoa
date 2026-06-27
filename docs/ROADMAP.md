@@ -124,8 +124,18 @@ typed, multi-provider, and cross-platform.
   needed — `lib/mcp-config.ts` already points every conductor at the server, so the
   new tools register automatically. This is the pattern #4 notes / #6 channels /
   #5 scheduler build on.
-- **Next (Phase 2 cont.):** #4 notes → #6 channels → #5 scheduler, each a new
-  data tool on the same MCP + `/api/*` seam.
+- **✅ #4 Notes / shared knowledge base — SHIPPED.** The first feature built on the
+  #3 data-tool seam. A `notes` table (migration 40) → `lib/notes.ts` service →
+  `GET/POST /api/notes` + `GET/PATCH/DELETE /api/notes/[id]` → four auto-registering
+  `notes_*` MCP tools (list/get/write/delete) — and, unlike #3, a **human UI**: a
+  Notes dialog (reaching the SAME route via react-query) with a list, the reused
+  markdown renderer, view/edit, pin, create, delete, opened from a fleet-nav button
+  - a ⌘K command. Markdown handoff docs shared across the whole fleet ("notes =
+    things to read"); pull-based like the memory (no terminal-inject surface).
+    _Per-session namespacing + trash/restore are deferred follow-ups; v1 is
+    fleet-shared + pinnable._
+- **Next (Phase 2 cont.):** #6 channels → #5 scheduler, each a new data tool on the
+  same MCP + `/api/*` seam.
 
 ---
 

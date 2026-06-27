@@ -48,6 +48,8 @@ export interface ViewProps {
   onOpenAsk: () => void;
   onShowShortcuts: () => void;
   onShowGuide: () => void;
+  /** Open the Notes / shared knowledge base dialog. */
+  onShowNotes: () => void;
 
   // Notification settings
   notificationSettings: NotificationSettings;

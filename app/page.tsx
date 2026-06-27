@@ -55,6 +55,7 @@ import { getActiveBackend } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
 import { StoaGuide } from "@/components/StoaGuide";
+import { NotesDialog } from "@/components/Notes/NotesDialog";
 import { SessionDiffModal } from "@/components/SessionDiffModal";
 import type { Keybinding } from "@/lib/keybindings";
 
@@ -193,6 +194,7 @@ function HomeContent() {
 
   const [showHelp, setShowHelp] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
   // Session whose diff to show via the "See changes" jump (fired when a turn
   // completes). null = the diff modal is closed.
   const [seeChangesSessionId, setSeeChangesSessionId] = useState<string | null>(
@@ -852,6 +854,7 @@ function HomeContent() {
     onOpenAsk: () => addViewTab(focusedPaneId, "ask"),
     onShowShortcuts: () => setShowHelp(true),
     onShowGuide: () => setShowGuide(true),
+    onShowNotes: () => setShowNotes(true),
     notificationSettings,
     permissionGranted,
     updateSettings,
@@ -892,6 +895,7 @@ function HomeContent() {
       />
       {/* Plain-English feature tour (opened from the sidebar footer). */}
       <StoaGuide open={showGuide} onOpenChange={setShowGuide} />
+      <NotesDialog open={showNotes} onOpenChange={setShowNotes} />
       {/* Dispatch + Verdict Inbox are now first-class pane TABs (see addViewTab),
           not dialogs — opened from the nav / cross-links via onOpenDispatch /
           onOpenVerdictInbox. */}

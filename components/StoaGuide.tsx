@@ -24,6 +24,7 @@ import {
   ScanSearch,
   TriangleAlert,
   BrainCircuit,
+  NotebookPen,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -101,6 +102,12 @@ const COCKPIT: Item[] = [
     title: "Shared agent memory",
     blurb:
       "A fleet-wide key→value scratchpad agents read/write over MCP (and a plain /api/memory route) — to share interface contracts and gotchas across worktrees.",
+  },
+  {
+    icon: NotebookPen,
+    title: "Notes",
+    blurb:
+      "A shared markdown knowledge base — handoffs, contracts, gotchas — that you edit in a dialog and your agents read/write over MCP (the same /api/notes endpoint).",
   },
   {
     icon: Workflow,
