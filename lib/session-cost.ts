@@ -1,12 +1,5 @@
-import { readFile } from "fs/promises";
-import { join } from "path";
-import { homedir } from "os";
-import {
-  findClaudeProjectDir,
-  claudeProjectDirName,
-  expandHome,
-} from "./platform";
 import { ZERO_USAGE, computeCostUsd, type TokenUsage } from "./pricing";
+import { readClaudeTranscriptRaw } from "./claude-transcript";
 import type { Session } from "./db";
 
 export interface SessionCost {
@@ -113,27 +106,12 @@ export async function readClaudeSessionUsage(
   cwd: string,
   claudeSessionId: string
 ): Promise<{ tokens: TokenUsage; contextTokens: number } | null> {
-  // The id is interpolated into the path and can originate from an external
-  // POST field — reject anything that isn't a plain id token so it can't
-  // traverse out of ~/.claude/projects.
-  if (!/^[\w-]+$/.test(claudeSessionId)) return null;
-  try {
-    const expanded = expandHome(cwd);
-    const projectDir =
-      findClaudeProjectDir(expanded) ||
-      join(homedir(), ".claude", "projects", claudeProjectDirName(expanded));
-    // readFile throws ENOENT if it's missing → caught below (no existsSync race).
-    const raw = await readFile(
-      join(projectDir, `${claudeSessionId}.jsonl`),
-      "utf-8"
-    );
-    return {
-      tokens: parseClaudeUsage(raw),
-      contextTokens: parseClaudeContextTokens(raw),
-    };
-  } catch {
-    return null;
-  }
+  const raw = await readClaudeTranscriptRaw(cwd, claudeSessionId);
+  if (raw == null) return null;
+  return {
+    tokens: parseClaudeUsage(raw),
+    contextTokens: parseClaudeContextTokens(raw),
+  };
 }
 
 /**

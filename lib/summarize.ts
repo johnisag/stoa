@@ -4,18 +4,23 @@
 // effects (reading the JSONL off disk, spawning `claude -p`, the fork); this
 // file owns the parsing, the prompt text, and the post-processing.
 
-/**
- * Flatten a Claude Code session JSONL transcript into a plain "User: ... /
- * Assistant: ..." conversation. Mirrors the extraction the summarize route used
- * inline: user messages (string or stringified content) and assistant TEXT
- * blocks only -- tool calls and thinking are dropped. Malformed lines are
- * skipped. Returns "" when nothing usable is found.
- */
-export function parseClaudeTranscript(jsonl: string): string {
-  const lines = jsonl.trim().split("\n");
-  const messages: string[] = [];
+/** One searchable/flattenable turn extracted from a Claude transcript. */
+export interface TranscriptEntry {
+  role: "user" | "assistant";
+  text: string;
+}
 
-  for (const line of lines) {
+/**
+ * Extract the text turns from a Claude Code JSONL transcript: user messages
+ * (string or stringified structured content) and assistant TEXT blocks only --
+ * tool calls and thinking are dropped. One entry per qualifying line; malformed
+ * and blank lines are skipped. The single source of truth for "how Stoa reads a
+ * transcript into text", shared by parseClaudeTranscript (summary flattening) and
+ * the cross-session output search (per-turn snippet matching). Pure.
+ */
+export function extractTranscriptEntries(jsonl: string): TranscriptEntry[] {
+  const out: TranscriptEntry[] = [];
+  for (const line of jsonl.split("\n")) {
     if (!line.trim()) continue;
     try {
       const entry = JSON.parse(line);
@@ -26,7 +31,7 @@ export function parseClaudeTranscript(jsonl: string): string {
           typeof entry.message.content === "string"
             ? entry.message.content
             : JSON.stringify(entry.message.content);
-        messages.push(`User: ${content}`);
+        out.push({ role: "user", text: content });
       }
 
       // Assistant text responses (skip tool calls and thinking).
@@ -35,16 +40,26 @@ export function parseClaudeTranscript(jsonl: string): string {
           .filter((block: { type: string }) => block.type === "text")
           .map((block: { text: string }) => block.text)
           .join("\n");
-        if (textBlocks) {
-          messages.push(`Assistant: ${textBlocks}`);
-        }
+        if (textBlocks) out.push({ role: "assistant", text: textBlocks });
       }
     } catch {
       // Skip malformed lines
     }
   }
+  return out;
+}
 
-  return messages.join("\n\n");
+/**
+ * Flatten a Claude Code session JSONL transcript into a plain "User: ... /
+ * Assistant: ..." conversation. Mirrors the extraction the summarize route used
+ * inline: user messages (string or stringified content) and assistant TEXT
+ * blocks only -- tool calls and thinking are dropped. Malformed lines are
+ * skipped. Returns "" when nothing usable is found.
+ */
+export function parseClaudeTranscript(jsonl: string): string {
+  return extractTranscriptEntries(jsonl)
+    .map((e) => `${e.role === "user" ? "User" : "Assistant"}: ${e.text}`)
+    .join("\n\n");
 }
 
 /**
