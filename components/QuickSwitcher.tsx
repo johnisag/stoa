@@ -24,6 +24,7 @@ import {
   Sparkles,
   NotebookPen,
   LayoutGrid,
+  TerminalSquare,
 } from "lucide-react";
 import { statusGlyph } from "@/components/status-glyph";
 import type { Session } from "@/lib/db";
@@ -112,6 +113,7 @@ interface QuickSwitcherProps {
   onOpenAskStoa?: () => void;
   /** Open the Notes / shared knowledge base dialog. */
   onOpenNotes?: () => void;
+  onOpenCommands?: () => void;
   onOpenLiveWall?: () => void;
 }
 
@@ -136,6 +138,7 @@ export function QuickSwitcher({
   onNewSession,
   onOpenAskStoa,
   onOpenNotes,
+  onOpenCommands,
   onOpenLiveWall,
 }: QuickSwitcherProps) {
   const { isMobile } = useViewport();
@@ -218,6 +221,13 @@ export function QuickSwitcher({
       <NotebookPen className="h-4 w-4" />
     );
     add(
+      "open-commands",
+      "Open Commands",
+      ["command", "skill", "slash", "macro", "snippet"],
+      onOpenCommands,
+      <TerminalSquare className="h-4 w-4" />
+    );
+    add(
       "open-live-wall",
       "Open Live Wall",
       ["wall", "grid", "terminals", "monitor", "live", "fleet", "watch"],
@@ -234,6 +244,7 @@ export function QuickSwitcher({
     onOpenWorkflows,
     onOpenAskStoa,
     onOpenNotes,
+    onOpenCommands,
     onOpenLiveWall,
   ]);
 
