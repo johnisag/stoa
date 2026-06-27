@@ -11,6 +11,12 @@ import type { Session, Group } from "@/lib/db";
 export interface SessionsCache {
   sessions: Session[];
   groups: Group[];
+  /** Server-resolved absolute home dir + OS case-sensitivity, so client-side path
+   * comparison (e.g. the worktree-conflict detector) can canonicalize the same
+   * way the server does. Optional: preserved across optimistic spreads, absent
+   * only until the first fetch resolves. */
+  homeDir?: string;
+  isWindows?: boolean;
 }
 
 /** Optimistic delete: drop a session from the cached list. */

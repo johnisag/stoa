@@ -90,8 +90,20 @@ typed, multi-provider, and cross-platform.
   only the seed prompt in the live terminal architecture, so the transcript is the
   only real corpus. _Claude-only today (the only transcript Stoa reads), mirroring
   the cost surface; per-provider transcripts are a follow-up._
-- **Next:** #9 worktree-conflict badge · #10 rate-limit budget hardening (Phase 1),
-  then the MCP data-tool unlock (#3 → #4 → #6 → #5).
+- **✅ #9 Worktree-conflict warning — SHIPPED.** A cross-session "are two agents
+  about to clobber each other?" badge. A pure, I/O-free detector
+  (`lib/worktree-conflict.ts`) groups the live session list by normalized
+  `working_directory` — which IS the checkout a pty edits, and is unique per
+  worktree, so worktree-isolated sessions self-exempt — and flags any directory
+  shared by ≥2 **live** sessions (a dead pty can't clobber). Surfaced as an amber ⚠
+  badge on the session card (with a tooltip to isolate one in a worktree). Simpler
+  than amux's `repo::branch` grouping — a shared directory already implies a shared
+  branch, so no git I/O or default-branch resolution is needed; the tradeoff is two
+  sessions in _different_ dirs that alias the same checkout (a symlink, or a repo
+  root vs a subdirectory) aren't grouped. The server passes the home dir + OS
+  case-sensitivity so path equality matches `normalizePathForCompare`.
+- **Next:** #10 rate-limit budget hardening (Phase 1), then the MCP data-tool
+  unlock (#3 → #4 → #6 → #5).
 
 ---
 

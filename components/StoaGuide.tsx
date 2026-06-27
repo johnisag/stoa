@@ -22,6 +22,7 @@ import {
   Brain,
   HeartPulse,
   ScanSearch,
+  TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -77,6 +78,12 @@ const COCKPIT: Item[] = [
     icon: GitFork,
     title: "Git worktrees",
     blurb: "Isolated branches with automatic setup per session.",
+  },
+  {
+    icon: TriangleAlert,
+    title: "Conflict warning",
+    blurb:
+      "Flags when two sessions share a working directory and could clobber each other's edits — isolate one in a worktree.",
   },
   {
     icon: Server,

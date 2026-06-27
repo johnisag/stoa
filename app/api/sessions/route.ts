@@ -17,7 +17,7 @@ import {
   writeConductorMarker,
   ensureHermesMcpRegistered,
 } from "@/lib/mcp-config";
-import { expandHome } from "@/lib/platform";
+import { expandHome, homeDir, isWindows } from "@/lib/platform";
 import { getLessonsBlockForCwd } from "@/lib/dispatch/lessons";
 import {
   parseJsonBody,
@@ -42,7 +42,14 @@ export async function GET() {
       expanded: Boolean(g.expanded),
     }));
 
-    return NextResponse.json({ sessions, groups: formattedGroups });
+    // Path context for client-side canonicalization (worktree-conflict detector):
+    // the server knows the home dir + OS case-sensitivity; the browser doesn't.
+    return NextResponse.json({
+      sessions,
+      groups: formattedGroups,
+      homeDir: homeDir(),
+      isWindows,
+    });
   } catch (error) {
     console.error("Error fetching sessions:", error);
     return NextResponse.json(
