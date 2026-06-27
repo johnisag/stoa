@@ -20,6 +20,7 @@ import {
   Compass,
   Navigation,
   Brain,
+  HeartPulse,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -131,6 +132,12 @@ const FLEET: Item[] = [
     title: "Auto-steer",
     blurb:
       "Resumes after a rate-limit, answers routine prompts, escalates risky ones, and can page you when a session is stuck in an error loop — enabled with server flags.",
+  },
+  {
+    icon: HeartPulse,
+    title: "Self-healing watchdog",
+    blurb:
+      "Keeps an unattended fleet alive: reaps a hung worker that would pin a concurrency slot forever, and pages you when a session wedges (spinner never settles) — enabled with server flags.",
   },
   {
     icon: Brain,
