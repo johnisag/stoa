@@ -83,19 +83,23 @@ On Windows the native pty backend is selected automatically (no tmux/WSL needed)
 
 ## Supported Agents
 
-| Agent       | Resume | Fork | Auto-Approve                                 |
-| ----------- | ------ | ---- | -------------------------------------------- |
-| Claude Code | ✅     | ✅   | `--dangerously-skip-permissions`             |
-| Codex       | ❌     | ❌   | `--dangerously-bypass-approvals-and-sandbox` |
-| Hermes      | ✅     | ❌   | `--yolo`                                     |
-| Kilo Code   | ❌     | ❌   | —                                            |
-| Kimi Code   | ✅     | ❌   | `--yolo`                                     |
+| Agent       | Resume | Fork          | Auto-Approve                                 |
+| ----------- | ------ | ------------- | -------------------------------------------- |
+| Claude Code | ✅     | ✅ native     | `--dangerously-skip-permissions`             |
+| Codex       | ❌     | ✅ scrollback | `--dangerously-bypass-approvals-and-sandbox` |
+| Hermes      | ✅     | ✅ scrollback | `--yolo`                                     |
+| Kilo Code   | ❌     | ✅ scrollback | —                                            |
+| Kimi Code   | ✅     | ✅ scrollback | `--yolo`                                     |
 
 _**Resume**/**Fork** reflect what Stoa manages per session, not the CLI's raw
-capability. **Auto-Approve** is the flag Stoa passes when you enable "skip
-permissions". Hermes resume works by capturing its session id from the startup
-banner. Codex resume/fork (its CLI exposes `codex resume`/`codex fork`
-subcommands) is planned — see [docs/ROADMAP.md](docs/ROADMAP.md). **Kimi Code**
+capability. **Fork** branches a conversation: Claude does it **natively**
+(`--fork-session`, the full history); every other agent forks via a
+**scrollback** fallback — a fresh session seeded with the parent's recent
+terminal transcript as a "continue from here" prompt (#11). **Auto-Approve** is the
+flag Stoa passes when you enable "skip permissions". Hermes resume works by
+capturing its session id from the startup banner. Codex resume and its native
+`codex fork` subcommand (today Codex forks via the scrollback fallback) are
+planned — see [docs/ROADMAP.md](docs/ROADMAP.md). **Kimi Code**
 resume works by capturing its session id from its startup banner, exactly like
 Hermes. **Kilo Code** launches as a real terminal session like any other agent;
 its per-session resume capture is a follow-up._
