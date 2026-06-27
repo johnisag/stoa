@@ -46,7 +46,7 @@ on the board (type or dictate one request).
   **audited**. `POST /api/command/propose` runs the agent (answers in prose OR
   emits a strict-JSON action); the proposal is validated against the allowlist
   (`lib/command/actions`) and rendered as a **confirm card**; `POST
-  /api/command/execute` re-validates server-side and creates the session
+/api/command/execute` re-validates server-side and creates the session
   **in-process** (no self-fetch), directory derived from the server-resolved
   project, `auto_approve` hard-off. Ships ONE action — `create_session` (same
   capability as the New Session dialog). Audited to the `session_events` ledger
@@ -60,6 +60,28 @@ on the board (type or dictate one request).
   Windows tree-kill on the runAsk timeout; sync-test ASK_PROVIDERS ↔
   CHAT_PROVIDER_OPTIONS; harden the operator-set `project.default_model` →
   hermes-on-POSIX `-m` path (pre-existing, not chatbox-reachable)._
+
+---
+
+## 🛠️ Advancements — borrowing operator features from amux
+
+A prioritized backlog ([docs/ADVANCEMENTS.md](ADVANCEMENTS.md)) of agent-OS
+features distilled from a deep Stoa-vs-amux analysis, shipped one advancement per
+branch by the autonomous loop. Each lands on a seam Stoa already has and stays
+typed, multi-provider, and cross-platform.
+
+- **✅ #1 Self-healing watchdog — SHIPPED.** "The fleet doesn't die." Two opt-in,
+  default-off, escalate-first safeguards on existing seams: a **hung-worker reaper**
+  in the Dispatch reconciler (`STOA_DISPATCH_WORKER_MAX_AGE_MS`) frees a concurrency
+  slot a wedged worker would otherwise pin forever, and a **wedged-session push**
+  (`STOA_AUTO_WATCHDOG=1`) on the 2.5s status tick pages you ONCE when a session
+  stays "running" past a wall-clock ceiling (a spinner that never settles). The
+  terminal is never written to — a false positive costs one notification, never a
+  derailed agent. Pure, unit-tested core in `lib/watchdog.ts`. _Deferred to v2:
+  unattended crash-restart + low-context auto-/compact as per-provider descriptors._
+- **Next:** #2 cross-session output search · #9 worktree-conflict badge · #10
+  rate-limit budget hardening (Phase 1), then the MCP data-tool unlock (#3 → #4 →
+  #6 → #5).
 
 ---
 

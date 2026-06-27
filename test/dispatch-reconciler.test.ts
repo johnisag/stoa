@@ -5,7 +5,15 @@
  * auto dispatches up to the slot count, review leaves candidates pending,
  * disabled repos are skipped, and ingestion is idempotent.
  */
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
 import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
@@ -148,8 +156,19 @@ function addDispatchedWithSession(
   return dispatchId;
 }
 
+// Backdate a worker's dispatched_at so the age reaper sees it as hung.
+function setDispatchedAt(dispatchId: string, sqliteTime: string) {
+  db()
+    .prepare("UPDATE issue_dispatches SET dispatched_at = ? WHERE id = ?")
+    .run(sqliteTime, dispatchId);
+}
+
 const getStatus = (id: string) =>
   (queries.getDispatch(db()).get(id) as IssueDispatch).status;
+
+afterEach(() => {
+  delete process.env.STOA_DISPATCH_WORKER_MAX_AGE_MS;
+});
 
 describe("reconcileTick", () => {
   it("auto mode dispatches up to the slot count (concurrency-bound)", async () => {
@@ -325,5 +344,58 @@ describe("sweepActiveWorkers", () => {
     await sweepActiveWorkers({ guardEmptyList: false });
 
     expect(getStatus(d)).toBe("failed"); // slot freed — won't pin forever
+  });
+
+  it("watchdog reaps a HUNG live worker (old dispatched_at) when the age reaper is armed", async () => {
+    process.env.STOA_DISPATCH_WORKER_MAX_AGE_MS = "3600000"; // 1h ceiling
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-hung" });
+    setDispatchedAt(d, "2020-01-01 00:00:00"); // dispatched years ago
+    backendList.mockResolvedValue(["claude-hung"]); // STILL live, but wedged
+
+    await sweepActiveWorkers({ guardEmptyList: false });
+
+    expect(getStatus(d)).toBe("failed"); // slot reclaimed despite being live
+    expect((queries.countLiveInFlight(db()).get(repo) as { n: number }).n).toBe(
+      0
+    );
+  });
+
+  it("leaves an old live worker dispatched when the reaper is DISARMED (default)", async () => {
+    // No STOA_DISPATCH_WORKER_MAX_AGE_MS → today's behavior, never reap by age.
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-old" });
+    setDispatchedAt(d, "2020-01-01 00:00:00");
+    backendList.mockResolvedValue(["claude-old"]);
+
+    await sweepActiveWorkers({ guardEmptyList: false });
+
+    expect(getStatus(d)).toBe("dispatched"); // untouched
+  });
+
+  it("leaves a RECENT live worker dispatched even when the reaper is armed", async () => {
+    process.env.STOA_DISPATCH_WORKER_MAX_AGE_MS = "3600000"; // 1h ceiling
+    const repo = addRepo();
+    // dispatched_at defaults to datetime('now') — well within the 1h ceiling.
+    const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-fresh" });
+    backendList.mockResolvedValue(["claude-fresh"]);
+
+    await sweepActiveWorkers({ guardEmptyList: false });
+
+    expect(getStatus(d)).toBe("dispatched"); // too young to reap
+  });
+
+  it("does NOT reap a hung worker under the startup guard (empty live list)", async () => {
+    process.env.STOA_DISPATCH_WORKER_MAX_AGE_MS = "3600000"; // 1h ceiling
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-x" });
+    setDispatchedAt(d, "2020-01-01 00:00:00"); // old, but…
+    backendList.mockResolvedValue([]); // …ambiguous startup: daemon mid-hydration
+
+    await sweepActiveWorkers({ guardEmptyList: true });
+
+    // The age reaper respects the startup guard — a worker that may just not have
+    // rehydrated yet is NOT reaped on age alone (no false-fail during the race).
+    expect(getStatus(d)).toBe("dispatched");
   });
 });

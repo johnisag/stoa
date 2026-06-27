@@ -17,6 +17,7 @@ import type { IssueDispatch } from "../dispatch/types";
 import type { AgentType } from "../providers";
 import { computeSessionCosts } from "../session-cost";
 import { buildReport, utcDay } from "./engine";
+import { sqliteTimeToMs } from "../sqlite-time";
 import type {
   AnalyticsSnapshot,
   AnalyticsSession,
@@ -28,14 +29,10 @@ const MS_PER_DAY = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 14;
 const MAX_WINDOW_DAYS = 90;
 
-/** Parse a TEXT datetime('now') value (UTC, no zone) to epoch ms; now() on fail. */
+/** Parse a TEXT datetime('now') value (UTC, no zone) to epoch ms; fallback on
+ * fail. Thin wrapper over the shared sqliteTimeToMs (see lib/sqlite-time.ts). */
 function parseSqlTime(s: string | null | undefined, fallback: number): number {
-  if (!s) return fallback;
-  // SQLite datetime('now') yields "YYYY-MM-DD HH:MM:SS" in UTC — append Z so
-  // Date parses it as UTC rather than local (which would skew every duration).
-  const iso = s.includes("T") ? s : s.replace(" ", "T") + "Z";
-  const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? fallback : ms;
+  return sqliteTimeToMs(s) ?? fallback;
 }
 
 /** Clamp the window-days query param into a sane range. */
