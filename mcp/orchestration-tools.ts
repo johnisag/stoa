@@ -683,6 +683,112 @@ export async function handleToolCall(request: {
         };
       }
 
+      case "schedule_create": {
+        // Default the target to the caller's own session ("schedule for myself").
+        const sessionId =
+          typeof args?.sessionId === "string" && args.sessionId.trim()
+            ? args.sessionId
+            : getConductorId(args);
+        if (!sessionId) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: no target session — pass sessionId, or run inside a Stoa session (CONDUCTOR_SESSION_ID).",
+              },
+            ],
+          };
+        }
+        const prompt = requireString(args, "prompt");
+        const result = await apiCall("/api/schedules", {
+          method: "POST",
+          body: JSON.stringify({
+            sessionId,
+            prompt,
+            recurrence: args?.recurrence,
+            runAt: args?.runAt,
+            name: args?.name,
+          }),
+        });
+        if (result.error || !result.schedule) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: ${result.error || "failed to create schedule"}`,
+              },
+            ],
+          };
+        }
+        const s = result.schedule;
+        const cadence = s.recurrence ? `repeats ${s.recurrence}` : "once";
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Scheduled (${cadence}) — next run ${s.next_run_at}. id: ${s.id}`,
+            },
+          ],
+        };
+      }
+
+      case "schedule_list": {
+        const result = await apiCall("/api/schedules");
+        if (result.error) {
+          return {
+            content: [
+              { type: "text" as const, text: `Error: ${result.error}` },
+            ],
+          };
+        }
+        const schedules: {
+          id: string;
+          name: string;
+          session_id: string;
+          prompt: string;
+          recurrence: string | null;
+          next_run_at: string;
+          enabled: number;
+        }[] = result.schedules || [];
+        if (schedules.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "No schedules." }],
+          };
+        }
+        // The FULL id (not a prefix) — an agent cancels with schedule_delete(id),
+        // which needs the complete id. Include the label when one was set.
+        const list = schedules
+          .map((s) => {
+            const label = s.name ? ` "${s.name}"` : "";
+            const cadence = s.enabled ? s.recurrence || "once" : "paused";
+            return `- ${s.id}${label} [${cadence}] → ${s.session_id.slice(0, 8)} @ ${s.next_run_at}: ${oneLinePreview(s.prompt, 80)}`;
+          })
+          .join("\n");
+        return {
+          content: [{ type: "text" as const, text: `Schedules:\n${list}` }],
+        };
+      }
+
+      case "schedule_delete": {
+        const id = requireString(args, "id");
+        const result = await apiCall(
+          `/api/schedules/${encodeURIComponent(id)}`,
+          { method: "DELETE" }
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: result.error
+                ? `Error: ${result.error}`
+                : result.removed
+                  ? `Deleted schedule ${id}.`
+                  : `No schedule with id "${id}" to delete.`,
+            },
+          ],
+        };
+      }
+
       default:
         return {
           content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],

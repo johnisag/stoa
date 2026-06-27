@@ -26,6 +26,7 @@ import {
   BrainCircuit,
   NotebookPen,
   MessagesSquare,
+  CalendarClock,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -115,6 +116,12 @@ const COCKPIT: Item[] = [
     title: "Inter-agent channels",
     blurb:
       'Direct 1:1 messaging between agent sessions over MCP — a sibling worker can say "the column is named X". Pull by default; opt-in to push a message into the recipient\'s terminal at its next turn boundary.',
+  },
+  {
+    icon: CalendarClock,
+    title: "Scheduler",
+    blurb:
+      "Fire a prompt into a session on a cadence — a nightly test run, a scheduled summary, a deferred follow-up. Once or hourly/daily/weekly; created over MCP (and a plain /api/schedules route).",
   },
   {
     icon: Workflow,

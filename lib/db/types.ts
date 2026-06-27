@@ -91,6 +91,21 @@ export interface NoteRow {
   updated_at: string;
 }
 
+/** A scheduled prompt (schedules). `recurrence` is NULL for a one-shot; `enabled`
+ * is a SQLite 0/1; `next_run_at`/`last_run_at` are ISO strings. */
+export interface ScheduleRow {
+  id: string;
+  name: string;
+  session_id: string;
+  prompt: string;
+  recurrence: string | null;
+  next_run_at: string;
+  last_run_at: string | null;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
 /** A 1:1 inter-agent channel message (channel_messages). `pair_key` is the
  * order-independent thread id; `delivered_at`/`read_at` are NULL until set. */
 export interface ChannelMessageRow {
