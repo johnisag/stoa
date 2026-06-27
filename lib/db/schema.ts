@@ -263,6 +263,20 @@ export function createSchema(db: Database.Database): void {
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE
     );
 
+    -- Agent-accessible shared memory: a fleet-wide key→value scratchpad any agent
+    -- can read/write via the orchestration MCP server (memory_* tools) or the
+    -- /api/memory route — the SAME shared surface a human UI would call.
+    -- Use it to coordinate across worktrees ("the interface contract is X",
+    -- "don't touch file Y", a discovered gotcha). Distinct from repo_lessons
+    -- (Dispatch-only critic findings): this is general, agent-writable, pull-based
+    -- (an agent reads a key on demand — never auto-injected into a terminal).
+    CREATE TABLE IF NOT EXISTS agent_memory (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     -- Saved visual-builder workflows (spec + canvas positions, as JSON)
     CREATE TABLE IF NOT EXISTS saved_workflows (
       id TEXT PRIMARY KEY,

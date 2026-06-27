@@ -950,6 +950,25 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 39,
+    name: "add_agent_memory_table",
+    up: (db) => {
+      // Agent-accessible shared memory: a fleet-wide key→value scratchpad any
+      // agent reads/writes via the orchestration MCP server (memory_* tools) or
+      // the /api/memory route — the shared human+agent surface.
+      if (!hasTable(db, "agent_memory")) {
+        db.exec(`
+          CREATE TABLE agent_memory (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

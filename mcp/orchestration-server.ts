@@ -251,6 +251,60 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: "memory_set",
+        description:
+          "Write a key→value entry to the SHARED fleet memory — a scratchpad every Stoa agent session can read. Use it to coordinate across worktrees: the interface contract you chose, a column name, 'don't touch file X', a discovered gotcha. Overwrites an existing key.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            key: {
+              type: "string",
+              description:
+                "A short label for the entry (e.g. 'db-schema-decision').",
+            },
+            value: {
+              type: "string",
+              description:
+                "The note to store (read back later with memory_get).",
+            },
+          },
+          required: ["key", "value"],
+        },
+      },
+      {
+        name: "memory_get",
+        description:
+          "Read one entry from the shared fleet memory by key. Returns the stored note, or '(not set)' if no agent has written that key.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            key: { type: "string", description: "The entry's key." },
+          },
+          required: ["key"],
+        },
+      },
+      {
+        name: "memory_list",
+        description:
+          "List the keys in the shared fleet memory (with a one-line preview of each note), most-recently-updated first. Use memory_get for a key's full value.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {},
+        },
+      },
+      {
+        name: "memory_delete",
+        description:
+          "Delete a key from the shared fleet memory once it's no longer relevant.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            key: { type: "string", description: "The entry's key." },
+          },
+          required: ["key"],
+        },
+      },
     ],
   };
 });

@@ -73,6 +73,14 @@ export interface SavedWorkflowRow {
   updated_at: string;
 }
 
+/** A row in the fleet-wide agent-accessible key→value memory (agent_memory). */
+export interface AgentMemoryRow {
+  key: string;
+  value: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProjectDevServer {
   id: string;
   project_id: string;
