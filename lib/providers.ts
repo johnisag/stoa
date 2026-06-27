@@ -118,9 +118,13 @@ export const claudeProvider: AgentProvider = {
     }
 
     // Resume/fork (session ids are shell-quoted too — same reason as the model).
+    // The parent-resume fork branch is NATIVE-FORK-ONLY (gated on supportsFork):
+    // a non-fork provider ignores parentSessionId entirely and forks via the
+    // scrollback seed (a fresh launch) instead — it must never resume the PARENT's
+    // session or emit --fork-session. Self-safe regardless of the caller.
     if (options.sessionId && def.resumeFlag) {
       flags.push(`${def.resumeFlag} ${shellQuoteArg(options.sessionId)}`);
-    } else if (options.parentSessionId && def.resumeFlag) {
+    } else if (options.parentSessionId && def.resumeFlag && def.supportsFork) {
       flags.push(`${def.resumeFlag} ${shellQuoteArg(options.parentSessionId)}`);
       flags.push("--fork-session");
     }
@@ -527,9 +531,11 @@ export function buildAgentArgs(
   }
   if (options.sessionId && def.resumeFlag) {
     args.push(def.resumeFlag, options.sessionId);
-  } else if (options.parentSessionId && def.resumeFlag) {
-    args.push(def.resumeFlag, options.parentSessionId);
-    if (def.supportsFork) args.push("--fork-session");
+  } else if (options.parentSessionId && def.resumeFlag && def.supportsFork) {
+    // Native-fork-only (see the buildFlags note): a non-fork provider never
+    // resumes the parent's session or emits --fork-session — it forks fresh +
+    // scrollback-seeded.
+    args.push(def.resumeFlag, options.parentSessionId, "--fork-session");
   }
   // Conductor MCP wiring (clean tokens), before the positional prompt.
   if (options.extraArgs?.length) args.push(...options.extraArgs);

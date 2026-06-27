@@ -199,7 +199,23 @@ typed, multi-provider, and cross-platform.
   per-provider builder), command namespacing (subdirs), preserving hand-added
   frontmatter keys beyond `description` on a Stoa re-save, and send-bar autocomplete
   (the provider TUI already autocompletes `/`)._
-- **Next (Phase 3 cont.):** #11 all-provider fork · #15 token/cost persistence.
+- **✅ #11 Conversation fork for all providers — SHIPPED.** Stoa forked Claude only;
+  now every agent can fork. Claude keeps its **native** fork (`--resume <id>
+--fork-session`); the others (Codex / Hermes / Kilo / Kimi — no fork primitive)
+  use amux's **scrollback fallback**: the `/fork` route captures the parent's recent
+  rendered scrollback (`getSessionBackend().capture`) and seeds a FRESH session with
+  a "continue from here" prompt via the existing prompt-queue (the same safe
+  turn-boundary delivery the scheduler uses); a dead/empty parent degrades to a
+  plain fresh session. Pure helpers in [lib/fork.ts](../lib/fork.ts)
+  (`forkModeForProvider` derives native/scrollback from the registry's
+  `supportsFork`; `buildForkSeed` + a control-byte sanitizer). The Fork menu item is
+  un-gated from Claude-only (every agent, not the plain shell). Hardening: the
+  parent-resume `--fork-session` path is now gated on `supportsFork` on BOTH the
+  tmux and pty arg builders, and `app/page.tsx` only resolves a `parentSessionId`
+  for a native fork — so a non-Claude fork can never resume the parent's session or
+  emit an invalid `--fork-session`. _Deferred: Codex's native `codex fork`
+  subcommand once its session-id capture is wired._
+- **Next (Phase 3 cont.):** #15 token/cost persistence.
 
 ---
 
