@@ -73,6 +73,10 @@ import {
   buildChannelDeliveryText,
 } from "./lib/channel-delivery";
 import { nextUnreadMessage, markDelivered } from "./lib/channels";
+import {
+  queueDispatchBlocked,
+  channelDeliveryBlocked,
+} from "./lib/tick-guards";
 import { computeSessionCosts } from "./lib/session-cost";
 import {
   costSampleEnabled,
@@ -545,6 +549,22 @@ app.prepare().then(() => {
         }
       }
       for (const s of curr) {
+        // Cross-loop guard: never paste a queued prompt into a rate-limited session
+        // (the resume loop below owns it — pasting here would hit the limited TUI
+        // before its reset and lose the prompt) or one a channel push is mid-paste
+        // into. A rate-limited "limit reached" screen classifies as idle, so without
+        // this the queued/scheduled/fork-seed prompt would dispatch prematurely.
+        if (
+          queueDispatchBlocked({
+            rateLimited: !!s.rateLimit,
+            channelInFlight: channelDelivering.has(s.id),
+          })
+        ) {
+          // Reset the once-guard for a rate-limited session so it dispatches fresh
+          // once the limit clears (a transient channel-in-flight just skips a tick).
+          if (s.rateLimit) queueDispatched.delete(s.id);
+          continue;
+        }
         const next = peekPrompt(s.id);
         if (
           next == null ||
@@ -827,13 +847,21 @@ app.prepare().then(() => {
       // NEXT unread is delivered on a later tick (one message at a time).
       if (CHANNEL_DELIVER_ENABLED) {
         for (const s of curr) {
-          if (channelDelivering.has(s.id)) continue;
-          // If the prompt-queue loop above already pasted this session's queued
-          // task this idle period, don't ALSO inject a channel message — both
-          // fire on "idle" off the same snapshot, so two pastes would interleave
-          // in one terminal. Wait for the next idle tick (mirrors the rate-limit
-          // resume loop's queueDispatched guard).
-          if (queueDispatched.has(s.id)) continue;
+          // Mutual exclusion with the other tick loops (all fire on "idle" off the
+          // same snapshot): skip if a delivery is in flight, the queue already
+          // pasted this idle period, the session is rate-limited (the resume loop
+          // owns it — injecting would burn the unread mid-limit), or it was just
+          // resumed this tick (a channel paste would interleave with the resume
+          // Enter). Encoded in one pure, tested predicate (lib/tick-guards.ts).
+          if (
+            channelDeliveryBlocked({
+              rateLimited: !!s.rateLimit,
+              rateLimitResumed: rateLimitResumed.has(s.id),
+              queueDispatched: queueDispatched.has(s.id),
+              channelInFlight: channelDelivering.has(s.id),
+            })
+          )
+            continue;
           if (
             !isChannelDeliveryTurn({ status: s.status, hasPrompt: !!s.prompt })
           )
