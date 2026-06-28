@@ -55,10 +55,20 @@ export function enqueueOfflineAction(action: OfflineAction): Promise<void> {
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
+/** How often the safety-net interval re-attempts a drain while online. */
+const DRAIN_INTERVAL_MS = 45_000;
+
 /**
- * Mount ONCE (app root). Replays the queued offline actions when the tab regains
- * connectivity — and once on mount, to flush a backlog left by a previous session.
- * Summarizes the pass as a toast and refreshes the queue views that just changed.
+ * Mount ONCE (app root). Replays the queued offline actions on every trigger that
+ * could mean "connectivity is back or worth retrying": the `online` event, the tab
+ * becoming visible, and a low-frequency safety-net interval — plus once on mount.
+ *
+ * The interval + visibility triggers matter because an action can be queued while
+ * `navigator.onLine` is still TRUE (a transient `fetch` rejection — a 502, a server
+ * restart, a captive portal): no `online` event ever fires for that, so without a
+ * while-online retry the action would sit until the next full page load. Extra
+ * drains are safe — the `draining` re-entrancy guard prevents overlap and the
+ * server idempotency key makes a re-delivered replay a no-op.
  */
 export function useOfflineQueueDrain(): void {
   const queryClient = useQueryClient();
@@ -93,10 +103,21 @@ export function useOfflineQueueDrain(): void {
 
     void drain(); // flush any backlog now
     const onOnline = () => void drain();
+    // Retry on tab refocus (covers a queued-while-online action the `online` event
+    // never fires for) and the user returning after a blip.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void drain();
+    };
     window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisible);
+    // Safety net: a periodic retry while online so a queued-while-online action
+    // doesn't strand until the next page load. Cheap when the queue is empty.
+    const interval = setInterval(() => void drain(), DRAIN_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(interval);
     };
   }, [queryClient]);
 }

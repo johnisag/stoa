@@ -36,9 +36,12 @@ export function useEnqueuePrompt(sessionId: string) {
       const url = `/api/sessions/${sessionId}/queue`;
       const body = JSON.stringify({ text, clientId });
 
-      // Stash the action for reconnect replay + optimistically reflect it locally,
-      // so a send in a dead spot isn't lost (it lands when connectivity returns).
-      const queueOffline = async (): Promise<string[]> => {
+      // Stash the action for replay + optimistically reflect it locally, so a send
+      // in a dead spot (or a transient server failure) isn't lost — it's retried on
+      // reconnect, tab refocus, or the periodic drain (useOfflineQueue). `offline`
+      // distinguishes a real offline (navigator.onLine===false) from an online fetch
+      // rejection so the toast doesn't give false "when you reconnect" confidence.
+      const queueOffline = async (offline: boolean): Promise<string[]> => {
         await enqueueOfflineAction({
           id: clientId,
           url,
@@ -49,7 +52,11 @@ export function useEnqueuePrompt(sessionId: string) {
           seq: nextSeq(),
           attempts: 0,
         });
-        toast.message("Offline — queued to send when you reconnect");
+        toast.message(
+          offline
+            ? "Offline — queued to send when you reconnect"
+            : "Couldn't reach the server — queued, retrying shortly"
+        );
         const current =
           (queryClient.getQueryData(key(sessionId)) as string[]) ?? [];
         return [...current, text];
@@ -57,7 +64,7 @@ export function useEnqueuePrompt(sessionId: string) {
 
       // Known-offline: don't even attempt the network.
       if (typeof navigator !== "undefined" && navigator.onLine === false) {
-        return queueOffline();
+        return queueOffline(true);
       }
 
       let res: Response;
@@ -68,9 +75,12 @@ export function useEnqueuePrompt(sessionId: string) {
           body,
         });
       } catch {
-        // fetch() rejects only on a NETWORK failure (offline / unreachable) — queue
-        // it. A server that responds (even an error) resolves and is handled below.
-        return queueOffline();
+        // fetch() rejects on a NETWORK failure — offline, OR a transient
+        // online failure (server restart / 502 / captive portal). Queue it either
+        // way; the while-online drain triggers (useOfflineQueue) retry it.
+        return queueOffline(
+          typeof navigator !== "undefined" && navigator.onLine === false
+        );
       }
       if (!res.ok) throw new Error(`enqueue ${res.status}`);
       return (await res.json()).queue ?? [];
