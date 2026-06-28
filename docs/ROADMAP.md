@@ -4,7 +4,7 @@ Stoa is a **mobile-first, self-hosted web UI for running AI coding agents
 (Claude Code, Codex, Hermes, Kilo Code, Kimi Code) in real terminals — native on
 Windows, macOS, and Linux.**
 
-**Status (2026-06-14):** the **UI/UX campaign is COMPLETE** — all **21** items
+**Status (2026-06-28):** the **UI/UX campaign is COMPLETE** — all **21** items
 from the multi-agent UI/UX research (#214) shipped across **7 waves, PRs
 #215–#221**. The **"Ask / Command Stoa" chatbox is shipped through Phase 2**: Ask
 (read-only, #223) + a Claude+Opus default model picker (#225) + **Command Stoa —
@@ -14,12 +14,17 @@ the drag-and-drop canvas with drag-to-connect edges, saved/reloadable workflows,
 and tidy-layout + import/export (#243–#246). **Multi-repo "workspace" sessions**
 (one session, a worktree per sub-repo, #237) ship with a **session-scoped Git
 panel** (#240). This PR adds two agent providers — **Kilo Code** (open-source
-agentic CLI) and **Kimi Code** (Moonshot AI's coding agent). Next: broaden the Command
-Stoa action set and seed-prompt the created session.
+agentic CLI) and **Kimi Code** (Moonshot AI's coding agent). Since this snapshot,
+the Command Stoa action set has been broadened to five actions (`create_session`,
+`dispatch_issue`, `open_view`, `list_sessions`, `best_of_n`), and several "Bigger
+bets" have shipped (Best-of-N, webhook intake, warm worktree bootstrap, the
+plan-approve-execute gate, the Playwright visual harness). The full **amux-inspired
+operator backlog (#1–#12, #14, #15)** has also shipped — see "Amux-inspired
+advancements" below; only #13 (native mobile shells) remains, as a needs-human item.
 
 ---
 
-## 🎯 Active / Next — the "Ask / Command Stoa" chatbox
+## ✅ Shipped — the "Ask / Command Stoa" chatbox
 
 A natural-language operator for Stoa **itself** — a meta-agent whose tools are
 Stoa's own data + operations, not the coding agents in the terminals. It's the
@@ -48,14 +53,15 @@ on the board (type or dictate one request).
   (`lib/command/actions`) and rendered as a **confirm card**; `POST
 /api/command/execute` re-validates server-side and creates the session
   **in-process** (no self-fetch), directory derived from the server-resolved
-  project, `auto_approve` hard-off. Ships ONE action — `create_session` (same
-  capability as the New Session dialog). Audited to the `session_events` ledger
+  project, `auto_approve` hard-off. Ships FIVE actions — `create_session`,
+  `dispatch_issue`, `open_view`, `list_sessions`, and `best_of_n`
+  (`lib/command/actions.ts`, `COMMAND_ACTION_IDS`). Audited to the `session_events` ledger
   (shared `recordEvent`, synthetic key invisible to analytics). The 3-round Fable
   security panel caught a real RCE: a free-text (hermes) `model` would ride
   unescaped into the POSIX tmux launch — fixed by clamping `model` to the STATIC
   catalog. _Follow-ups: seed the new session with an initial task prompt (needs a
   persisted on-open delivery path — the instruction field was dropped from v1 as
-  undeliverable); broaden the action set (dispatch / spawn-worker / worktree);
+  undeliverable);
   re-add Hermes to the chatbox once its one-shot is verified; a Stop/abort button;
   Windows tree-kill on the runAsk timeout; sync-test ASK_PROVIDERS ↔
   CHAT_PROVIDER_OPTIONS; harden the operator-set `project.default_model` →
@@ -322,11 +328,14 @@ the fleet views.
 
 ### Bigger bets (full features)
 
-- **Plan-approve-execute gate** · **Best-of-N + side-by-side compare** ·
-  **Visual verification artifacts (Playwright)** · **Generalized intake —
-  webhooks** · **Warm worktree bootstrap** · **Task playbooks** · **Hot-swap
-  manual QA** · **One-tap structured mobile approvals** · **Maintainer v2**
-  (auto-dispatch + deploy/monitor/self-heal).
+- **Shipped since this snapshot:** Plan-approve-execute gate
+  (`lib/dispatch/planner.ts` + `/api/dispatch/plan/[id]/approve`) · Best-of-N +
+  side-by-side compare (`lib/best-of-n.ts`, `BestOfNView`, a `best_of_n` Command
+  Stoa action) · Visual verification artifacts / Playwright (`playwright.config.ts`,
+  `test/visual/`) · Generalized intake — webhooks (`lib/webhooks/`,
+  `/api/webhooks/intake`) · Warm worktree bootstrap (`lib/dispatch/warm-pool.ts`).
+- **Still parked:** Task playbooks · Hot-swap manual QA · One-tap structured
+  mobile approvals · Maintainer v2 (auto-dispatch + deploy/monitor/self-heal).
 
 ---
 
