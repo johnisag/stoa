@@ -77,7 +77,7 @@ const COCKPIT: Item[] = [
     icon: ScanSearch,
     title: "Output search",
     blurb:
-      "Search what your agents actually said across every session — find the one that hit a TypeError (Cmd/Ctrl+K → Output).",
+      "Search what your Claude agents actually said across every session — find the one that hit a TypeError (Cmd/Ctrl+K → Output). Claude transcripts today.",
   },
   {
     icon: FolderOpen,
