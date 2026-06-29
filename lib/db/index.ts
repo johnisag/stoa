@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { homeDir, expandHome } from "../platform";
 import { createSchema } from "./schema";
 import { runMigrations } from "./migrations";
 
@@ -8,13 +9,63 @@ import { runMigrations } from "./migrations";
 export * from "./types";
 export { queries } from "./queries";
 
-const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "stoa.db");
+/**
+ * Resolve where the SQLite database lives. It MUST sit outside the repo clone so
+ * a re-clone / `git reset` / reinstall of `~/.stoa/repo` can never destroy session
+ * history — AND so the path doesn't depend on the launch cwd (a `stoa`-launched
+ * server can have a cwd that isn't writable, where a relative `./stoa.db` fails to
+ * open and 500s every DB route). Resolution order:
+ *   1. An explicit `DB_PATH` (a leading `~` is expanded).
+ *   2. The canonical `STOA_HOME/stoa.db` (`~/.stoa`, where token/vapid.json already
+ *      live) — the safe zero-config default.
+ *   3. Back-compat: if no canonical DB exists yet but a legacy in-repo `./stoa.db`
+ *      does, migrate it to the canonical location so an upgrade never orphans data.
+ * Exported for tests. (Restores #147/#154, which a "return to June 5 stable" revert
+ * had rolled back to the cwd-relative path — the macOS DB-500 regression.)
+ */
+export function resolveDbPath(): string {
+  // An empty DB_PATH ("") is treated as unset. A relative DB_PATH is resolved from
+  // process.cwd() at startup (better-sqlite3's behavior); prefer absolute.
+  if (process.env.DB_PATH) return expandHome(process.env.DB_PATH);
+  const stoaHome = process.env.STOA_HOME || path.join(homeDir(), ".stoa");
+  const canonical = path.join(stoaHome, "stoa.db");
+  const legacy = path.join(process.cwd(), "stoa.db");
+  if (!fs.existsSync(canonical) && fs.existsSync(legacy)) {
+    // Sticky migration: copy the legacy in-repo DB (all 3 SQLite parts) into the
+    // canonical STOA_HOME location so this clone — and any sibling clone — converge
+    // on ONE file. Best-effort: if the copy fails, keep using the legacy path.
+    try {
+      fs.mkdirSync(stoaHome, { recursive: true });
+      // COPYFILE_EXCL: if another process created the canonical DB between the
+      // existsSync check above and now (TOCTOU), don't clobber it.
+      fs.copyFileSync(legacy, canonical, fs.constants.COPYFILE_EXCL);
+      for (const suffix of ["-wal", "-shm"]) {
+        if (fs.existsSync(legacy + suffix)) {
+          fs.copyFileSync(legacy + suffix, canonical + suffix);
+        }
+      }
+      return canonical;
+    } catch {
+      return fs.existsSync(canonical) ? canonical : legacy;
+    }
+  }
+  return canonical;
+}
+
+const DB_PATH = resolveDbPath();
 const LOCK_PATH = DB_PATH + ".init-lock";
 
 // Simple file-based lock for initialization
 function withInitLock<T>(fn: () => T): T {
   const maxWait = 10000; // 10 seconds
   const start = Date.now();
+
+  // The DB now defaults to STOA_HOME, which may not exist yet on a fresh box — and
+  // the lock file (and the DB itself) is written into that directory below. Ensure
+  // it exists, or both the lock write and Database() open would throw (→ DB 500s).
+  try {
+    fs.mkdirSync(path.dirname(LOCK_PATH), { recursive: true });
+  } catch {}
 
   // Wait for lock to be available
   while (fs.existsSync(LOCK_PATH)) {
