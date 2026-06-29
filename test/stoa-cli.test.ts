@@ -34,6 +34,7 @@ const {
   checkPortFree,
   NODE_MIN_MAJOR,
   NATIVE_MODULES,
+  nativeRebuildArgs,
   toolchainHint,
 } = require(CLI_PATH) as {
   isGitInstall: (dir?: string) => boolean;
@@ -60,6 +61,7 @@ const {
   checkPortFree: (port: number, host?: string) => Promise<boolean>;
   NODE_MIN_MAJOR: number;
   NATIVE_MODULES: string[];
+  nativeRebuildArgs: () => string[];
   toolchainHint: () => string;
 };
 
@@ -298,6 +300,19 @@ describe("stoa CLI: native-module rebuild list (ABI-mismatch fix)", () => {
     else if (process.platform === "win32")
       expect(hint).toContain("Build Tools");
     else expect(hint).toContain("build-essential");
+  });
+
+  it("forces scripts on for the rebuild (defeats a global ignore-scripts=true)", () => {
+    // CRITICAL: under a global `ignore-scripts=true` (supply-chain hardening), a plain
+    // `npm rebuild` skips the compile step and the .node binary is never built — every
+    // DB route then 500s. `--ignore-scripts=false` re-enables scripts for ONLY these
+    // trusted, vendored packages. Without this flag the whole fix is a silent no-op.
+    const args = nativeRebuildArgs();
+    expect(args[0]).toBe("rebuild");
+    expect(args).toContain("--ignore-scripts=false");
+    for (const mod of NATIVE_MODULES) expect(args).toContain(mod);
+    // The flag must NOT leak onto the npm-install step, which would run EVERY package's
+    // scripts and defeat the user's global hardening — only the targeted rebuild gets it.
   });
 });
 
