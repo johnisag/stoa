@@ -98,6 +98,16 @@ const LOG_FILE = path.join(LOG_DIR, "stoa.log");
 // force-rebuild this set. KEEP IN SYNC with the native deps in package.json.
 const NATIVE_MODULES = ["better-sqlite3", "node-pty"];
 
+// Per-OS remediation shown before a native rebuild: if no prebuilt binary matches
+// the running Node, `npm rebuild` falls back to compiling, which needs a C++
+// toolchain. Pure (unit-tested) so the hint stays actionable on every platform.
+function toolchainHint() {
+  if (process.platform === "darwin") return "macOS: xcode-select --install";
+  if (process.platform === "win32")
+    return "Windows: install the Visual Studio Build Tools (Desktop development with C++)";
+  return "Linux: install build-essential (Debian/Ubuntu) or the Development Tools group";
+}
+
 // ---------------------------------------------------------------------------
 // Small logging helpers
 // ---------------------------------------------------------------------------
@@ -283,7 +293,7 @@ function cmdInstall() {
   // dependencies" remedy) hits the same version-aware-not-ABI-aware gap as update,
   // so rebuild the native modules here too. See NATIVE_MODULES.
   info(
-    "Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — macOS: xcode-select --install)..."
+    `Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — ${toolchainHint()})...`
   );
   runSync("npm", ["rebuild", ...NATIVE_MODULES]);
 
@@ -628,7 +638,7 @@ function cmdUpdate() {
   // case (a quick download, not a compile), and gating it on a stamp file would
   // reintroduce the exact "silently skip the rebuild" failure this fixes.
   info(
-    "Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — macOS: xcode-select --install)..."
+    `Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — ${toolchainHint()})...`
   );
   step("npm rebuild", "npm", ["rebuild", ...NATIVE_MODULES]);
 
@@ -925,6 +935,7 @@ module.exports = {
   checkPortFree,
   NODE_MIN_MAJOR,
   NATIVE_MODULES,
+  toolchainHint,
 };
 
 // PORT is read from the current env on every access so tests that reload the
