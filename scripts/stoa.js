@@ -607,6 +607,16 @@ function cmdUpdate() {
     "--legacy-peer-deps",
   ]);
 
+  // Force-rebuild the native modules for the CURRENTLY-running Node. `npm install`
+  // above is version-aware, not ABI-aware: if a package is already at the locked
+  // version it WON'T recompile its native binary — so a Node-version change (e.g.
+  // the >=24 baseline, or the user's fnm/nvm moving) leaves better-sqlite3 / node-pty
+  // bound to the OLD Node ABI. The next `new Database()` then throws
+  // "NODE_MODULE_VERSION mismatch", which 500s every DB route (the macOS regression
+  // where a routine `stoa update` silently broke the fleet).
+  info("Rebuilding native modules for the current Node...");
+  step("npm rebuild", "npm", ["rebuild", "better-sqlite3", "node-pty"]);
+
   info("Rebuilding...");
   step("npm run build", "npm", ["run", "build"]);
 
