@@ -16,8 +16,8 @@ export { queries } from "./queries";
  * server can have a cwd that isn't writable, where a relative `./stoa.db` fails to
  * open and 500s every DB route). Resolution order:
  *   1. An explicit `DB_PATH` (a leading `~` is expanded).
- *   2. The canonical `STOA_HOME/stoa.db` (`~/.stoa`, where token/vapid.json already
- *      live) — the safe zero-config default.
+ *   2. The canonical `STOA_HOME/stoa.db` (`~/.stoa`, the per-user Stoa home where the
+ *      pid/log already live) — the safe zero-config default.
  *   3. Back-compat: if no canonical DB exists yet but a legacy in-repo `./stoa.db`
  *      does, migrate it to the canonical location so an upgrade never orphans data.
  * Exported for tests. (Restores #147/#154, which a "return to June 5 stable" revert
@@ -62,10 +62,11 @@ function withInitLock<T>(fn: () => T): T {
 
   // The DB now defaults to STOA_HOME, which may not exist yet on a fresh box — and
   // the lock file (and the DB itself) is written into that directory below. Ensure
-  // it exists, or both the lock write and Database() open would throw (→ DB 500s).
-  try {
-    fs.mkdirSync(path.dirname(LOCK_PATH), { recursive: true });
-  } catch {}
+  // it exists. NOT wrapped in try/catch: mkdir(recursive) is a no-op when the dir
+  // already exists, so it only throws on a genuine permission / read-only failure —
+  // which must surface as a clear EPERM at startup. Swallowing it would make the
+  // lock write below ENOENT and withInitLock retry forever (stack overflow).
+  fs.mkdirSync(path.dirname(LOCK_PATH), { recursive: true });
 
   // Wait for lock to be available
   while (fs.existsSync(LOCK_PATH)) {
