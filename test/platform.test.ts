@@ -38,8 +38,12 @@ describe("extraBinDirsForPlatform / pathWithExtraBinDirs (macOS Homebrew PATH)",
     ).toBe("/opt/homebrew/bin:/usr/local/bin");
   });
 
-  it("handles an empty base PATH on macOS", () => {
+  it("handles an empty / undefined base PATH on macOS", () => {
     expect(pathWithExtraBinDirs("", "darwin")).toBe(
+      "/opt/homebrew/bin:/usr/local/bin"
+    );
+    // undefined falls through the `= process.env.PATH || ""` default to "".
+    expect(pathWithExtraBinDirs(undefined, "darwin")).toBe(
       "/opt/homebrew/bin:/usr/local/bin"
     );
   });

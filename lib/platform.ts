@@ -51,6 +51,9 @@ export function pathWithExtraBinDirs(
 ): string {
   const extra = extraBinDirsForPlatform(platform);
   if (extra.length === 0) return base;
+  // Safe to hardcode ":" here: extra is non-empty only for darwin (POSIX), and the
+  // early return above means this is never reached off-darwin (so the host's own
+  // path.delimiter is irrelevant — keeps the result deterministic in tests).
   const SEP = ":";
   const parts = base ? base.split(SEP) : [];
   const missing = extra.filter((d) => !parts.includes(d));
