@@ -86,6 +86,22 @@ describe("resolveDbPath (DB lives in STOA_HOME, never inside the repo)", () => {
     expect(readFileSync(resolved, "utf8")).toBe("legacydata");
   });
 
+  it("migrates the -wal and -shm sidecars alongside the main DB (WAL-mode journal)", () => {
+    const home = fresh();
+    const repo = fresh();
+    writeFileSync(join(repo, "stoa.db"), "main");
+    writeFileSync(join(repo, "stoa.db-wal"), "wal"); // committed-not-checkpointed
+    writeFileSync(join(repo, "stoa.db-shm"), "shm");
+    process.env.STOA_HOME = home;
+    process.chdir(repo);
+    const resolved = resolveDbPath();
+    expect(resolved).toBe(join(home, "stoa.db"));
+    // All three SQLite parts move together, or the journal would be orphaned.
+    expect(readFileSync(resolved, "utf8")).toBe("main");
+    expect(readFileSync(resolved + "-wal", "utf8")).toBe("wal");
+    expect(readFileSync(resolved + "-shm", "utf8")).toBe("shm");
+  });
+
   it("prefers the canonical STOA_HOME DB once it exists, ignoring a legacy one", () => {
     const home = fresh();
     const repo = fresh();
