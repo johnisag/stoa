@@ -557,6 +557,17 @@ function gitCapture(args) {
   return r.status === 0 ? (r.stdout || "").trim() : null;
 }
 
+/** Read one `npm config get <key>` value (trimmed), or null if npm can't be run. */
+function npmConfigGet(key) {
+  const spec = commandSpec("npm", ["config", "get", key]);
+  const r = spawnSync(spec.file, spec.args, {
+    cwd: REPO_DIR,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return r.status === 0 ? (r.stdout || "").trim() : null;
+}
+
 /** True if `dir` is a git checkout (vs. e.g. an `npm i -g` install). */
 function isGitInstall(dir = REPO_DIR) {
   return fs.existsSync(path.join(dir, ".git"));
@@ -714,6 +725,52 @@ function checkNodeVersion(versionString, minMajor = NODE_MIN_MAJOR) {
   return { name: "Node.js", status: "ok", detail: versionString };
 }
 
+/** Try to load a native module; report whether its compiled binary actually loads.
+ *  `load` is injectable for tests. A throw here is exactly the runtime failure that
+ *  500s every DB route — missing binary (ignore-scripts skipped the build) OR an ABI
+ *  mismatch — so this is the most direct preflight for it. Pure → unit-tested. */
+function checkNativeModule(name, load = require) {
+  try {
+    load(name);
+    return { name: `Native: ${name}`, status: "ok", detail: "loads" };
+  } catch (err) {
+    const first = String((err && err.message) || err).split("\n")[0];
+    return {
+      name: `Native: ${name}`,
+      status: "fail",
+      detail: `won't load — ${first}`,
+      hint:
+        "Rebuild it: `stoa install`, or `npm rebuild " +
+        NATIVE_MODULES.join(" ") +
+        " --ignore-scripts=false` if your ~/.npmrc sets ignore-scripts=true.",
+    };
+  }
+}
+
+/** True iff `npm config get ignore-scripts` reports it enabled. Pure → unit-tested. */
+function isIgnoreScriptsEnabled(configValue) {
+  return String(configValue == null ? "" : configValue).trim() === "true";
+}
+
+/** A global `ignore-scripts=true` makes a plain `npm install` skip native builds, so
+ *  the .node binary is never produced. It's a user policy choice (warn, not fail) and
+ *  `stoa install`/`stoa update` already work around it. Pure → unit-tested. */
+function checkIgnoreScripts(configValue) {
+  if (!isIgnoreScriptsEnabled(configValue)) {
+    return {
+      name: "npm ignore-scripts",
+      status: "ok",
+      detail: configValue ? String(configValue).trim() : "false",
+    };
+  }
+  return {
+    name: "npm ignore-scripts",
+    status: "warn",
+    detail: "true — a plain `npm install` skips native module builds",
+    hint: "`stoa install`/`stoa update` rebuild with --ignore-scripts=false; add that flag to any manual `npm install`.",
+  };
+}
+
 /** The CLI exit code for a set of check results: 1 if ANY failed, else 0 (a warn
  *  is advisory, not fatal). Pure → unit-tested. */
 function doctorExitCode(results) {
@@ -774,8 +831,9 @@ async function cmdDoctor() {
   // @vscode/ripgrep (lib/code-search.ts), not a system `rg`, so a PATH check would
   // false-warn on a perfectly healthy install. `npm install` (below) restores it.
 
+  const depsPresent = fs.existsSync(path.join(REPO_DIR, "node_modules"));
   results.push(
-    fs.existsSync(path.join(REPO_DIR, "node_modules"))
+    depsPresent
       ? { name: "Dependencies", status: "ok", detail: "node_modules present" }
       : {
           name: "Dependencies",
@@ -784,6 +842,17 @@ async function cmdDoctor() {
           hint: "Run `npm install --include=dev --legacy-peer-deps`.",
         }
   );
+
+  // Only probe the native binaries once node_modules exists — otherwise every module
+  // would redundantly fail "Cannot find module" on top of the Dependencies fail above.
+  if (depsPresent) {
+    for (const mod of NATIVE_MODULES) results.push(checkNativeModule(mod));
+  }
+
+  // Surface a global ignore-scripts policy: it's the root cause of native builds being
+  // silently skipped (every DB route 500s), and proactively warns even when the binary
+  // currently loads but a future manual `npm install` would re-break it.
+  results.push(checkIgnoreScripts(npmConfigGet("ignore-scripts")));
 
   results.push(
     buildIsComplete()
@@ -957,6 +1026,9 @@ module.exports = {
   formatDoctorLine,
   parsePort,
   checkPortFree,
+  checkNativeModule,
+  isIgnoreScriptsEnabled,
+  checkIgnoreScripts,
   NODE_MIN_MAJOR,
   NATIVE_MODULES,
   nativeRebuildArgs,

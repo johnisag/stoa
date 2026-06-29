@@ -32,6 +32,9 @@ const {
   formatDoctorLine,
   parsePort,
   checkPortFree,
+  checkNativeModule,
+  isIgnoreScriptsEnabled,
+  checkIgnoreScripts,
   NODE_MIN_MAJOR,
   NATIVE_MODULES,
   nativeRebuildArgs,
@@ -59,6 +62,17 @@ const {
   }) => string;
   parsePort: (v: unknown) => number | null;
   checkPortFree: (port: number, host?: string) => Promise<boolean>;
+  checkNativeModule: (
+    name: string,
+    load?: (n: string) => unknown
+  ) => { name: string; status: string; detail: string; hint?: string };
+  isIgnoreScriptsEnabled: (v: unknown) => boolean;
+  checkIgnoreScripts: (v: unknown) => {
+    name: string;
+    status: string;
+    detail: string;
+    hint?: string;
+  };
   NODE_MIN_MAJOR: number;
   NATIVE_MODULES: string[];
   nativeRebuildArgs: () => string[];
@@ -313,6 +327,44 @@ describe("stoa CLI: native-module rebuild list (ABI-mismatch fix)", () => {
     for (const mod of NATIVE_MODULES) expect(args).toContain(mod);
     // The flag must NOT leak onto the npm-install step, which would run EVERY package's
     // scripts and defeat the user's global hardening — only the targeted rebuild gets it.
+  });
+});
+
+describe("stoa CLI: doctor native-module + ignore-scripts checks", () => {
+  it("checkNativeModule passes when the module loads", () => {
+    const r = checkNativeModule("better-sqlite3", () => ({}));
+    expect(r.status).toBe("ok");
+    expect(r.name).toContain("better-sqlite3");
+  });
+
+  it("checkNativeModule fails (with the error + a rebuild hint) when the binary won't load", () => {
+    const r = checkNativeModule("better-sqlite3", () => {
+      throw new Error(
+        "NODE_MODULE_VERSION 115. This version requires 127.\nstack frame"
+      );
+    });
+    expect(r.status).toBe("fail");
+    expect(r.detail).toContain("NODE_MODULE_VERSION 115"); // first line of the error
+    expect(r.detail).not.toContain("stack frame"); // only the first line is shown
+    expect(r.hint).toContain("--ignore-scripts=false");
+  });
+
+  it("isIgnoreScriptsEnabled is true only for an exact `true` (trimmed)", () => {
+    expect(isIgnoreScriptsEnabled("true")).toBe(true);
+    expect(isIgnoreScriptsEnabled(" true\n")).toBe(true);
+    expect(isIgnoreScriptsEnabled("false")).toBe(false);
+    expect(isIgnoreScriptsEnabled("")).toBe(false);
+    expect(isIgnoreScriptsEnabled(null)).toBe(false);
+    expect(isIgnoreScriptsEnabled("TRUE")).toBe(false); // npm prints lowercase
+  });
+
+  it("checkIgnoreScripts warns (with a workaround hint) only when enabled", () => {
+    const on = checkIgnoreScripts("true");
+    expect(on.status).toBe("warn");
+    expect(on.hint).toContain("--ignore-scripts=false");
+
+    expect(checkIgnoreScripts("false").status).toBe("ok");
+    expect(checkIgnoreScripts(null).status).toBe("ok"); // npm unqueryable → not a warning
   });
 });
 
