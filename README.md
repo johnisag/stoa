@@ -4,9 +4,40 @@
 
 Point it at a repo, pick an agent (Claude Code, Codex, Hermes, Kilo Code, or Kimi Code), and Stoa spawns a real terminal session you can watch stream live, steer, and reconnect to from anywhere on your network. It runs **natively on Windows, macOS, and Linux** — no WSL or tmux required on Windows — and your sessions keep running even after you close the tab.
 
-It's built for the way agents actually work: run several side by side from a mobile-first UI — with a **worktree-conflict warning** when two live sessions share a checkout and could overwrite each other's edits. Open many repos at once as a **multi-repo workspace** (one session, a worktree per sub-repo) with a session-scoped Git panel. Compose pipelines in the **visual workflow builder** (drag-and-drop DAG canvas, saved and reloadable). Drive Stoa itself in plain language with the **Ask / Command Stoa** chatbox. Let your agents coordinate through a **shared fleet memory** — a key→value scratchpad they read and write over MCP (and a plain `/api/memory` route) to pass interface contracts and gotchas across worktrees — and a shared markdown **Notes** knowledge base you edit in a dialog and your agents read/write over the same endpoint, plus **inter-agent channels** for direct 1:1 messages between sessions (pull by default; opt-in to inject a message into the recipient's terminal at its next turn boundary). Put the fleet on a clock with the **scheduler** — fire a prompt into a session once or hourly/daily/weekly (a nightly test run, a scheduled summary), enqueued so it lands at the session's next idle turn. Watch every agent at once on the **live wall** — a read-only grid of their terminals, streamed over the same WebSockets the panes use (no polling), on the native pty backend. Turn team conventions into one-keystroke **commands** — author a slash command in the UI and Stoa writes it to the agent's native command dir (`~/.claude/commands/`) so it becomes a real `/name` its terminal autocompletes. Branch any agent's conversation with **fork** — Claude forks **natively** (the full history), and every other agent forks via a **scrollback fallback** that seeds a fresh session with the parent's recent transcript as a "continue from here" prompt. Find any Claude session by what its agent actually said with **cross-session output search** (⌘K → Output) — "which of my agents hit a `TypeError`?" (Claude transcripts today — the only transcript Stoa reads; other providers as their transcript readers land). And — when you're ready to scale past hands-on — let **Dispatch** turn GitHub issues into reviewed, merged PRs autonomously: the fleet reviews its own PRs (a 3-critic gate), lands them (a self-rebasing merge train), splits a spec into conflict-free parallel tasks, verifies its changes, and learns from every review. An opt-in **self-healing watchdog** keeps an unattended run from dying quietly — it reaps a hung worker that would otherwise pin a concurrency slot forever, and pages you when a session wedges (spinner never settles). Opt-in **rate-limit auto-resume** picks a parked session back up the moment its limit resets — capped per-day and skipped while a session is still working, so it stays safe overnight. Keep an eye on the bill with **persisted spend tracking** — an estimated token cost per session (tinted against per-session budget caps), now sampled into a durable daily history so the spend sparkline survives a session being deleted or its transcript scrolling off (it accrues whenever the cost badge is open, or unattended with `STOA_AUTO_COST_SAMPLE=1`). And because phones drop connections, an **offline queue** stashes a prompt you send in a dead spot on-device and replays it the moment you're back online — de-duplicated on replay, so a flaky reconnect doesn't double-send.
-
 For a plain-English tour of every feature, open the **Guide** (the compass icon in the sidebar) once Stoa is running.
+
+## Features
+
+Built for the way agents actually work — several at once, from a mobile-first UI.
+
+**Run a fleet**
+
+- **Multi-repo workspace** — open many repos as one session, with a worktree per sub-repo and a session-scoped Git panel.
+- **Worktree-conflict warning** — get warned when two live sessions share a checkout and could overwrite each other's edits.
+- **Live wall** — watch every agent's terminal at once in a read-only grid, streamed over WebSockets (no polling).
+- **Fork** — branch any agent's conversation: natively for Claude (full history), via a scrollback fallback for every other agent.
+- **Cross-session output search** — find a session by what its agent actually said (⌘K → Output), e.g. _"which agent hit a `TypeError`?"_ (Claude transcripts today).
+
+**Coordinate them**
+
+- **Shared fleet memory** — a key→value scratchpad agents read and write over MCP (and a plain `/api/memory` route) to pass interface contracts and gotchas across worktrees.
+- **Notes** — a shared markdown knowledge base you edit in a dialog and agents read/write over the same endpoint.
+- **Inter-agent channels** — direct 1:1 messages between sessions (pull by default; opt in to inject a message into the recipient's terminal at its next turn boundary).
+- **Custom commands** — author a slash command in the UI; Stoa writes it to the agent's native command dir (`~/.claude/commands/`) so it becomes a real `/name` the terminal autocompletes.
+
+**Automate the work**
+
+- **Visual workflow builder** — compose pipelines on a drag-and-drop DAG canvas, saved and reloadable.
+- **Dispatch** — turn GitHub issues into reviewed, merged PRs autonomously: a 3-critic review gate, a self-rebasing merge train, and conflict-free parallel task splitting that verifies its changes and learns from every review.
+- **Scheduler** — fire a prompt into a session once or hourly/daily/weekly (a nightly test run, a scheduled summary), enqueued to land at the session's next idle turn.
+- **Ask / Command Stoa** — drive Stoa itself in plain language from a chatbox.
+
+**Keep it running unattended**
+
+- **Self-healing watchdog** (opt-in) — reaps a hung worker that would otherwise pin a concurrency slot forever, and pages you when a session wedges (spinner never settles).
+- **Rate-limit auto-resume** (opt-in) — picks a parked session back up the moment its limit resets, capped per-day and skipped while a session is still working.
+- **Spend tracking** — estimated token cost per session against per-session budget caps, sampled into a durable daily history so the sparkline survives a session being deleted.
+- **Offline queue** — stashes a prompt you send in a dead spot on-device and replays it (de-duplicated) the moment you're back online.
 
 ## Installation
 
