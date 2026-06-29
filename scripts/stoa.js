@@ -732,17 +732,17 @@ function checkNodeVersion(versionString, minMajor = NODE_MIN_MAJOR) {
 function checkNativeModule(name, load = require) {
   try {
     load(name);
-    return { name: `Native: ${name}`, status: "ok", detail: "loads" };
+    return { name: `${name} (native)`, status: "ok", detail: "loads" };
   } catch (err) {
     const first = String((err && err.message) || err).split("\n")[0];
     return {
-      name: `Native: ${name}`,
+      name: `${name} (native)`,
       status: "fail",
       detail: `won't load — ${first}`,
       hint:
-        "Rebuild it: `stoa install`, or `npm rebuild " +
+        "Run `stoa install` (or `npm rebuild " +
         NATIVE_MODULES.join(" ") +
-        " --ignore-scripts=false` if your ~/.npmrc sets ignore-scripts=true.",
+        " --ignore-scripts=false`).",
     };
   }
 }
@@ -849,10 +849,12 @@ async function cmdDoctor() {
     for (const mod of NATIVE_MODULES) results.push(checkNativeModule(mod));
   }
 
-  // Surface a global ignore-scripts policy: it's the root cause of native builds being
-  // silently skipped (every DB route 500s), and proactively warns even when the binary
-  // currently loads but a future manual `npm install` would re-break it.
-  results.push(checkIgnoreScripts(npmConfigGet("ignore-scripts")));
+  // Surface a global ignore-scripts policy ONLY when it's enabled — it's the root cause
+  // of native builds being silently skipped (every DB route 500s) and warns even when the
+  // binary currently loads but a future manual `npm install` would re-break it. In the
+  // common (disabled / unqueryable) case it's pure noise, so don't print an ok line.
+  const ignoreScripts = checkIgnoreScripts(npmConfigGet("ignore-scripts"));
+  if (ignoreScripts.status !== "ok") results.push(ignoreScripts);
 
   results.push(
     buildIsComplete()
