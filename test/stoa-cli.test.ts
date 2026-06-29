@@ -34,6 +34,7 @@ const {
   checkPortFree,
   NODE_MIN_MAJOR,
   NATIVE_MODULES,
+  toolchainHint,
 } = require(CLI_PATH) as {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
@@ -59,6 +60,7 @@ const {
   checkPortFree: (port: number, host?: string) => Promise<boolean>;
   NODE_MIN_MAJOR: number;
   NATIVE_MODULES: string[];
+  toolchainHint: () => string;
 };
 
 function loadCliWith(env: Record<string, string | undefined>) {
@@ -285,6 +287,17 @@ describe("stoa CLI: native-module rebuild list (ABI-mismatch fix)", () => {
         `${mod} must be a dependency in package.json`
       ).toBeDefined();
     }
+  });
+
+  it("toolchainHint names the C++ toolchain remediation for the current OS", () => {
+    // The hint is printed before every rebuild so a compile-fallback failure stays
+    // actionable on whichever OS the user is on — not just macOS.
+    const hint = toolchainHint();
+    expect(hint).toBeTruthy();
+    if (process.platform === "darwin") expect(hint).toContain("xcode-select");
+    else if (process.platform === "win32")
+      expect(hint).toContain("Build Tools");
+    else expect(hint).toContain("build-essential");
   });
 });
 
