@@ -90,13 +90,28 @@ const PID_FILE = path.join(STOA_HOME, "stoa.pid");
 const LOG_DIR = path.join(STOA_HOME, "logs");
 const LOG_FILE = path.join(LOG_DIR, "stoa.log");
 
-// Native modules whose compiled `.node` binary is tied to the running Node's ABI.
-// A bare `npm install` is version-aware but NOT ABI-aware: if a package is already
-// at its locked version it WON'T recompile, so after a Node-version change (e.g. the
-// >=24 baseline, or fnm/nvm moving Node) the old binary lingers and `new Database()`
-// throws NODE_MODULE_VERSION mismatch — 500ing every DB route. Both install and update
-// force-rebuild this set. KEEP IN SYNC with the native deps in package.json.
+// Native modules whose compiled `.node` binary must be built for the running Node.
+// Two ways a plain `npm install` leaves them broken, both of which 500 every DB route
+// (`new Database()` throws because better_sqlite3.node is missing or ABI-mismatched):
+//   1. A global `ignore-scripts=true` in ~/.npmrc (common under supply-chain hardening
+//      policies) makes npm SKIP the install/build scripts entirely, so the binary is
+//      never compiled or fetched — a fresh install has no `.node` at all.
+//   2. `npm install` is version-aware but NOT ABI-aware: an already-locked package
+//      isn't recompiled, so after a Node-version change (the >=24 baseline, fnm/nvm
+//      moving Node) a stale binary lingers → NODE_MODULE_VERSION mismatch.
+// Both install and update force-rebuild this set. KEEP IN SYNC with the native deps in
+// package.json.
 const NATIVE_MODULES = ["better-sqlite3", "node-pty"];
+
+// argv to rebuild the native modules. `--ignore-scripts=false` is REQUIRED, not
+// cosmetic: it overrides a global `ignore-scripts=true` so these two trusted, vendored
+// packages actually run their compile/prebuild-fetch step — WITHOUT touching the user's
+// global hardening setting (every other package still has scripts suppressed). Plain
+// `npm rebuild` inherits the global `ignore-scripts=true` and silently does nothing,
+// which is why the rebuild step alone wasn't enough.
+function nativeRebuildArgs() {
+  return ["rebuild", ...NATIVE_MODULES, "--ignore-scripts=false"];
+}
 
 // Per-OS remediation shown before a native rebuild: if no prebuilt binary matches
 // the running Node, `npm rebuild` falls back to compiling, which needs a C++
@@ -295,7 +310,7 @@ function cmdInstall() {
   info(
     `Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — ${toolchainHint()})...`
   );
-  runSync("npm", ["rebuild", ...NATIVE_MODULES]);
+  runSync("npm", nativeRebuildArgs());
 
   info("Building for production...");
   runSync("npm", ["run", "build"]);
@@ -640,7 +655,7 @@ function cmdUpdate() {
   info(
     `Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — ${toolchainHint()})...`
   );
-  step("npm rebuild", "npm", ["rebuild", ...NATIVE_MODULES]);
+  step("npm rebuild", "npm", nativeRebuildArgs());
 
   info("Rebuilding...");
   step("npm run build", "npm", ["run", "build"]);
@@ -935,6 +950,7 @@ module.exports = {
   checkPortFree,
   NODE_MIN_MAJOR,
   NATIVE_MODULES,
+  nativeRebuildArgs,
   toolchainHint,
 };
 
