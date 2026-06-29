@@ -28,6 +28,37 @@ export function tmpDir(): string {
 }
 
 /**
+ * Extra directories to add to PATH so a process launched OUTSIDE a login shell can
+ * still find user-installed CLIs. On macOS, Homebrew installs into /opt/homebrew/bin
+ * (Apple Silicon) or /usr/local/bin (Intel); a server started from Finder/Spotlight/
+ * an IDE/launchd inherits the BARE system PATH without these, so tmux/gh/git/claude
+ * resolve to "command not found". Empty off macOS (Linux ships these in /usr/bin,
+ * already on PATH; Windows uses its own resolution).
+ */
+export function extraBinDirsForPlatform(platform: NodeJS.Platform): string[] {
+  return platform === "darwin" ? ["/opt/homebrew/bin", "/usr/local/bin"] : [];
+}
+
+/**
+ * `base` PATH with the platform's extra CLI dirs prepended when missing — so a
+ * bare-PATH macOS launch can still find tmux/gh/etc. Idempotent (won't duplicate an
+ * already-present dir) and unchanged off macOS. darwin is POSIX, so the separator is
+ * always ":" regardless of the host running this (keeps it deterministic in tests).
+ */
+export function pathWithExtraBinDirs(
+  base: string = process.env.PATH || "",
+  platform: NodeJS.Platform = process.platform
+): string {
+  const extra = extraBinDirsForPlatform(platform);
+  if (extra.length === 0) return base;
+  const SEP = ":";
+  const parts = base ? base.split(SEP) : [];
+  const missing = extra.filter((d) => !parts.includes(d));
+  if (missing.length === 0) return base;
+  return [...missing, ...(base ? [base] : [])].join(SEP);
+}
+
+/**
  * Expand a leading "~" to the home directory, cross-platform.
  * Returns non-tilde paths unchanged. Handles "~", "~/x", and "~\x".
  */
