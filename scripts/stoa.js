@@ -90,6 +90,14 @@ const PID_FILE = path.join(STOA_HOME, "stoa.pid");
 const LOG_DIR = path.join(STOA_HOME, "logs");
 const LOG_FILE = path.join(LOG_DIR, "stoa.log");
 
+// Native modules whose compiled `.node` binary is tied to the running Node's ABI.
+// A bare `npm install` is version-aware but NOT ABI-aware: if a package is already
+// at its locked version it WON'T recompile, so after a Node-version change (e.g. the
+// >=24 baseline, or fnm/nvm moving Node) the old binary lingers and `new Database()`
+// throws NODE_MODULE_VERSION mismatch — 500ing every DB route. Both install and update
+// force-rebuild this set. KEEP IN SYNC with the native deps in package.json.
+const NATIVE_MODULES = ["better-sqlite3", "node-pty"];
+
 // ---------------------------------------------------------------------------
 // Small logging helpers
 // ---------------------------------------------------------------------------
@@ -270,6 +278,14 @@ function buildIsComplete(dir = REPO_DIR) {
 function cmdInstall() {
   info("Installing dependencies...");
   runSync("npm", ["install", "--include=dev", "--legacy-peer-deps"]);
+
+  // Re-running `stoa install` over an existing node_modules (a documented "missing
+  // dependencies" remedy) hits the same version-aware-not-ABI-aware gap as update,
+  // so rebuild the native modules here too. See NATIVE_MODULES.
+  info(
+    "Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — macOS: xcode-select --install)..."
+  );
+  runSync("npm", ["rebuild", ...NATIVE_MODULES]);
 
   info("Building for production...");
   runSync("npm", ["run", "build"]);
@@ -607,15 +623,14 @@ function cmdUpdate() {
     "--legacy-peer-deps",
   ]);
 
-  // Force-rebuild the native modules for the CURRENTLY-running Node. `npm install`
-  // above is version-aware, not ABI-aware: if a package is already at the locked
-  // version it WON'T recompile its native binary — so a Node-version change (e.g.
-  // the >=24 baseline, or the user's fnm/nvm moving) leaves better-sqlite3 / node-pty
-  // bound to the OLD Node ABI. The next `new Database()` then throws
-  // "NODE_MODULE_VERSION mismatch", which 500s every DB route (the macOS regression
-  // where a routine `stoa update` silently broke the fleet).
-  info("Rebuilding native modules for the current Node...");
-  step("npm rebuild", "npm", ["rebuild", "better-sqlite3", "node-pty"]);
+  // Force-rebuild native modules for the running Node (see NATIVE_MODULES). Always
+  // unconditional: `npm rebuild` resolves a matching prebuilt binary in the common
+  // case (a quick download, not a compile), and gating it on a stamp file would
+  // reintroduce the exact "silently skip the rebuild" failure this fixes.
+  info(
+    "Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — macOS: xcode-select --install)..."
+  );
+  step("npm rebuild", "npm", ["rebuild", ...NATIVE_MODULES]);
 
   info("Rebuilding...");
   step("npm run build", "npm", ["run", "build"]);
@@ -909,6 +924,7 @@ module.exports = {
   parsePort,
   checkPortFree,
   NODE_MIN_MAJOR,
+  NATIVE_MODULES,
 };
 
 // PORT is read from the current env on every access so tests that reload the

@@ -33,6 +33,7 @@ const {
   parsePort,
   checkPortFree,
   NODE_MIN_MAJOR,
+  NATIVE_MODULES,
 } = require(CLI_PATH) as {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
@@ -57,6 +58,7 @@ const {
   parsePort: (v: unknown) => number | null;
   checkPortFree: (port: number, host?: string) => Promise<boolean>;
   NODE_MIN_MAJOR: number;
+  NATIVE_MODULES: string[];
 };
 
 function loadCliWith(env: Record<string, string | undefined>) {
@@ -257,6 +259,31 @@ describe("stoa CLI: command resolution", () => {
         file: npm,
         args: ["install", "--legacy-peer-deps"],
       });
+    }
+  });
+});
+
+describe("stoa CLI: native-module rebuild list (ABI-mismatch fix)", () => {
+  // install/update force-rebuild this set so a Node-version change can't leave a
+  // stale ABI-mismatched binary (NODE_MODULE_VERSION mismatch → 500s every DB route).
+  it("includes the native modules the server loads at runtime", () => {
+    expect(NATIVE_MODULES.length).toBeGreaterThan(0);
+    expect(NATIVE_MODULES).toContain("better-sqlite3"); // the DB binding
+    expect(NATIVE_MODULES).toContain("node-pty"); // the pty backend
+  });
+
+  it("lists only real package.json dependencies (the list can't silently go stale)", () => {
+    const pkg = require("../package.json") as {
+      dependencies?: Record<string, string>;
+    };
+    const deps = pkg.dependencies ?? {};
+    for (const mod of NATIVE_MODULES) {
+      // A phantom entry would make `npm rebuild` error or no-op; a missing-from-deps
+      // entry means the list drifted from what's actually installed.
+      expect(
+        deps[mod],
+        `${mod} must be a dependency in package.json`
+      ).toBeDefined();
     }
   });
 });
