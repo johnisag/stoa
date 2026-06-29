@@ -6,10 +6,53 @@ import {
   isPortInUse,
   resolveBinary,
   defaultInteractiveShell,
+  extraBinDirsForPlatform,
+  pathWithExtraBinDirs,
 } from "@/lib/platform";
 import os from "os";
 import path from "path";
 import net from "net";
+
+describe("extraBinDirsForPlatform / pathWithExtraBinDirs (macOS Homebrew PATH)", () => {
+  it("extraBinDirsForPlatform returns the Homebrew dirs only on darwin", () => {
+    expect(extraBinDirsForPlatform("darwin")).toEqual([
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+    ]);
+    expect(extraBinDirsForPlatform("linux")).toEqual([]);
+    expect(extraBinDirsForPlatform("win32")).toEqual([]);
+  });
+
+  it("prepends the missing Homebrew dirs on macOS so tmux/gh/etc. resolve", () => {
+    expect(pathWithExtraBinDirs("/usr/bin:/bin", "darwin")).toBe(
+      "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    );
+  });
+
+  it("is idempotent — won't duplicate an already-present dir", () => {
+    expect(pathWithExtraBinDirs("/opt/homebrew/bin:/usr/bin", "darwin")).toBe(
+      "/usr/local/bin:/opt/homebrew/bin:/usr/bin"
+    );
+    expect(
+      pathWithExtraBinDirs("/opt/homebrew/bin:/usr/local/bin", "darwin")
+    ).toBe("/opt/homebrew/bin:/usr/local/bin");
+  });
+
+  it("handles an empty base PATH on macOS", () => {
+    expect(pathWithExtraBinDirs("", "darwin")).toBe(
+      "/opt/homebrew/bin:/usr/local/bin"
+    );
+  });
+
+  it("leaves PATH unchanged off macOS (Linux/Windows)", () => {
+    expect(pathWithExtraBinDirs("/usr/bin:/bin", "linux")).toBe(
+      "/usr/bin:/bin"
+    );
+    expect(pathWithExtraBinDirs("C:\\Windows\\System32", "win32")).toBe(
+      "C:\\Windows\\System32"
+    );
+  });
+});
 
 describe("claudeProjectDirName", () => {
   it("encodes a Windows path to Claude's project-dir convention", () => {

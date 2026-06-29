@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import { join } from "path";
+import { pathWithExtraBinDirs } from "./platform";
 
 /**
  * Parse a dotenv-style file body into key→value pairs. Pure (unit-testable):
@@ -46,4 +47,13 @@ if (process.env.STOA_SKIP_ENV_FILE !== "1" && !process.env.VITEST) {
   } catch {
     // No .env / unreadable — that's fine.
   }
+}
+
+// macOS: a server launched OUTSIDE a login shell (Finder/Spotlight/an IDE's runner/
+// launchd) inherits a bare PATH without Homebrew's bin dirs, so every child_process
+// spawn — tmux (the whole session backend), gh, git, claude — resolves to "command
+// not found" and the fleet silently fails to load. Prepend the Homebrew dirs so those
+// CLIs are found. No-op off macOS; idempotent. Skipped under vitest (own env).
+if (!process.env.VITEST) {
+  process.env.PATH = pathWithExtraBinDirs();
 }
