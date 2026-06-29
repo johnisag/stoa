@@ -307,10 +307,15 @@ function cmdInstall() {
   // Re-running `stoa install` over an existing node_modules (a documented "missing
   // dependencies" remedy) hits the same version-aware-not-ABI-aware gap as update,
   // so rebuild the native modules here too. See NATIVE_MODULES.
-  info(
-    `Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — ${toolchainHint()})...`
-  );
-  runSync("npm", nativeRebuildArgs());
+  info("Rebuilding native modules for the current Node...");
+  if (runSync("npm", nativeRebuildArgs(), { allowFail: true }) !== 0) {
+    // Repeat the remediation IN the failure path: on a compile fallback npm prints a
+    // wall of gyp output, so a hint printed only before the rebuild scrolls off.
+    error(
+      `Failed to rebuild native modules. If they must compile, ${toolchainHint()}`
+    );
+    process.exit(1);
+  }
 
   info("Building for production...");
   runSync("npm", ["run", "build"]);
@@ -652,10 +657,14 @@ function cmdUpdate() {
   // unconditional: `npm rebuild` resolves a matching prebuilt binary in the common
   // case (a quick download, not a compile), and gating it on a stamp file would
   // reintroduce the exact "silently skip the rebuild" failure this fixes.
-  info(
-    `Rebuilding native modules for the current Node (needs a C++ toolchain if no prebuilt binary matches — ${toolchainHint()})...`
+  info("Rebuilding native modules for the current Node...");
+  // The hint rides in the step label so recover() echoes it adjacent to the failure
+  // (a compile fallback buries an info-line hint under gyp output).
+  step(
+    `npm rebuild (if they must compile: ${toolchainHint()})`,
+    "npm",
+    nativeRebuildArgs()
   );
-  step("npm rebuild", "npm", nativeRebuildArgs());
 
   info("Rebuilding...");
   step("npm run build", "npm", ["run", "build"]);
