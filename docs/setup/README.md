@@ -137,6 +137,8 @@ The `stoa status` command will show your Tailscale URL if Tailscale is installed
 ```
 ~/.stoa/
 |-- repo/          # Cloned Stoa repository
+|-- stoa.db        # SQLite database (sessions/history) — lives OUTSIDE repo/ so a
+|                  #   re-clone or reset of repo/ can never destroy it
 |-- stoa.pid       # PID file when running
 `-- stoa.log       # Server logs
 ```
