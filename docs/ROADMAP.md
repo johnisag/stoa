@@ -70,7 +70,8 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 > (#311) · #5 Windows `.cmd` EINVAL in commit-message + summarize (#312) · #6 Key
 > `session_costs` on the canonical backend key (#313) · #7 Coalesce recurring
 > schedules so a busy session isn't flooded (#314) · #8 Self-resolve the
-> native-fork parent on re-attach (#315).
+> native-fork parent on re-attach (#315) · #1 Fix the native-fork cost
+> double-count (#316).
 
 ### Tier 1 — High impact (ranks 1–32)
 
@@ -78,13 +79,15 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 > cheap trust wins and several corrupt cost/analytics or break a first-class
 > platform.
 
-1. 🐛 **Fix native Claude fork cost double-count** — `bug` · L. A native Claude
-   fork (`--resume <parent> --fork-session`) inherits the parent's entire
-   transcript, so `parseClaudeUsage` books the parent's full history as the fork's
-   usage. Capture a per-session `baselineTokens/baselineCost` at fork time and net
-   it out. _Why:_ fleet cost badge ~doubles and the persisted curve spikes on every
-   fork day. _Seam:_ `lib/session-cost.ts`, `lib/cost-history.ts`,
-   `app/api/sessions/[id]/fork/route.ts`, `app/api/sessions/cost/route.ts`.
+1. ✅ 🐛 **Fix native Claude fork cost double-count** — `bug` · L.
+   **SHIPPED (#316).** A native fork's row now stores the parent's cumulative usage
+   AT FORK TIME (`fork_cost_baseline` JSON, migration 44, written by the fork route
+   from the parent's transcript); `computeSessionCosts` nets it out (`netForkUsage`,
+   clamped ≥0) so only the fork's OWN spend counts — fixing the live badge, the
+   persisted samples, AND the curve at one seam. contextTokens (live window) is left
+   as-is. (Only new forks get a baseline; forks predating the change keep NULL — the
+   parent-at-fork snapshot is unrecoverable.) _Seam:_ `lib/session-cost.ts`,
+   `app/api/sessions/[id]/fork/route.ts`, `lib/db/{migrations,schema,types,queries}.ts`.
 2. 🐛 **Fix Windows live-wall observer evicting pane resize** — `bug` · L. Re-key
    the pty-host `attached` map by `(key, sub-id)` so an observer attach gets its own
    slot and never evicts the real client's sizing slot. _Why:_ on the default

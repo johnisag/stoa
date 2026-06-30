@@ -1083,6 +1083,34 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 44,
+    name: "add_fork_cost_baseline",
+    up: (db) => {
+      // #1: a NATIVE Claude fork (--resume <parent> --fork-session) inherits the
+      // parent's ENTIRE transcript, so the cost reader books the parent's full
+      // history as the fork's usage (the fleet cost ~doubles, the persisted curve
+      // spikes on the fork day). Record the parent's cumulative usage AT FORK TIME
+      // here (a JSON TokenUsage); the cost path nets it out so only the fork's OWN
+      // spend above the inherited baseline counts. NULL = no baseline (the common
+      // case: not a native fork). Guarded ALTER (migration-24.. pattern).
+      const hasSessions =
+        (
+          db
+            .prepare(
+              `SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'`
+            )
+            .all() as { name: string }[]
+        ).length > 0;
+      if (!hasSessions) return;
+      const hasColumn = (
+        db.prepare(`PRAGMA table_info(sessions)`).all() as { name: string }[]
+      ).some((c) => c.name === "fork_cost_baseline");
+      if (!hasColumn) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN fork_cost_baseline TEXT`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

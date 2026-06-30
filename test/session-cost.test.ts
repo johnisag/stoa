@@ -1,9 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   parseClaudeUsage,
   parseClaudeContextTokens,
   costReaderFor,
+  parseForkBaseline,
+  netForkUsage,
+  computeSessionCosts,
 } from "../lib/session-cost";
+import { readClaudeTranscriptRaw } from "../lib/claude-transcript";
+import type { Session } from "../lib/db";
+
+// Mock the transcript fs boundary so computeSessionCosts can be exercised with a
+// controlled transcript (no real files) — locks that it actually nets the baseline.
+vi.mock("../lib/claude-transcript", () => ({
+  readClaudeTranscriptRaw: vi.fn(),
+}));
 
 // A few JSONL lines like Claude Code writes: user turns (no usage) + assistant
 // turns carrying message.usage, plus a blank + a malformed line to skip.
@@ -83,6 +94,131 @@ describe("parseClaudeContextTokens", () => {
         JSON.stringify({ type: "user", message: { content: "hi" } })
       )
     ).toBe(0);
+  });
+});
+
+describe("parseForkBaseline (#1 — native fork cost baseline)", () => {
+  it("parses a stored JSON TokenUsage", () => {
+    expect(
+      parseForkBaseline(
+        JSON.stringify({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 })
+      )
+    ).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+  });
+
+  it("is null for null/empty/malformed input (no netting)", () => {
+    expect(parseForkBaseline(null)).toBeNull();
+    expect(parseForkBaseline(undefined)).toBeNull();
+    expect(parseForkBaseline("")).toBeNull();
+    expect(parseForkBaseline("{not json")).toBeNull();
+  });
+
+  it("coerces missing/NaN buckets to 0", () => {
+    expect(parseForkBaseline(JSON.stringify({ input: 5 }))).toEqual({
+      input: 5,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+});
+
+describe("netForkUsage (#1 — subtract the inherited parent history)", () => {
+  it("returns the fork's OWN spend = total minus the parent-at-fork baseline", () => {
+    // The fork's transcript = parent history (100/50/200/10) + its own work
+    // (30/20/40/5). Netting the baseline yields exactly the fork's own usage.
+    const baseline = { input: 100, output: 50, cacheRead: 200, cacheWrite: 10 };
+    const total = { input: 130, output: 70, cacheRead: 240, cacheWrite: 15 };
+    expect(netForkUsage(total, baseline)).toEqual({
+      input: 30,
+      output: 20,
+      cacheRead: 40,
+      cacheWrite: 5,
+    });
+  });
+
+  it("returns the usage unchanged when there is no baseline (non-fork)", () => {
+    const t = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
+    expect(netForkUsage(t, null)).toEqual(t);
+  });
+
+  it("clamps each bucket at >= 0 (a torn/truncated transcript below the baseline)", () => {
+    const baseline = { input: 100, output: 50, cacheRead: 200, cacheWrite: 10 };
+    const total = { input: 80, output: 50, cacheRead: 0, cacheWrite: 10 };
+    expect(netForkUsage(total, baseline)).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+});
+
+describe("computeSessionCosts (#1 — applies the fork baseline end-to-end)", () => {
+  function forkSession(over: Partial<Session> = {}): Session {
+    return {
+      id: "f",
+      name: "fork",
+      agent_type: "claude",
+      claude_session_id: "cid",
+      working_directory: "/repo",
+      model: "claude-sonnet-4-6",
+      fork_cost_baseline: null,
+      ...over,
+    } as unknown as Session;
+  }
+
+  it("subtracts a native fork's fork_cost_baseline from its transcript usage", async () => {
+    // The fork's transcript = parent history (100/50/200/10) + its own work
+    // (30/20/40/5). With the baseline stamped, only the fork's own spend counts —
+    // this locks that computeSessionCosts actually calls parseForkBaseline+netForkUsage.
+    vi.mocked(readClaudeTranscriptRaw).mockResolvedValue(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "m",
+          usage: {
+            input_tokens: 130,
+            output_tokens: 70,
+            cache_read_input_tokens: 240,
+            cache_creation_input_tokens: 15,
+          },
+        },
+      })
+    );
+    const costs = await computeSessionCosts([
+      forkSession({
+        fork_cost_baseline: JSON.stringify({
+          input: 100,
+          output: 50,
+          cacheRead: 200,
+          cacheWrite: 10,
+        }),
+      }),
+    ]);
+    expect(costs["f"].tokens).toEqual({
+      input: 30,
+      output: 20,
+      cacheRead: 40,
+      cacheWrite: 5,
+    });
+    expect(costs["f"].supported).toBe(true);
+  });
+
+  it("does not net when there is no baseline (an ordinary session)", async () => {
+    vi.mocked(readClaudeTranscriptRaw).mockResolvedValue(
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "m", usage: { input_tokens: 10, output_tokens: 5 } },
+      })
+    );
+    const costs = await computeSessionCosts([forkSession({ id: "s" })]);
+    expect(costs["s"].tokens).toEqual({
+      input: 10,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
   });
 });
 

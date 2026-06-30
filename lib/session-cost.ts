@@ -98,6 +98,48 @@ export function parseClaudeContextTokens(jsonl: string): number {
 }
 
 /**
+ * The fork-cost baseline stored on a native fork — the parent's cumulative usage
+ * AT FORK TIME as a JSON TokenUsage — or null when absent/unparseable. Pure →
+ * unit-tested. (#1: a native Claude fork inherits the parent's whole transcript.)
+ */
+export function parseForkBaseline(
+  json: string | null | undefined
+): TokenUsage | null {
+  if (!json) return null;
+  try {
+    const b = JSON.parse(json) as Partial<TokenUsage>;
+    if (!b || typeof b !== "object") return null;
+    return {
+      input: Number(b.input) || 0,
+      output: Number(b.output) || 0,
+      cacheRead: Number(b.cacheRead) || 0,
+      cacheWrite: Number(b.cacheWrite) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Net a fork baseline out of cumulative usage, clamping each bucket at >= 0. A
+ * native fork's transcript = the inherited parent history + the fork's own turns,
+ * so the fork's OWN spend is the total minus the parent-at-fork baseline. A null
+ * baseline (the common case) returns the usage unchanged. Pure → unit-tested.
+ */
+export function netForkUsage(
+  tokens: TokenUsage,
+  baseline: TokenUsage | null
+): TokenUsage {
+  if (!baseline) return tokens;
+  return {
+    input: Math.max(0, tokens.input - baseline.input),
+    output: Math.max(0, tokens.output - baseline.output),
+    cacheRead: Math.max(0, tokens.cacheRead - baseline.cacheRead),
+    cacheWrite: Math.max(0, tokens.cacheWrite - baseline.cacheWrite),
+  };
+}
+
+/**
  * Read + sum usage for a Claude session from its on-disk transcript, plus the
  * live context-window occupancy (last turn's input). Async (so the cost route
  * can read all sessions concurrently without blocking the event loop). Returns
@@ -170,7 +212,13 @@ export async function computeSessionCosts(
       ];
     }
     const usage = await reader(s.working_directory, s.claude_session_id);
-    const tokens = usage?.tokens ?? ZERO_USAGE;
+    // Net out a native fork's inherited parent history (#1) so only the fork's own
+    // spend counts. contextTokens is the live window occupancy (last turn) and
+    // legitimately includes the inherited context, so it's NOT baseline-adjusted.
+    const tokens = netForkUsage(
+      usage?.tokens ?? ZERO_USAGE,
+      parseForkBaseline(s.fork_cost_baseline)
+    );
     return [
       s.id,
       {

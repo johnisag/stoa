@@ -32,6 +32,10 @@ export function createSchema(db: Database.Database): void {
       tmux_name TEXT,
       worktree_paths TEXT,
       mcp_launch_args TEXT,
+      -- JSON TokenUsage of the parent's cumulative usage at fork time (#1): a
+      -- native Claude fork inherits the parent's transcript, so the cost path nets
+      -- this baseline out. NULL for non-forks. (migration 44)
+      fork_cost_baseline TEXT,
       FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
     );
 

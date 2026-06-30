@@ -85,6 +85,14 @@ export const queries = {
       `UPDATE sessions SET mcp_launch_args = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // #1: stamp a native fork's parent-usage-at-fork-time baseline (JSON TokenUsage),
+  // netted out by the cost path so the fork's inherited transcript isn't counted.
+  updateSessionForkBaseline: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE sessions SET fork_cost_baseline = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
   updateSessionPR: (db: Database.Database) =>
     getStmt(
       db,
