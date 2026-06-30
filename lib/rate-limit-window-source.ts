@@ -13,7 +13,9 @@ import { homeDir } from "./platform";
 import {
   parseWindowRecord,
   windowUtilization,
+  isWindowStale,
   type RateLimitWindow,
+  type RateLimitWindowRecord,
 } from "./rate-limit-window";
 
 /**
@@ -30,6 +32,27 @@ export function readRateLimitWindow(
       "utf-8"
     );
     return windowUtilization(parseWindowRecord(raw), nowMs);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the RAW M2a record (the 5h + 7d breakdown + reset), staleness-validated: null when
+ * the file is missing / malformed OR older than the freshness horizon. The telemetry
+ * snapshot export (M5) wants BOTH windows, not just the derived binding pct that
+ * readRateLimitWindow exposes.
+ */
+export function readRateLimitWindowRecord(
+  nowMs: number = Date.now()
+): RateLimitWindowRecord | null {
+  try {
+    const raw = readFileSync(
+      join(homeDir(), ".stoa", "rate-limits.json"),
+      "utf-8"
+    );
+    const record = parseWindowRecord(raw);
+    return record && !isWindowStale(record, nowMs) ? record : null;
   } catch {
     return null;
   }

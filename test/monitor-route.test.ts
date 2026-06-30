@@ -1,0 +1,109 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { SessionProcessInfo } from "@/lib/process-tree";
+import type { RateLimitWindowRecord } from "@/lib/rate-limit-window";
+
+// Mock the heavy gather (cost computation, process/port snapshot, rate-limit read) but let
+// the REAL buildMonitorRows + buildTelemetrySnapshot run, so the test exercises the route's
+// actual end-to-end mapping into the wire shape.
+const state = vi.hoisted(() => ({
+  sessions: [] as Array<Record<string, unknown>>,
+  costs: {} as Record<string, unknown>,
+  processInfo: {} as Record<string, SessionProcessInfo>,
+  rateLimit: null as RateLimitWindowRecord | null,
+}));
+
+vi.mock("@/lib/db", () => ({
+  getDb: () => ({}),
+  queries: { getAllSessions: () => ({ all: () => state.sessions }) },
+}));
+vi.mock("@/lib/session-cost", () => ({
+  computeSessionCosts: vi.fn(async () => state.costs),
+}));
+vi.mock("@/lib/monitor-collect", () => ({
+  collectMonitorProcessInfo: vi.fn(async () => state.processInfo),
+}));
+vi.mock("@/lib/rate-limit-window-source", () => ({
+  readRateLimitWindowRecord: vi.fn(() => state.rateLimit),
+}));
+
+import { GET } from "@/app/api/monitor/route";
+import type { NextRequest } from "next/server";
+
+function reqWith(qs: string): NextRequest {
+  return {
+    nextUrl: { searchParams: new URLSearchParams(qs) },
+  } as unknown as NextRequest;
+}
+
+beforeEach(() => {
+  state.sessions = [];
+  state.costs = {};
+  state.processInfo = {};
+  state.rateLimit = null;
+});
+
+describe("GET /api/monitor (M5 telemetry snapshot)", () => {
+  it("emits an abtop-aligned snapshot for ?format=json", async () => {
+    state.sessions = [
+      {
+        id: "s1",
+        name: "sess",
+        agent_type: "claude",
+        status: "running",
+        branch_name: "feature/x",
+        model: "opus",
+      },
+    ];
+    state.costs = {
+      s1: {
+        model: "opus",
+        tokens: { input: 100, output: 20, cacheRead: 5, cacheWrite: 3 },
+        costUsd: 0.42,
+        contextTokens: 8000,
+        supported: true,
+      },
+    };
+    state.processInfo = {
+      s1: {
+        childCount: 2,
+        mcpServers: ["mcp-server-git"],
+        ports: [{ port: 8080, orphan: true }],
+      },
+    };
+    state.rateLimit = {
+      fiveHourPct: 0.5,
+      sevenDayPct: 0.2,
+      resetAt: 99,
+      updatedAt: 1,
+    };
+
+    const body = await (await GET(reqWith("format=json"))).json();
+    expect(body.schema).toBe("stoa.monitor.v1");
+    expect(typeof body.generated_at).toBe("number");
+    expect(body.rate_limits).toEqual({
+      five_hour: { used_percent: 50 },
+      seven_day: { used_percent: 20 },
+      reset_at: 99,
+    });
+    expect(body.agents).toHaveLength(1);
+    const a = body.agents[0];
+    expect(a.id).toBe("s1");
+    expect(a.agent_type).toBe("claude");
+    expect(a.mcp_servers).toEqual(["mcp-server-git"]);
+    expect(a.ports).toEqual([8080]);
+    expect(a.orphan_ports).toEqual([8080]);
+    expect(a.tokens.cache_read_tokens).toBe(5);
+    expect(a.cost_usd).toBe(0.42);
+  });
+
+  it("rejects an unsupported format with 400", async () => {
+    const res = await GET(reqWith("format=xml"));
+    expect(res.status).toBe(400);
+  });
+
+  it("defaults to the snapshot (empty fleet) when format is omitted", async () => {
+    const body = await (await GET(reqWith(""))).json();
+    expect(body.schema).toBe("stoa.monitor.v1");
+    expect(body.agents).toEqual([]);
+  });
+});
