@@ -3,12 +3,16 @@
 import { useQuery } from "@tanstack/react-query";
 import type { SessionCost } from "@/app/api/sessions/cost/route";
 import type { BudgetConfig, BudgetLevel } from "@/lib/budget";
+import type { RateLimitWindow } from "@/lib/rate-limit-window";
 
 export interface SessionCostsResponse {
   sessions: Record<string, SessionCost>;
   totalUsd: number;
   budget: BudgetConfig;
   levels: Record<string, BudgetLevel>;
+  /** Proactive Claude rate-limit window utilization (M2), or null when unknown
+   *  (no statusline hook installed / stale) — fail-closed. */
+  rateLimitWindow?: RateLimitWindow | null;
 }
 
 /**

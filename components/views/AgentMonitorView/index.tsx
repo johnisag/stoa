@@ -46,6 +46,9 @@ export function AgentMonitorView({
   // with no estimate shows zeroes + "—" via buildMonitorRows.
   const { data } = useSessionCosts();
   const rows = buildMonitorRows(sessions, data?.sessions ?? {});
+  // Proactive Claude rate-limit window (M2): global, fail-closed (null until the
+  // statusline hook is installed) — render nothing when absent.
+  const win = data?.rateLimitWindow ?? null;
 
   return (
     <div className="bg-background flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -57,6 +60,26 @@ export function AgentMonitorView({
             {rows.length} {rows.length === 1 ? "session" : "sessions"}
           </span>
         </span>
+        {win && (
+          <span
+            className="flex flex-shrink-0 items-center gap-1.5"
+            title="Claude rate-limit window utilization (the binding 5h/7d quota)"
+          >
+            <span className="text-muted-foreground text-[10px] uppercase">
+              quota
+            </span>
+            <span className="bg-muted h-1.5 w-16 overflow-hidden rounded-full">
+              <span
+                className={cn("block h-full", TONE_BAR[win.tone])}
+                style={{ width: `${Math.round(win.pct * 100)}%` }}
+                aria-hidden="true"
+              />
+            </span>
+            <span className="text-muted-foreground text-[10px] tabular-nums">
+              {Math.round(win.pct * 100)}%
+            </span>
+          </span>
+        )}
         {onClose && (
           <Button
             variant="ghost"
