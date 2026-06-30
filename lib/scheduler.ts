@@ -232,28 +232,39 @@ export function recordScheduleFired(
 }
 
 /** The outcome of firing one due schedule (for the tick's logging). */
-export type FireOutcome = "fired" | "session-gone";
+export type FireOutcome = "fired" | "skipped-queued" | "session-gone";
 
 /**
  * Fire one due schedule: the per-row body of the server tick, extracted so it's
- * unit-testable (the terminal-side enqueue is INJECTED, so this stays free of the
- * prompt-queue import). The DB transition runs BEFORE the enqueue so a DB failure
- * can't leave the row "due" AND already delivered (which would double-deliver next
- * tick); a successful advance with a (near-impossible) enqueue failure merely drops
- * that one occurrence, matching the prompt queue's own transience. A schedule whose
- * target session is gone is disabled (a deleted session never returns), so it stops
- * churning the tick instead of enqueuing into a dead session forever.
+ * unit-testable (the terminal-side enqueue + queue check are INJECTED, so this
+ * stays free of the prompt-queue import). The DB transition runs BEFORE the enqueue
+ * so a DB failure can't leave the row "due" AND already delivered (which would
+ * double-deliver next tick); a successful advance with a (near-impossible) enqueue
+ * failure merely drops that one occurrence, matching the prompt queue's own
+ * transience. A schedule whose target session is gone is disabled (a deleted
+ * session never returns), so it stops churning the tick instead of enqueuing into a
+ * dead session forever.
+ *
+ * Coalescing: if `isQueued` reports this schedule's prompt is STILL pending in the
+ * target's queue (the session hasn't gone idle to drain it since the last fire), we
+ * advance the cadence but DON'T enqueue a duplicate — otherwise a recurring schedule
+ * against a busy/wedged session grows the queue unbounded and floods the agent with
+ * stale copies the moment it recovers. The cadence still advances (so a one-shot
+ * disables itself and a recurring schedule won't busy-retry every tick).
  */
 export function fireSchedule(
   row: ScheduleRow,
   nowMs: number,
-  enqueue: (sessionId: string, prompt: string) => void
+  enqueue: (sessionId: string, prompt: string) => void,
+  isQueued?: (sessionId: string, prompt: string) => boolean
 ): FireOutcome {
   if (!(queries.getSession(db).get(row.session_id) as Session | undefined)) {
     setScheduleEnabled(row.id, false);
     return "session-gone";
   }
+  const duplicate = isQueued?.(row.session_id, row.prompt) ?? false;
   recordScheduleFired(row, nowMs);
+  if (duplicate) return "skipped-queued";
   enqueue(row.session_id, row.prompt);
   return "fired";
 }
