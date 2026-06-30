@@ -123,10 +123,18 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     statusLine; `stoa doctor` advertises it (warn + hint) when Claude is installed but
     the hook isn't. The M2a quota gauge now lights up. _Seam:_
     `scripts/claude-statusline-hook.js`, `scripts/stoa.js`.
-  - **M2c** — feed the window % into Dispatch + the watchdog so the fleet backs off
-    BEFORE a hard stall (reuse the `server.ts` tick + `lib/rate-limit.ts` resume
-    gating). _Seam:_ new `lib/rate-limit-window.ts`, `lib/agent-monitor.ts`,
-    `scripts/stoa.js`, `server.ts` tick, `lib/dispatch`.
+  - ✅ **M2c — SHIPPED (#324).** Proactive backoff: when Claude's binding 5h/7d window
+    is saturated, the Dispatch reconciler HOLDS new claude workers (candidates stay
+    pending, FIFO) and the age-reaper spares a throttled (not hung) worker. Pure
+    `isWindowSaturated` + an opt-in threshold (`STOA_DISPATCH_RATELIMIT_BACKOFF`, a
+    fraction or percent; off by default → zero I/O and no behavior change). Fail-OPEN:
+    absent window data never throttles. The `fs` reader was split into a server-only
+    `lib/rate-limit-window-source.ts` so the client-safe model stays node-builtin-free.
+    The wedged-session watchdog is intentionally NOT touched (escalate-only → no API
+    load to back off; suppressing it on proactive saturation would mask real wedges).
+    Reactive resume (`lib/rate-limit.ts`) still drains sessions already AT the limit.
+    _Seam:_ `lib/rate-limit-window.ts`, `lib/rate-limit-window-source.ts`,
+    `lib/dispatch/reconciler.ts`, `server.ts` banner, `.env.example`.
 - **M3 — MCP-server + subagent/child-process tree per session** — `feature` · M.
   Detect each session's child-process / subagent fan-out and its MCP servers
   (process inspection + the existing netstat/lsof primitive); surface in the
