@@ -1,36 +1,11 @@
 import { NextResponse } from "next/server";
-import { readFileSync } from "fs";
-import { join } from "path";
 import { getDb, queries, type Session } from "@/lib/db";
 import { computeSessionCosts } from "@/lib/session-cost";
 import { persistCostSamples } from "@/lib/cost-history";
 import { getBudgetConfig, evaluateBudget } from "@/lib/budget";
-import { homeDir } from "@/lib/platform";
-import {
-  parseWindowRecord,
-  windowUtilization,
-  type RateLimitWindow,
-} from "@/lib/rate-limit-window";
+import { readRateLimitWindow } from "@/lib/rate-limit-window-source";
 
 export type { SessionCost } from "@/lib/session-cost";
-
-/**
- * The proactive Claude rate-limit WINDOW utilization (M2a), read best-effort from
- * the Stoa-owned statusline-hook file (~/.stoa/rate-limits.json, written by M2b).
- * Fail-closed: no file / unreadable / malformed / stale → null (no gauge), never a
- * confident wrong number. Global (per Claude account), not per session.
- */
-function readRateLimitWindow(): RateLimitWindow | null {
-  try {
-    const raw = readFileSync(
-      join(homeDir(), ".stoa", "rate-limits.json"),
-      "utf-8"
-    );
-    return windowUtilization(parseWindowRecord(raw), Date.now());
-  } catch {
-    return null;
-  }
-}
 
 // GET /api/sessions/cost — estimated token cost per session + a fleet total,
 // plus the active budget caps and each session's level vs them. Claude-only

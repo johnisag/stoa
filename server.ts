@@ -68,6 +68,7 @@ import {
   WATCHDOG_MAX_GAP_MS,
   type StuckTrack,
 } from "./lib/watchdog";
+import { dispatchBackoffThreshold } from "./lib/rate-limit-window";
 import {
   channelDeliverEnabled,
   isChannelDeliveryTurn,
@@ -338,6 +339,14 @@ app.prepare().then(() => {
   if (WATCHDOG_ENABLED) {
     console.log(
       `> Watchdog on (STOA_AUTO_WATCHDOG=1): a session stuck "running" continuously for ~${Math.round(WATCHDOG_STUCK_MS / 60000)}m gets ONE "may be stuck" push, then it's left for you. The terminal is never written to.`
+    );
+  }
+  // Proactive rate-limit backoff (opt-in via STOA_DISPATCH_RATELIMIT_BACKOFF). The
+  // reconciler reads the threshold fresh each tick; this is just the startup banner.
+  const DISPATCH_BACKOFF_THRESHOLD = dispatchBackoffThreshold();
+  if (DISPATCH_BACKOFF_THRESHOLD > 0) {
+    console.log(
+      `> Dispatch rate-limit backoff on (STOA_DISPATCH_RATELIMIT_BACKOFF): new Claude dispatches are HELD while the binding 5h/7d rate-limit window is >= ${Math.round(DISPATCH_BACKOFF_THRESHOLD * 100)}% (needs the M2b statusline hook for data). Reactive resume still drains sessions already AT the limit.`
     );
   }
   // Inter-agent channel PUSH delivery (opt-in via STOA_AUTO_CHANNEL_DELIVER=1).

@@ -3,8 +3,11 @@ import {
   parseWindowRecord,
   windowUtilization,
   isWindowStale,
+  isWindowSaturated,
+  parseDispatchBackoffThreshold,
   WINDOW_STALE_MS,
   type RateLimitWindowRecord,
+  type RateLimitWindow,
 } from "@/lib/rate-limit-window";
 
 const NOW = 1_000_000_000;
@@ -112,5 +115,57 @@ describe("parseWindowRecord (#M2a — fail-closed)", () => {
       resetAt: null,
       updatedAt: NOW,
     });
+  });
+});
+
+const win = (pct: number): RateLimitWindow => ({
+  pct,
+  resetAt: null,
+  tone: "ok",
+});
+
+describe("isWindowSaturated (#M2c — proactive backoff predicate, fail-open)", () => {
+  it("is true only when a window exists AND pct >= the (positive) threshold", () => {
+    expect(isWindowSaturated(win(0.9), 0.9)).toBe(true); // at the threshold
+    expect(isWindowSaturated(win(0.95), 0.9)).toBe(true);
+    expect(isWindowSaturated(win(0.89), 0.9)).toBe(false); // below
+  });
+
+  it("is false (fail-OPEN) when there's no window — absent data never throttles", () => {
+    expect(isWindowSaturated(null, 0.9)).toBe(false);
+    expect(isWindowSaturated(undefined, 0.9)).toBe(false);
+  });
+
+  it("is false when backoff is off (threshold <= 0), regardless of pct", () => {
+    expect(isWindowSaturated(win(1), 0)).toBe(false);
+    expect(isWindowSaturated(win(1), -0.5)).toBe(false);
+  });
+
+  it("is false for a non-finite pct (defensive)", () => {
+    expect(isWindowSaturated(win(NaN), 0.9)).toBe(false);
+  });
+});
+
+describe("parseDispatchBackoffThreshold (#M2c — opt-in, fail-safe)", () => {
+  it("treats a fraction in (0,1] as the threshold", () => {
+    expect(parseDispatchBackoffThreshold("0.9")).toBe(0.9);
+    expect(parseDispatchBackoffThreshold("1")).toBe(1);
+    expect(parseDispatchBackoffThreshold("0.5")).toBe(0.5);
+  });
+
+  it("treats a value in (1,100] as a percentage (÷100) — forgiving of `90`", () => {
+    expect(parseDispatchBackoffThreshold("90")).toBeCloseTo(0.9);
+    expect(parseDispatchBackoffThreshold("100")).toBe(1);
+    expect(parseDispatchBackoffThreshold("85")).toBeCloseTo(0.85);
+  });
+
+  it("is 0 (OFF) for unset/empty/garbage/<=0/>100 — junk can only DISABLE", () => {
+    expect(parseDispatchBackoffThreshold(undefined)).toBe(0);
+    expect(parseDispatchBackoffThreshold("")).toBe(0);
+    expect(parseDispatchBackoffThreshold("  ")).toBe(0);
+    expect(parseDispatchBackoffThreshold("nope")).toBe(0);
+    expect(parseDispatchBackoffThreshold("0")).toBe(0);
+    expect(parseDispatchBackoffThreshold("-0.9")).toBe(0);
+    expect(parseDispatchBackoffThreshold("101")).toBe(0); // nonsense → off
   });
 });

@@ -32,6 +32,10 @@ vi.mock("@/lib/dispatch/issues", () => ({
 vi.mock("@/lib/session-backend", () => ({
   getSessionBackend: () => ({ list: backendList }),
 }));
+// M2c: control the rate-limit window the reconciler/sweeper reads (server-only reader).
+vi.mock("@/lib/rate-limit-window-source", () => ({
+  readRateLimitWindow: vi.fn(() => null),
+}));
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
   return { ...actual, getDb: () => state.db };
@@ -41,6 +45,8 @@ import { randomUUID } from "crypto";
 import { reconcileTick, sweepActiveWorkers } from "@/lib/dispatch/reconciler";
 import { queries } from "@/lib/db";
 import { dispatchOne } from "@/lib/dispatch/dispatcher";
+import { readRateLimitWindow } from "@/lib/rate-limit-window-source";
+import type { RateLimitWindow } from "@/lib/rate-limit-window";
 import {
   listEligibleIssues,
   getPRForBranchAnyState,
@@ -114,6 +120,7 @@ beforeEach(() => {
   vi.mocked(listEligibleIssues).mockResolvedValue([]);
   vi.mocked(getPRForBranchAnyState).mockResolvedValue(null);
   backendList.mockResolvedValue([]);
+  vi.mocked(readRateLimitWindow).mockReturnValue(null); // no window unless a test sets one
 });
 
 // Insert a live-worker dispatch: a session row (so getSession resolves) + a
@@ -168,7 +175,10 @@ const getStatus = (id: string) =>
 
 afterEach(() => {
   delete process.env.STOA_DISPATCH_WORKER_MAX_AGE_MS;
+  delete process.env.STOA_DISPATCH_RATELIMIT_BACKOFF;
 });
+
+const saturated: RateLimitWindow = { pct: 0.95, resetAt: null, tone: "full" };
 
 describe("reconcileTick", () => {
   it("auto mode dispatches up to the slot count (concurrency-bound)", async () => {
@@ -361,6 +371,41 @@ describe("sweepActiveWorkers", () => {
     );
   });
 
+  it("M2c: does NOT reap an old worker while the rate-limit window is saturated (throttled, not hung)", async () => {
+    process.env.STOA_DISPATCH_WORKER_MAX_AGE_MS = "3600000"; // reaper armed
+    process.env.STOA_DISPATCH_RATELIMIT_BACKOFF = "0.9"; // backoff armed
+    vi.mocked(readRateLimitWindow).mockReturnValue(saturated); // 95% — at the wall
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, {
+      tmuxName: "claude-throttled",
+    });
+    setDispatchedAt(d, "2020-01-01 00:00:00"); // old enough to be "hung" by age
+    backendList.mockResolvedValue(["claude-throttled"]); // still live, just waiting
+
+    await sweepActiveWorkers({ guardEmptyList: false });
+
+    // Spared: a worker parked on the limit must not be reaped + orphaned.
+    expect(getStatus(d)).toBe("dispatched");
+  });
+
+  it("M2c: still reaps when armed but the window is NOT saturated (backoff is the only gate)", async () => {
+    process.env.STOA_DISPATCH_WORKER_MAX_AGE_MS = "3600000";
+    process.env.STOA_DISPATCH_RATELIMIT_BACKOFF = "0.9";
+    vi.mocked(readRateLimitWindow).mockReturnValue({
+      pct: 0.5,
+      resetAt: null,
+      tone: "ok",
+    }); // plenty of headroom → genuinely hung
+    const repo = addRepo();
+    const d = addDispatchedWithSession(repo, 1, { tmuxName: "claude-hung" });
+    setDispatchedAt(d, "2020-01-01 00:00:00");
+    backendList.mockResolvedValue(["claude-hung"]);
+
+    await sweepActiveWorkers({ guardEmptyList: false });
+
+    expect(getStatus(d)).toBe("failed");
+  });
+
   it("leaves an old live worker dispatched when the reaper is DISARMED (default)", async () => {
     // No STOA_DISPATCH_WORKER_MAX_AGE_MS → today's behavior, never reap by age.
     const repo = addRepo();
@@ -397,5 +442,59 @@ describe("sweepActiveWorkers", () => {
     // The age reaper respects the startup guard — a worker that may just not have
     // rehydrated yet is NOT reaped on age alone (no false-fail during the race).
     expect(getStatus(d)).toBe("dispatched");
+  });
+});
+
+describe("reconcileTick — M2c proactive rate-limit backoff", () => {
+  it("holds NEW claude dispatches when the window is saturated and backoff is armed", async () => {
+    process.env.STOA_DISPATCH_RATELIMIT_BACKOFF = "0.9";
+    vi.mocked(readRateLimitWindow).mockReturnValue(saturated); // 95% of the binding window
+    const repo = addRepo({ mode: "auto", agent_type: "claude" });
+    addPending(repo, 1);
+    addPending(repo, 2);
+
+    await reconcileTick();
+
+    // Candidates stay pending (FIFO) for a later, less-saturated tick.
+    expect(vi.mocked(dispatchOne)).not.toHaveBeenCalled();
+  });
+
+  it("does NOT back off a non-claude repo — the window is Claude-account-specific", async () => {
+    process.env.STOA_DISPATCH_RATELIMIT_BACKOFF = "0.9";
+    vi.mocked(readRateLimitWindow).mockReturnValue(saturated);
+    const repo = addRepo({ mode: "auto", agent_type: "codex" });
+    addPending(repo, 1);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).toHaveBeenCalledTimes(1); // codex isn't gated
+  });
+
+  it("does not back off below the threshold", async () => {
+    process.env.STOA_DISPATCH_RATELIMIT_BACKOFF = "0.9";
+    vi.mocked(readRateLimitWindow).mockReturnValue({
+      pct: 0.5,
+      resetAt: null,
+      tone: "ok",
+    });
+    const repo = addRepo({ mode: "auto", agent_type: "claude" });
+    addPending(repo, 1);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).toHaveBeenCalledTimes(1);
+  });
+
+  it("is OFF by default — no env means no backoff AND no window read", async () => {
+    // Even a saturated window is ignored when the feature isn't armed; and the reader
+    // is never consulted, so the default path adds zero I/O.
+    vi.mocked(readRateLimitWindow).mockReturnValue(saturated);
+    const repo = addRepo({ mode: "auto", agent_type: "claude" });
+    addPending(repo, 1);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readRateLimitWindow)).not.toHaveBeenCalled();
   });
 });

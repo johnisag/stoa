@@ -16,6 +16,12 @@ import { getDb, queries, type Session } from "../db";
 import { getSessionBackend } from "../session-backend";
 import { expandHome } from "../platform";
 import { isWorkerHung, workerMaxAgeMs } from "../watchdog";
+import {
+  dispatchBackoffThreshold,
+  isWindowSaturated,
+  type RateLimitWindow,
+} from "../rate-limit-window";
+import { readRateLimitWindow } from "../rate-limit-window-source";
 import { sqliteTimeToMs } from "../sqlite-time";
 import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
 import { dispatchOne } from "./dispatcher";
@@ -59,6 +65,23 @@ export function computeSlots(input: SlotInputs): number {
   const dailyLeft = input.dailyQuota - input.dailyDone;
   const concurrencyLeft = input.maxConcurrency - input.liveInFlight;
   return Math.max(0, Math.min(dailyLeft, concurrencyLeft));
+}
+
+/**
+ * M2c proactive backoff: should we HOLD new dispatches for this repo because Claude's
+ * rolling rate-limit window is saturated? Claude-only — the window is Claude-account-
+ * specific, so a codex/hermes/kilo/kimi worker isn't bound by it. A no-op when the
+ * window is absent (M2b hook not installed) or backoff is disabled (isWindowSaturated
+ * handles both → false). Reactive resume (lib/rate-limit.ts) still drains sessions
+ * already AT the limit; this only stops STARTING work that would immediately hit the
+ * wall. Pure → unit-tested.
+ */
+export function shouldBackOffDispatch(
+  agentType: string,
+  window: RateLimitWindow | null,
+  threshold: number
+): boolean {
+  return agentType === "claude" && isWindowSaturated(window, threshold);
 }
 
 /** The first `slots` pending candidates (already FIFO-ordered by the query). */
@@ -179,6 +202,11 @@ export async function reconcileTick(): Promise<void> {
     // scheduled clone) so the chore keeps firing.
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
+    // M2c proactive backoff: read Claude's rolling rate-limit window ONCE this tick —
+    // and only when the feature is armed (threshold > 0), so the default path does no
+    // file I/O and behaves exactly as before. Used to hold new claude dispatches below.
+    const backoffThreshold = dispatchBackoffThreshold();
+    const rlWindow = backoffThreshold > 0 ? readRateLimitWindow(now) : null;
     const scheduledRows = queries.listScheduled(db).all() as IssueDispatch[];
     const { promoteIds, reArms } = planScheduledPromotion(scheduledRows, now);
     // Apply atomically: if a re-arm insert or a promote throws mid-block, NOTHING
@@ -241,6 +269,17 @@ export async function reconcileTick(): Promise<void> {
 
       // 3. Auto dispatches now; review leaves candidates for manual approval.
       if (repo.mode !== "auto") continue;
+      // M2c: don't START claude work that would immediately hit the wall — the binding
+      // 5h/7d window is already saturated. The candidates stay pending (FIFO) for a
+      // later, less-saturated tick; reactive resume drains anything already at the limit.
+      if (shouldBackOffDispatch(repo.agent_type, rlWindow, backoffThreshold)) {
+        console.log(
+          `dispatch: backing off ${repo.repo_slug} — Claude rate-limit window at ` +
+            `${Math.round((rlWindow?.pct ?? 0) * 100)}% ` +
+            `(>= ${Math.round(backoffThreshold * 100)}% threshold)`
+        );
+        continue;
+      }
       // The fence: maintainer-proposed rows are EXCLUDED here (maintainer_proposed=1),
       // so a survey proposal never auto-ships even on an auto-mode repo — it waits
       // for one-tap Approve in the Backlog. Everything else is identical.
@@ -356,14 +395,24 @@ export async function sweepActiveWorkers(opts: {
   // (default) = never reap by age (today's behavior). Read once per sweep.
   const maxAgeMs = workerMaxAgeMs();
   const nowMs = Date.now();
+  // M2c: while Claude's rate-limit window is saturated, a 'dispatched' worker parked on
+  // the limit is THROTTLED, not hung — skip the age-reaper so we don't false-reap (and
+  // orphan the session of) a worker that's just waiting out the window. Consulted ONLY
+  // when both the reaper (maxAgeMs) and backoff (threshold) are armed, so the default
+  // path does no extra I/O. Fleet-wide: a non-claude worker is briefly spared too, which
+  // only delays freeing its slot until the window clears — never a correctness loss.
+  const reaperThreshold = dispatchBackoffThreshold();
+  const reaperSaturated =
+    maxAgeMs > 0 &&
+    reaperThreshold > 0 &&
+    isWindowSaturated(readRateLimitWindow(nowMs), reaperThreshold);
 
   for (const d of rows) {
     if (d.worktree_path && d.branch_name) {
       // Look up the PR repo-explicitly from the stable main checkout, not the
       // worker's worktree (which may have been reclaimed → misleading gh ENOENT).
       const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-        | DispatchRepo
-        | undefined;
+        DispatchRepo | undefined;
       const pr = await getPRForBranchAnyState(
         repo ? expandHome(repo.repo_path) : expandHome(d.worktree_path),
         d.branch_name,
@@ -391,6 +440,7 @@ export async function sweepActiveWorkers(opts: {
     // session). Runs before the dead-session check so a hung-but-live worker is
     // caught (the dead check would leave a live one dispatched).
     if (
+      !reaperSaturated &&
       isWorkerHung({
         dispatchedAtMs: sqliteTimeToMs(d.dispatched_at),
         nowMs,
@@ -565,8 +615,7 @@ export async function reviewGatePass(): Promise<void> {
 
   for (const d of prOpen) {
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo || repo.review_gate !== 1) continue;
 
     const fixerAlive = isAlive(d.fixer_session_id);
