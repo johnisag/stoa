@@ -66,6 +66,9 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 > `security` `tech-debt` `simplification` `test` `docs`. 🐛 = a **confirmed**
 > defect in current code (verify-then-fix; ship a regression test).
 
+> **✅ Shipped from this roadmap:** #4 Map `STOA_PORT`→`PORT` for `npm run dev`
+> (#311).
+
 ### Tier 1 — High impact (ranks 1–32)
 
 > Ranks **1, 2, 4, 5, 6, 7, 8** are confirmed bugs — clear these first; they're
@@ -87,9 +90,10 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 3. **OS app-icon badge for attention count** — `mobile` · S. `setAppBadge`/
    `clearAppBadge` from the state-change check + the SW push payload. _Seam:_
    `lib/notifications.ts`, `hooks/useNotifications.ts`, `app/sw.ts`, `lib/push*.ts`.
-4. 🐛 **Map `STOA_PORT`→`PORT` for `npm run dev`** — `bug` · S. _Why:_ the
-   documented port knob no-ops in dev and `stoa doctor` reports the wrong bind.
-   _Seam:_ `lib/load-env.ts`, `server.ts`, `scripts/stoa.js`.
+4. ✅ 🐛 **Map `STOA_PORT`→`PORT` for `npm run dev`** — `bug` · S. **SHIPPED (#311).**
+   `portAlias()` in `lib/load-env.ts` bridges `STOA_PORT`→`PORT` on startup
+   (STOA_PORT wins), so `npm run dev` honours the knob the same way the CLI and
+   `stoa doctor` do. _Seam:_ `lib/load-env.ts`.
 5. 🐛 **Fix Windows `.cmd` EINVAL in commit-message + summarize** — `bug` · S.
    Route the `claude` `.cmd` shim through `cmd.exe /c` via a shared helper. _Why:_
    two features fully broken on Windows. _Seam:_

@@ -94,6 +94,9 @@ cp .env.example .env
 # edit .env and set STOA_PORT=8080
 ```
 
+`STOA_PORT` is honored by `stoa start`, `stoa doctor`, **and** `npm run dev` (it is
+bridged to `PORT` on startup; if both are set, `STOA_PORT` wins).
+
 ## Mobile Access with Tailscale
 
 Stoa is designed for mobile access. The easiest way to access it from your phone is with [Tailscale](https://tailscale.com):
