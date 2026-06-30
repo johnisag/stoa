@@ -175,6 +175,43 @@ export function setTabNotificationCount(count: number): void {
   }
 }
 
+/** The OS app-icon badge action for a "needs you" count: show the (clamped,
+ *  whole) number, or clear it at zero / on any bad input. Pure → unit-tested
+ *  (the impure applier is best-effort). */
+export function appBadgeAction(
+  count: number
+): { set: number } | { clear: true } {
+  const n = Math.max(0, Math.floor(count));
+  return n > 0 ? { set: n } : { clear: true };
+}
+
+/** Navigator with the Badging API (Chromium/Android, iOS 16.4+ installed PWA). */
+type BadgeNavigator = Navigator & {
+  setAppBadge?: (count?: number) => Promise<void>;
+  clearAppBadge?: () => Promise<void>;
+};
+
+/**
+ * Set/clear the OS app-icon badge with the count of sessions needing you — the
+ * one glanceable "N agents need you" signal on an INSTALLED PWA (the tab title is
+ * invisible there). The badge is sticky: it persists on the home-screen icon after
+ * the page is backgrounded/suspended, and only changes on the next call. Feature-
+ * detected + best-effort (silently no-ops where unsupported, and swallows the
+ * promise rejection some platforms throw when the badge can't be shown).
+ */
+export function setAppBadge(count: number): void {
+  if (typeof navigator === "undefined") return;
+  const nav = navigator as BadgeNavigator;
+  if (!nav.setAppBadge || !nav.clearAppBadge) return;
+  const action = appBadgeAction(count);
+  try {
+    if ("set" in action) nav.setAppBadge(action.set).catch(() => {});
+    else nav.clearAppBadge().catch(() => {});
+  } catch {
+    // Some platforms throw synchronously when the badge can't be applied.
+  }
+}
+
 export function flashTabTitle(message: string): void {
   if (typeof window === "undefined") return;
 
