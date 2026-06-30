@@ -5,9 +5,9 @@
  * inspired by graykode/abtop but native (no Rust binary). One row per session with
  * the telemetry Stoa already computes: status, model, context-window %, token usage,
  * cost, and branch. Data comes from the session roster (prop) + the /api/sessions/cost
- * estimate (useSessionCosts) + the on-demand per-session process fan-out
- * (useMonitorProcesses / /api/monitor/processes, M3). The merge/sort lives in the pure,
- * unit-tested lib/agent-monitor.ts.
+ * estimate (useSessionCosts) + the on-demand per-session process fan-out + listening
+ * ports (useMonitorProcesses / /api/monitor/processes, M3+M4). The merge/sort lives in
+ * the pure, unit-tested lib/agent-monitor.ts.
  *
  * Opens as its own pane tab (fleet-nav / ⌘K), mirroring the Live Wall.
  */
@@ -109,6 +109,8 @@ export function AgentMonitorView({
           <ul className="flex flex-col gap-1.5">
             {rows.map((r) => {
               const fan = fanouts[r.id];
+              const ports = fan?.ports ?? [];
+              const hasOrphanPort = ports.some((p) => p.orphan);
               return (
                 <li key={r.id}>
                   <button
@@ -183,6 +185,32 @@ export function AgentMonitorView({
                         {fan && fan.mcpServers.length > 0
                           ? `proc · ${fan.mcpServers.length}mcp`
                           : "proc"}
+                      </span>
+                    </span>
+
+                    {/* Listening ports (M4): agent-spawned servers; orphans flagged */}
+                    <span
+                      className="hidden flex-shrink-0 text-right text-[11px] tabular-nums sm:block"
+                      title={
+                        ports.length > 0
+                          ? `Listening ports: ${ports
+                              .map((p) =>
+                                p.orphan ? `${p.port} (orphan)` : `${p.port}`
+                              )
+                              .join(", ")}`
+                          : undefined
+                      }
+                    >
+                      {ports.length > 0 ? ports.length : "—"}
+                      <span
+                        className={cn(
+                          "block text-[9px] uppercase",
+                          hasOrphanPort
+                            ? "text-amber-500"
+                            : "text-muted-foreground"
+                        )}
+                      >
+                        {hasOrphanPort ? "port ⚠" : "port"}
                       </span>
                     </span>
                   </button>
