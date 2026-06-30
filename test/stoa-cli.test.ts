@@ -39,6 +39,11 @@ const {
   NATIVE_MODULES,
   nativeRebuildArgs,
   toolchainHint,
+  statuslineHookPath,
+  buildStatusLineCommand,
+  isStoaStatusLine,
+  mergeStatusLine,
+  checkStatuslineHook,
 } = require(CLI_PATH) as {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
@@ -77,6 +82,22 @@ const {
   NATIVE_MODULES: string[];
   nativeRebuildArgs: () => string[];
   toolchainHint: () => string;
+  statuslineHookPath: (repoDir?: string) => string;
+  buildStatusLineCommand: (hookPath: string) => string;
+  isStoaStatusLine: (statusLine: unknown) => boolean;
+  mergeStatusLine: (
+    settings: unknown,
+    command: string
+  ) => {
+    settings: Record<string, unknown>;
+    action: "added" | "updated" | "conflict";
+  };
+  checkStatuslineHook: (rawSettings: string | null) => {
+    name: string;
+    status: string;
+    detail: string;
+    hint?: string;
+  };
 };
 
 function loadCliWith(env: Record<string, string | undefined>) {
@@ -463,5 +484,124 @@ describe("stoa CLI: checkPortFree (real net round-trip)", () => {
     expect(await checkPortFree(port, "127.0.0.1")).toBe(false); // held
     await new Promise<void>((r) => srv.close(() => r()));
     expect(await checkPortFree(port, "127.0.0.1")).toBe(true); // released
+  });
+});
+
+describe("stoa CLI: statusline installer (M2b — never-clobber merge)", () => {
+  it("statuslineHookPath is forward-slashed and points at the bundled hook", () => {
+    const p = statuslineHookPath("C:\\Program Files\\stoa");
+    // Forward slashes only, so the quoted command is one shell-safe token even on
+    // Windows (Node accepts "/" paths, and "/" needs no escaping in double quotes).
+    expect(p).not.toContain("\\");
+    expect(p.endsWith("/scripts/claude-statusline-hook.js")).toBe(true);
+    expect(p).toContain("C:/Program Files/stoa");
+  });
+
+  it('buildStatusLineCommand wraps the hook path in `node "..."`', () => {
+    expect(
+      buildStatusLineCommand("/home/u/stoa/scripts/claude-statusline-hook.js")
+    ).toBe('node "/home/u/stoa/scripts/claude-statusline-hook.js"');
+  });
+
+  it("isStoaStatusLine recognizes ours and rejects a custom / missing one", () => {
+    expect(
+      isStoaStatusLine({
+        type: "command",
+        command: 'node "/x/claude-statusline-hook.js"',
+      })
+    ).toBe(true);
+    expect(isStoaStatusLine({ type: "command", command: "my-prompt.sh" })).toBe(
+      false
+    );
+    expect(isStoaStatusLine(undefined)).toBe(false);
+    expect(isStoaStatusLine("string")).toBe(false);
+    expect(isStoaStatusLine({ type: "command" })).toBe(false); // no command
+  });
+
+  it("adds our statusLine while preserving every other key (never clobbers config)", () => {
+    const { settings, action } = mergeStatusLine(
+      { mcpServers: { x: { command: "y" } }, env: { A: "1" } },
+      'node "/x/claude-statusline-hook.js"'
+    );
+    expect(action).toBe("added");
+    // Minimal config: only the documented required keys (padding defaults to 0).
+    expect(settings.statusLine).toEqual({
+      type: "command",
+      command: 'node "/x/claude-statusline-hook.js"',
+    });
+    // Untouched siblings.
+    expect(settings.mcpServers).toEqual({ x: { command: "y" } });
+    expect(settings.env).toEqual({ A: "1" });
+  });
+
+  it("leaves a user's CUSTOM statusLine untouched (action=conflict)", () => {
+    const original = { statusLine: { type: "command", command: "mine.sh" } };
+    const { settings, action } = mergeStatusLine(
+      original,
+      'node "/x/claude-statusline-hook.js"'
+    );
+    expect(action).toBe("conflict");
+    expect(settings.statusLine).toEqual({
+      type: "command",
+      command: "mine.sh",
+    });
+  });
+
+  it("treats a truthy NON-OBJECT statusLine as a conflict too (never discard user config)", () => {
+    // An invalid bare-string statusLine is still user-authored - preserve it rather
+    // than silently overwriting (Gate A nit).
+    const { settings, action } = mergeStatusLine(
+      { statusLine: "my-prompt.sh" },
+      'node "/x/claude-statusline-hook.js"'
+    );
+    expect(action).toBe("conflict");
+    expect(settings.statusLine).toBe("my-prompt.sh");
+  });
+
+  it("refreshes OUR own statusLine in place (action=updated, idempotent path change)", () => {
+    const { settings, action } = mergeStatusLine(
+      {
+        statusLine: {
+          type: "command",
+          command: 'node "/old/claude-statusline-hook.js"',
+        },
+      },
+      'node "/new/claude-statusline-hook.js"'
+    );
+    expect(action).toBe("updated");
+    expect((settings.statusLine as { command: string }).command).toBe(
+      'node "/new/claude-statusline-hook.js"'
+    );
+  });
+
+  it("defaults a non-object settings value to a fresh object (defensive)", () => {
+    const { settings, action } = mergeStatusLine(null, "cmd");
+    expect(action).toBe("added");
+    expect(settings.statusLine).toBeDefined();
+  });
+
+  it("checkStatuslineHook is ok when our hook is installed", () => {
+    const raw = JSON.stringify({
+      statusLine: {
+        type: "command",
+        command: 'node "/x/claude-statusline-hook.js"',
+      },
+    });
+    expect(checkStatuslineHook(raw).status).toBe("ok");
+  });
+
+  it("checkStatuslineHook warns (with a `stoa statusline` hint) when absent/custom/unreadable", () => {
+    const absent = checkStatuslineHook(null);
+    expect(absent.status).toBe("warn");
+    expect(absent.hint).toContain("stoa statusline");
+
+    // A user's custom statusLine is NOT ours → still "not installed" (advisory).
+    const custom = checkStatuslineHook(
+      JSON.stringify({ statusLine: { type: "command", command: "mine.sh" } })
+    );
+    expect(custom.status).toBe("warn");
+
+    // Malformed JSON reads as not installed, never throws.
+    expect(checkStatuslineHook("{not json").status).toBe("warn");
   });
 });
