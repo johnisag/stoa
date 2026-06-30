@@ -67,6 +67,9 @@ function fakeBackend(): SessionBackend & { calls: string[] } {
     async getEnv() {
       return null;
     },
+    async getPid() {
+      return null;
+    },
     async capture() {
       return "";
     },

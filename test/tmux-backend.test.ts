@@ -17,6 +17,8 @@ vi.mock("child_process", () => ({
       stdout = "claude-1\t1700000000\ncodex-2\t1700000005\n";
     } else if (cmd.includes("list-sessions")) {
       stdout = "claude-1\ncodex-2\n";
+    } else if (cmd.includes("pane_pid")) {
+      stdout = "4242\n";
     } else if (cmd.includes("display-message")) {
       stdout = "/Users/me/proj\n";
     } else if (cmd.includes("show-environment")) {
@@ -108,6 +110,14 @@ describe("TmuxBackend command construction (macOS/Linux path)", () => {
     ]);
     expect(await tb.getPanePath("claude-1")).toBe("/Users/me/proj");
     expect(await tb.getEnv("claude-1", "CLAUDE_SESSION_ID")).toBe("abc-123");
+  });
+
+  it("getPid: display-message '#{pane_pid}', parsed to a positive int (M3)", async () => {
+    const pid = await tb.getPid("claude-1");
+    expect(last()).toBe(
+      'tmux display-message -t "claude-1" -p "#{pane_pid}" 2>/dev/null || echo ""'
+    );
+    expect(pid).toBe(4242);
   });
 
   it("pasteText: load-buffer/paste-buffer/delete-buffer then Enter", async () => {

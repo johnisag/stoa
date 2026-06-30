@@ -259,6 +259,18 @@ async function handleMessage(conn: Conn, msg: ClientMessage) {
       });
       break;
     }
+
+    case "pid": {
+      const session = getSession(msg.key);
+      const pid = session?.pid;
+      send(conn, {
+        t: "res",
+        id: msg.id,
+        ok: true,
+        value: typeof pid === "number" && pid > 0 ? pid : null,
+      });
+      break;
+    }
   }
 }
 

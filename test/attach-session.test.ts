@@ -75,6 +75,9 @@ class FakeTransport implements PtyTransport {
   async panePath(): Promise<string | null> {
     return null;
   }
+  async pid(): Promise<number | null> {
+    return null;
+  }
   async capture(): Promise<string> {
     return "";
   }

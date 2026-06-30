@@ -90,6 +90,10 @@ export class PtyBackend implements SessionBackend {
     return null;
   }
 
+  async getPid(name: string): Promise<number | null> {
+    return this.transport.pid(name);
+  }
+
   async capture(name: string, opts?: CaptureOptions): Promise<string> {
     return this.transport.capture(name, opts?.lines);
   }
