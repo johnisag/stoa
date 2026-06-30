@@ -26,7 +26,10 @@ import {
   type PushEvent,
 } from "./lib/session-status";
 import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
-import { actionsForKind } from "./lib/notification-actions";
+import {
+  actionsForKind,
+  canApproveFromPrompt,
+} from "./lib/notification-actions";
 import { sanitizeNotificationText } from "./lib/notification-text";
 import { captureSnapshot } from "./lib/snapshots";
 import {
@@ -47,6 +50,7 @@ import { utcDay } from "./lib/utc-day";
 import {
   nextAutoAnswerAction,
   autoAnswerEnabled,
+  pushApproveEnabled,
   promptSignature,
   shouldRearmAutoAnswer,
   shouldAcknowledgeQueued,
@@ -325,6 +329,15 @@ app.prepare().then(() => {
       "> Auto-answer on (STOA_AUTO_ANSWER=1): Enter accepts a routine prompt ONLY when it takes the highlighted single-shot Yes (or an explicit Press-Enter / [Y/n] default); blanket-permission, default-No, and destructive-looking prompts are left for you (and still pushed)."
     );
   }
+  // One-tap push Approve (opt-in via STOA_PUSH_APPROVE=1). Adds an "Approve" button to the
+  // lock-screen push for a waiting session at a SAFE press-Enter-to-continue prompt; the tap
+  // presses Enter (re-verified server-side). OFF by default → notifications stay attention-only.
+  const PUSH_APPROVE_ENABLED = pushApproveEnabled();
+  if (PUSH_APPROVE_ENABLED) {
+    console.log(
+      "> Push Approve on (STOA_PUSH_APPROVE=1): a lock-screen Approve button one-taps Enter on a press-Enter-to-continue / [Y/n] prompt (re-verified at tap); permission menus and risky prompts stay attention-only."
+    );
+  }
   // Auto-steer: error-loop escalation (opt-in via STOA_ERROR_LOOP=1). Tracks each
   // session's persisting error signature so we PAGE ONCE per distinct error when it
   // sticks for >= the threshold ticks AND >= the elapsed window — the terminal is
@@ -436,9 +449,12 @@ app.prepare().then(() => {
       body: `${name} ${verb}`,
       tag: `${ev.id}-${ev.kind}`,
       url: "/",
-      // Lock-screen action buttons → /api/sessions/[id]/respond (send-keys/kill).
+      // Lock-screen action buttons → /api/sessions/[id]/respond. A waiting session at a safe
+      // press-Enter-to-continue prompt also gets one-tap Approve (#9), re-verified server-side.
       sessionId: ev.id,
-      actions: actionsForKind(ev.kind),
+      actions: actionsForKind(ev.kind, {
+        canApprove: PUSH_APPROVE_ENABLED && canApproveFromPrompt(ev.promptKind),
+      }),
     });
   };
 

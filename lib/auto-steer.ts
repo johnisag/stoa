@@ -284,3 +284,17 @@ export function shouldAcknowledgeQueued(
 export function autoAnswerEnabled(): boolean {
   return process.env.STOA_AUTO_ANSWER === "1";
 }
+
+/**
+ * Is one-tap push Approve armed? OFF by default (STOA_PUSH_APPROVE=1 enables). The lock-screen
+ * Approve presses Enter on a `continue` prompt — a keystroke sent from a notification — so it is
+ * gated like every other unattended-keystroke feature; by default Stoa notifications stay purely
+ * attention-only. It is a SEPARATE flag from STOA_AUTO_ANSWER (not a reuse) because the two never
+ * overlap: when auto-answer is on, an answerable prompt is auto-pressed BEFORE any push fires, so
+ * the button would never appear — this flag serves the opposite user, one who wants manual control
+ * yet a one-tap Approve from the lock screen. Enforced at BOTH the push-build (the button) and the
+ * /respond route (the actual Enter), so a stale notification can't fire when the flag is off.
+ */
+export function pushApproveEnabled(): boolean {
+  return process.env.STOA_PUSH_APPROVE === "1";
+}

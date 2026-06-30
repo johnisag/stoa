@@ -230,9 +230,19 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
    fork that reconnects before its first turn resumes its parent
    (`--fork-session`) instead of respawning blank. _Seam:_ `lib/fork.ts`,
    `lib/client/backend.ts`, `components/Pane/index.tsx`, `app/page.tsx`.
-9. **Inline-reply push notifications** — `mobile` · M. Text reply action in the SW
-   → POST to a new reply route → `SessionBackend.write`. _Seam:_ `app/sw.ts`,
-   `lib/notification-actions.ts`, `app/api/sessions/[id]/reply/route.ts`.
+9. ✅ **Inline-reply push notifications** — `mobile` · M. **SHIPPED.** Web push has no
+   free-text input affordance, so "reply" ships as a one-tap **Approve** action on the
+   lock-screen notification — reusing the existing `/api/sessions/[id]/respond` route (no
+   new `/reply` route) → `SessionBackend.sendEnter`. **Opt-in** via `STOA_PUSH_APPROVE=1`
+   (OFF by default → notifications stay attention-only), enforced at the push-build AND the
+   route. Offered ONLY for a structurally-benign press-Enter-to-continue / `[Y/n]` prompt
+   (`continue`); a permission MENU's single-shot "Yes" (`affirmative`) and any
+   blanket/destructive/free-text prompt are deliberately withheld — a blind lock-screen tap
+   can't show the gated command, so those stay attention-only (swap to the app). The route
+   RE-VERIFIES the live prompt before pressing Enter (push→tap TOCTOU) and an in-flight guard
+   makes a double-tap 409. _Seam:_ `app/sw.ts` (unchanged), `lib/notification-actions.ts`,
+   `lib/session-status.ts`, `lib/auto-steer.ts`, `app/api/sessions/[id]/respond/route.ts`,
+   `server.ts`.
 10. **Audit/activity timeline read surface + export** — `adoption` · M. `GET
 /api/sessions/[key]/events` + fleet `GET /api/audit` + an Activity panel
     (filterable, JSON/CSV). _Seam:_ `lib/db/queries.ts`, `lib/command/audit.ts`,
