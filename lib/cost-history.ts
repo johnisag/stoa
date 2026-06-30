@@ -18,6 +18,7 @@
 
 import type Database from "better-sqlite3";
 import { queries, type SessionCostRow, type Session } from "./db";
+import { backendKeyForSession } from "./providers/registry";
 import { utcDay } from "./utc-day";
 import { totalTokens, type TokenUsage } from "./pricing";
 import type { SessionCost } from "./session-cost";
@@ -53,7 +54,12 @@ export interface CostSample {
 /** Minimal per-session metadata the pure mapper needs (joined with costs by id). */
 export interface SessionCostMeta {
   id: string;
-  /** Backend key = session_events.session_key (tmux_name || name). */
+  /**
+   * Canonical backend key (backendKeyForSession): tmux_name, else {provider}-{id}.
+   * MUST be unique per session — it's the session_costs PK with the day. The old
+   * `tmux_name || name` fell back to the display NAME, so two same-named pty
+   * sessions (tmux_name null) collided on one cost row and clobbered each other.
+   */
   key: string;
   agentType: string;
 }
@@ -173,11 +179,13 @@ export function shouldSampleCost(
   return nowMs - lastSampleMs >= intervalMs;
 }
 
-/** Build the pure mapper's metadata from full Session rows (backend key + agent). */
+/** Build the pure mapper's metadata from full Session rows (backend key + agent).
+ *  Keys on backendKeyForSession (tmux_name, else the unique {provider}-{id}) so a
+ *  pty session with no tmux_name can't collide with another by display name. */
 export function metasFromSessions(sessions: Session[]): SessionCostMeta[] {
   return sessions.map((s) => ({
     id: s.id,
-    key: s.tmux_name || s.name,
+    key: backendKeyForSession(s),
     agentType: s.agent_type,
   }));
 }
