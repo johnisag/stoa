@@ -120,3 +120,52 @@ export function parseWindowRecord(
 function numOrUndef(n: unknown): number | undefined {
   return typeof n === "number" && Number.isFinite(n) ? n : undefined;
 }
+
+// ── M2c: proactive dispatch backoff ───────────────────────────────────────────
+// The fleet's only API-load-generating action is Dispatch spawning a NEW worker, so
+// "back off before a hard stall" = don't START work when the binding window is already
+// near full. These are PURE (client-safe — no fs); the actual file READ lives in the
+// server-only lib/rate-limit-window-source.ts. Reactive resume (lib/rate-limit.ts)
+// still drains sessions already AT the limit; this is the proactive complement.
+
+/**
+ * Parse `STOA_DISPATCH_RATELIMIT_BACKOFF` into a 0..1 saturation threshold, or 0 = OFF
+ * (today's behavior). OPT-IN and fail-SAFE: unset / empty / garbage / <= 0 / > 100 all
+ * → 0, so a typo can only DISABLE backoff, never silently arm it. Accepts EITHER a
+ * fraction (`0.9`) or a percentage (`90`): a value in (0, 1] is a fraction, (1, 100] a
+ * percentage (÷100). Pure → unit-tested.
+ */
+export function parseDispatchBackoffThreshold(raw: string | undefined): number {
+  if (raw == null || raw.trim() === "") return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n <= 1) return n; // fraction
+  if (n <= 100) return n / 100; // percentage
+  return 0; // > 100 is nonsense → off
+}
+
+/** The dispatch proactive-backoff threshold, read at CALL time (mirrors
+ *  watchdog.workerMaxAgeMs) so it's overridable without a restart. 0 = feature off. */
+export function dispatchBackoffThreshold(): number {
+  return parseDispatchBackoffThreshold(
+    process.env.STOA_DISPATCH_RATELIMIT_BACKOFF
+  );
+}
+
+/**
+ * Is the binding rate-limit window at/above `threshold` (a 0..1 fraction)? Pure.
+ * Returns false when backoff is off (threshold <= 0) OR there's no usable window (the
+ * M2b hook isn't installed / data is stale → null) — so ABSENT data never throttles the
+ * fleet (fail-OPEN: this is an enhancement, not a gate). Unit-tested.
+ */
+export function isWindowSaturated(
+  window: RateLimitWindow | null | undefined,
+  threshold: number
+): boolean {
+  return (
+    threshold > 0 &&
+    window != null &&
+    Number.isFinite(window.pct) &&
+    window.pct >= threshold
+  );
+}
