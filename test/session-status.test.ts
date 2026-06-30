@@ -106,11 +106,31 @@ describe("detectPushEvents", () => {
     expect(detectPushEvents(new Map(), [wt("a", "waiting")])).toEqual([]);
   });
 
-  it("running -> waiting AT A PROMPT pushes 'waiting' (needs input)", () => {
+  it("running -> waiting AT A PROMPT pushes 'waiting' (needs input) + the promptKind", () => {
     const prev = statusById([wt("a", "running")]);
     expect(
       detectPushEvents(prev, [wt("a", "waiting", "Allow?", PROMPT)])
-    ).toEqual([{ id: "a", name: "claude-a", kind: "waiting" }]);
+    ).toEqual([
+      { id: "a", name: "claude-a", kind: "waiting", promptKind: "continue" },
+    ]);
+  });
+
+  it("carries the prompt's KIND so the push can offer (or withhold) one-tap Approve (#9)", () => {
+    const prev = statusById([wt("a", "running")]);
+    const cont = detectPushEvents(prev, [
+      wt("a", "waiting", "Continue?", { kind: "continue", line: "[Y/n]" }),
+    ]);
+    expect(cont[0].promptKind).toBe("continue"); // → one-tap approvable
+    const affirmative = detectPushEvents(prev, [
+      wt("a", "waiting", "Allow?", { kind: "affirmative", line: "❯ 1. Yes" }),
+    ]);
+    // Carried, but a permission MENU's Yes is WITHHELD server-side (canApproveFromPrompt) —
+    // a blind one-tap command grant. The kind still rides so the route can re-verify/withhold.
+    expect(affirmative[0].promptKind).toBe("affirmative");
+    const destructive = detectPushEvents(prev, [
+      wt("a", "waiting", "rm -rf?", { kind: "destructive", line: "❯ 1. Yes" }),
+    ]);
+    expect(destructive[0].promptKind).toBe("destructive"); // → NOT approvable
   });
 
   it("running -> waiting with NO prompt (finished its turn) pushes 'done', not 'waiting'", () => {

@@ -3,6 +3,7 @@ import {
   RESPOND_ACTIONS,
   isRespondAction,
   actionsForKind,
+  canApproveFromPrompt,
   cardActionsForStatus,
   respondErrorMessage,
   planResponse,
@@ -10,18 +11,19 @@ import {
   type ResponseTarget,
 } from "../lib/notification-actions";
 
-// Attention-only: the only respond action is "stop" (the approve/reject keystroke
-// buttons were removed — you swap to the session and type). hasPrompt still drives
-// the "ready vs needs input" notification copy + auto-steer, but no longer buttons.
+// Notification actions: "stop" (always) + "approve" (#9 — one-tap Enter, offered ONLY for a
+// safe press-Enter-to-continue / [Y/n] prompt (`continue`), NEVER for a permission menu's Yes
+// (`affirmative` — a blind command grant) or blanket/negative/destructive/freeform). In-app
+// cards stay Stop-only; the lock-screen push is where Approve appears.
 
 describe("isRespondAction", () => {
-  it("accepts only 'stop'", () => {
+  it("accepts the respond actions (stop, approve)", () => {
     for (const a of RESPOND_ACTIONS) expect(isRespondAction(a)).toBe(true);
-    expect(RESPOND_ACTIONS).toEqual(["stop"]);
+    expect(RESPOND_ACTIONS).toEqual(["stop", "approve"]);
     expect(isRespondAction("stop")).toBe(true);
+    expect(isRespondAction("approve")).toBe(true);
   });
-  it("rejects the retired actions and anything else", () => {
-    expect(isRespondAction("approve")).toBe(false); // retired
+  it("rejects anything else", () => {
     expect(isRespondAction("reject")).toBe(false); // retired
     expect(isRespondAction("kill")).toBe(false); // it's "stop", not "kill"
     expect(isRespondAction("")).toBe(false);
@@ -33,23 +35,49 @@ describe("isRespondAction", () => {
 });
 
 describe("actionsForKind", () => {
-  it("a live session (waiting / error) offers a one-tap Stop", () => {
+  it("a waiting session offers Stop; + Approve ONLY when the prompt is approvable", () => {
     expect(actionsForKind("waiting").map((a) => a.action)).toEqual(["stop"]);
-    expect(actionsForKind("error").map((a) => a.action)).toEqual(["stop"]);
+    expect(
+      actionsForKind("waiting", { canApprove: true }).map((a) => a.action)
+    ).toEqual(["approve", "stop"]);
+    expect(
+      actionsForKind("waiting", { canApprove: false }).map((a) => a.action)
+    ).toEqual(["stop"]);
   });
-  it("a done session has no actions", () => {
+  it("an errored session offers Stop only (never Approve); a done session has none", () => {
+    expect(actionsForKind("error").map((a) => a.action)).toEqual(["stop"]);
+    expect(
+      actionsForKind("error", { canApprove: true }).map((a) => a.action)
+    ).toEqual(["stop"]);
     expect(actionsForKind("done")).toEqual([]);
   });
   it("every button has a non-empty title and is a valid respond action", () => {
-    for (const a of actionsForKind("waiting")) {
+    for (const a of actionsForKind("waiting", { canApprove: true })) {
       expect(a.title.length).toBeGreaterThan(0);
       expect(isRespondAction(a.action)).toBe(true);
     }
   });
 });
 
+describe("canApproveFromPrompt", () => {
+  it("approvable ONLY for a press-Enter-to-continue / [Y/n] proceed prompt (continue)", () => {
+    expect(canApproveFromPrompt("continue")).toBe(true);
+  });
+  it("NOT approvable for a permission MENU's Yes (affirmative — a blind command grant), nor any risky / free-text prompt, or none", () => {
+    // affirmative IS Enter-safe for opt-in auto-answer, but a BLIND one-tap lock-screen grant
+    // of an arbitrary command (denylist is fail-open) is not — fail closed, swap to the app.
+    expect(canApproveFromPrompt("affirmative")).toBe(false);
+    expect(canApproveFromPrompt("blanket")).toBe(false);
+    expect(canApproveFromPrompt("negative")).toBe(false);
+    expect(canApproveFromPrompt("destructive")).toBe(false);
+    expect(canApproveFromPrompt("freeform")).toBe(false);
+    expect(canApproveFromPrompt(null)).toBe(false);
+    expect(canApproveFromPrompt(undefined)).toBe(false);
+  });
+});
+
 describe("cardActionsForStatus", () => {
-  it("a live session (waiting / running / error) offers Stop", () => {
+  it("a live session (waiting / running / error) offers Stop (in-app stays Stop-only)", () => {
     expect(cardActionsForStatus("waiting")).toEqual(["stop"]);
     expect(cardActionsForStatus("running")).toEqual(["stop"]);
     expect(cardActionsForStatus("error")).toEqual(["stop"]);
@@ -74,7 +102,7 @@ describe("cardActionsForStatus", () => {
 describe("respondErrorMessage", () => {
   it("treats 404/409 as benign — no error to show", () => {
     expect(respondErrorMessage(404)).toBeNull(); // session deleted
-    expect(respondErrorMessage(409)).toBeNull(); // not running / double-tap
+    expect(respondErrorMessage(409)).toBeNull(); // not running / double-tap / prompt changed
   });
   it("surfaces other failures with the status code", () => {
     expect(respondErrorMessage(500)).toBe("request failed (500)");
@@ -83,30 +111,36 @@ describe("respondErrorMessage", () => {
 });
 
 describe("planResponse", () => {
-  it("maps stop to kill", () => {
+  it("maps stop to kill and approve to enter", () => {
     expect(planResponse("stop")).toBe("kill");
+    expect(planResponse("approve")).toBe("enter");
   });
 });
 
 describe("applyResponse", () => {
-  // A spy backend records that kill fired with the right name.
+  // A spy backend records which op fired with which name.
   function spy() {
     const calls: Array<[string, string]> = [];
     const target: ResponseTarget = {
       kill: async (n) => void calls.push(["kill", n]),
+      sendEnter: async (n) => void calls.push(["enter", n]),
     };
     return { calls, target };
   }
 
-  it("routes stop to the backend kill, with the name", async () => {
+  it("routes stop to kill and approve to sendEnter, with the name", async () => {
     const { calls, target } = spy();
     await applyResponse(target, "claude-c", "stop");
-    expect(calls).toEqual([["kill", "claude-c"]]);
+    await applyResponse(target, "claude-c", "approve");
+    expect(calls).toEqual([
+      ["kill", "claude-c"],
+      ["enter", "claude-c"],
+    ]);
   });
 
   it("calls exactly one op per action", async () => {
     const { calls, target } = spy();
-    await applyResponse(target, "s", "stop");
+    await applyResponse(target, "s", "approve");
     expect(calls).toHaveLength(1);
   });
 });

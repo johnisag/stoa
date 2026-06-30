@@ -11,9 +11,11 @@ import {
 import type { SessionStatus } from "@/lib/status-detector";
 import { useRespondToSession } from "@/data/sessions/queries";
 
-const META: Record<
-  RespondAction,
-  { icon: LucideIcon; label: string; className: string }
+// In-app cards stay Stop-only (you're already in the app — swap to the session and type);
+// one-tap Approve is a lock-screen-only affordance (#9). Partial so the type doesn't force
+// a dead Approve entry the card never renders.
+const META: Partial<
+  Record<RespondAction, { icon: LucideIcon; label: string; className: string }>
 > = {
   stop: {
     icon: Square,
@@ -66,7 +68,9 @@ export function SessionQuickActions({
       onPointerDown={(e) => e.stopPropagation()}
     >
       {actions.map((action) => {
-        const { icon: Icon, label, className } = META[action];
+        const meta = META[action];
+        if (!meta) return null; // card doesn't render this action (e.g. approve)
+        const { icon: Icon, label, className } = meta;
         return (
           <button
             key={action}

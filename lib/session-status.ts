@@ -1,7 +1,7 @@
 import { getSessionBackend } from "./session-backend";
 import { statusDetector, type SessionStatus } from "./status-detector";
 import type { RateLimitState } from "./rate-limit";
-import type { PromptState } from "./auto-steer";
+import type { PromptState, PromptKind } from "./auto-steer";
 import {
   getManagedSessionPattern,
   getSessionIdFromName,
@@ -121,6 +121,9 @@ export interface PushEvent {
   id: string;
   name: string;
   kind: PushEventKind;
+  /** For a "waiting" event, the live prompt's kind — drives the one-tap Approve action
+   *  (only a safe `affirmative`/`continue` prompt is approvable). Absent otherwise. */
+  promptKind?: PromptKind | null;
 }
 
 /**
@@ -141,11 +144,16 @@ export function detectPushEvents(
       // A real prompt (Y/n / approve) → "needs your input" (approve/reject). No
       // prompt means the agent just FINISHED its turn → "done", not an approval
       // request — so we don't page (or show buttons) for a question that isn't there.
-      events.push({
-        id: s.id,
-        name: s.name,
-        kind: s.prompt ? "waiting" : "done",
-      });
+      events.push(
+        s.prompt
+          ? {
+              id: s.id,
+              name: s.name,
+              kind: "waiting",
+              promptKind: s.prompt.kind,
+            }
+          : { id: s.id, name: s.name, kind: "done" }
+      );
     } else if (s.status === "error") {
       events.push({ id: s.id, name: s.name, kind: "error" });
     } else if (s.status === "idle" && (p === "running" || p === "waiting")) {
