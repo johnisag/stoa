@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { execFileSync, spawn } from "child_process";
+import { execFileSync } from "child_process";
 import { isGitRepo, getGitStatus, expandPath } from "@/lib/git-status";
-import { resolveBinary, isWindows } from "@/lib/platform";
+import { isWindows } from "@/lib/platform";
 import { buildCommitPrompt, cleanCommitMessage } from "@/lib/commit-message";
+import { runClaudeOneshot } from "@/lib/claude-oneshot";
 
 /** Read the staged diff (no shell, argv array, cwd = the repo). */
 function getStagedDiff(workingDir: string): string {
@@ -17,53 +18,14 @@ function getStagedDiff(workingDir: string): string {
 
 /**
  * Draft a commit message by piping the full prompt (instruction + the bounded
- * staged diff) to `claude -p` on stdin. Mirrors the spawn in
- * app/api/sessions/[id]/summarize/route.ts: resolveBinary("claude") for the
- * .cmd shim on Windows, argv array, content on stdin, post-process the reply
- * with a pure helper. The prompt is piped (not on argv) so a large diff can't
- * blow the platform argv-length limit.
+ * staged diff) to `claude -p` on stdin via the shared, cross-platform-safe
+ * runClaudeOneshot (the prompt rides stdin — never argv — so it's both
+ * argv-length-safe and injection-safe under the Windows shell). cleanCommitMessage
+ * strips control chars (keeping newlines/tab) so the text is safe to render and,
+ * later, to inject into the message box.
  */
-function draftCommitMessage(diff: string): Promise<string> {
-  const prompt = buildCommitPrompt(diff);
-  const binary = resolveBinary("claude") || "claude";
-
-  return new Promise((resolve, reject) => {
-    const claude = spawn(binary, ["-p"], {
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-      windowsHide: isWindows,
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    claude.stdout.on("data", (data) => {
-      stdout += data.toString();
-    });
-
-    claude.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-
-    claude.on("close", (code) => {
-      if (code === 0) {
-        // cleanCommitMessage strips control chars (keeping newlines/tab) so the
-        // text is safe to render and, later, to inject into the message box.
-        resolve(cleanCommitMessage(stdout));
-      } else {
-        console.error("Claude CLI failed:", stderr);
-        reject(new Error(`Claude CLI exited with code ${code}`));
-      }
-    });
-
-    claude.on("error", (err) => {
-      reject(err);
-    });
-
-    // Hand the prompt to Claude on stdin (read by `claude -p`).
-    claude.stdin.write(prompt);
-    claude.stdin.end();
-  });
+async function draftCommitMessage(diff: string): Promise<string> {
+  return cleanCommitMessage(await runClaudeOneshot(buildCommitPrompt(diff)));
 }
 
 // POST /api/git/commit-message - Draft a Conventional Commit message from the

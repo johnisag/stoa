@@ -67,7 +67,7 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 > defect in current code (verify-then-fix; ship a regression test).
 
 > **✅ Shipped from this roadmap:** #4 Map `STOA_PORT`→`PORT` for `npm run dev`
-> (#311).
+> (#311) · #5 Windows `.cmd` EINVAL in commit-message + summarize (#312).
 
 ### Tier 1 — High impact (ranks 1–32)
 
@@ -94,10 +94,12 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
    `portAlias()` in `lib/load-env.ts` bridges `STOA_PORT`→`PORT` on startup
    (STOA_PORT wins), so `npm run dev` honours the knob the same way the CLI and
    `stoa doctor` do. _Seam:_ `lib/load-env.ts`.
-5. 🐛 **Fix Windows `.cmd` EINVAL in commit-message + summarize** — `bug` · S.
-   Route the `claude` `.cmd` shim through `cmd.exe /c` via a shared helper. _Why:_
-   two features fully broken on Windows. _Seam:_
-   `app/api/git/commit-message/route.ts`, `app/api/sessions/[id]/summarize/route.ts`.
+5. ✅ 🐛 **Fix Windows `.cmd` EINVAL in commit-message + summarize** — `bug` · S.
+   **SHIPPED (#312).** New shared `lib/claude-oneshot.ts` (`runClaudeOneshot`,
+   mirroring `lib/ask.ts`: `shell: isWindows` so the `.cmd` shim runs, prompt
+   always on stdin) replaces the `shell:false` spawns in both routes. _Seam:_
+   `lib/claude-oneshot.ts`, `app/api/git/commit-message/route.ts`,
+   `app/api/sessions/[id]/summarize/route.ts`.
 6. 🐛 **Key `session_costs` on the canonical backend key** — `bug` · S. Replace
    `tmux_name || name` with `backendKeyForSession(s)`. _Why:_ same-named pty
    sessions clobber each other's cost rows. _Seam:_ `lib/cost-history.ts`,

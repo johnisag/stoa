@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "child_process";
 import { getDb, queries, type Session } from "@/lib/db";
 import { sessionKey, backendKeyForSession } from "@/lib/providers/registry";
 import { randomUUID } from "crypto";
@@ -24,9 +23,8 @@ import {
   findClaudeProjectDir,
   expandHome,
   homeDir,
-  resolveBinary,
-  isWindows,
 } from "@/lib/platform";
+import { runClaudeOneshot } from "@/lib/claude-oneshot";
 
 const backend = getSessionBackend();
 
@@ -131,48 +129,16 @@ async function getTmuxCwd(sessionName: string): Promise<string | null> {
   return backend.getPanePath(sessionName);
 }
 
-// Generate summary using Claude CLI with stdin
+// Generate a summary via the shared, cross-platform-safe `claude -p` runner. The
+// instruction + the conversation are piped together on stdin (never argv — so the
+// untrusted conversation can't be command-injected under the Windows shell, and
+// nothing can blow the argv-length limit). sanitizeDigest strips control chars
+// (keeping newlines) so the text is safe to render and, later, to re-inject.
 async function generateSummary(conversation: string): Promise<string> {
-  const prompt = buildSummaryPrompt();
-  const binary = resolveBinary("claude") || "claude";
-
-  return new Promise((resolve, reject) => {
-    const claude = spawn(binary, ["-p", prompt], {
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-      windowsHide: isWindows,
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    claude.stdout.on("data", (data) => {
-      stdout += data.toString();
-    });
-
-    claude.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-
-    claude.on("close", (code) => {
-      if (code === 0) {
-        // sanitizeDigest strips control chars (keeping newlines) so the text is
-        // safe to render and, later, to re-inject into a prompt.
-        resolve(sanitizeDigest(stdout));
-      } else {
-        console.error("Claude CLI failed:", stderr);
-        reject(new Error(`Claude CLI exited with code ${code}`));
-      }
-    });
-
-    claude.on("error", (err) => {
-      reject(err);
-    });
-
-    // Write conversation to stdin
-    claude.stdin.write(conversation);
-    claude.stdin.end();
-  });
+  const stdout = await runClaudeOneshot(
+    `${buildSummaryPrompt()}\n\n${conversation}`
+  );
+  return sanitizeDigest(stdout);
 }
 
 // Wait for Claude prompt to appear in tmux session
