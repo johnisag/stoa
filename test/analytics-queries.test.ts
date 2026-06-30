@@ -118,6 +118,21 @@ describe("getAnalyticsReport", () => {
     ).toBe(1);
   });
 
+  it("counts a pty session's events keyed by the canonical backend key (null tmux_name)", async () => {
+    // Regression for #6: a pty session has NO tmux_name, so its events are stored
+    // under {provider}-{id} ("claude-p"). The old lookup (tmux_name || name) used
+    // the display name ("p") and missed them — so a long-lived pty session active
+    // in-window was dropped and its events never counted. Created 40d ago (outside
+    // the window) on purpose: it can ONLY be included via its in-window activity,
+    // which requires the backend-key lookup to match.
+    addSession("p", { tmux_name: "", createdMsAgo: 40 * DAY });
+    addEvent("claude-p", "input_text", NOW - 1 * DAY, { length: 2 });
+
+    const r = await getAnalyticsReport(14, NOW);
+    expect(r.performance.sessionCount).toBe(1);
+    expect(r.performance.totalInputEvents).toBe(1);
+  });
+
   it("excludes sessions created before the window", async () => {
     addSession("old", { createdMsAgo: 40 * DAY }); // outside a 14d window
     addSession("new", { createdMsAgo: 1 * DAY });

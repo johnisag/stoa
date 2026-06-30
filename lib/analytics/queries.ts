@@ -4,8 +4,9 @@
  * This is the ONLY part of the Insight layer that touches better-sqlite3 + the
  * filesystem (cost transcripts). It reads the audit ledger (session_events), the
  * sessions table, and the dispatch outcome columns, joins them on the backend
- * key (session_events.session_key == sessions.tmux_name), folds in the existing
- * cost estimator, and hands a plain AnalyticsSnapshot to engine.buildReport().
+ * key (session_events.session_key == backendKeyForSession — tmux_name, else the
+ * canonical {provider}-{id}), folds in the existing cost estimator, and hands a
+ * plain AnalyticsSnapshot to engine.buildReport().
  *
  * Runs in the web-server process (where the DB lives). Best-effort on the
  * per-session cost read (a missing transcript contributes 0, never throws).
@@ -13,6 +14,7 @@
 
 import { getDb, queries, type Session } from "../db";
 import type { SessionEvent } from "../db";
+import { backendKeyForSession } from "../providers/registry";
 import type { IssueDispatch } from "../dispatch/types";
 import type { AgentType } from "../providers";
 import { computeSessionCosts } from "../session-cost";
@@ -98,10 +100,14 @@ export async function getAnalyticsReport(
 
   // A session belongs to the window if it was CREATED in it OR has any event in
   // it (so a long-lived session active this week isn't dropped for being old).
-  const sessionKey = (s: Session) => s.tmux_name || s.name;
+  // Key on the canonical backend key (the same value session_events.session_key
+  // is written with) — NOT tmux_name || name, which falls back to the display
+  // name and so misses a pty session's events (tmux_name is null; events were
+  // stored under {provider}-{id}).
+  const backendKey = (s: Session) => backendKeyForSession(s);
   const windowSessions = allSessions.filter(
     (s) =>
-      parseSqlTime(s.created_at, now) >= since || eventsByKey.has(sessionKey(s))
+      parseSqlTime(s.created_at, now) >= since || eventsByKey.has(backendKey(s))
   );
 
   // Cost (Claude-only; others null) for the WINDOW sessions only — scoping it
@@ -109,7 +115,7 @@ export async function getAnalyticsReport(
   const costs = await computeSessionCosts(windowSessions);
 
   const sessions: AnalyticsSession[] = windowSessions.map((s) => {
-    const key = sessionKey(s);
+    const key = backendKey(s);
     const d = dispatchBySession.get(s.id) ?? null;
     const cost = costs[s.id];
     const prMerged = s.pr_status === "merged" || d?.status === "merged";

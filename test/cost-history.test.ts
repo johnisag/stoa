@@ -194,14 +194,30 @@ describe("shouldSampleCost (pure)", () => {
 });
 
 describe("metasFromSessions (pure)", () => {
-  it("uses tmux_name as the backend key, falling back to name", () => {
+  it("uses tmux_name as the backend key, falling back to the canonical {provider}-{id}", () => {
     const sessions = [
       { id: "a", name: "na", tmux_name: "ta", agent_type: "claude" },
       { id: "b", name: "nb", tmux_name: "", agent_type: "codex" },
     ] as unknown as Session[];
     const metas = metasFromSessions(sessions);
     expect(metas[0]).toEqual({ id: "a", key: "ta", agentType: "claude" });
-    expect(metas[1].key).toBe("nb"); // empty tmux_name → name
+    // No tmux_name (a pty session) → the unique {provider}-{id}, NOT the display
+    // name (which isn't unique). This is the #6 PK-collision fix.
+    expect(metas[1].key).toBe("codex-b");
+  });
+
+  it("gives two same-named pty sessions DISTINCT keys (no session_costs collision)", () => {
+    // Regression for #6: both display "main" with no tmux_name. Under the old
+    // `tmux_name || name` they shared the key "main" and clobbered each other's
+    // (session_key, day) cost row. Keyed on {provider}-{id} they're distinct.
+    const sessions = [
+      { id: "x1", name: "main", tmux_name: "", agent_type: "claude" },
+      { id: "x2", name: "main", tmux_name: "", agent_type: "claude" },
+    ] as unknown as Session[];
+    const [m1, m2] = metasFromSessions(sessions);
+    expect(m1.key).toBe("claude-x1");
+    expect(m2.key).toBe("claude-x2");
+    expect(m1.key).not.toBe(m2.key);
   });
 });
 

@@ -342,9 +342,10 @@ export function createSchema(db: Database.Database): void {
     -- transcript per request, so analytics had no history and a sample died with
     -- the session (deletion / transcript scroll-off). One row per (session_key,
     -- day) = the session's cumulative usage as last sampled that UTC day, upserted
-    -- idempotently. session_key matches session_events.session_key (tmux_name ||
-    -- name). Best-effort: written when costs are computed (cost badge / opt-in
-    -- STOA_AUTO_COST_SAMPLE tick), never on a hot path.
+    -- idempotently. session_key is the canonical backend key (tmux_name, else
+    -- {provider}-{id}) — matching session_events.session_key — so same-named pty
+    -- sessions don't collide. Best-effort: written when costs are computed (cost
+    -- badge / opt-in STOA_AUTO_COST_SAMPLE tick), never on a hot path.
     CREATE TABLE IF NOT EXISTS session_costs (
       session_key TEXT NOT NULL,
       day TEXT NOT NULL,
