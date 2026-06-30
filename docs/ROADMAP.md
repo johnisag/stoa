@@ -69,7 +69,8 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 > **✅ Shipped from this roadmap:** #4 Map `STOA_PORT`→`PORT` for `npm run dev`
 > (#311) · #5 Windows `.cmd` EINVAL in commit-message + summarize (#312) · #6 Key
 > `session_costs` on the canonical backend key (#313) · #7 Coalesce recurring
-> schedules so a busy session isn't flooded (#314).
+> schedules so a busy session isn't flooded (#314) · #8 Self-resolve the
+> native-fork parent on re-attach (#315).
 
 ### Tier 1 — High impact (ranks 1–32)
 
@@ -114,10 +115,12 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
    `server.ts` passes `listQueue(id).includes(p)`. A recurring schedule against a
    busy/wedged session no longer builds an unbounded backlog. _Seam:_
    `lib/scheduler.ts`, `server.ts`.
-8. 🐛 **Self-resolve native-fork parent on respawn** — `bug` · M. Make
-   `buildSpawnForSession` self-resolve the native-fork parent like `app/page.tsx`
-   does. _Why:_ a fork that reconnects (flaky mobile WS) before its first turn
-   silently becomes a blank session, losing the forked context. _Seam:_
+8. ✅ 🐛 **Self-resolve native-fork parent on respawn** — `bug` · M.
+   **SHIPPED (#315).** A shared pure `resolveNativeForkParentId(session, allSessions)`
+   in `lib/fork.ts` now backs BOTH the first launch (`app/page.tsx`) and the
+   re-attach (`buildSpawnForSession`, fed `allSessions` from `Pane`) — so a native
+   fork that reconnects before its first turn resumes its parent
+   (`--fork-session`) instead of respawning blank. _Seam:_ `lib/fork.ts`,
    `lib/client/backend.ts`, `components/Pane/index.tsx`, `app/page.tsx`.
 9. **Inline-reply push notifications** — `mobile` · M. Text reply action in the SW
    → POST to a new reply route → `SessionBackend.write`. _Seam:_ `app/sw.ts`,

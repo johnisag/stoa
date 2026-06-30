@@ -46,7 +46,7 @@ import {
 } from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
-import { forkModeForProvider } from "@/lib/fork";
+import { resolveNativeForkParentId } from "@/lib/fork";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
@@ -304,8 +304,7 @@ function HomeContent() {
 
   // Get terminal for a pane, with fallback to first available
   const getTerminalWithFallback = useCallback(():
-    | { terminal: TerminalHandle; paneId: string; tabId: string }
-    | undefined => {
+    { terminal: TerminalHandle; paneId: string; tabId: string } | undefined => {
     debugLog(
       `getTerminalWithFallback called, total refs: ${terminalRefs.current.size}, focusedPaneId: ${focusedPaneId}`
     );
@@ -373,23 +372,12 @@ function HomeContent() {
       // with .mcp.json files that aren't in their .gitignore.
       // See: /api/sessions/[id]/mcp-config, lib/mcp-config.ts
 
-      // Get parent session ID for a NATIVE fork (Claude's --resume <id>
-      // --fork-session). Only native-fork providers do this; a non-native fork
-      // (Codex/Hermes/Kilo/Kimi) launches FRESH and is seeded with the parent's
-      // scrollback instead (see the /fork route), so it must NOT resume the
-      // parent's session id — that would continue the parent's conversation (and
-      // emit an invalid --fork-session for a provider that lacks it).
-      let parentSessionId: string | null = null;
-      if (
-        !session.claude_session_id &&
-        session.parent_session_id &&
-        forkModeForProvider(session.agent_type || "claude") === "native"
-      ) {
-        const parentSession = sessions.find(
-          (s) => s.id === session.parent_session_id
-        );
-        parentSessionId = parentSession?.claude_session_id || null;
-      }
+      // Parent session id for a NATIVE fork (Claude's --resume <id>
+      // --fork-session). Only a native, not-yet-started fork resolves one; a
+      // non-native fork (Codex/Hermes/Kilo/Kimi) launches FRESH and is seeded with
+      // the parent's scrollback instead (see the /fork route). Shared with the
+      // re-attach path (buildSpawnForSession) so they can't drift.
+      const parentSessionId = resolveNativeForkParentId(session, sessions);
 
       // Check for pending initial prompt
       const initialPrompt = getPendingPrompt(session.id);
