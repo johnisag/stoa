@@ -68,7 +68,8 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 
 > **✅ Shipped from this roadmap:** #4 Map `STOA_PORT`→`PORT` for `npm run dev`
 > (#311) · #5 Windows `.cmd` EINVAL in commit-message + summarize (#312) · #6 Key
-> `session_costs` on the canonical backend key (#313).
+> `session_costs` on the canonical backend key (#313) · #7 Coalesce recurring
+> schedules so a busy session isn't flooded (#314).
 
 ### Tier 1 — High impact (ranks 1–32)
 
@@ -107,9 +108,12 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
    `{provider}-{id}`) instead of `tmux_name || name` — same-named pty sessions no
    longer clobber each other's cost row, and pty-session events are counted in
    analytics. _Seam:_ `lib/cost-history.ts`, `lib/analytics/queries.ts`.
-7. 🐛 **Skip-if-queued / cap depth for recurring schedules** — `bug` · S. _Why:_ a
-   schedule against a wedged session builds an unbounded queue then floods the
-   agent. _Seam:_ `lib/scheduler.ts`, `lib/prompt-queue.ts`.
+7. ✅ 🐛 **Skip-if-queued / cap depth for recurring schedules** — `bug` · S.
+   **SHIPPED (#314).** `fireSchedule` takes an injected `isQueued` predicate and
+   coalesces a still-pending duplicate (advances the cadence but skips the enqueue);
+   `server.ts` passes `listQueue(id).includes(p)`. A recurring schedule against a
+   busy/wedged session no longer builds an unbounded backlog. _Seam:_
+   `lib/scheduler.ts`, `server.ts`.
 8. 🐛 **Self-resolve native-fork parent on respawn** — `bug` · M. Make
    `buildSpawnForSession` self-resolve the native-fork parent like `app/page.tsx`
    does. _Why:_ a fork that reconnects (flaky mobile WS) before its first turn

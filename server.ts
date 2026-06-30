@@ -34,6 +34,7 @@ import {
   dequeuePrompt,
   hasAnyQueued,
   enqueuePrompt,
+  listQueue,
 } from "./lib/prompt-queue";
 import { dueSchedules, fireSchedule } from "./lib/scheduler";
 import {
@@ -509,8 +510,7 @@ app.prepare().then(() => {
               s.status === "error")
           ) {
             const row = queries.getSession(getDb()).get(s.id) as
-              | Session
-              | undefined;
+              Session | undefined;
             if (row?.working_directory)
               void captureSnapshot(
                 row.working_directory,
@@ -1007,11 +1007,17 @@ app.prepare().then(() => {
       // Per-row try/catch: one bad row (e.g. a transient DB write error) must not
       // abort the rest, and a failed fire leaves the row "due" to retry next tick.
       try {
-        const outcome = fireSchedule(row, now, enqueuePrompt);
+        // Coalesce a still-pending duplicate: don't pile a recurring schedule's
+        // prompt onto a session that hasn't drained the last one yet.
+        const outcome = fireSchedule(row, now, enqueuePrompt, (id, p) =>
+          listQueue(id).includes(p)
+        );
         console.log(
           outcome === "session-gone"
             ? `scheduler: target session ${row.session_id} gone — disabled schedule ${row.id}`
-            : `scheduler: enqueued scheduled prompt for session ${row.session_id} (schedule ${row.id})`
+            : outcome === "skipped-queued"
+              ? `scheduler: prompt already queued for session ${row.session_id} — skipped duplicate (schedule ${row.id})`
+              : `scheduler: enqueued scheduled prompt for session ${row.session_id} (schedule ${row.id})`
         );
       } catch (err) {
         console.error(`scheduler: schedule ${row.id} failed:`, err);

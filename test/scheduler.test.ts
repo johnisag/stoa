@@ -263,6 +263,74 @@ describe("fireSchedule (the tick's per-row body)", () => {
     expect(getSchedule(s.id)?.enabled).toBe(1); // recurring stays enabled
   });
 
+  it("coalesces: skips the enqueue (but still advances) when the prompt is already queued", () => {
+    // Regression for #7: a recurring schedule whose target hasn't drained the last
+    // fire must NOT pile a duplicate — otherwise a busy/wedged session accrues an
+    // unbounded backlog and gets flooded on recovery.
+    const s = createSchedule({
+      sessionId: "sess-1",
+      prompt: "run tests",
+      recurrence: "hourly",
+      runAt: new Date(T0 + HOUR).toISOString(),
+      nowMs: T0,
+    });
+    const calls: Array<[string, string]> = [];
+    // isQueued reports the prompt is still pending for this session.
+    const outcome = fireSchedule(
+      s,
+      T0 + HOUR,
+      (id, p) => calls.push([id, p]),
+      (id, p) => id === "sess-1" && p === "run tests"
+    );
+    expect(outcome).toBe("skipped-queued");
+    expect(calls).toHaveLength(0); // no duplicate enqueued
+    // The cadence STILL advances — so it won't busy-retry every tick.
+    expect(getSchedule(s.id)?.next_run_at).toBe(
+      new Date(T0 + 2 * HOUR).toISOString()
+    );
+    expect(getSchedule(s.id)?.enabled).toBe(1);
+  });
+
+  it("enqueues when isQueued reports the prompt is NOT already pending", () => {
+    const s = createSchedule({
+      sessionId: "sess-1",
+      prompt: "run tests",
+      recurrence: "hourly",
+      runAt: new Date(T0 + HOUR).toISOString(),
+      nowMs: T0,
+    });
+    const calls: Array<[string, string]> = [];
+    const outcome = fireSchedule(
+      s,
+      T0 + HOUR,
+      (id, p) => calls.push([id, p]),
+      () => false // nothing pending
+    );
+    expect(outcome).toBe("fired");
+    expect(calls).toEqual([["sess-1", "run tests"]]);
+  });
+
+  it("a one-shot whose prompt is already queued is skipped AND still disabled", () => {
+    // The subtlest path: recordScheduleFired runs before the skip early-return, so a
+    // one-shot (no recurrence) still stops even when its enqueue is coalesced away.
+    const s = createSchedule({
+      sessionId: "sess-1",
+      prompt: "once",
+      runAt: new Date(T0).toISOString(), // one-shot (no recurrence)
+      nowMs: T0,
+    });
+    const calls: Array<[string, string]> = [];
+    const outcome = fireSchedule(
+      s,
+      T0 + 1,
+      (id, p) => calls.push([id, p]),
+      () => true // already pending
+    );
+    expect(outcome).toBe("skipped-queued");
+    expect(calls).toHaveLength(0);
+    expect(getSchedule(s.id)?.enabled).toBe(0); // one-shot stopped, not re-firing
+  });
+
   it("disables (does NOT enqueue) when the target session is gone", () => {
     const s = createSchedule({
       sessionId: "sess-1",
