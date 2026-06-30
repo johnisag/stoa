@@ -112,11 +112,17 @@ tab/session** (a new fleet view, mirroring the Live Wall). Built one PR at a tim
     `~/.stoa/rate-limits.json` best-effort and adds `rateLimitWindow` to its
     response; the Agent Monitor shows a global "quota" gauge when present (nothing
     until M2b installs the hook — fail-closed).
-  - **M2b** — the statusline-hook INSTALLER: an opt-in `stoa` setup step that
-    merges a `statusLine` command into `~/.claude/settings.json` (NEVER clobbering
-    existing config) running a small Stoa script that maps Claude's statusline JSON
-    → the M2a record. **Verify the Claude statusline JSON schema first** (claude
-    `--help` / docs) — do not guess the field names.
+  - ✅ **M2b — SHIPPED (#322).** The statusline-hook INSTALLER.
+    `scripts/claude-statusline-hook.js` (a dependency-free hook Claude runs per
+    session) maps Claude's **verified** statusline JSON
+    (`rate_limits.{five_hour,seven_day}.{used_percentage 0..100, resets_at epoch
+sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips the
+    write when no window is present so a free-tier / pre-first-response session can't
+    clobber a good record. `stoa statusline` merges the `statusLine` into
+    `~/.claude/settings.json` WITHOUT clobbering existing config or a user's own
+    statusLine; `stoa doctor` advertises it (warn + hint) when Claude is installed but
+    the hook isn't. The M2a quota gauge now lights up. _Seam:_
+    `scripts/claude-statusline-hook.js`, `scripts/stoa.js`.
   - **M2c** — feed the window % into Dispatch + the watchdog so the fleet backs off
     BEFORE a hard stall (reuse the `server.ts` tick + `lib/rate-limit.ts` resume
     gating). _Seam:_ new `lib/rate-limit-window.ts`, `lib/agent-monitor.ts`,
