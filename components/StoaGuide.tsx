@@ -157,7 +157,7 @@ const COCKPIT: Item[] = [
     icon: Gauge,
     title: "Agent Monitor",
     blurb:
-      'An "htop for your AI agents" — one row per session with status, model, context-window %, token usage, cost, each session\'s child-process + MCP-server fan-out (hover the "proc" cell for MCP server names), and the listening ports its agents opened (the "port" label turns amber + ⚠ when one is an untracked orphan; hover for the numbers), sorted so whoever needs you is on top. Opens as its own tab (header or ⌘K).',
+      'An "htop for your AI agents" — one row per session with status, model, context-window %, token usage, cost, each session\'s child-process + MCP-server fan-out (hover the "proc" cell for MCP server names), and the listening ports its agents opened (the "port" label turns amber + ⚠ when one is an untracked orphan; hover for the numbers), sorted so whoever needs you is on top. Opens as its own tab (header or ⌘K). A scriptable JSON snapshot of the whole fleet is at GET /api/monitor?format=json.',
   },
   {
     icon: LineChart,
