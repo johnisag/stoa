@@ -154,11 +154,15 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
   tooltip) via the extended `/api/monitor/processes`. Only counts + port numbers cross to
   the client. _Seam:_ `lib/listening-ports.ts`, `lib/process-tree.ts`,
   `app/api/monitor/processes`, `components/views/AgentMonitorView`.
-- **M5 — Telemetry Snapshot schema + JSON export** — `feature` · S. A normalized TS
-  telemetry type aligned to abtop's serde `Snapshot` field names
-  (`context_percent`, `cache_read_tokens`, `orphan_ports`, `rate_limits`,
-  `mcp_servers`, …); `GET /api/monitor?format=json` emits an abtop-compatible
-  snapshot for interop. _Seam:_ `lib/agent-monitor.ts`, `app/api/monitor`.
+- ✅ **M5 — Telemetry Snapshot schema + JSON export** — `feature` · S.
+  **SHIPPED (#328).** `lib/monitor-snapshot.ts` (pure `buildTelemetrySnapshot`) maps the
+  Agent-Monitor rows + per-session process/port info (M3/M4) + the rate-limit record (M2)
+  into a versioned, snake_case `stoa.monitor.v1` shape aligned to abtop's serde field
+  names (`context_percent`, `cache_read_tokens`, `orphan_ports`, `rate_limits`,
+  `mcp_servers`, …); `GET /api/monitor?format=json` emits it. The heavy per-session gather
+  was extracted to a shared `lib/monitor-collect.ts` (both monitor routes use it). Only
+  fields already on the wire (cost/processes) cross — no raw command lines. _Seam:_
+  `lib/monitor-snapshot.ts`, `lib/monitor-collect.ts`, `app/api/monitor`.
 - **M6 — Optional `abtop --json` external sensor** — `orchestration` · M.
   _(deferred — the only option that adds a non-npm dependency.)_ When an `abtop`
   binary is present, best-effort `execFile abtop --json --once` (argv array, JS
