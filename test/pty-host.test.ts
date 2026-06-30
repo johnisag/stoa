@@ -24,7 +24,10 @@ import {
   uninstallProcessGuards,
 } from "@/lib/session-backend/pty/host";
 import { HostClient } from "@/lib/session-backend/pty/host-client";
-import { _resetRegistryForTests } from "@/lib/session-backend/pty/registry";
+import {
+  _resetRegistryForTests,
+  getSession,
+} from "@/lib/session-backend/pty/registry";
 import {
   getSessionBackend,
   resetSessionBackend,
@@ -200,6 +203,89 @@ describe("pty-host daemon (Tier 2)", () => {
     client.close();
   });
 
+  it("an observer attach does NOT steal the viewer's resize slot (#2)", async () => {
+    // Repro of the Windows live-wall bug: a worker open full-screen (a real sizing
+    // viewer) AND observed in the live wall (an observer attach on the SAME daemon
+    // connection). The observer must not evict the viewer's sizing client, or the
+    // viewer's resize stops taking effect on the pty.
+    const client = new HostClient();
+    await client.spawn("host-resize", {
+      binary: "node",
+      args: ["-e", "setInterval(()=>{},1000)"],
+      cwd: process.cwd(),
+    });
+
+    // Viewer attaches at 80x24 (registers a sizing client).
+    const viewer = await client.attach(
+      "host-resize",
+      () => {},
+      () => {},
+      false,
+      80,
+      24
+    );
+    // Live-wall observer attaches the SAME key on the SAME connection.
+    const obs = await client.attach(
+      "host-resize",
+      () => {},
+      () => {},
+      true
+    );
+
+    // The viewer resizes — this MUST reach the pty. Pre-fix, the observer attach
+    // had nulled the viewer's sizing slot, so this resize was silently ignored.
+    client.resize("host-resize", 120, 40);
+    const session = getSession("host-resize");
+    const applied = await waitFor(
+      () => session?.cols === 120 && session?.rows === 40
+    );
+    expect(applied).toBe(true);
+    expect(session?.cols).toBe(120);
+    expect(session?.rows).toBe(40);
+
+    viewer.detach();
+    obs.detach();
+    await client.kill("host-resize");
+    client.close();
+  });
+
+  it("observer-FIRST then viewer still gives the viewer a working resize slot (#2)", async () => {
+    // The natural live-wall flow: the wall is already observing the worker, THEN
+    // you open it full-screen. The later viewer attach must register a real sizing
+    // client even though an observer got there first.
+    const client = new HostClient();
+    await client.spawn("host-resize2", {
+      binary: "node",
+      args: ["-e", "setInterval(()=>{},1000)"],
+      cwd: process.cwd(),
+    });
+    const obs = await client.attach(
+      "host-resize2",
+      () => {},
+      () => {},
+      true
+    );
+    const viewer = await client.attach(
+      "host-resize2",
+      () => {},
+      () => {},
+      false,
+      80,
+      24
+    );
+    client.resize("host-resize2", 132, 43);
+    const session = getSession("host-resize2");
+    const applied = await waitFor(
+      () => session?.cols === 132 && session?.rows === 43
+    );
+    expect(applied).toBe(true);
+
+    obs.detach();
+    viewer.detach();
+    await client.kill("host-resize2");
+    client.close();
+  });
+
   it("re-key daemon subscriptions on rename so detach under the new key works", async () => {
     const client = new HostClient();
     await client.spawn("host-rename-old", {
@@ -351,8 +437,7 @@ describe("Tier-2 daemon process guards (keep-alive)", () => {
       const ue = process
         .listeners("uncaughtException")
         .find((l) => !ueBefore.has(l)) as
-        | ((e: unknown, o?: string) => void)
-        | undefined;
+        ((e: unknown, o?: string) => void) | undefined;
       const ur = process
         .listeners("unhandledRejection")
         .find((l) => !urBefore.has(l)) as ((r: unknown) => void) | undefined;
