@@ -85,4 +85,56 @@ describe("buildSpawnForSession", () => {
     const spawn = buildSpawnForSession(session({ agent_type: "shell" }));
     expect(spawn).toEqual({ binary: "", args: [], cwd: "/repo" });
   });
+
+  // #8: a native fork that re-attaches BEFORE its first turn (no own
+  // claude_session_id yet) must resume its parent (--resume <parent>
+  // --fork-session) instead of respawning blank.
+  it("resumes the parent for a not-yet-started native fork when given allSessions", () => {
+    const parent = session({ id: "p", claude_session_id: "parent-cid" });
+    const fork = session({
+      id: "f",
+      agent_type: "claude",
+      parent_session_id: "p",
+      claude_session_id: null,
+    });
+    const { args } = buildSpawnForSession(fork, {
+      allSessions: [parent, fork],
+    });
+    const i = args.indexOf("--resume");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args.slice(i, i + 2)).toEqual(["--resume", "parent-cid"]);
+    expect(args).toContain("--fork-session");
+  });
+
+  it("does NOT resume the parent for a non-native (codex) fork", () => {
+    const parent = session({ id: "p", claude_session_id: "parent-cid" });
+    const fork = session({
+      id: "f",
+      agent_type: "codex",
+      parent_session_id: "p",
+      claude_session_id: null,
+    });
+    const { args } = buildSpawnForSession(fork, {
+      allSessions: [parent, fork],
+    });
+    expect(args).not.toContain("--fork-session");
+    expect(args).not.toContain("parent-cid");
+  });
+
+  it("an explicit parentSessionId overrides the allSessions self-resolution", () => {
+    const fork = session({
+      id: "f",
+      agent_type: "claude",
+      parent_session_id: "p",
+      claude_session_id: null,
+    });
+    const { args } = buildSpawnForSession(fork, {
+      parentSessionId: null,
+      allSessions: [
+        session({ id: "p", claude_session_id: "parent-cid" }),
+        fork,
+      ],
+    });
+    expect(args).not.toContain("--fork-session");
+  });
 });

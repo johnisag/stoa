@@ -14,6 +14,7 @@ import {
   parseMcpLaunchArgs,
 } from "@/lib/providers";
 import { resolveModelForAgent } from "@/lib/model-catalog";
+import { resolveNativeForkParentId } from "@/lib/fork";
 import type { Session } from "@/lib/db";
 
 let cached: "pty" | "tmux" | null = null;
@@ -48,19 +49,35 @@ export interface SessionSpawn {
  * may already be running (server treats spawn as create-if-missing) or may need
  * respawning after a server restart. Omits the initial prompt by default so a
  * re-attach doesn't resend it; pass initialPrompt for a first launch.
+ *
+ * Pass `allSessions` so a NATIVE fork that re-attaches BEFORE its first turn (no
+ * own claude_session_id yet) still resumes its parent's conversation
+ * (`--resume <parent> --fork-session`) instead of respawning blank — via the SAME
+ * resolveNativeForkParentId the first-launch path uses, so they can't drift. An
+ * explicit `parentSessionId` (incl. null) overrides the self-resolution.
  */
 export function buildSpawnForSession(
   session: Session,
-  opts?: { initialPrompt?: string; parentSessionId?: string | null }
+  opts?: {
+    initialPrompt?: string;
+    parentSessionId?: string | null;
+    allSessions?: Session[];
+  }
 ): SessionSpawn {
   const provider = getProvider(session.agent_type || "claude");
   const cwd = session.working_directory || "~";
   if (provider.id === "shell") {
     return { binary: "", args: [], cwd };
   }
+  const parentSessionId =
+    opts?.parentSessionId !== undefined
+      ? opts.parentSessionId
+      : opts?.allSessions
+        ? resolveNativeForkParentId(session, opts.allSessions)
+        : null;
   const { binary, args } = buildAgentArgs(session.agent_type || "claude", {
     sessionId: session.claude_session_id,
-    parentSessionId: opts?.parentSessionId ?? null,
+    parentSessionId,
     autoApprove: session.auto_approve,
     // Resolve so a legacy row holding a foreign/non-catalog model can't reach
     // `--model <bogus>` on a fresh respawn (every other spawn site resolves too).

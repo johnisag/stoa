@@ -367,7 +367,11 @@ export const Pane = memo(function Pane({
           // Native: (re)attach immediately — the WS is already open (this fires
           // from onConnected), so the old 100ms delay was dead time. spawn lets
           // the server respawn the session if it isn't running.
-          const spawn = session ? buildSpawnForSession(session) : undefined;
+          // allSessions: so a native fork re-attaching before its first turn still
+          // resumes its parent (--fork-session) instead of respawning blank.
+          const spawn = session
+            ? buildSpawnForSession(session, { allSessions: sessions })
+            : undefined;
           handle.attachSession({ key: sessionName, spawn });
         } else {
           setTimeout(
@@ -397,7 +401,7 @@ export const Pane = memo(function Pane({
         if (backend === "pty") {
           terminalRef.attachSession({
             key: sessionName,
-            spawn: buildSpawnForSession(worker),
+            spawn: buildSpawnForSession(worker, { allSessions: sessions }),
           });
         } else {
           terminalRef.sendInput("\x02d");

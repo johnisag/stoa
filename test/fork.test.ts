@@ -8,9 +8,22 @@ import {
   forkModeForProvider,
   sanitizeForkScrollback,
   buildForkSeed,
+  resolveNativeForkParentId,
   FORK_SEED_MAX_LENGTH,
 } from "@/lib/fork";
 import { buildAgentArgs, getProvider } from "@/lib/providers";
+import type { Session } from "@/lib/db";
+
+/** Minimal Session — only the fields resolveNativeForkParentId reads matter. */
+function session(over: Partial<Session> = {}): Session {
+  return {
+    id: "s1",
+    parent_session_id: null,
+    claude_session_id: null,
+    agent_type: "claude",
+    ...over,
+  } as Session;
+}
 
 describe("forkModeForProvider", () => {
   it("is native for Claude (it has --fork-session), scrollback for the rest", () => {
@@ -65,6 +78,50 @@ describe("buildForkSeed", () => {
     const seed = buildForkSeed(huge, "a");
     expect(seed).toContain("RECENT-TAIL"); // the end is kept
     expect(seed).not.toContain("OLDOLD"); // the start is dropped
+  });
+});
+
+describe("resolveNativeForkParentId (#8 — re-attach before first turn)", () => {
+  const parent = session({ id: "p", claude_session_id: "parent-cid" });
+
+  it("returns the parent's conversation id for a not-yet-started native fork", () => {
+    const fork = session({
+      id: "f",
+      parent_session_id: "p",
+      agent_type: "claude",
+    });
+    expect(resolveNativeForkParentId(fork, [parent, fork])).toBe("parent-cid");
+  });
+
+  it("returns null once the fork has its OWN claude_session_id (already started)", () => {
+    const fork = session({
+      id: "f",
+      parent_session_id: "p",
+      claude_session_id: "own-cid",
+    });
+    expect(resolveNativeForkParentId(fork, [parent, fork])).toBeNull();
+  });
+
+  it("returns null when there is no parent (not a fork)", () => {
+    expect(resolveNativeForkParentId(session(), [parent])).toBeNull();
+  });
+
+  it("returns null for a NON-native (scrollback) provider — must NOT resume the parent", () => {
+    // Codex forks via scrollback; resuming the parent here would continue the
+    // parent's conversation and emit an invalid --fork-session.
+    const fork = session({
+      id: "f",
+      parent_session_id: "p",
+      agent_type: "codex",
+    });
+    expect(resolveNativeForkParentId(fork, [parent, fork])).toBeNull();
+  });
+
+  it("returns null when the parent is gone or has no conversation id yet", () => {
+    const fork = session({ id: "f", parent_session_id: "p" });
+    expect(resolveNativeForkParentId(fork, [fork])).toBeNull(); // parent absent
+    const parentNoCid = session({ id: "p", claude_session_id: null });
+    expect(resolveNativeForkParentId(fork, [parentNoCid, fork])).toBeNull();
   });
 });
 

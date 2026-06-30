@@ -11,6 +11,7 @@
  */
 
 import { getProviderDefinition, isValidProviderId } from "./providers/registry";
+import type { Session } from "./db";
 
 /** native  — the provider has a fork flag (Claude): an exact branched conversation.
  *  scrollback — no fork primitive: a fresh session seeded with recent scrollback. */
@@ -32,6 +33,34 @@ export function forkModeForProvider(providerId: string): ForkMode | null {
   return getProviderDefinition(providerId).supportsFork
     ? "native"
     : "scrollback";
+}
+
+/**
+ * The parent's stored conversation id to resume for a NATIVE fork that has not had
+ * its first turn yet (so it has no own `claude_session_id`). Returns null for a
+ * fork that has already started, a non-native (scrollback) fork, a non-fork
+ * session, or a parent that's gone / has no id — in which case the fork must launch
+ * FRESH, never resuming the parent.
+ *
+ * SINGLE SOURCE for the `--fork-session` parent resolution shared by the first
+ * launch (app/page.tsx) and the re-attach respawn (buildSpawnForSession): without
+ * it, a native fork that reconnects (a flaky mobile WS) BEFORE its first turn would
+ * respawn as a brand-new blank session, silently discarding the forked context.
+ * Pure → unit-tested.
+ */
+export function resolveNativeForkParentId(
+  session: Session,
+  allSessions: Session[]
+): string | null {
+  if (
+    session.claude_session_id ||
+    !session.parent_session_id ||
+    forkModeForProvider(session.agent_type || "claude") !== "native"
+  ) {
+    return null;
+  }
+  const parent = allSessions.find((s) => s.id === session.parent_session_id);
+  return parent?.claude_session_id || null;
 }
 
 /**
