@@ -70,8 +70,6 @@ docs/*
 !docs/setup/
 !docs/issues/
 !docs/ROADMAP.md
-!docs/swarm-findings.md
-!docs/phase-review-backlog.md
 .mcp.json
 .git-evening
 
