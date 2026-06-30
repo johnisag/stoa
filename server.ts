@@ -69,6 +69,14 @@ import {
   type StuckTrack,
 } from "./lib/watchdog";
 import { dispatchBackoffThreshold } from "./lib/rate-limit-window";
+import { tokenMeter, contextWindowFor } from "./lib/context-window";
+import {
+  nextCompactAction,
+  autoCompactEnabled,
+  COMPACT_THRESHOLD,
+  COMPACT_COOLDOWN_MS,
+  COMPACT_MAX_PER_DAY,
+} from "./lib/auto-compact";
 import {
   channelDeliverEnabled,
   isChannelDeliveryTurn,
@@ -379,6 +387,20 @@ app.prepare().then(() => {
   if (COST_SAMPLE_ENABLED) {
     console.log(
       `> Cost sampling on (STOA_AUTO_COST_SAMPLE=1): the persisted spend history (session_costs) is refreshed every ${Math.round(COST_SAMPLE_INTERVAL_MS / 60000)}m so it keeps accruing even when no one's watching the cost badge.`
+    );
+  }
+  // Auto-/compact (opt-in via STOA_AUTO_COMPACT=1). Unlike the read-only cost sampler and
+  // the escalate-only watchdog/error-loop, this WRITES /compact to a session — so it's off
+  // by default and fires ONLY at an idle boundary (the pure nextCompactAction decides).
+  // `lastCompactAt` tracks the per-session cooldown; `compactBusy` guards the slow reads.
+  const AUTO_COMPACT_ENABLED = autoCompactEnabled();
+  const lastCompactAt = new Map<string, number>();
+  // Per-session UTC-day compaction count, so a stuck-high session can't /compact forever.
+  const compactDay = new Map<string, { day: string; count: number }>();
+  let compactBusy = false;
+  if (AUTO_COMPACT_ENABLED) {
+    console.log(
+      `> Auto-compact on (STOA_AUTO_COMPACT=1): a Claude session whose context window is >= ${Math.round(COMPACT_THRESHOLD * 100)}% full at an idle boundary (no open prompt) is sent /compact (${Math.round(COMPACT_COOLDOWN_MS / 60000)}m cooldown${COMPACT_MAX_PER_DAY > 0 ? `, ${COMPACT_MAX_PER_DAY}/day cap` : ""}), so a long/overnight run reclaims headroom before the painful auto-compaction. Claude-only.`
     );
   }
   const shouldPush = (ev: PushEvent): boolean => {
@@ -1064,6 +1086,88 @@ app.prepare().then(() => {
       }
     }, 60000);
     costSampleTimer.unref?.();
+  }
+
+  // ── auto-/compact (opt-in: reclaim context before the wall) ──
+  // Off unless STOA_AUTO_COMPACT=1. Every 60s, compute each session's context occupancy
+  // (the same bounded transcript read the cost sampler uses); for a Claude session over the
+  // threshold and past its cooldown, capture + classify ONLY that candidate and, if it's at
+  // a clean idle boundary, send /compact via the backend. Fail-closed: a backend/list/cost
+  // failure skips the tick; a per-session capture error skips that session. All backend ops
+  // key on backendKeyForSession(s) (the tmux_name / pty key), not the display name.
+  if (AUTO_COMPACT_ENABLED) {
+    const compactTimer = setInterval(async () => {
+      if (compactBusy) return;
+      compactBusy = true;
+      try {
+        const nowMs = Date.now();
+        const sessions = queries.getAllSessions(getDb()).all() as Session[];
+        const backend = getSessionBackend();
+        let liveNames: Set<string>;
+        try {
+          liveNames = new Set(await backend.list());
+        } catch {
+          return; // can't enumerate live sessions → skip this tick
+        }
+        const costs = await computeSessionCosts(sessions);
+        for (const s of sessions) {
+          if (s.agent_type !== "claude") continue; // /compact is a Claude command
+          const key = backendKeyForSession(s);
+          if (!liveNames.has(key)) continue;
+          const cost = costs[s.id];
+          if (!cost) continue;
+          const pct = tokenMeter(
+            cost.contextTokens,
+            contextWindowFor(cost.model ?? s.model)
+          ).pct;
+          // Cheap pre-checks before paying for a screen capture + classify.
+          if (pct < COMPACT_THRESHOLD) continue;
+          const last = lastCompactAt.get(s.id) ?? null;
+          if (last != null && nowMs - last < COMPACT_COOLDOWN_MS) continue;
+          // Only NOW capture + classify this candidate (bounded to over-threshold
+          // sessions). getStatusDetail (not getStatus) also yields the detected prompt, so
+          // we honor the canonical idle-AND-no-prompt unattended-write gate.
+          const detail = await statusDetector
+            .getStatusDetail(key)
+            .catch(() => null);
+          if (!detail) continue; // capture failed → leave this session for the next tick
+          const today = utcDay(nowMs);
+          const dayRec = compactDay.get(s.id);
+          const usedToday = dayRec && dayRec.day === today ? dayRec.count : 0;
+          const action = nextCompactAction({
+            contextPct: pct,
+            threshold: COMPACT_THRESHOLD,
+            isIdle: detail.status === "idle",
+            hasPrompt: detail.prompt != null,
+            compactionsUsedToday: usedToday,
+            maxPerDay: COMPACT_MAX_PER_DAY,
+            lastCompactMs: last,
+            cooldownMs: COMPACT_COOLDOWN_MS,
+            nowMs,
+          });
+          if (action !== "compact") continue;
+          lastCompactAt.set(s.id, nowMs);
+          compactDay.set(s.id, { day: today, count: usedToday + 1 });
+          console.log(
+            `auto-compact: ${s.name} context ~${Math.round(pct * 100)}% at idle → /compact (${usedToday + 1}/${COMPACT_MAX_PER_DAY || "∞"} today)`
+          );
+          await backend
+            .pasteText(key, "/compact", { enter: true })
+            .catch((err) => console.error("auto-compact send failed:", err));
+        }
+        // Prune the per-session trackers for sessions that no longer exist.
+        const liveIds = new Set(sessions.map((s) => s.id));
+        for (const id of [...lastCompactAt.keys()])
+          if (!liveIds.has(id)) lastCompactAt.delete(id);
+        for (const id of [...compactDay.keys()])
+          if (!liveIds.has(id)) compactDay.delete(id);
+      } catch (err) {
+        console.error("auto-compact tick failed:", err);
+      } finally {
+        compactBusy = false;
+      }
+    }, 60000);
+    compactTimer.unref?.();
   }
 
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
