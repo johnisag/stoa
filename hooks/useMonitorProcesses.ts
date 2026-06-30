@@ -1,11 +1,11 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import type { ProcessFanout } from "@/app/api/monitor/processes/route";
+import type { SessionProcessInfo } from "@/app/api/monitor/processes/route";
 
 export interface MonitorProcessesResponse {
-  /** Per-session (by session id) child-process / MCP-server fan-out. */
-  fanouts: Record<string, ProcessFanout>;
+  /** Per-session (by session id) child-process / MCP-server fan-out + listening ports. */
+  fanouts: Record<string, SessionProcessInfo>;
 }
 
 /**

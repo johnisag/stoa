@@ -15,6 +15,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { isWindows } from "./platform";
+import type { PortOwner } from "./listening-ports";
 
 const execFileAsync = promisify(execFile);
 
@@ -189,6 +190,45 @@ export function fanoutFor(
     childCount: descendants.length,
     mcpServers: [...mcp].sort((a, b) => a.localeCompare(b)),
   };
+}
+
+/** A listening port attributed to a session. */
+export interface SessionPort {
+  port: number;
+  /** True when this isn't a Stoa-tracked dev-server port — the agent opened it itself
+   *  (the "orphan" the Monitor flags). */
+  orphan: boolean;
+}
+
+/** Per-session process info: the fan-out (M3) plus its attributed listening ports (M4). */
+export interface SessionProcessInfo extends ProcessFanout {
+  ports: SessionPort[];
+}
+
+/**
+ * Attribute host-wide listening ports to a session by intersecting the port owners with
+ * the session's process tree (root + descendants). Deduped by port (a server bound on
+ * both IPv4 and IPv6 counts once), sorted ascending. A port not in `managedPorts` (Stoa's
+ * tracked dev-server ports) is flagged `orphan` — the agent opened it itself, unbeknownst
+ * to Stoa. An invalid/zero root pid yields []. Pure → unit-tested.
+ */
+export function attributePorts(
+  procs: ProcInfo[],
+  rootPid: number | null | undefined,
+  listening: PortOwner[],
+  managedPorts: ReadonlySet<number>
+): SessionPort[] {
+  if (rootPid == null || !Number.isInteger(rootPid) || rootPid <= 0) return [];
+  const pids = new Set<number>([rootPid]);
+  for (const d of collectDescendants(procs, rootPid)) pids.add(d.pid);
+  const seen = new Set<number>();
+  const out: SessionPort[] = [];
+  for (const { port, pid } of listening) {
+    if (!pids.has(pid) || seen.has(port)) continue;
+    seen.add(port);
+    out.push({ port, orphan: !managedPorts.has(port) });
+  }
+  return out.sort((a, b) => a.port - b.port);
 }
 
 /**

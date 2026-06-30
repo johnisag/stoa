@@ -5,9 +5,11 @@ import {
   collectDescendants,
   mcpServerName,
   fanoutFor,
+  attributePorts,
   WINDOWS_SNAPSHOT_PS,
   type ProcInfo,
 } from "@/lib/process-tree";
+import type { PortOwner } from "@/lib/listening-ports";
 
 describe("parsePosixPs", () => {
   it("parses pid/ppid/command from padded `ps` lines (command may have spaces)", () => {
@@ -181,6 +183,43 @@ describe("fanoutFor", () => {
     });
     expect(fanoutFor(procs, 0)).toEqual({ childCount: 0, mcpServers: [] });
     expect(fanoutFor(procs, -1)).toEqual({ childCount: 0, mcpServers: [] });
+  });
+});
+
+describe("attributePorts (M4 — per-session listening ports + orphan flag)", () => {
+  const procs: ProcInfo[] = [
+    { pid: 100, ppid: 1, command: "pty-root" },
+    { pid: 101, ppid: 100, command: "claude" },
+    { pid: 102, ppid: 101, command: "vite" },
+    { pid: 103, ppid: 101, command: "api" },
+  ];
+  const listening: PortOwner[] = [
+    { port: 8080, pid: 102 }, // in the session tree
+    { port: 8080, pid: 102 }, // IPv4+IPv6 dup
+    { port: 3000, pid: 103 }, // in the session tree
+    { port: 9999, pid: 500 }, // an UNRELATED process — not this session
+  ];
+
+  it("attributes only the session-tree ports, deduped + sorted, flagging orphans", () => {
+    const managed = new Set<number>([3000]); // Stoa tracks 3000, not 8080
+    expect(attributePorts(procs, 100, listening, managed)).toEqual([
+      { port: 3000, orphan: false }, // managed → known
+      { port: 8080, orphan: true }, // agent opened it; Stoa unaware → orphan
+    ]);
+  });
+
+  it("includes a port the ROOT pid itself listens on", () => {
+    expect(
+      attributePorts(procs, 100, [{ port: 4000, pid: 100 }], new Set())
+    ).toEqual([{ port: 4000, orphan: true }]);
+  });
+
+  it("is empty for an invalid/zero root, or when no owned port listens", () => {
+    expect(attributePorts(procs, null, listening, new Set())).toEqual([]);
+    expect(attributePorts(procs, 0, listening, new Set())).toEqual([]);
+    expect(
+      attributePorts(procs, 100, [{ port: 5000, pid: 9999 }], new Set())
+    ).toEqual([]);
   });
 });
 
