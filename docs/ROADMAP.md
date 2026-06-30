@@ -145,10 +145,15 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
   `/api/monitor/processes`. Only counts + sanitized names cross to the client. _Seam:_
   `lib/process-tree.ts`, `lib/session-backend/*` (getPid), `app/api/monitor/processes`,
   `components/views/AgentMonitorView`. _Deferred: a full interactive tree view._
-- **M4 — Orphan-port-per-session attribution** — `feature` · M. Attribute ANY
-  agent-spawned listening port to its owning session (not just Stoa-spawned
-  DevServers) and flag orphans in the Monitor. _Seam:_ `lib/dev-servers.ts`,
-  `lib/ports.ts`, `lib/agent-monitor.ts`.
+- ✅ **M4 — Orphan-port-per-session attribution** — `feature` · M. **SHIPPED (#327).**
+  `lib/listening-ports.ts` snapshots host listening ports (Windows `netstat -ano` /
+  POSIX `lsof`, fail-closed); `attributePorts` (lib/process-tree.ts) intersects them with
+  each session's process tree (M3) → `{ port, orphan }`, where orphan = not in the
+  session's PER-SESSION managed set (its own `dev_server_port` + its project's dev-server
+  ports). Surfaced as a per-row "port" cell (amber + ⚠ on an orphan, numbers in a
+  tooltip) via the extended `/api/monitor/processes`. Only counts + port numbers cross to
+  the client. _Seam:_ `lib/listening-ports.ts`, `lib/process-tree.ts`,
+  `app/api/monitor/processes`, `components/views/AgentMonitorView`.
 - **M5 — Telemetry Snapshot schema + JSON export** — `feature` · S. A normalized TS
   telemetry type aligned to abtop's serde `Snapshot` field names
   (`context_percent`, `cache_read_tokens`, `orphan_ports`, `rate_limits`,
