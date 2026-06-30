@@ -100,13 +100,27 @@ tab/session** (a new fleet view, mirroring the Live Wall). Built one PR at a tim
   `lib/panes.ts`, `view-meta.tsx`, `FLEET_NAV`, `QuickSwitcher`, `Desktop/MobileView`,
   `Pane`, StoaGuide. _Deferred follow-ups: a global keybinding (the mnemonic chords
   are browser-reserved), git change-counts, and a managed-status override._
-- **M2 — Rate-limit window % (5h/7d quota)** — `orchestration` · M. abtop's crown
-  jewel: read the Claude rate-limit WINDOW utilization (5h/7d) — opt-in,
-  fail-closed, reject >10-min-stale data — into `lib/rate-limit.ts`; show a quota
-  gauge in the Monitor; let Dispatch + the watchdog back off BEFORE a hard stall
-  (richer than today's "limit reached" screen-scrape). Provenance is an unofficial
-  `~/.claude` statusline hook → strictly opt-in. _Seam:_ `lib/rate-limit.ts`,
-  Monitor, `server.ts` tick, `lib/dispatch`.
+- **M2 — Rate-limit window % (5h/7d quota)** — `orchestration` · M/L. abtop's crown
+  jewel: surface the Claude rate-limit WINDOW utilization (5h/7d) — proactive,
+  unlike today's reactive "limit reached" screen-scrape. **DECISION (2026-06-30):
+  Stoa installs its OWN Claude statusline hook** (not reading abtop's file), so the
+  capability is Stoa-owned. Build sub-plan (one PR each, in order):
+  - ✅ **M2a — SHIPPED (#320).** Pure window MODEL in `lib/rate-limit-window.ts`
+    (`parseWindowRecord`, `windowUtilization` = the binding max of the 5h/7d
+    windows, `isWindowStale` — reject >10-min-old data, all fail-closed/null-on-
+    doubt), unit-tested. The cost route reads the Stoa-defined
+    `~/.stoa/rate-limits.json` best-effort and adds `rateLimitWindow` to its
+    response; the Agent Monitor shows a global "quota" gauge when present (nothing
+    until M2b installs the hook — fail-closed).
+  - **M2b** — the statusline-hook INSTALLER: an opt-in `stoa` setup step that
+    merges a `statusLine` command into `~/.claude/settings.json` (NEVER clobbering
+    existing config) running a small Stoa script that maps Claude's statusline JSON
+    → the M2a record. **Verify the Claude statusline JSON schema first** (claude
+    `--help` / docs) — do not guess the field names.
+  - **M2c** — feed the window % into Dispatch + the watchdog so the fleet backs off
+    BEFORE a hard stall (reuse the `server.ts` tick + `lib/rate-limit.ts` resume
+    gating). _Seam:_ new `lib/rate-limit-window.ts`, `lib/agent-monitor.ts`,
+    `scripts/stoa.js`, `server.ts` tick, `lib/dispatch`.
 - **M3 — MCP-server + subagent/child-process tree per session** — `feature` · M.
   Detect each session's child-process / subagent fan-out and its MCP servers
   (process inspection + the existing netstat/lsof primitive); surface in the
