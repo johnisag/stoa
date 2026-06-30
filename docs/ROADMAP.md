@@ -446,6 +446,17 @@ Condensed record (full detail in git history). All of the below is **done**.
   QA · One-tap structured mobile approvals (subsumed by **#9** inline-reply) ·
   Maintainer v2 (auto-dispatch + deploy/monitor/self-heal).
 
+### Removed (don't re-add)
+
+- **Playwright visual-regression gate** (added #290) — **removed 2026-06-30.** It
+  was red since inception (no baselines were ever committed → `toHaveScreenshot`
+  fails-to-write on every run), non-blocking, and ignored — pure CI noise that
+  delivered zero caught regressions and cost a debugging session. `tsc` + the vitest
+  suite (×3 OS) + the mandatory 3-agent review (whose Gate C is simplicity/UX) cover
+  regressions. If a visual safety net is wanted later, _re-introduce it properly_
+  (generate Linux baselines via a workflow + commit them + make it blocking) rather
+  than restoring the perpetually-red job.
+
 ---
 
 _History: the autonomous maintainer (#203/#204), the small-big QoL campaign
