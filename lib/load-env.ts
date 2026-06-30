@@ -31,6 +31,23 @@ export function parseEnv(text: string): Record<string, string> {
   return out;
 }
 
+/**
+ * `STOA_PORT` is the documented port knob, but the server (and Next) read `PORT`.
+ * The `stoa` CLI bridges this by resolving `STOA_PORT || PORT || 3011` and passing
+ * it as `PORT` to the spawned server; `stoa doctor` reports the same. `npm run dev`
+ * runs `tsx server.ts` directly (no CLI), so without this bridge it ignored
+ * `STOA_PORT` and `doctor` disagreed with the actual bind. Mirror the CLI's
+ * precedence here (STOA_PORT wins) so dev ≡ prod ≡ doctor. Returns the value `PORT`
+ * should take, or undefined to leave it unset (server falls back to 3011). Pure →
+ * unit-testable. An empty string is treated as unset (the `||` chain skips it).
+ */
+export function portAlias(
+  stoaPort: string | undefined,
+  port: string | undefined
+): string | undefined {
+  return stoaPort || port || undefined;
+}
+
 // Side effect on import: load a cwd-relative `.env` into process.env so
 // `npm run dev` (which runs `tsx server.ts` directly) honours `.env` the SAME
 // way the `stoa` CLI does — the CLI loads `.env` then passes it to the spawned
@@ -47,6 +64,14 @@ if (process.env.STOA_SKIP_ENV_FILE !== "1" && !process.env.VITEST) {
   } catch {
     // No .env / unreadable — that's fine.
   }
+}
+
+// Bridge STOA_PORT → PORT (after .env load, so a .env STOA_PORT counts) so
+// `npm run dev` honours the documented knob the same way the `stoa` CLI does.
+// Skipped under vitest (tests manage their own env).
+if (!process.env.VITEST) {
+  const resolved = portAlias(process.env.STOA_PORT, process.env.PORT);
+  if (resolved) process.env.PORT = resolved;
 }
 
 // macOS: a server launched OUTSIDE a login shell (Finder/Spotlight/an IDE's runner/
