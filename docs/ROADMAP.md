@@ -78,6 +78,54 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 >
 > **🐛 All seven confirmed bugs (#1, #2, #4, #5, #6, #7, #8) are now shipped.**
 
+### Tier 0 — 🛰️ Agent Monitor (abtop-inspired) — TOP PRIORITY
+
+A native "**htop for your AI agents**" observability surface, inspired by
+[graykode/abtop](https://github.com/graykode/abtop) (Rust TUI, MIT). abtop is the
+read-only OBSERVABILITY half of Stoa's domain; Stoa is the CONTROL plane. We port
+the IDEAS natively in TypeScript (no Rust binary — keeps Stoa npm-only + native on
+3 OSes) reusing seams Stoa already owns (`computeManagedStatuses`,
+`computeSessionCosts`, `lib/rate-limit.ts`, `lib/dev-servers.ts` netstat/lsof), and
+cover ALL providers, not just abtop's Claude/Codex/OpenCode. **It opens as its own
+tab/session** (a new fleet view, mirroring the Live Wall). Built one PR at a time.
+
+- ✅ **M1 — Agent Monitor view (new tab)** — `feature` · M. **SHIPPED (#319).** A
+  read-only fleet view (mirrors `components/views/LiveWallView`) opened from a
+  fleet-nav button + ⌘K — one row per live session showing the telemetry Stoa
+  ALREADY computes: status, model, token usage, context-window % (with a saturation
+  band), and cost, sorted attention-first. Pure, tested row/merge/sort/format
+  helpers in `lib/agent-monitor.ts`; the view reuses the existing
+  `/api/sessions/cost` (via `useSessionCosts`) + the session roster — **no new
+  backend**. _Seam:_ `lib/agent-monitor.ts`, `components/views/AgentMonitorView`,
+  `lib/panes.ts`, `view-meta.tsx`, `FLEET_NAV`, `QuickSwitcher`, `Desktop/MobileView`,
+  `Pane`, StoaGuide. _Deferred follow-ups: a global keybinding (the mnemonic chords
+  are browser-reserved), git change-counts, and a managed-status override._
+- **M2 — Rate-limit window % (5h/7d quota)** — `orchestration` · M. abtop's crown
+  jewel: read the Claude rate-limit WINDOW utilization (5h/7d) — opt-in,
+  fail-closed, reject >10-min-stale data — into `lib/rate-limit.ts`; show a quota
+  gauge in the Monitor; let Dispatch + the watchdog back off BEFORE a hard stall
+  (richer than today's "limit reached" screen-scrape). Provenance is an unofficial
+  `~/.claude` statusline hook → strictly opt-in. _Seam:_ `lib/rate-limit.ts`,
+  Monitor, `server.ts` tick, `lib/dispatch`.
+- **M3 — MCP-server + subagent/child-process tree per session** — `feature` · M.
+  Detect each session's child-process / subagent fan-out and its MCP servers
+  (process inspection + the existing netstat/lsof primitive); surface in the
+  Monitor. _Seam:_ `lib/agent-monitor.ts`, `lib/platform.ts`, `lib/dev-servers.ts`.
+- **M4 — Orphan-port-per-session attribution** — `feature` · M. Attribute ANY
+  agent-spawned listening port to its owning session (not just Stoa-spawned
+  DevServers) and flag orphans in the Monitor. _Seam:_ `lib/dev-servers.ts`,
+  `lib/ports.ts`, `lib/agent-monitor.ts`.
+- **M5 — Telemetry Snapshot schema + JSON export** — `feature` · S. A normalized TS
+  telemetry type aligned to abtop's serde `Snapshot` field names
+  (`context_percent`, `cache_read_tokens`, `orphan_ports`, `rate_limits`,
+  `mcp_servers`, …); `GET /api/monitor?format=json` emits an abtop-compatible
+  snapshot for interop. _Seam:_ `lib/agent-monitor.ts`, `app/api/monitor`.
+- **M6 — Optional `abtop --json` external sensor** — `orchestration` · M.
+  _(deferred — the only option that adds a non-npm dependency.)_ When an `abtop`
+  binary is present, best-effort `execFile abtop --json --once` (argv array, JS
+  parse, fail-closed) to enrich Codex/OpenCode sessions Stoa can't parse natively,
+  incl. agents started OUTSIDE Stoa. Strictly optional, never a hard dependency.
+
 ### Tier 1 — High impact (ranks 1–32)
 
 > Ranks **1, 2, 4, 5, 6, 7, 8** are confirmed bugs — clear these first; they're

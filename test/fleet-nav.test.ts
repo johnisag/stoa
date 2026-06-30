@@ -11,6 +11,7 @@ import {
   Sparkles,
   NotebookPen,
   LayoutGrid,
+  Gauge,
   TerminalSquare,
 } from "lucide-react";
 import { FLEET_NAV, fleetNavEntry } from "@/components/nav/fleet-nav";
@@ -28,6 +29,7 @@ describe("FLEET_NAV", () => {
       "verdict-inbox",
       "fleet-board",
       "live-wall",
+      "agent-monitor",
       "ask-stoa",
       "notes",
       "commands",
@@ -45,6 +47,7 @@ describe("FLEET_NAV", () => {
     expect(icons["verdict-inbox"]).toBe(Inbox);
     expect(icons["fleet-board"]).toBe(Columns3);
     expect(icons["live-wall"]).toBe(LayoutGrid);
+    expect(icons["agent-monitor"]).toBe(Gauge);
     expect(icons["ask-stoa"]).toBe(Sparkles);
     expect(icons.notes).toBe(NotebookPen);
     expect(icons.commands).toBe(TerminalSquare);
@@ -69,6 +72,9 @@ describe("FLEET_NAV", () => {
     expect(aria["live-wall"]).toBe(
       "Live Wall (read-only grid of agent terminals)"
     );
+    expect(aria["agent-monitor"]).toBe(
+      "Agent Monitor (per-session telemetry — model, tokens, context, cost)"
+    );
     expect(aria["ask-stoa"]).toBe("Ask Stoa (chat about your fleet)");
     expect(aria.notes).toBe("Notes (shared knowledge base)");
     expect(aria.commands).toBe("Commands (author native slash commands)");
@@ -87,6 +93,7 @@ describe("FLEET_NAV", () => {
     expect(labels["verdict-inbox"]).toBe("Verdict Inbox");
     expect(labels["fleet-board"]).toBe("Fleet Board");
     expect(labels["live-wall"]).toBe("Live Wall");
+    expect(labels["agent-monitor"]).toBe("Agent Monitor");
     expect(labels["ask-stoa"]).toBe("Ask Stoa");
     expect(labels.notes).toBe("Notes");
     expect(labels.commands).toBe("Commands");

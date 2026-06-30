@@ -28,6 +28,7 @@ import {
   MessagesSquare,
   CalendarClock,
   LayoutGrid,
+  Gauge,
   TerminalSquare,
   Split,
   LineChart,
@@ -151,6 +152,12 @@ const COCKPIT: Item[] = [
     title: "Live Wall",
     blurb:
       "A read-only grid of every agent's live terminal — the control-plane view — streamed over the same WebSockets the panes use (open it from the header, ⌘K, or ⌘⇧M). Needs the native pty backend.",
+  },
+  {
+    icon: Gauge,
+    title: "Agent Monitor",
+    blurb:
+      'An "htop for your AI agents" — one row per session with status, model, context-window %, token usage, and cost, sorted so whoever needs you is on top. Opens as its own tab (header or ⌘K).',
   },
   {
     icon: LineChart,

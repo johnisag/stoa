@@ -11,6 +11,7 @@ The in-app **Guide** (compass icon in the sidebar) gives a plain-English tour of
 **Run a fleet**
 
 - **Live wall** — watch every agent's terminal at once in a read-only grid, streamed over WebSockets (no polling).
+- **Agent Monitor** — an "htop for your AI agents": one row per session with status, model, context-window %, tokens, and cost, sorted so whoever needs you is on top (opens as its own tab from the header or ⌘K).
 - **Multi-repo workspace** — open many repos as one session, with a worktree per sub-repo and a session-scoped Git panel.
 - **Worktree-conflict warning** — get warned when two live sessions share a checkout and could overwrite each other's edits.
 - **Fork** — branch any agent's conversation: natively for Claude (full history), via a scrollback fallback for every other agent (see [Supported Agents](#supported-agents)).
