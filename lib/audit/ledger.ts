@@ -196,6 +196,9 @@ export class RecordingBackend implements SessionBackend {
   getEnv(name: string, varName: string): Promise<string | null> {
     return this.inner.getEnv(name, varName);
   }
+  getPid(name: string): Promise<number | null> {
+    return this.inner.getPid(name);
+  }
   capture(name: string, opts?: CaptureOptions): Promise<string> {
     return this.inner.capture(name, opts);
   }

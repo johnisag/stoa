@@ -70,6 +70,10 @@ export interface SessionBackend {
   getPanePath(name: string): Promise<string | null>;
   /** Read an environment variable set in the session. (tmux: show-environment) */
   getEnv(name: string, varName: string): Promise<string | null>;
+  /** The session's ROOT process pid (the pane/pty process), or null if unknown. The
+   *  Agent Monitor (M3) walks the OS process tree from here to show each session's
+   *  child-process / MCP-server fan-out. (tmux: display-message '#{pane_pid}') */
+  getPid(name: string): Promise<number | null>;
 
   // ── Read ───────────────────────────────────────────────────────────────
   /** Rendered terminal text (visible grid, or last N scrollback lines). (tmux: capture-pane -p) */

@@ -488,6 +488,10 @@ export class HostClient {
     return (await this.request<string | null>({ t: "panePath", key })) ?? null;
   }
 
+  async pid(key: string): Promise<number | null> {
+    return (await this.request<number | null>({ t: "pid", key })) ?? null;
+  }
+
   close(): void {
     this.socket?.destroy();
     this.socket = null;

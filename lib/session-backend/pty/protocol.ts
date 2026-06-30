@@ -117,6 +117,7 @@ export type ClientMessage =
   | { t: "list"; id: number }
   | { t: "listActivity"; id: number }
   | { t: "panePath"; id: number; key: string }
+  | { t: "pid"; id: number; key: string }
   | { t: "ping"; id: number };
 
 // Host -> Client

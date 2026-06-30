@@ -130,6 +130,18 @@ export class TmuxBackend implements SessionBackend {
     }
   }
 
+  async getPid(name: string): Promise<number | null> {
+    try {
+      const { stdout } = await execAsync(
+        `tmux display-message -t ${q(name)} -p "#{pane_pid}" 2>/dev/null || echo ""`
+      );
+      const pid = parseInt(stdout.trim(), 10);
+      return Number.isInteger(pid) && pid > 0 ? pid : null;
+    } catch {
+      return null;
+    }
+  }
+
   async capture(name: string, opts?: CaptureOptions): Promise<string> {
     const range = opts?.lines != null ? ` -S -${opts.lines}` : "";
     try {

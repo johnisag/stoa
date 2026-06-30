@@ -63,6 +63,7 @@ export interface PtyTransport {
   list(): Promise<string[]>;
   listActivity(): Promise<SessionActivity[]>;
   panePath(key: string): Promise<string | null>;
+  pid(key: string): Promise<number | null>;
   capture(key: string, lines?: number): Promise<string>;
   write(key: string, data: string): void;
   // ── streaming (used by server.ts) ──
@@ -104,6 +105,10 @@ export class LocalTransport implements PtyTransport {
   }
   async panePath(key: string): Promise<string | null> {
     return getSession(key)?.cwd ?? null;
+  }
+  async pid(key: string): Promise<number | null> {
+    const p = getSession(key)?.pid;
+    return typeof p === "number" && p > 0 ? p : null;
   }
   async capture(key: string, lines?: number): Promise<string> {
     return getSession(key)?.capture(lines) ?? "";
@@ -182,6 +187,9 @@ export class HostTransport implements PtyTransport {
   }
   async panePath(key: string): Promise<string | null> {
     return this.client.panePath(key);
+  }
+  async pid(key: string): Promise<number | null> {
+    return this.client.pid(key);
   }
   async capture(key: string, lines?: number): Promise<string> {
     return this.client.capture(key, lines);
