@@ -14,12 +14,18 @@ macOS, and Linux** — preserving that is a hard requirement, not a nice-to-have
   `npm run build`. The pre-commit hook runs prettier + typecheck.
 - CI runs the test matrix on **ubuntu + macos + windows** (`.github/workflows/test.yml`).
   A change isn't done until that matrix is green.
-- **3-agent review before merge — no exceptions.** Every change (any size —
-  feature, fix, refactor, or docs) gets a local review of the PR diff by three
-  independent agents, each on a distinct dimension: correctness/security,
-  conventions/cross-platform, and simplicity/UX. Surface the findings and fix
-  them first; this gate carries equal weight to green CI. (Merging itself still
-  follows "don't push or open PRs unless asked".)
+- **4-agent review before merge — UNBREAKABLE, no exceptions.** Every change (any
+  size — feature, fix, refactor, or docs) gets a local review of the PR diff by
+  FOUR independent agents, each on a distinct dimension:
+  1. **correctness/security**,
+  2. **conventions/cross-platform**,
+  3. **simplicity/UX**, and
+  4. **adversarial red-team** — its sole mandate is to BREAK the change: hunt the
+     bug the other three missed (edge cases, races, malformed/hostile inputs,
+     failure modes, unbounded growth, and any risk path the tests don't exercise).
+     Surface every finding and fix the blocker/major ones first; this gate carries
+     equal weight to green CI. Re-run the panel until a round is clean. (Merging
+     itself still follows "don't push or open PRs unless asked".)
 - Conventional commits; end the message with the project's `Co-Authored-By` trailer.
 - Don't push or open PRs unless asked.
 
