@@ -135,10 +135,16 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     Reactive resume (`lib/rate-limit.ts`) still drains sessions already AT the limit.
     _Seam:_ `lib/rate-limit-window.ts`, `lib/rate-limit-window-source.ts`,
     `lib/dispatch/reconciler.ts`, `server.ts` banner, `.env.example`.
-- **M3 — MCP-server + subagent/child-process tree per session** — `feature` · M.
-  Detect each session's child-process / subagent fan-out and its MCP servers
-  (process inspection + the existing netstat/lsof primitive); surface in the
-  Monitor. _Seam:_ `lib/agent-monitor.ts`, `lib/platform.ts`, `lib/dev-servers.ts`.
+- ✅ **M3 — MCP-server + subagent/child-process tree per session** — `feature` · M.
+  **SHIPPED (#326).** A new `getPid(name)` on the SessionBackend seam (tmux
+  `#{pane_pid}`; pty via a `pid` IPC message mirroring `panePath`) gives each session a
+  root pid; `lib/process-tree.ts` snapshots the host (POSIX `ps` / Windows PowerShell
+  `Get-CimInstance`, fail-closed) and walks the subtree → `{ childCount, mcpServers }`.
+  The MCP classifier is segment-anchored and rejects mcp-ish files/flags. Surfaced as a
+  per-row "N proc · Mmcp" cell (+ MCP names tooltip) in the Monitor via on-demand
+  `/api/monitor/processes`. Only counts + sanitized names cross to the client. _Seam:_
+  `lib/process-tree.ts`, `lib/session-backend/*` (getPid), `app/api/monitor/processes`,
+  `components/views/AgentMonitorView`. _Deferred: a full interactive tree view._
 - **M4 — Orphan-port-per-session attribution** — `feature` · M. Attribute ANY
   agent-spawned listening port to its owning session (not just Stoa-spawned
   DevServers) and flag orphans in the Monitor. _Seam:_ `lib/dev-servers.ts`,
