@@ -104,35 +104,48 @@ async function handleMessage(conn: Conn, msg: ClientMessage) {
         });
         break;
       }
-      // Detach any prior subscription for this key on this connection.
-      //
-      // KNOWN LIMITATION (Tier-2 same-key multi-viewer): all browser sockets
-      // share ONE HostClient → ONE daemon Conn, and `attached` holds a single
-      // slot per key. If two tabs attach the SAME key (e.g. a worker open
-      // full-screen AND its mini-terminal observed), this re-attach evicts the
-      // first tab's SIZING slot, so that tab's resize stops taking effect until
-      // it re-attaches. (The worse failure — a detach dropping the shared output
-      // sub and freezing the other tab — is now guarded client-side by
-      // ref-counted detach in host-client.ts.) The full fix is per-subscription
-      // slots (Map<key, Set<sub>> + a sub id in the detach protocol), tracked as
-      // a follow-up. The common mini-terminal case (observing a worker NOT also
-      // open full-screen) doesn't hit this.
-      detachKey(conn, msg.key);
       const snapshot = session.serialize();
-      const offOutput = session.onOutput((data) =>
-        send(conn, { t: "output", key: msg.key, data })
-      );
-      const offExit = session.onExit(({ exitCode }) =>
-        send(conn, { t: "exit", key: msg.key, code: exitCode })
-      );
-      // Register as a sizing client (pty -> smallest viewer) — UNLESS this is an
-      // observer (read-only mini-terminal), which must not shrink the pty. Use the
-      // client's initial viewport size when provided so the first paint isn't clipped.
+      const existing = conn.attached.get(msg.key);
+
+      // Same-key multi-viewer (#2): all browser sockets share ONE HostClient → ONE
+      // daemon Conn, which fans the single output stream out to every local tab and
+      // sends exactly one daemon detach when its LAST local listener for the key
+      // drops. So a 2nd attach to the SAME key must REUSE the existing output/exit
+      // subscription — a fresh one would DOUBLE every output frame — rather than
+      // detach-and-recreate. (The old code detached first, which evicted the prior
+      // tab's SIZING slot: a live-wall observer attaching a worker that's also open
+      // full-screen froze that pane's resize.)
+      const offOutput =
+        existing?.offOutput ??
+        session.onOutput((data) =>
+          send(conn, { t: "output", key: msg.key, data })
+        );
+      const offExit =
+        existing?.offExit ??
+        session.onExit(({ exitCode }) =>
+          send(conn, { t: "exit", key: msg.key, code: exitCode })
+        );
+
+      // Sizing (pty -> smallest viewer): only a NON-observer drives it, and an
+      // observer must never evict the real viewer's sizing slot (the #2 bug).
+      // Preserve any existing viewer clientId; register a NEW sizing client only
+      // when a viewer attaches and none exists yet; an already-registered viewer
+      // re-attaching just updates its size. Use the client's initial viewport size
+      // when provided so the first paint isn't clipped.
+      // (Still single-slot per (key, conn): two REAL same-key viewers on one
+      // connection share it — last size wins, not min-of-both. True per-viewer
+      // min-sizing would need per-subscription slots + a sub id in detach; deferred
+      // — it's not the reported failure and this is the locked daemon seam.)
       const initialCols = msg.cols ?? session.cols;
       const initialRows = msg.rows ?? session.rows;
-      const clientId = msg.observer
-        ? null
-        : session.addClient(initialCols, initialRows);
+      let clientId = existing?.clientId ?? null;
+      if (!msg.observer) {
+        if (clientId === null) {
+          clientId = session.addClient(initialCols, initialRows);
+        } else if (msg.cols !== undefined && msg.rows !== undefined) {
+          session.resizeClient(clientId, initialCols, initialRows);
+        }
+      }
       conn.attached.set(msg.key, { offOutput, offExit, clientId });
       // The snapshot is the response value; the client repaints it first.
       send(conn, { t: "res", id: msg.id, ok: true, value: { snapshot } });

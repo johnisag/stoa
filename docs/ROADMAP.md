@@ -71,7 +71,8 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 > `session_costs` on the canonical backend key (#313) · #7 Coalesce recurring
 > schedules so a busy session isn't flooded (#314) · #8 Self-resolve the
 > native-fork parent on re-attach (#315) · #1 Fix the native-fork cost
-> double-count (#316).
+> double-count (#316) · #2 Stop a live-wall observer from evicting a pane's resize
+> on the Windows pty-host (#317).
 
 ### Tier 1 — High impact (ranks 1–32)
 
@@ -88,11 +89,15 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
    as-is. (Only new forks get a baseline; forks predating the change keep NULL — the
    parent-at-fork snapshot is unrecoverable.) _Seam:_ `lib/session-cost.ts`,
    `app/api/sessions/[id]/fork/route.ts`, `lib/db/{migrations,schema,types,queries}.ts`.
-2. 🐛 **Fix Windows live-wall observer evicting pane resize** — `bug` · L. Re-key
-   the pty-host `attached` map by `(key, sub-id)` so an observer attach gets its own
-   slot and never evicts the real client's sizing slot. _Why:_ on the default
-   Windows backend, observing a full-screen worker permanently breaks that pane's
-   resize. _Seam:_ `lib/session-backend/pty/host.ts`, `host-client.ts`.
+2. ✅ 🐛 **Fix Windows live-wall observer evicting pane resize** — `bug` · L.
+   **SHIPPED (#317).** The daemon attach handler now REUSES the one output/exit sub
+   per key per connection (the client fans out + sends a single detach) and
+   PRESERVES the viewer's sizing `clientId` instead of detaching-and-recreating — so
+   a live-wall observer attaching a full-screen worker no longer nulls that pane's
+   sizing slot. Protocol-preserving (no host-client/IPC change), locked by a Tier-2
+   IPC regression test. _Seam:_ `lib/session-backend/pty/host.ts`. _Deferred (S): true
+   per-viewer min-sizing for two REAL same-key viewers on one connection (still
+   last-size-wins) — needs per-subscription slots + a sub id in detach._
 3. **OS app-icon badge for attention count** — `mobile` · S. `setAppBadge`/
    `clearAppBadge` from the state-change check + the SW push payload. _Seam:_
    `lib/notifications.ts`, `hooks/useNotifications.ts`, `app/sw.ts`, `lib/push*.ts`.
