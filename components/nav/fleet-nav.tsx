@@ -11,6 +11,7 @@ import {
   Sparkles,
   NotebookPen,
   LayoutGrid,
+  Gauge,
   TerminalSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -82,6 +83,13 @@ export const FLEET_NAV: readonly FleetNavEntry[] = [
     label: "Live Wall",
     icon: LayoutGrid,
     ariaLabel: "Live Wall (read-only grid of agent terminals)",
+  },
+  {
+    id: "agent-monitor",
+    label: "Agent Monitor",
+    icon: Gauge,
+    ariaLabel:
+      "Agent Monitor (per-session telemetry — model, tokens, context, cost)",
   },
   {
     id: "ask-stoa",

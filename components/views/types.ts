@@ -46,6 +46,8 @@ export interface ViewProps {
   onOpenFleetBoard: () => void;
   /** Open the Live Wall (read-only grid of agent terminals) as a pane tab. */
   onOpenLiveWall: () => void;
+  /** Open the Agent Monitor (per-session telemetry) as a pane tab. */
+  onOpenAgentMonitor: () => void;
   /** Open Ask Stoa (the chatbox) as a pane tab (it's a window now, not a dialog). */
   onOpenAsk: () => void;
   onShowShortcuts: () => void;

@@ -107,6 +107,13 @@ const LiveWallView = dynamic(
     import("@/components/views/LiveWallView").then((mod) => mod.LiveWallView),
   { ssr: false }
 );
+const AgentMonitorView = dynamic(
+  () =>
+    import("@/components/views/AgentMonitorView").then(
+      (mod) => mod.AgentMonitorView
+    ),
+  { ssr: false }
+);
 
 interface PaneProps {
   paneId: string;
@@ -580,6 +587,14 @@ export const Pane = memo(function Pane({
       case "live-wall":
         return (
           <LiveWallView
+            sessions={sessions}
+            onOpenSession={onOpenSessionInNewTab ?? onSelectSession}
+            onClose={() => closeTab(paneId, tab.id)}
+          />
+        );
+      case "agent-monitor":
+        return (
+          <AgentMonitorView
             sessions={sessions}
             onOpenSession={onOpenSessionInNewTab ?? onSelectSession}
             onClose={() => closeTab(paneId, tab.id)}

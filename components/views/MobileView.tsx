@@ -32,6 +32,7 @@ export function MobileView({
   onOpenVerdictInbox,
   onOpenFleetBoard,
   onOpenLiveWall,
+  onOpenAgentMonitor,
   onOpenAsk,
   showNotificationSettings,
   setShowNotificationSettings,
@@ -194,6 +195,7 @@ export function MobileView({
         onOpenNotes={onShowNotes}
         onOpenCommands={onShowCommands}
         onOpenLiveWall={onOpenLiveWall}
+        onOpenAgentMonitor={onOpenAgentMonitor}
         onNewSession={() => setShowNewSessionDialog(true)}
         onSelectSession={(sessionId) => {
           const session = sessions.find((s) => s.id === sessionId);

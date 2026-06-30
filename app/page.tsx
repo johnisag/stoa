@@ -867,6 +867,7 @@ function HomeContent() {
     onOpenVerdictInbox: () => addViewTab(focusedPaneId, "verdict-inbox"),
     onOpenFleetBoard: () => addViewTab(focusedPaneId, "fleet-board"),
     onOpenLiveWall: () => addViewTab(focusedPaneId, "live-wall"),
+    onOpenAgentMonitor: () => addViewTab(focusedPaneId, "agent-monitor"),
     onOpenAsk: () => addViewTab(focusedPaneId, "ask"),
     onShowShortcuts: () => setShowHelp(true),
     onShowGuide: () => setShowGuide(true),
