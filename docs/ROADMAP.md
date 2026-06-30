@@ -290,10 +290,14 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
 24. **@-mention file autocomplete in the send bar** — `feature` · M. On `@`, an
     inline fuzzy file dropdown from the working dir (reuse the recursive fuzzy +
     `fuzzyScore`). _Seam:_ `components/Terminal/index.tsx`, `components/MessageInput.tsx`.
-25. **Compaction control + external-memory injection** — `orchestration` · M. Make
-    the context gauge a trigger: custom compaction prompt, PreCompact flush of
-    NOTES/TODO into the worktree, PostCompact re-inject. _Why:_ long runs silently
-    drop load-bearing constraints at compaction. _Seam:_ `lib/context-window.ts`,
+25. **Compaction control + external-memory injection** — `orchestration` · M.
+    🟡 _Proactive TRIGGER shipped (#329):_ opt-in auto-/compact (STOA_AUTO_COMPACT) sends
+    `/compact` to a near-full Claude session at the canonical idle-AND-no-prompt boundary
+    (cooldown + per-session daily cap), so a long run reclaims headroom before the painful
+    native auto-compaction — amux's headline self-healing move + the watchdog's deferred
+    "low-context auto-/compact". _Remaining:_ a custom compaction prompt, the PreCompact
+    flush of NOTES/TODO into the worktree, and the PostCompact re-inject (the
+    external-memory half). _Seam:_ `lib/auto-compact.ts` (done), `lib/context-window.ts`,
     `lib/snapshots.ts`, `lib/notes.ts`, `lib/summarize.ts`.
 26. **LLM-as-judge rubric review gate** — `orchestration` · M. A binary rubric judge
     (tests added? no secret left? matches AGENTS.md? no injection shape?) alongside
