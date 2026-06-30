@@ -35,10 +35,11 @@ small · **M** medium · **L** large · **XL** very large.
 The highest impact-to-effort items the research surfaced (copy/paste was already
 this archetype — solved). Most are **S/M** and land on seams that already exist.
 
-- **OS app-icon badge for attention** (S) — `setAppBadge(waitingCount)` from the
-  state-change check that already computes it (+ the SW push payload). A red **N**
-  on the home-screen icon is the only glanceable "agents need you" signal on an
-  installed PWA; the tab title is never seen on a phone.
+- ✅ **OS app-icon badge for attention** (S) — **SHIPPED (#318).**
+  `setAppBadge(waitingCount)` from the state-change check that already computes it.
+  A red **N** on the home-screen icon is the only glanceable "agents need you"
+  signal on an installed PWA; the tab title is never seen on a phone. (SW-push badge
+  for a fully-closed PWA deferred.)
 - **STOA_PORT honored by `npm run dev`** (S) — map `STOA_PORT`→`PORT` in
   `lib/load-env.ts`. The documented knob silently no-ops in dev and `stoa doctor`
   disagrees with the actual bind.
@@ -72,7 +73,10 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
 > schedules so a busy session isn't flooded (#314) · #8 Self-resolve the
 > native-fork parent on re-attach (#315) · #1 Fix the native-fork cost
 > double-count (#316) · #2 Stop a live-wall observer from evicting a pane's resize
-> on the Windows pty-host (#317).
+> on the Windows pty-host (#317) · #3 OS app-icon badge for the "needs you" count
+> (#318).
+>
+> **🐛 All seven confirmed bugs (#1, #2, #4, #5, #6, #7, #8) are now shipped.**
 
 ### Tier 1 — High impact (ranks 1–32)
 
@@ -98,9 +102,14 @@ this archetype — solved). Most are **S/M** and land on seams that already exis
    IPC regression test. _Seam:_ `lib/session-backend/pty/host.ts`. _Deferred (S): true
    per-viewer min-sizing for two REAL same-key viewers on one connection (still
    last-size-wins) — needs per-subscription slots + a sub id in detach._
-3. **OS app-icon badge for attention count** — `mobile` · S. `setAppBadge`/
-   `clearAppBadge` from the state-change check + the SW push payload. _Seam:_
-   `lib/notifications.ts`, `hooks/useNotifications.ts`, `app/sw.ts`, `lib/push*.ts`.
+3. ✅ **OS app-icon badge for attention count** — `mobile` · S. **SHIPPED (#318).**
+   `setAppBadge(waitingCount)` (pure `appBadgeAction` + a feature-detected,
+   best-effort applier in `lib/notifications.ts`) is driven from the live
+   state-change check in `hooks/useNotifications.ts` alongside the tab-title count.
+   The badge is sticky on an installed PWA's home-screen icon (survives
+   backgrounding). _Seam:_ `lib/notifications.ts`, `hooks/useNotifications.ts`.
+   _Deferred (S): the SW-push-payload badge for a fully-CLOSED PWA — needs the
+   server push to carry a fleet "needs you" count (`app/sw.ts`, `lib/push*.ts`)._
 4. ✅ 🐛 **Map `STOA_PORT`→`PORT` for `npm run dev`** — `bug` · S. **SHIPPED (#311).**
    `portAlias()` in `lib/load-env.ts` bridges `STOA_PORT`→`PORT` on startup
    (STOA_PORT wins), so `npm run dev` honours the knob the same way the CLI and

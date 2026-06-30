@@ -13,6 +13,7 @@ import {
   sendBrowserNotification,
   playNotificationSound,
   setTabNotificationCount,
+  setAppBadge,
   flashTabTitle,
   clearTabNotifications,
 } from "@/lib/notifications";
@@ -49,7 +50,10 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
     useState<NotificationSettings>(defaultSettings);
   const [permissionGranted, setPermissionGranted] = useState(false);
   const previousStates = useRef<Map<string, SessionStatus>>(new Map());
-  const waitingCount = useRef(0);
+  // -1 (not 0) so the FIRST computed count always applies — syncing the OS app
+  // badge (and tab title) to reality on load, which clears a badge left sticky on
+  // the home-screen icon from a prior session that resolved while Stoa was closed.
+  const waitingCount = useRef(-1);
   // Last time we notified each `${sessionId}-${event}`, for cooldown-based
   // dedup: suppresses flap (waiting->idle->waiting) and repeat alerts while
   // still allowing a genuine re-notification once the cooldown passes.
@@ -309,10 +313,14 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
         if (!validKeys.has(key)) lastNotified.current.delete(key);
       }
 
-      // Update tab badge (count of sessions awaiting input).
+      // Update tab badge (count of sessions awaiting input) AND the OS app-icon
+      // badge — the latter is the only "N agents need you" signal visible on an
+      // installed PWA whose tab title you never see, and it persists on the icon
+      // after the app is backgrounded.
       if (newWaitingCount !== waitingCount.current) {
         waitingCount.current = newWaitingCount;
         setTabNotificationCount(newWaitingCount);
+        setAppBadge(newWaitingCount);
       }
     },
     []

@@ -50,7 +50,7 @@ const COCKPIT: Item[] = [
     icon: Smartphone,
     title: "Mobile-first",
     blurb:
-      "Full control from your phone — not a stripped-down responsive view.",
+      "Full control from your phone — not a stripped-down responsive view. Install it and the home-screen icon shows a badge with how many agents need you.",
   },
   {
     icon: Columns3,
