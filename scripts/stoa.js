@@ -880,6 +880,22 @@ async function cmdDoctor() {
         }
   );
 
+  // Advertise the opt-in rate-limit statusline hook (M2b) ONLY when Claude is present —
+  // it's how the Agent Monitor's quota gauge gets its 5h/7d window data. Best-effort
+  // read; an absent/unreadable settings.json reads as "not installed".
+  if (foundAgents.includes("claude")) {
+    let claudeSettingsRaw = null;
+    try {
+      claudeSettingsRaw = fs.readFileSync(
+        path.join(os.homedir(), ".claude", "settings.json"),
+        "utf8"
+      );
+    } catch {
+      /* absent/unreadable -> treated as not installed */
+    }
+    results.push(checkStatuslineHook(claudeSettingsRaw));
+  }
+
   // Port: if Stoa owns the pid file it's expected to hold the port; otherwise the
   // port must be free to start. A foreign process on the port is a hard fail.
   const pid = getRunningPid();
@@ -931,6 +947,157 @@ async function cmdDoctor() {
   process.exit(code);
 }
 
+// ---------------------------------------------------------------------------
+// statusline (M2b) - install the opt-in Claude rate-limit statusline hook
+// ---------------------------------------------------------------------------
+
+/** Absolute path to the bundled statusline hook script, forward-slashed so the
+ *  command string stays one shell-safe token on Windows too (Node accepts "/"
+ *  paths there, and "/" needs no escaping inside the double quotes). */
+function statuslineHookPath(repoDir = REPO_DIR) {
+  return path
+    .join(repoDir, "scripts", "claude-statusline-hook.js")
+    .replace(/\\/g, "/");
+}
+
+/** The statusLine command Claude runs. Quoted so a spaced install path stays one
+ *  token. Pure -> unit-tested. */
+function buildStatusLineCommand(hookPath) {
+  return `node "${hookPath}"`;
+}
+
+/** True iff a statusLine config is Stoa's own (vs a user's custom one) - so re-running
+ *  is idempotent and we never clobber someone else's statusline. Pure -> unit-tested. */
+function isStoaStatusLine(statusLine) {
+  return !!(
+    statusLine &&
+    typeof statusLine === "object" &&
+    typeof statusLine.command === "string" &&
+    statusLine.command.includes("claude-statusline-hook")
+  );
+}
+
+/**
+ * Merge our statusLine into a parsed ~/.claude/settings.json WITHOUT clobbering any
+ * other config. Returns { settings, action }:
+ *   - "conflict": a DIFFERENT (user-owned) statusLine is already set - leave everything
+ *     as-is; the caller must NOT write.
+ *   - "added" / "updated": ours was absent / refreshed - the caller writes `settings`,
+ *     which carries every pre-existing key untouched plus our statusLine.
+ * Pure -> unit-tested.
+ */
+function mergeStatusLine(settings, command) {
+  const base =
+    settings && typeof settings === "object" && !Array.isArray(settings)
+      ? settings
+      : {};
+  const existing = base.statusLine;
+  // Any truthy statusLine that isn't ours belongs to the user - never clobber it. This
+  // also preserves an already-invalid bare-string value rather than silently discarding
+  // it (an attacker can't reach here, but a careless overwrite of user config is wrong).
+  if (existing && !isStoaStatusLine(existing)) {
+    return { settings: base, action: "conflict" };
+  }
+  return {
+    settings: { ...base, statusLine: { type: "command", command } },
+    action: isStoaStatusLine(existing) ? "updated" : "added",
+  };
+}
+
+/** doctor check (discoverability): advertise the opt-in rate-limit statusline hook so
+ *  a user who hasn't installed it learns how to light up the Agent Monitor quota gauge.
+ *  Takes the raw ~/.claude/settings.json contents (or null when absent/unreadable);
+ *  "ok" when our hook is present, advisory "warn" + hint otherwise. Pure -> unit-tested. */
+function checkStatuslineHook(rawSettings) {
+  let installed = false;
+  if (rawSettings) {
+    try {
+      const parsed = JSON.parse(rawSettings);
+      installed = isStoaStatusLine(
+        parsed && typeof parsed === "object" ? parsed.statusLine : null
+      );
+    } catch {
+      installed = false;
+    }
+  }
+  return installed
+    ? { name: "Rate-limit statusline", status: "ok", detail: "installed" }
+    : {
+        name: "Rate-limit statusline",
+        status: "warn",
+        detail: "not installed",
+        hint: "Run `stoa statusline` to feed the Agent Monitor quota gauge.",
+      };
+}
+
+/** statusline: install the opt-in Claude rate-limit statusline hook. It feeds the
+ *  Agent Monitor quota gauge (the 5h/7d window %) by writing ~/.stoa/rate-limits.json,
+ *  and shows model/context/quota in Claude's own status bar. Never clobbers an existing
+ *  statusLine or the rest of ~/.claude/settings.json. */
+function cmdStatusline() {
+  const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
+
+  let settings = {};
+  if (fs.existsSync(settingsPath)) {
+    let raw;
+    try {
+      raw = fs.readFileSync(settingsPath, "utf8");
+    } catch (err) {
+      error(`Can't read ${settingsPath}: ${err.message}`);
+      process.exit(1);
+    }
+    try {
+      settings = raw.trim() ? JSON.parse(raw) : {};
+    } catch {
+      error(`${settingsPath} is not valid JSON - refusing to overwrite it.`);
+      error("Fix or remove the file, then re-run `stoa statusline`.");
+      process.exit(1);
+    }
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+      error(`${settingsPath} isn't a JSON object - refusing to overwrite it.`);
+      process.exit(1);
+    }
+  }
+
+  const command = buildStatusLineCommand(statuslineHookPath());
+  const { settings: next, action } = mergeStatusLine(settings, command);
+
+  if (action === "conflict") {
+    warn(
+      "A custom statusLine is already set in ~/.claude/settings.json - leaving it untouched."
+    );
+    info(
+      "To capture rate limits, remove your statusLine and re-run `stoa statusline`."
+    );
+    return;
+  }
+
+  try {
+    ensureDir(path.dirname(settingsPath));
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify(next, null, 2) + "\n",
+      "utf8"
+    );
+  } catch (err) {
+    error(`Failed to write ${settingsPath}: ${err.message}`);
+    process.exit(1);
+  }
+
+  info(
+    action === "updated"
+      ? "Refreshed the Stoa rate-limit statusline hook in ~/.claude/settings.json."
+      : "Installed the Stoa rate-limit statusline hook in ~/.claude/settings.json."
+  );
+  info(
+    "Claude's status bar now shows model / context / 5h+7d quota, and the Agent"
+  );
+  info("Monitor quota gauge reads the live window utilization.");
+  info(
+    "(Rate-limit windows appear for Claude Pro/Max after the first response.)"
+  );
+}
+
 /** help: usage text. */
 function cmdHelp() {
   console.log("");
@@ -948,6 +1115,9 @@ function cmdHelp() {
   console.log("  logs        Tail server logs");
   console.log("  update      Update to the latest version");
   console.log("  doctor      Run preflight environment checks");
+  console.log(
+    "  statusline  Install the Claude rate-limit statusline hook (Agent Monitor quota)"
+  );
   console.log("");
   console.log("Environment variables:");
   console.log("  STOA_HOME   Home directory (default: ~/.stoa)");
@@ -995,6 +1165,9 @@ function main() {
         process.exit(1);
       });
       break;
+    case "statusline":
+      cmdStatusline();
+      break;
     case "help":
     case "--help":
     case "-h":
@@ -1035,6 +1208,12 @@ module.exports = {
   NATIVE_MODULES,
   nativeRebuildArgs,
   toolchainHint,
+  // statusline (M2b) - pure helpers, unit-tested
+  statuslineHookPath,
+  buildStatusLineCommand,
+  isStoaStatusLine,
+  mergeStatusLine,
+  checkStatuslineHook,
 };
 
 // PORT is read from the current env on every access so tests that reload the
