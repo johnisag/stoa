@@ -38,6 +38,11 @@ export interface Session {
   // `-c mcp_servers.stoa.*`). NULL for non-conductors and file-configured
   // providers (Claude's .mcp.json). JSON-encoded string[].
   mcp_launch_args: string | null;
+  /** A native fork inherits its parent's transcript; this is the parent's
+   * cumulative usage AT FORK TIME (JSON TokenUsage), netted out by the cost path so
+   * only the fork's own spend counts. NULL for non-forks. Optional so existing
+   * Session fixtures/builders don't all need it. (migration 44) */
+  fork_cost_baseline?: string | null;
 }
 
 export interface Group {

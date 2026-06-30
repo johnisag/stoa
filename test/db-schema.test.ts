@@ -47,4 +47,10 @@ describe("fresh schema sessions columns", () => {
     expect(hasColumn("sessions", "conductor_session_id")).toBe(true);
     expect(hasColumn("sessions", "project_id")).toBe(true);
   });
+
+  it("has the fork_cost_baseline column (#1 — schema/migration parity)", () => {
+    // schema.ts must carry it too, so migration 44's guarded ALTER is a no-op on a
+    // fresh DB (and the cost path can read s.fork_cost_baseline).
+    expect(hasColumn("sessions", "fork_cost_baseline")).toBe(true);
+  });
 });

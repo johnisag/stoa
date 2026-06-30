@@ -10,6 +10,7 @@ import {
 } from "@/lib/fork";
 import { getSessionBackend } from "@/lib/session-backend";
 import { enqueuePrompt } from "@/lib/prompt-queue";
+import { readClaudeSessionUsage } from "@/lib/session-cost";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -95,6 +96,36 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       } catch (err) {
         // Parent not live / capture unsupported — fork without a seed.
         console.warn("fork: scrollback capture failed, no seed:", err);
+      }
+    } else if (forkMode === "native") {
+      // #1: a native fork inherits the parent's ENTIRE transcript, so without a
+      // baseline the cost reader counts the parent's whole history as the fork's
+      // spend (fleet cost ~doubles; the curve spikes on the fork day). Record the
+      // parent's cumulative usage NOW — the fork's transcript starts as a copy of
+      // it — so the cost path nets it out. Best-effort: a missing/unreadable parent
+      // transcript leaves NULL (no netting; degrades to the prior behavior).
+      // Captured at fork-REQUEST time (the parent's snapshot when you fork); if the
+      // parent keeps generating before the fork is first opened, the baseline is
+      // slightly low — which only REDUCES the over-count, never a regression. Forks
+      // predating this change have NULL baseline (the snapshot is unrecoverable), so
+      // only new forks are corrected.
+      if (parent.claude_session_id && parent.working_directory) {
+        try {
+          const parentUsage = await readClaudeSessionUsage(
+            parent.working_directory,
+            parent.claude_session_id
+          );
+          if (parentUsage) {
+            queries
+              .updateSessionForkBaseline(db)
+              .run(JSON.stringify(parentUsage.tokens), newId);
+          }
+        } catch (err) {
+          console.warn(
+            "fork: parent usage read failed, no cost baseline:",
+            err
+          );
+        }
       }
     }
 
