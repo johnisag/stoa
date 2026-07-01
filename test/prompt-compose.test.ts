@@ -95,4 +95,37 @@ describe("composeLaunchPrompt (#12 cache-aware order)", () => {
       composeLaunchPrompt({ projectPrompt: "  ", sessionPrompt: null })
     ).toBeUndefined();
   });
+
+  it("places pinned knowledge + playbook among the stable prefix (#13)", () => {
+    const out = composeLaunchPrompt({
+      leadInstruction: "RULE.",
+      pinnedKnowledge: "FACTS: npm.",
+      playbook: "RECIPE: fix flake.",
+      projectPrompt: "PROJECT.",
+      sessionPrompt: "Do the task.",
+      volatileSuffix: "[worktree /tmp/x]",
+    });
+    expect(out).toBe(
+      "RULE.\n\nFACTS: npm.\n\nRECIPE: fix flake.\n\nPROJECT.\n\n" +
+        "Do the task.\n\n[worktree /tmp/x]"
+    );
+  });
+
+  it("keeps knowledge+recipe in the cacheable prefix across sibling tasks (#13)", () => {
+    const shared = "FACTS: npm.\n\nRECIPE: fix flake.";
+    const a = composeLaunchPrompt({
+      pinnedKnowledge: "FACTS: npm.",
+      playbook: "RECIPE: fix flake.",
+      sessionPrompt: "Task A",
+      volatileSuffix: "[/tmp/a]",
+    })!;
+    const b = composeLaunchPrompt({
+      pinnedKnowledge: "FACTS: npm.",
+      playbook: "RECIPE: fix flake.",
+      sessionPrompt: "Task B",
+      volatileSuffix: "[/tmp/b]",
+    })!;
+    expect(a.startsWith(shared)).toBe(true);
+    expect(b.startsWith(shared)).toBe(true);
+  });
 });

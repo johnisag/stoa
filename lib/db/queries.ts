@@ -1326,6 +1326,45 @@ export const queries = {
 
   getDispatchRepoBySlug: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM dispatch_repos WHERE repo_slug = ?`),
+
+  // Playbooks (#13) — named prompt recipes; pinned ones auto-prepend per project.
+  // A session picker sees the project's own playbooks + the global ones (project_id
+  // NULL); pinned auto-recall is project-scoped only. Newest first, stable by id.
+  listPlaybooksForProject: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM playbooks WHERE project_id = ? OR project_id IS NULL
+       ORDER BY created_at DESC, id DESC`
+    ),
+  listGlobalPlaybooks: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM playbooks WHERE project_id IS NULL
+       ORDER BY created_at DESC, id DESC`
+    ),
+  listPinnedPlaybooks: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM playbooks WHERE project_id = ? AND pinned = 1
+       ORDER BY created_at ASC, id ASC`
+    ),
+  getPlaybook: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM playbooks WHERE id = ?`),
+  createPlaybook: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO playbooks (id, name, body, project_id, pinned)
+       VALUES (?, ?, ?, ?, ?)`
+    ),
+  updatePlaybook: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE playbooks SET name = ?, body = ?, pinned = ?,
+         updated_at = datetime('now')
+       WHERE id = ?`
+    ),
+  deletePlaybook: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM playbooks WHERE id = ?`),
 };
 
 // Audit read surface (#10). Dynamic filters (types/time/pagination) mean the SQL

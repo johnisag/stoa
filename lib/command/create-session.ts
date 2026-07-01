@@ -17,6 +17,8 @@ import { randomUUID } from "crypto";
 import { getDb, queries, type Session } from "@/lib/db";
 import { sessionKey } from "@/lib/providers/registry";
 import { resolveModelForAgent } from "@/lib/model-catalog";
+import { resolvePlaybookParts } from "@/lib/playbooks-server";
+import { composeLaunchPrompt } from "@/lib/prompt-compose";
 import type { CreateSessionParams } from "./actions";
 
 /** The fields of the resolved project the executor needs (a Project subset). */
@@ -82,6 +84,19 @@ export function executeCreateSession(
 
   const session = queries.getSession(db).get(id) as Session;
   const result: CreatedSession = { id: session.id, name: session.name };
-  if (params.initialPrompt) result.initialPrompt = params.initialPrompt;
+  // Playbooks + auto-recalled knowledge (#13): prepend the project's pinned knowledge
+  // and any selected recipe to the seed prompt (this executor bypasses /api/sessions,
+  // so it resolves them the same way the route does — via the shared server helper).
+  const { pinnedKnowledge, playbook } = resolvePlaybookParts(
+    db,
+    project.id,
+    params.playbookId
+  );
+  const composed = composeLaunchPrompt({
+    pinnedKnowledge,
+    playbook,
+    sessionPrompt: params.initialPrompt,
+  });
+  if (composed) result.initialPrompt = composed;
   return result;
 }

@@ -20,6 +20,7 @@ import {
 import { expandHome, homeDir, isWindows } from "@/lib/platform";
 import { getLessonsBlockForCwd } from "@/lib/dispatch/lessons";
 import { composeLaunchPrompt } from "@/lib/prompt-compose";
+import { resolvePlaybookParts } from "@/lib/playbooks-server";
 import {
   parseJsonBody,
   resolveSandboxedPath,
@@ -118,6 +119,7 @@ export async function POST(request: NextRequest) {
     useTmux?: boolean;
     initialPrompt?: string;
     enableOrchestration?: boolean;
+    playbookId?: string;
   }>(request);
   if (!parsed.ok) return parsed.response;
 
@@ -154,6 +156,9 @@ export async function POST(request: NextRequest) {
       // Conductor: write the orchestration MCP (.mcp.json) so this session can
       // spawn worker sessions via the stoa MCP's spawn_worker tool.
       enableOrchestration = false,
+      // Playbook (#13): a selected recipe whose body seeds the prompt (the dialog
+      // inlines the body into initialPrompt instead; this is for API/Command callers).
+      playbookId = null,
     } = body;
 
     // Validate agent type
@@ -473,17 +478,31 @@ export async function POST(request: NextRequest) {
         (workspaceBranch ? ` · branch "${workspaceBranch}"` : "");
     }
 
+    // Playbooks + auto-recalled knowledge (#13). Pinned project playbooks auto-prepend
+    // (a stable per-project block); a selected recipe (playbookId) seeds the prompt.
+    const { pinnedKnowledge, playbook: playbookBody } = resolvePlaybookParts(
+      db,
+      projectId,
+      playbookId
+    );
+
     // Fleet memory (#9): append this repo's known pitfalls, but only when there's
     // already a prompt to ride along with (mirrors the prior behavior). Match the
     // REPO ROOT the user chose (workingDirectory), not the worktree cwd.
     const hasPromptContent =
-      !!leadInstruction || !!projectInitialPrompt || !!sessionInitialPrompt;
+      !!leadInstruction ||
+      !!projectInitialPrompt ||
+      !!sessionInitialPrompt ||
+      !!pinnedKnowledge ||
+      !!playbookBody;
     const lessons = hasPromptContent
       ? getLessonsBlockForCwd(workingDirectory)
       : "";
 
     const combinedPrompt = composeLaunchPrompt({
       leadInstruction,
+      pinnedKnowledge,
+      playbook: playbookBody,
       projectPrompt: projectInitialPrompt,
       sessionPrompt: sessionInitialPrompt,
       lessons,

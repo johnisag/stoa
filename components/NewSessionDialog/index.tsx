@@ -23,6 +23,7 @@ import { WorkingDirectoryInput } from "./WorkingDirectoryInput";
 import { WorktreeSection } from "./WorktreeSection";
 import { WorkspaceSection } from "./WorkspaceSection";
 import { ProjectSelector } from "./ProjectSelector";
+import { PlaybookSelector } from "./PlaybookSelector";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { CreatingOverlay } from "./CreatingOverlay";
 import { NewSessionHelp } from "./NewSessionHelp";
@@ -187,6 +188,23 @@ export function NewSessionDialog({
                   placeholder="Enter a prompt to send when the session starts..."
                   className="min-h-[80px] resize-none text-sm"
                   rows={3}
+                />
+                {/* Playbooks + auto-recalled knowledge (#13): load a saved recipe into
+                    the prompt, or save the current prompt as a reusable/pinned recipe. */}
+                <PlaybookSelector
+                  projectId={
+                    form.projectId && form.projectId !== "uncategorized"
+                      ? form.projectId
+                      : null
+                  }
+                  currentPrompt={form.initialPrompt}
+                  onLoadRecipe={(bodyText) =>
+                    form.setInitialPrompt(
+                      form.initialPrompt.trim()
+                        ? `${bodyText}\n\n${form.initialPrompt.trim()}`
+                        : bodyText
+                    )
+                  }
                 />
               </div>
 

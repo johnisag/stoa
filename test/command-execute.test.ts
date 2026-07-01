@@ -72,26 +72,24 @@ beforeEach(() => {
       1
     );
   // Seed a dispatch repo for dispatch_issue tests.
-  queries
-    .createDispatchRepo(db())
-    .run(
-      REPO.id,
-      REPO.repo_path,
-      REPO.repo_slug,
-      "claude",   // agent_type
-      5,          // daily_quota
-      2,          // max_concurrency
-      null,       // label_filter
-      "main",     // base_branch
-      "auto",     // mode
-      1,          // enabled
-      0,          // review_gate
-      0,          // ci_autofix
-      0,          // merge_train
-      0,          // verify_gate
-      null,       // verify_command
-      null        // project_id
-    );
+  queries.createDispatchRepo(db()).run(
+    REPO.id,
+    REPO.repo_path,
+    REPO.repo_slug,
+    "claude", // agent_type
+    5, // daily_quota
+    2, // max_concurrency
+    null, // label_filter
+    "main", // base_branch
+    "auto", // mode
+    1, // enabled
+    0, // review_gate
+    0, // ci_autofix
+    0, // merge_train
+    0, // verify_gate
+    null, // verify_command
+    null // project_id
+  );
 });
 
 describe("executeCreateSession", () => {
@@ -112,6 +110,48 @@ describe("executeCreateSession", () => {
     expect(row.name).toBe("Fix bug");
     expect(row.project_id).toBe("proj_test");
     expect(row.tmux_name).toBe(`claude-${created.id}`);
+  });
+
+  it("seeds a project recipe + pinned knowledge, and NEVER a foreign project's recipe (#13)", () => {
+    queries
+      .createPlaybook(db())
+      .run("pb_ok", "OK", "PROJECT RECIPE BODY", PROJECT.id, 0);
+    queries
+      .createPlaybook(db())
+      .run("pb_pin", "Pin", "PINNED FACT", PROJECT.id, 1);
+    // A recipe owned by ANOTHER project — a prompt-injected id must not pull it.
+    queries
+      .createProject(db())
+      .run("proj_other", "Other", "~/other", "claude", "sonnet", null, 9);
+    queries
+      .createPlaybook(db())
+      .run("pb_foreign", "Foreign", "FOREIGN SECRET BODY", "proj_other", 0);
+
+    const ok = executeCreateSession(
+      {
+        projectId: PROJECT.id,
+        agentType: "claude",
+        initialPrompt: "do it",
+        playbookId: "pb_ok",
+      },
+      PROJECT
+    );
+    expect(ok.initialPrompt).toContain("PROJECT RECIPE BODY");
+    expect(ok.initialPrompt).toContain("PINNED FACT"); // auto-recalled
+    expect(ok.initialPrompt).toContain("do it");
+
+    const foreign = executeCreateSession(
+      {
+        projectId: PROJECT.id,
+        agentType: "claude",
+        initialPrompt: "task",
+        playbookId: "pb_foreign",
+      },
+      PROJECT
+    );
+    expect(foreign.initialPrompt).not.toContain("FOREIGN SECRET BODY"); // scoped out
+    expect(foreign.initialPrompt).toContain("PINNED FACT"); // still gets own pins
+    expect(foreign.initialPrompt).toContain("task");
   });
 
   it("never creates an auto-approving (permission-bypassing) session", () => {
@@ -212,7 +252,10 @@ describe("executeCreateSession — initialPrompt seed-prompt flow", () => {
       },
       PROJECT
     );
-    const row = queries.getSession(db()).get(created.id) as unknown as Record<string, unknown>;
+    const row = queries.getSession(db()).get(created.id) as unknown as Record<
+      string,
+      unknown
+    >;
     // The sessions table has no initialPrompt/seed_prompt column — it should
     // not appear on the row (the row type has no such field).
     expect(row.initialPrompt).toBeUndefined();
@@ -265,8 +308,14 @@ describe("executeDispatchIssue", () => {
 describe("executeListSessions", () => {
   beforeEach(() => {
     // Create a couple of sessions with different statuses.
-    executeCreateSession({ projectId: PROJECT.id, agentType: "claude", name: "S-running" }, PROJECT);
-    executeCreateSession({ projectId: PROJECT.id, agentType: "codex", name: "S-idle" }, PROJECT);
+    executeCreateSession(
+      { projectId: PROJECT.id, agentType: "claude", name: "S-running" },
+      PROJECT
+    );
+    executeCreateSession(
+      { projectId: PROJECT.id, agentType: "codex", name: "S-idle" },
+      PROJECT
+    );
     // Manually set one to running status.
     const all = queries.getAllSessions(db()).all() as Session[];
     const running = all.find((s) => s.name === "S-running");
