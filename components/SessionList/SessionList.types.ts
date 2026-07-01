@@ -6,6 +6,7 @@ export interface SessionStatus {
   /** #19 verify badge: last turn-boundary verdict + short failing-output head. */
   verifyStatus?: string | null;
   verifyOutput?: string | null;
+  verifyRanAt?: string | null;
 }
 
 export interface SessionListProps {

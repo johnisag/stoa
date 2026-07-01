@@ -25,6 +25,7 @@ interface SessionStatus {
   /** #19 verify badge: last turn-boundary verdict + short failing-output head. */
   verifyStatus?: string | null;
   verifyOutput?: string | null;
+  verifyRanAt?: string | null;
 }
 
 interface ProjectsSectionProps {
@@ -332,6 +333,9 @@ export function ProjectsSection({
                                 verifyOutput={
                                   sessionStatuses?.[session.id]?.verifyOutput
                                 }
+                                verifyRanAt={
+                                  sessionStatuses?.[session.id]?.verifyRanAt
+                                }
                                 groups={groups}
                                 projects={projects}
                                 isSelected={selectedIds.has(session.id)}
@@ -419,6 +423,10 @@ export function ProjectsSection({
                                           verifyOutput={
                                             sessionStatuses?.[worker.id]
                                               ?.verifyOutput
+                                          }
+                                          verifyRanAt={
+                                            sessionStatuses?.[worker.id]
+                                              ?.verifyRanAt
                                           }
                                           groups={groups}
                                           projects={projects}
