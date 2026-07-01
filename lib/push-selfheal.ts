@@ -65,8 +65,10 @@ type WritableStorage = Pick<Storage, "setItem">;
  *   "unset" (absent)     the flag has never been written — a subscriber from
  *                        before the flag existed. ONLY this state may be
  *                        backfilled from a live subscription.
- * Unknown values and storage errors (Safari private mode) read as "unset", and
- * since a failing storage also rejects the backfill WRITE, they still never heal.
+ * Unknown values and storage errors (Safari private mode) read as "unset" — that
+ * heal then fails closed too, because the same failing storage rejects the
+ * backfill WRITE and intent stays unreadable ("don't heal"). A later heal with
+ * restored storage re-evaluates from scratch.
  */
 export type PushIntentState = "in" | "out" | "unset";
 

@@ -64,6 +64,7 @@ export function useWebPush() {
   const doSubscribe = useCallback(async (): Promise<boolean> => {
     const reg = await navigator.serviceWorker.ready;
     const res = await fetch("/api/push/key");
+    if (!res.ok) return false;
     const { publicKey } = await res.json();
     if (!publicKey) return false;
     const sub = await reg.pushManager.subscribe({
@@ -113,6 +114,10 @@ export function useWebPush() {
           });
           if (action === "resubscribe") {
             // Permission is already granted, so this needs no user gesture.
+            // Deliberately does NOT set `busy`: a background heal shouldn't
+            // flicker the settings toggle, and a user subscribe racing this is
+            // harmless — pushManager.subscribe returns the same subscription
+            // and the server POST is an idempotent upsert.
             const ok2 = await doSubscribe();
             if (ok2 && !readPushIntent()) {
               // The user opted out while the subscribe was in flight — roll the
@@ -190,6 +195,10 @@ export function useWebPush() {
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.getSubscription();
       if (sub) {
+        // Best-effort server delete (deliberately no res.ok check): if it
+        // fails, the orphaned endpoint 404/410s on the next send and the
+        // server prunes it — the browser-side unsubscribe below is what stops
+        // the notifications.
         await fetch("/api/push/unsubscribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
