@@ -328,10 +328,28 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     ("idle-done" = "idle", since a session only goes idle after working). _Seam:_
     `lib/session-attention.ts`, `components/FleetBar/FleetBar.tsx`,
     `components/views/{DesktopView,MobileView}.tsx`.
-16. **iOS push self-healing on launch** — `mobile` · M. On focus when
-    standalone+subscribed, re-subscribe if the endpoint silently dropped; prune dead
-    endpoints. _Why:_ directly fixes the known "iOS PWA push is flaky" gap. _Seam:_
-    `hooks/useWebPush.ts`, `lib/push.ts`, `app/api/push/subscribe`.
+16. ✅ **iOS push self-healing on launch** — `mobile` · M. **SHIPPED.** iOS silently
+    invalidates a PWA's push subscription; the client believed it was subscribed and
+    Stoa went quiet forever. Now the user's opt-in INTENT is persisted
+    (`stoa-push-intent` in localStorage, backfilled from a live subscription for
+    pre-existing subscribers), and on launch + every visibility regain the hook
+    compares intent vs reality: intent + permission-granted + subscription GONE →
+    silent re-subscribe (no gesture needed while granted); a LIVE subscription →
+    throttled idempotent re-POST (repairs the opposite drift — a server that pruned
+    the endpoint while the client still holds a valid subscription; throttle marks
+    only on SUCCESS so a failed resync retries next focus); no intent / permission
+    revoked → never heals. **An explicit opt-out STICKS by construction:** intent is
+    TRI-STATE ("out" is written as `0`, never removed, so the backfill — which acts
+    only on the never-set state — can't resurrect it from a lingering subscription),
+    unsubscribe opts out first then serializes behind any in-flight heal, and a heal
+    re-checks intent after subscribing and rolls the fresh subscription back if the
+    user opted out mid-flight. Decision logic is a pure matrix (`decideSelfHeal` in
+    `lib/push-selfheal.ts`) with storage-injectable intent helpers (fail-closed on
+    Safari-private-mode storage errors) — fully unit-tested, no browser needed. Gating on intent+granted is a strict superset of
+    the roadmap's "standalone" phrasing (an iOS Safari TAB has no PushManager at all;
+    desktop browsers get healed too). Dead-endpoint pruning already ships server-side
+    (`sendPushToAll` deletes on 404/410). _Seam:_ `lib/push-selfheal.ts`,
+    `hooks/useWebPush.ts`.
 17. **Manifest shortcuts + Web Share Target** — `mobile` · M. Home-screen
     shortcuts (New Session, Board, Ask, Live Wall) + a share target to forward
     text/URL/image into New Session/Dispatch. _Seam:_ `public/manifest.json`, new
