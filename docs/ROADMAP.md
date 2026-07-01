@@ -336,10 +336,24 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     shortcuts (New Session, Board, Ask, Live Wall) + a share target to forward
     text/URL/image into New Session/Dispatch. _Seam:_ `public/manifest.json`, new
     `app/share/page.tsx`, `app/sw.ts`.
-18. **Transcript cost cache (stat-gated)** — `perf` · M. Module-level cache keyed
-    by transcript path, invalidated on `mtime`+size; shared across cost route,
-    budget tick, sampler, analytics. _Why:_ largest avoidable steady-state CPU/IO.
-    _Seam:_ `lib/session-cost.ts`, `lib/claude-transcript.ts`, `server.ts`.
+18. ✅ **Transcript cost cache (stat-gated)** — `perf` · M. **SHIPPED.** Every cost
+    consumer — the cost route, the budget tick (30s), the cost sampler (60s), the
+    auto-compact tick (60s), analytics, and the monitor — funnels through
+    `readClaudeSessionUsage`, which previously re-read + re-parsed the same large
+    append-only transcript JSONL on every tick (the biggest avoidable steady-state
+    CPU/IO). New generic `createStatGatedCache` (`lib/transcript-cache.ts`) memoizes
+    the parsed usage keyed by transcript PATH, gated on **mtime AND size** (size
+    catches a `/compact` truncation that mtime alone would miss; a hit costs one
+    `resolve` + one `stat`, no read/parse), LRU-bounded (512) so a long-lived fleet
+    can't grow it without limit. `readClaudeSessionUsage` is wired through it; the
+    parse functions stay pure and fork baselines are still applied by the caller
+    after (so caching raw parsed usage is safe). `resolveClaudeTranscriptPath` splits
+    the path-resolution (+ its traversal guard) out of the reader for the cache key.
+    Kill switch `STOA_TRANSCRIPT_CACHE=0` (default on) for an NFS/Tailscale home with
+    unreliable mtime. The cache `stat`/`load` seam is injected so it's unit-tested
+    with a fake filesystem (append/truncate/mtime invalidation, LRU, null handling).
+    _Seam:_ `lib/transcript-cache.ts`, `lib/session-cost.ts`, `lib/claude-transcript.ts`,
+    `docs/setup/README.md`.
 19. **Outcome-based verify badge on interactive sessions** — `feature` · L. On a
     "done" claim, actually run the project's verify command and show a real
     red/green badge — independent of the agent's self-report. _Seam:_

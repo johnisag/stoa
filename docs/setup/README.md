@@ -76,12 +76,13 @@ You need at least one AI coding CLI installed. The installer will prompt you to 
 
 ### Environment Variables
 
-| Variable             | Default           | Description                                                                                                                           |
-| -------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `STOA_HOME`          | `~/.stoa`         | Installation directory                                                                                                                |
-| `STOA_PORT`          | `3011`            | Server port                                                                                                                           |
-| `DB_PATH`            | `~/.stoa/stoa.db` | SQLite database path (defaults to `$STOA_HOME/stoa.db`, outside the repo clone)                                                       |
-| `STOA_ENV_SNAPSHOTS` | `1` (on)          | Warm-cache a worktree's `node_modules` (in `$STOA_HOME/env-snapshots`) so sibling worktrees skip `npm install`. Set `0` to disable.\* |
+| Variable                | Default           | Description                                                                                                                                                                                           |
+| ----------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STOA_HOME`             | `~/.stoa`         | Installation directory                                                                                                                                                                                |
+| `STOA_PORT`             | `3011`            | Server port                                                                                                                                                                                           |
+| `DB_PATH`               | `~/.stoa/stoa.db` | SQLite database path (defaults to `$STOA_HOME/stoa.db`, outside the repo clone)                                                                                                                       |
+| `STOA_ENV_SNAPSHOTS`    | `1` (on)          | Warm-cache a worktree's `node_modules` (in `$STOA_HOME/env-snapshots`) so sibling worktrees skip `npm install`. Set `0` to disable.\*                                                                 |
+| `STOA_TRANSCRIPT_CACHE` | `1` (on)          | Cache parsed transcript usage (mtime+size-gated) so the cost/budget/monitor ticks don't re-parse the same JSONL each tick. Set `0` to disable (e.g. an NFS/Tailscale home where mtime is unreliable). |
 
 \* Only `node_modules` is snapshotted. Disable (`STOA_ENV_SNAPSHOTS=0`) if a
 project's `postinstall` writes files _outside_ `node_modules` that a copy wouldn't

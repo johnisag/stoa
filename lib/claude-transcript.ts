@@ -25,18 +25,33 @@ export async function readClaudeTranscriptRaw(
   cwd: string,
   claudeSessionId: string
 ): Promise<string | null> {
-  if (!/^[\w-]+$/.test(claudeSessionId)) return null;
+  const path = resolveClaudeTranscriptPath(cwd, claudeSessionId);
+  if (!path) return null;
   try {
-    const expanded = expandHome(cwd);
-    const projectDir =
-      findClaudeProjectDir(expanded) ||
-      join(homedir(), ".claude", "projects", claudeProjectDirName(expanded));
     // readFile throws ENOENT if it's missing → caught below (no existsSync race).
-    return await readFile(
-      join(projectDir, `${claudeSessionId}.jsonl`),
-      "utf-8"
-    );
+    return await readFile(path, "utf-8");
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve the absolute path of a Claude session's JSONL transcript, or null when
+ * the id is unsafe. Same path-traversal guard as the reader: `claudeSessionId` is
+ * interpolated into the path and can come from a stored/POSTed field, so reject
+ * anything that isn't a plain id token BEFORE building the path (keeps it inside
+ * ~/.claude/projects — no `../` escape). Does a couple of cheap stat/dir lookups to
+ * locate the project dir but NO transcript read, so the cost cache (#18) can call
+ * it on its hot path to key + stat the file without paying the parse.
+ */
+export function resolveClaudeTranscriptPath(
+  cwd: string,
+  claudeSessionId: string
+): string | null {
+  if (!/^[\w-]+$/.test(claudeSessionId)) return null;
+  const expanded = expandHome(cwd);
+  const projectDir =
+    findClaudeProjectDir(expanded) ||
+    join(homedir(), ".claude", "projects", claudeProjectDirName(expanded));
+  return join(projectDir, `${claudeSessionId}.jsonl`);
 }
