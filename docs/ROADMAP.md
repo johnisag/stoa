@@ -365,10 +365,25 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     desktop browsers get healed too). Dead-endpoint pruning already ships server-side
     (`sendPushToAll` deletes on 404/410). _Seam:_ `lib/push-selfheal.ts`,
     `hooks/useWebPush.ts`.
-17. **Manifest shortcuts + Web Share Target** — `mobile` · M. Home-screen
-    shortcuts (New Session, Board, Ask, Live Wall) + a share target to forward
-    text/URL/image into New Session/Dispatch. _Seam:_ `public/manifest.json`, new
-    `app/share/page.tsx`, `app/sw.ts`.
+17. ✅ **Manifest shortcuts + Web Share Target** — `mobile` · M. **SHIPPED.**
+    Long-press the installed icon → app SHORTCUTS (New Session / Fleet Board /
+    Ask Stoa / Live Wall), each launching `/?action=<id>`; and the OS share sheet
+    can send text/URLs INTO Stoa (`share_target` POSTs title/text/url to
+    `/share`, which composes a prompt and 303-redirects into the app shell as
+    `/?action=new-session&prompt=…`). The app had ZERO URL handling before — a
+    once-only mount reader in HomeContent now parses `?action=` (pure grammar in
+    `lib/share-intake.ts`: unknown actions DROP to a plain open; prompts clamped
+    to 4k chars) and dispatches to the same handlers the keybindings use, then
+    strips the query via history.replaceState so a reload can't re-fire.
+    NewSessionDialog gains a `promptSeed` prop (applied on open, cleared on
+    close — never clobbers user edits). Stateless by design: the share endpoint
+    stores nothing (an unauthenticated share can't write); the redirect lands on
+    the normally-authed app page. Platform notes: shortcuts work on
+    Android + desktop + iOS 15.1+; `share_target` is Android/ChromeOS/desktop
+    (iOS Safari doesn't support receiving shares — its users get the shortcuts +
+    Ask Stoa). Images deferred (text/URL is the core loop). _Seam:_
+    `public/manifest.json`, `app/share/route.ts`, `lib/share-intake.ts`,
+    `app/page.tsx` (mount reader), `components/NewSessionDialog`.
 18. ✅ **Transcript cost cache (stat-gated)** — `perf` · M. **SHIPPED.** Every cost
     consumer — the cost route, the budget tick (30s), the cost sampler (60s), the
     auto-compact tick (60s), analytics, and the monitor — funnels through

@@ -31,6 +31,8 @@ export interface ViewProps {
   showNewSessionDialog: boolean;
   setShowNewSessionDialog: (show: boolean) => void;
   newSessionProjectId: string | null;
+  /** #17: shared-text prompt seeded into the New Session dialog (share target). */
+  newSessionPromptSeed: string | null;
   showNotificationSettings: boolean;
   setShowNotificationSettings: (show: boolean) => void;
   showQuickSwitcher: boolean;

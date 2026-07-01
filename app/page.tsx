@@ -53,6 +53,7 @@ import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
 import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
 import { nextAttentionSession } from "@/lib/session-attention";
+import { parseAppAction } from "@/lib/share-intake";
 import { getActiveBackend } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
@@ -199,6 +200,20 @@ function HomeContent() {
   const [newSessionProjectId, setNewSessionProjectId] = useState<string | null>(
     null
   );
+  // #17: a shared-text prompt (from the /share redirect) seeded into the New
+  // Session dialog the next time it opens; cleared when the dialog closes so a
+  // later manual "New Session" starts blank.
+  const [newSessionPromptSeed, setNewSessionPromptSeed] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    // Fires on open/close transitions only; the closure's seed value is from
+    // the same render, so clearing on close is always acting on fresh state.
+    if (!showNewSessionDialog) {
+      setNewSessionPromptSeed(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showNewSessionDialog]);
   const [showNotificationSettings, setShowNotificationSettings] =
     useState(false);
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
@@ -721,6 +736,31 @@ function HomeContent() {
     else if (action === "open-ask-stoa") addViewTab(focusedPaneId, "ask");
   });
 
+  // #17: app-shortcut / share-target deep links. Read `?action=…` ONCE on
+  // launch (mount-only, no deps; the ref also guards StrictMode's dev
+  // double-invoke), dispatch to the same handlers the keybindings use, then
+  // strip the query from the URL so a reload (or the PWA restoring the
+  // location) can't re-fire the action.
+  const appActionHandledRef = useRef(false);
+  useEffect(() => {
+    if (appActionHandledRef.current) return;
+    appActionHandledRef.current = true;
+    const parsed = parseAppAction(window.location.search);
+    if (!parsed) return;
+    if (parsed.action === "new-session") {
+      if (parsed.prompt) setNewSessionPromptSeed(parsed.prompt);
+      setShowNewSessionDialog(true);
+    } else if (parsed.action === "board") {
+      addViewTab(focusedPaneId, "fleet-board");
+    } else if (parsed.action === "ask") {
+      addViewTab(focusedPaneId, "ask");
+    } else if (parsed.action === "live-wall") {
+      addViewTab(focusedPaneId, "live-wall");
+    }
+    window.history.replaceState(null, "", window.location.pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Pane renderer
   const renderPane = useCallback(
     (paneId: string) => (
@@ -857,6 +897,7 @@ function HomeContent() {
     showNewSessionDialog,
     setShowNewSessionDialog,
     newSessionProjectId,
+    newSessionPromptSeed,
     showNotificationSettings,
     setShowNotificationSettings,
     showQuickSwitcher,
