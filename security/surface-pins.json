@@ -38,6 +38,6 @@
     "scripts/setup.js": "0c36a6039d175ec1ce87b8819171d58907d8e5b8c95b5db66e2b8463dc18a33d",
     "scripts/setup.sh": "bcf4d5278276b6bf8f90dbacaadc1e30b8954d13b84d06948d08e6880c05495b",
     "scripts/stoa": "4d3a59d282d745607517e128c148a9c8f0ac19fe248fccd81ed8235da71b76db",
-    "scripts/stoa.js": "758809f2b84b25b43f9ef43ae0c2a33fe738181339969aff8d562f8a4a11bfee"
+    "scripts/stoa.js": "0ae761c46a4734ac41860961fcfc2ade8869932215dd5f9d5e3889793013b019"
   }
 }

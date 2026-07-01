@@ -255,9 +255,17 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     (`lib/audit/csv.ts`). _Seam:_ `lib/audit/{query,csv,response}.ts`, `lib/db/queries.ts`,
     `app/api/audit/route.ts`, `app/api/sessions/[id]/events/route.ts`,
     `components/views/ActivityView`, `data/audit`, `FLEET_NAV`.
-11. **`stoa share` — one-command secure remote access** — `adoption` · M. Detect
-    Tailscale funnel (else cloudflared), append `?token=`, print a QR, register the
-    WS origin, fail-closed if auth is off. _Seam:_ `scripts/stoa.js`, `lib/auth.ts`.
+11. ✅ **`stoa share` — one-command secure remote access** — `adoption` · M. **SHIPPED.**
+    `stoa share` starts a Tailscale funnel (else cloudflared) to the local server,
+    appends `?token=`, prints the URL + a terminal QR, and registers the tunnel origin
+    in `~/.stoa/shared-origins` (read LIVE per WS upgrade → no restart). **Fail-closed on
+    TWO gates**, not just auth-off: it refuses unless (a) auth is on AND (b) the server
+    enforces the token for local requests — verified by an unauthenticated `HEAD /` probe
+    that must return 401. This closes the real trap — a tunnel reaches the server FROM
+    localhost, so a loopback-trusting server (the default) would otherwise be exposed to
+    the internet with NO token. All tunnel detection/parsing/decision logic is pure +
+    unit-tested (no real binaries); cross-platform binary resolution + spawn.
+    _Seam:_ `scripts/stoa.js`, `lib/auth.ts` (`readSharedOrigins`), `server.ts`.
 12. **Prompt-cache-aware launch + cache-hit panel** — `perf` · M. Keep the cached
     prefix byte-identical across turns/siblings; surface a cache-hit stat. _Seam:_
     `lib/banner.ts`/`prompt-compose.ts`, `lib/cost-history.ts`, `lib/analytics/engine.ts`.

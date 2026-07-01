@@ -117,6 +117,7 @@ import {
   trustLoopback,
   trustTailscale,
   configuredAllowedOrigins,
+  readSharedOrigins,
   buildAuthCookie,
   safeRedirectPath,
   decideHttpAuth,
@@ -238,7 +239,9 @@ app.prepare().then(() => {
       serverToken: SERVER_TOKEN,
       origin: request.headers.origin,
       host: request.headers.host,
-      allowedOrigins: ALLOWED_ORIGINS,
+      // Env allowlist + live tunnel origins registered by `stoa share` (read per
+      // upgrade so a share started after the server needs no restart).
+      allowedOrigins: [...ALLOWED_ORIGINS, ...readSharedOrigins()],
       remoteAddr: request.socket.remoteAddress,
       trustLoopback: TRUST_LOOPBACK,
       trustTailscale: TRUST_TAILSCALE,

@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   isLoopbackAddress,
   isTailscaleAddress,
@@ -8,6 +11,7 @@ import {
   safeRedirectPath,
   decideHttpAuth,
   decideWsAuth,
+  readSharedOrigins,
   COOKIE_NAME,
 } from "../lib/auth";
 
@@ -322,5 +326,52 @@ describe("getServerToken (env resolution)", () => {
     process.env.STOA_TOKEN = "env-token-123";
     const { getServerToken } = await import("../lib/auth");
     expect(getServerToken()).toBe("env-token-123");
+  });
+});
+
+// share (#11): the tunnel origin `stoa share` registers in ~/.stoa/shared-origins is
+// read live and unioned into the WS origin allowlist (server.ts), so a share started
+// after the server needs no restart. Without it, the tunnel origin is CSWSH-denied.
+describe("readSharedOrigins (stoa share origin registry)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "stoa-origins-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reads one origin per line, trimmed, blanks dropped", () => {
+    const f = join(dir, "shared-origins");
+    writeFileSync(f, "https://a.ts.net\n  https://b.trycloudflare.com  \n\n");
+    expect(readSharedOrigins(f)).toEqual([
+      "https://a.ts.net",
+      "https://b.trycloudflare.com",
+    ]);
+  });
+
+  it("a missing/unreadable file is [] (fail-safe: unknown origins stay denied)", () => {
+    expect(readSharedOrigins(join(dir, "nope"))).toEqual([]);
+    expect(readSharedOrigins(dir)).toEqual([]); // a directory → read throws → []
+  });
+
+  it("registration is what admits the tunnel origin — unregistered is CSWSH-denied even with a valid cookie", () => {
+    const tunnel = "https://my-box.tail1a2b.ts.net";
+    const base = {
+      serverToken: "tok",
+      trustLoopback: false, // the loopback bypass is off (as `stoa share` requires)
+      host: "localhost:3011",
+      origin: tunnel,
+      cookieHeader: `${COOKIE_NAME}=tok`,
+    };
+    // registered → allowed
+    expect(decideWsAuth({ ...base, allowedOrigins: [tunnel] })).toEqual({
+      type: "allow",
+    });
+    // NOT registered → denied on origin BEFORE the token is even considered
+    expect(decideWsAuth({ ...base, allowedOrigins: [] })).toEqual({
+      type: "deny",
+      reason: "origin",
+    });
   });
 });

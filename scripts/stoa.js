@@ -15,10 +15,13 @@
 
 const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
+const http = require("http");
 const net = require("net");
 const os = require("os");
 const path = require("path");
-const { pathToFileURL } = require("url");
+// NodeURL is the WHATWG URL constructor — aliased because this module shadows the
+// global `URL` with a string constant (the local server URL) further down.
+const { pathToFileURL, URL: NodeURL } = require("url");
 
 // ---------------------------------------------------------------------------
 // Configuration / derived paths
@@ -84,8 +87,13 @@ function serverEnv(extra = {}) {
   return { ...env, PORT: resolvedPort, ...extra };
 }
 
-// ~/.stoa is the Stoa home; everything (pid, logs) lives under it.
+// ~/.stoa is the Stoa home; operational files (pid, logs) live under it and honor
+// STOA_HOME. AUTH files (token, shared-origins) are owned by the running server's
+// lib/auth.ts, which resolves them from os.homedir()+.stoa and does NOT honor
+// STOA_HOME — so `stoa share` must use the SAME base to interoperate (read the token
+// the server uses, write origins where the server reads them).
 const STOA_HOME = process.env.STOA_HOME || path.join(os.homedir(), ".stoa");
+const STOA_AUTH_HOME = path.join(os.homedir(), ".stoa");
 const PID_FILE = path.join(STOA_HOME, "stoa.pid");
 const LOG_DIR = path.join(STOA_HOME, "logs");
 const LOG_FILE = path.join(LOG_DIR, "stoa.log");
@@ -1098,6 +1106,451 @@ function cmdStatusline() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// share (#11) — secure remote access over a tunnel (Tailscale funnel / cloudflared)
+// ---------------------------------------------------------------------------
+
+// stoa share registers the live tunnel origin here; the server reads it per WS
+// upgrade (lib/auth.ts readSharedOrigins). MUST match SHARED_ORIGINS_PATH exactly —
+// hence STOA_AUTH_HOME (os.homedir-based, not STOA_HOME), see the note by that const.
+const SHARED_ORIGINS_FILE = path.join(STOA_AUTH_HOME, "shared-origins");
+const TOKEN_FILE = path.join(STOA_AUTH_HOME, "token");
+// PID of the tunnel child, so a later `stoa share` can reap an orphan left by a hard
+// kill (SIGKILL/crash) that skipped the in-process teardown handlers.
+const SHARE_PID_FILE = path.join(STOA_AUTH_HOME, "share.pid");
+// Cap the registered-origins list so repeated shares (esp. cloudflared's new random
+// subdomain each run) can't grow it — and the per-WS-upgrade scan — without bound.
+const MAX_SHARED_ORIGINS = 20;
+
+/** Prefer Tailscale funnel; fall back to cloudflared. null if neither is present. */
+function selectTunnelProvider(tailscaleBin, cloudflaredBin) {
+  if (tailscaleBin) return "tailscale";
+  if (cloudflaredBin) return "cloudflared";
+  return null;
+}
+
+/** The tunnel spawn command (bare name + argv) for a provider + local port. */
+function tunnelCommand(provider, port) {
+  const p = String(port);
+  if (provider === "tailscale")
+    return { cmd: "tailscale", args: ["funnel", p] };
+  if (provider === "cloudflared")
+    return {
+      cmd: "cloudflared",
+      args: ["tunnel", "--url", `http://localhost:${p}`],
+    };
+  return null;
+}
+
+/** Extract the public https URL from a line of a provider's output, or null. */
+function parseTunnelUrl(provider, line) {
+  const text = String(line);
+  if (provider === "tailscale") {
+    const m = /https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.ts\.net\b/i.exec(text);
+    return m ? m[0] : null;
+  }
+  if (provider === "cloudflared") {
+    const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com\b/i.exec(text);
+    return m ? m[0] : null;
+  }
+  return null;
+}
+
+/** The scheme://host origin of a URL, or null if unparseable. */
+function originFromUrl(url) {
+  try {
+    return new NodeURL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** The full share URL with the token appended (the server strips it after bootstrap). */
+function formatShareUrl(publicUrl, token) {
+  try {
+    const u = new NodeURL(publicUrl);
+    if (!u.pathname || u.pathname === "") u.pathname = "/";
+    u.searchParams.set("token", token);
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** Dedup-add an origin to the registered-origins list, capped to the newest `max`
+ *  (pure). The cap bounds the file (and the server's per-upgrade scan) across runs. */
+function addOriginToList(list, origin, max = MAX_SHARED_ORIGINS) {
+  const cleaned = list.map((s) => String(s).trim()).filter(Boolean);
+  const next = cleaned.includes(origin) ? cleaned : [...cleaned, origin];
+  return max > 0 && next.length > max ? next.slice(-max) : next;
+}
+
+/** Remove an origin from the registered-origins list (pure). */
+function removeOriginFromList(list, origin) {
+  return list
+    .map((s) => String(s).trim())
+    .filter(Boolean)
+    .filter((o) => o !== origin);
+}
+
+/**
+ * Fail-closed decision for `stoa share`. PURE over a probed state so it's
+ * unit-testable. Shares ONLY when: auth is on; the server is running AND enforces
+ * the token for local requests (a 401 to an unauthenticated `HEAD /` — otherwise a
+ * tunnel, which reaches the server FROM localhost, would expose it with no token);
+ * the token is known; and a tunnel tool exists. probeStatus is an HTTP status
+ * number, or "refused" (nothing listening) / "error" (probe failed).
+ */
+function decideShare(state) {
+  const { authOff, probeStatus, token, provider } = state;
+  if (authOff)
+    return {
+      ok: false,
+      code: "auth-off",
+      message:
+        "Auth is disabled (STOA_AUTH=off). Refusing to expose an unauthenticated server to the internet.",
+    };
+  if (probeStatus === "refused")
+    return {
+      ok: false,
+      code: "not-running",
+      message:
+        "No Stoa server is answering on this port. Start it first with `stoa start`.",
+    };
+  if (probeStatus === "error")
+    return {
+      ok: false,
+      code: "probe-failed",
+      message:
+        "Couldn't verify the server's auth posture (probe failed). Not sharing.",
+    };
+  if (probeStatus !== 401)
+    return {
+      ok: false,
+      code: "loopback-trusted",
+      message:
+        "This server allows unauthenticated local access, so a public tunnel would expose it WITHOUT the token. Restart it with STOA_REQUIRE_AUTH=1 (e.g. add it to .env), then run `stoa share`.",
+    };
+  if (!token)
+    return {
+      ok: false,
+      code: "no-token",
+      message:
+        "Couldn't find the server token. Set STOA_TOKEN, or start the server so it writes ~/.stoa/token.",
+    };
+  if (!provider)
+    return {
+      ok: false,
+      code: "no-tunnel",
+      message:
+        "No tunnel tool found on PATH. Install Tailscale (https://tailscale.com/download) or cloudflared.",
+    };
+  return { ok: true, provider };
+}
+
+/** The server token as a running server resolved it: STOA_TOKEN env, else the
+ *  persisted ~/.stoa/token. null if neither (we never generate one here). */
+function readServerToken() {
+  const fromEnv = (process.env.STOA_TOKEN || "").trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const t = fs.readFileSync(TOKEN_FILE, "utf8").trim();
+    return t || null;
+  } catch {
+    return null;
+  }
+}
+
+function readOriginsFile() {
+  try {
+    return fs.readFileSync(SHARED_ORIGINS_FILE, "utf8").split(/\r?\n/);
+  } catch {
+    return [];
+  }
+}
+
+function writeOriginsFile(list) {
+  ensureDir(STOA_AUTH_HOME);
+  const body = list.length ? list.join("\n") + "\n" : "";
+  // Atomic write (tmp + same-dir rename) so the server's per-upgrade read never sees
+  // a torn/truncated file and momentarily drops the live origin (transient false-deny).
+  const tmp = `${SHARED_ORIGINS_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, body, { mode: 0o600 });
+  fs.renameSync(tmp, SHARED_ORIGINS_FILE);
+}
+
+function registerOrigin(origin) {
+  writeOriginsFile(addOriginToList(readOriginsFile(), origin));
+}
+
+function unregisterOrigin(origin) {
+  writeOriginsFile(removeOriginFromList(readOriginsFile(), origin));
+}
+
+/** HEAD / on localhost with no auth. Resolves to the status number, or
+ *  "refused" (connection refused) / "error" (timeout / other). */
+function probeAuth(port) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: Number(port),
+        path: "/",
+        method: "HEAD",
+        timeout: 4000,
+      },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode || 0);
+      }
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      resolve("error");
+    });
+    req.on("error", (err) => {
+      resolve(err && err.code === "ECONNREFUSED" ? "refused" : "error");
+    });
+    req.end();
+  });
+}
+
+function printShareBanner(shareUrl, publicUrl) {
+  console.log("");
+  info("Stoa is now reachable from the internet (token-gated):");
+  console.log("");
+  console.log(`  ${shareUrl}`);
+  console.log("");
+  // Optional QR — lazy-required so the rest of the CLI stays dependency-free; if
+  // it's missing, the URL text above is the fallback.
+  try {
+    const qrcode = require("qrcode-terminal");
+    qrcode.generate(shareUrl, { small: true }, (qr) => console.log(qr));
+  } catch {
+    console.log("  (install qrcode-terminal for a scannable QR code)");
+  }
+  console.log(`  Public host: ${publicUrl}`);
+  console.log(`  Local:       ${URL}`);
+  console.log("");
+  info(
+    "Keep this running to keep the link live. Press Ctrl+C to stop sharing."
+  );
+}
+
+/** Kill a tunnel child by PID — tree-first on Windows (mirrors `stoa stop`). The
+ *  tunnel is a public exposure, so teardown must be thorough: a bare child.kill()
+ *  leaves a cmd.exe-shim grandchild (or any forked helper) orphaned and still serving. */
+function stopTunnel(pid) {
+  if (!pid) return;
+  try {
+    if (IS_WINDOWS) {
+      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } else {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        return; // already gone (ESRCH)
+      }
+      // Escalate to SIGKILL if it ignores SIGTERM — a public tunnel must not survive
+      // teardown (mirrors `stoa stop`). The sync wait is safe in an 'exit' handler.
+      if (!waitUntilDead(pid, 800)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
+function writeSharePid(pid) {
+  try {
+    ensureDir(STOA_AUTH_HOME);
+    fs.writeFileSync(SHARE_PID_FILE, String(pid), { mode: 0o600 });
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function clearSharePid() {
+  try {
+    fs.unlinkSync(SHARE_PID_FILE);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Reap a tunnel orphaned by a previous `stoa share` that was HARD-killed (SIGKILL /
+ *  crash) before its teardown ran: kill the still-live child and clear stale origins,
+ *  so a public tunnel can never outlive the command that started it (SIGKILL is the
+ *  one path in-process handlers can't catch — this backstops it on the next run). */
+function reapStaleShare() {
+  let pid = null;
+  try {
+    pid = parseInt(fs.readFileSync(SHARE_PID_FILE, "utf8").trim(), 10);
+  } catch {
+    return;
+  }
+  if (Number.isFinite(pid) && pid > 0 && isAlive(pid)) {
+    warn(`Reaping an orphaned tunnel from a previous share (PID ${pid}).`);
+    stopTunnel(pid);
+  }
+  clearSharePid();
+  // A crashed run may have left its origin registered — clear the lot (a fresh share
+  // re-registers its own). Safe: origins are public, non-secret.
+  try {
+    writeOriginsFile([]);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** share: open a secure, token-gated tunnel to the local server + print a QR. */
+async function cmdShare() {
+  const authOff = (process.env.STOA_AUTH || "").toLowerCase() === "off";
+  const probeStatus = await probeAuth(PORT);
+  const token = readServerToken();
+  const provider = selectTunnelProvider(
+    resolveCommand("tailscale"),
+    resolveCommand("cloudflared")
+  );
+
+  const decision = decideShare({ authOff, probeStatus, token, provider });
+  if (!decision.ok) {
+    error(decision.message);
+    process.exit(1);
+    return;
+  }
+
+  // Self-heal: kill any tunnel orphaned by a prior hard-killed share before starting.
+  reapStaleShare();
+
+  const spec = tunnelCommand(provider, PORT);
+  const { file, args } = commandSpec(spec.cmd, spec.args);
+  info(`Starting a ${provider} tunnel to ${URL} …`);
+
+  // Don't hand Stoa's secrets to the tunnel binary — it needs none of them, and they
+  // shouldn't sit in that process's environment (loadEnvFile hydrated them from .env).
+  const childEnv = { ...process.env };
+  for (const k of [
+    "STOA_TOKEN",
+    "STOA_VAPID_PRIVATE_KEY",
+    "STOA_WEBHOOK_SECRET",
+  ]) {
+    delete childEnv[k];
+  }
+
+  const child = spawn(file, args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    env: childEnv,
+  });
+  if (child.pid) writeSharePid(child.pid);
+
+  let registeredOrigin = null;
+  let announced = false;
+  let settled = false;
+  let torn = false;
+
+  // Synchronous teardown — safe to run from a process 'exit' handler (no async work).
+  const cleanupSync = () => {
+    if (torn) return;
+    torn = true;
+    if (registeredOrigin) {
+      try {
+        unregisterOrigin(registeredOrigin);
+      } catch {
+        /* best-effort */
+      }
+      registeredOrigin = null;
+    }
+    stopTunnel(child.pid);
+    clearSharePid();
+  };
+  const onSignal = () => {
+    cleanupSync();
+    process.exit(0);
+  };
+  // Cover every CATCHABLE exit path so the public tunnel never outlives the command:
+  // Ctrl+C (SIGINT), kill (SIGTERM), terminal close (SIGHUP), normal/`process.exit`
+  // (exit), and a crash (uncaughtException). SIGKILL is uncatchable — reapStaleShare
+  // handles that orphan on the next run.
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  process.on("SIGHUP", onSignal);
+  process.on("exit", cleanupSync);
+  process.on("uncaughtException", (err) => {
+    error(`share crashed: ${err && err.message ? err.message : err}`);
+    cleanupSync();
+    process.exit(1);
+  });
+
+  const onLine = (line) => {
+    if (announced) return;
+    const url = parseTunnelUrl(provider, line);
+    if (!url) return;
+    announced = true;
+    settled = true;
+    const origin = originFromUrl(url);
+    if (origin) {
+      registeredOrigin = origin;
+      try {
+        registerOrigin(origin);
+      } catch (e) {
+        warn(`Couldn't register the tunnel origin: ${e.message}`);
+      }
+    }
+    printShareBanner(formatShareUrl(url, token), url);
+  };
+
+  const wire = (stream) => {
+    let buf = "";
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk) => {
+      buf += chunk;
+      let idx;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        onLine(buf.slice(0, idx));
+        buf = buf.slice(idx + 1);
+      }
+    });
+  };
+  wire(child.stdout);
+  wire(child.stderr);
+
+  child.on("error", (err) => {
+    error(`Failed to start ${provider}: ${err.message}`);
+    cleanupSync();
+    process.exit(1);
+  });
+  child.on("exit", (code) => {
+    cleanupSync();
+    if (!settled) {
+      error(
+        `${provider} exited before a public URL was available (code ${code}). Is it installed and set up (e.g. \`tailscale up\` / cloudflared login)?`
+      );
+      process.exit(1);
+      return;
+    }
+    info("Tunnel closed.");
+    process.exit(code || 0);
+  });
+
+  setTimeout(() => {
+    if (!announced) {
+      warn(
+        `No public URL from ${provider} yet — if it needs first-time setup, complete that and retry.`
+      );
+    }
+  }, 15000);
+}
+
 /** help: usage text. */
 function cmdHelp() {
   console.log("");
@@ -1117,6 +1570,9 @@ function cmdHelp() {
   console.log("  doctor      Run preflight environment checks");
   console.log(
     "  statusline  Install the Claude rate-limit statusline hook (Agent Monitor quota)"
+  );
+  console.log(
+    "  share       Share securely over a tunnel (Tailscale/cloudflared) with a QR"
   );
   console.log("");
   console.log("Environment variables:");
@@ -1168,6 +1624,12 @@ function main() {
     case "statusline":
       cmdStatusline();
       break;
+    case "share":
+      cmdShare().catch((err) => {
+        error(`share failed: ${err && err.message ? err.message : err}`);
+        process.exit(1);
+      });
+      break;
     case "help":
     case "--help":
     case "-h":
@@ -1214,6 +1676,15 @@ module.exports = {
   isStoaStatusLine,
   mergeStatusLine,
   checkStatuslineHook,
+  // share (#11) - pure helpers, unit-tested
+  selectTunnelProvider,
+  tunnelCommand,
+  parseTunnelUrl,
+  originFromUrl,
+  formatShareUrl,
+  addOriginToList,
+  removeOriginFromList,
+  decideShare,
 };
 
 // PORT is read from the current env on every access so tests that reload the
