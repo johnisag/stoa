@@ -278,6 +278,10 @@ export const queries = {
       `UPDATE sessions SET verify_status = NULL, verify_output = NULL, verify_ran_at = NULL WHERE id = ?`
     ),
 
+  // #21: a session's lifetime USD budget cap (NULL = no budget).
+  setSessionBudget: (db: Database.Database) =>
+    getStmt(db, `UPDATE sessions SET budget_usd = ? WHERE id = ?`),
+
   updateProjectExpanded: (db: Database.Database) =>
     getStmt(db, `UPDATE projects SET expanded = ? WHERE id = ?`),
 

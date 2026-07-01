@@ -120,6 +120,7 @@ export async function POST(request: NextRequest) {
     initialPrompt?: string;
     enableOrchestration?: boolean;
     playbookId?: string;
+    budgetUsd?: number | null;
   }>(request);
   if (!parsed.ok) return parsed.response;
 
@@ -159,6 +160,8 @@ export async function POST(request: NextRequest) {
       // Playbook (#13): a selected recipe whose body seeds the prompt (the dialog
       // inlines the body into initialPrompt instead; this is for API/Command callers).
       playbookId = null,
+      // #21: a lifetime USD budget cap (80/100% alerts + opt-in park at cap).
+      budgetUsd = null,
     } = body;
 
     // Validate agent type
@@ -398,6 +401,17 @@ export async function POST(request: NextRequest) {
         claudeSessionId,
         id
       );
+    }
+
+    // #21: a per-session budget cap. Fail-closed validation — only a finite
+    // positive number is stored; anything else means "no budget".
+    if (
+      budgetUsd != null &&
+      typeof budgetUsd === "number" &&
+      Number.isFinite(budgetUsd) &&
+      budgetUsd > 0
+    ) {
+      queries.setSessionBudget(db).run(budgetUsd, id);
     }
 
     // If forking, copy messages from parent

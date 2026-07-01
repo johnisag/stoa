@@ -42,6 +42,9 @@ export function createSchema(db: Database.Database): void {
       verify_status TEXT,
       verify_output TEXT,
       verify_ran_at TEXT,
+      -- #21 (migration 49): a lifetime USD budget cap for this session (80/100%
+      -- alerts + opt-in fail-closed park at the cap). NULL = no budget.
+      budget_usd REAL,
       FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
     );
 

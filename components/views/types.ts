@@ -19,6 +19,9 @@ export interface SessionStatus {
   verifyStatus?: string | null;
   verifyRanAt?: string | null;
   verifyOutput?: string | null;
+  /** #21 budget badge: stage vs the session's budget cap + parked flag. */
+  budgetStage?: string;
+  budgetParked?: boolean;
 }
 
 export interface ViewProps {

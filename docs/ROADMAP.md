@@ -441,10 +441,21 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     v2 deferred: task-difficulty classifier + cost-signal feedback. _Seam:_
     `lib/model-router.ts`, `lib/dispatch/{dispatcher,reviewer,ci-fix}.ts`,
     migration 48, `app/api/dispatch/repos/[id]`, AllocationConsole.
-21. **Per-session cost budgets with alert + opt-in auto-pause** — `adoption` · M.
-    Daily/monthly budget, soft alert at 80/100%, opt-in fail-closed park at cap
-    (reuse the rate-limit park decision). _Seam:_ `lib/cost-history.ts`,
-    `lib/rate-limit.ts`, `server.ts` tick, push path.
+21. ✅ **Per-session cost budgets with alert + opt-in auto-pause** — `adoption` · M.
+    **SHIPPED (v1: lifetime cap).** A session may carry a lifetime USD budget
+    (`sessions.budget_usd`, migration 49; set in the New Session dialog's advanced
+    settings). A dedicated 30s tick computes live costs for budgeted sessions and
+    runs pure edge-triggered stage detection (`lib/budget-park.ts`): crossing 80%
+    → ONE push alert; crossing 100% → ONE push alert — and, with
+    `STOA_BUDGET_PARK=1` (opt-in, default OFF), the session is PARKED: passive
+    fail-closed, Stoa stops FEEDING it work (prompt queue, rate-limit auto-resume,
+    channel delivery all skip it) but nothing is killed and the user can still
+    type. Unpark = raise/clear the budget (the tick clears the park below cap).
+    Distinct from the GLOBAL `STOA_BUDGET_HARD_USD` kill. SessionCard shows a
+    stage badge (amber 80% / red cap / "parked") via the status route. v2
+    deferred: daily/monthly windows (cost-history already keeps per-day data).
+    _Seam:_ `lib/budget-park.ts`, migration 49, `server.ts` tick + 3 park skips,
+    `app/api/sessions` (+`/status`), AdvancedSettings, SessionCard.
 22. **`computeSessionCosts` direct test (budget-kill path)** — `test` · M. Inject a
     fake usage reader; assert short-circuits, concurrency cap, and that the cost GET
     never 500s. _Why:_ this feeds the loop that can kill sessions, yet only the pure

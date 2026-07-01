@@ -59,6 +59,8 @@ export function useNewSessionForm({
   const [enableOrchestration, setEnableOrchestration] = useState(false);
   const [useTmux, setUseTmux] = useState(true);
   const [initialPrompt, setInitialPrompt] = useState("");
+  // #21: lifetime USD budget cap as raw input text ("" = no budget).
+  const [budgetUsd, setBudgetUsd] = useState("");
 
   // Worktree state
   const [useWorktree, setUseWorktree] = useState(false);
@@ -346,6 +348,13 @@ export function useNewSessionForm({
         enableOrchestration,
         useTmux,
         initialPrompt: initialPrompt.trim() || null,
+        // #21: a finite positive number or nothing (invalid input = no budget).
+        budgetUsd:
+          budgetUsd.trim() &&
+          Number.isFinite(Number(budgetUsd)) &&
+          Number(budgetUsd) > 0
+            ? Number(budgetUsd)
+            : null,
       },
       {
         onSuccess: (data) => {
@@ -405,6 +414,7 @@ export function useNewSessionForm({
     setExistingWorktreePath("");
     setExistingWorktreeBranch("");
     setInitialPrompt("");
+    setBudgetUsd("");
     setEnableOrchestration(false);
     setShowNewProject(false);
     setNewProjectName("");
@@ -433,6 +443,8 @@ export function useNewSessionForm({
     useTmux,
     initialPrompt,
     setInitialPrompt,
+    budgetUsd,
+    setBudgetUsd,
     // Worktree
     useWorktree,
     setUseWorktree,

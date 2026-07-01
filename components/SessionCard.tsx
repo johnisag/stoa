@@ -88,6 +88,10 @@ interface SessionCardProps {
   verifyStatus?: string | null;
   verifyOutput?: string | null;
   verifyRanAt?: string | null;
+  /** #21 budget badge — stage vs the session's budget cap ("warn80"/"cap") and
+   * whether the tick parked it. Primitives for React.memo. */
+  budgetStage?: string;
+  budgetParked?: boolean;
   /** How many sessions (this one included, so always ≥2 when set) share this
    * session's working_directory — they edit the same files on the same branch and
    * can clobber each other. Undefined/0/1 = isolated (worktree or lone) = no badge.
@@ -173,6 +177,8 @@ function SessionCardComponent({
   verifyStatus,
   verifyOutput,
   verifyRanAt,
+  budgetStage,
+  budgetParked,
   conflictCount,
   groups = EMPTY_GROUPS,
   projects = EMPTY_PROJECTS,
@@ -661,6 +667,36 @@ function SessionCardComponent({
               m
             </span>
           )}
+        </span>
+      )}
+
+      {/* #21 budget badge — 80% warning (amber) / at-cap (red, "parked" when the
+          opt-in park stopped feeding it work). */}
+      {budgetStage && budgetStage !== "ok" && (
+        <span
+          className={cn(
+            "flex flex-shrink-0 items-center gap-0.5 rounded px-1 text-[10px]",
+            budgetStage === "warn80" &&
+              "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+            budgetStage === "cap" &&
+              "bg-red-500/15 text-red-600 dark:text-red-400"
+          )}
+          title={
+            budgetStage === "cap"
+              ? budgetParked
+                ? "Budget cap hit — parked (no new work is fed; you can still type)"
+                : "Budget cap hit"
+              : "At 80% of this session's budget"
+          }
+          aria-label={
+            budgetStage === "cap" ? "Budget cap reached" : "Budget warning"
+          }
+        >
+          {budgetParked
+            ? "parked"
+            : budgetStage === "cap"
+              ? "budget cap"
+              : "budget 80%"}
         </span>
       )}
 

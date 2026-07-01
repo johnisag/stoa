@@ -26,6 +26,9 @@ interface SessionStatus {
   verifyStatus?: string | null;
   verifyOutput?: string | null;
   verifyRanAt?: string | null;
+  /** #21 budget badge: stage vs budget cap + parked flag. */
+  budgetStage?: string;
+  budgetParked?: boolean;
 }
 
 interface ProjectsSectionProps {
@@ -336,6 +339,12 @@ export function ProjectsSection({
                                 verifyRanAt={
                                   sessionStatuses?.[session.id]?.verifyRanAt
                                 }
+                                budgetStage={
+                                  sessionStatuses?.[session.id]?.budgetStage
+                                }
+                                budgetParked={
+                                  sessionStatuses?.[session.id]?.budgetParked
+                                }
                                 groups={groups}
                                 projects={projects}
                                 isSelected={selectedIds.has(session.id)}
@@ -427,6 +436,14 @@ export function ProjectsSection({
                                           verifyRanAt={
                                             sessionStatuses?.[worker.id]
                                               ?.verifyRanAt
+                                          }
+                                          budgetStage={
+                                            sessionStatuses?.[worker.id]
+                                              ?.budgetStage
+                                          }
+                                          budgetParked={
+                                            sessionStatuses?.[worker.id]
+                                              ?.budgetParked
                                           }
                                           groups={groups}
                                           projects={projects}

@@ -1203,6 +1203,21 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 49,
+    name: "add_session_budget_usd",
+    up: (db) => {
+      // #21 per-session cost budget: a lifetime USD cap for this session.
+      // 80%/100% alerts + an opt-in fail-closed park at the cap (the tick
+      // stops feeding it work; the user can still type). NULL = no budget.
+      if (
+        hasTable(db, "sessions") &&
+        !hasColumn(db, "sessions", "budget_usd")
+      ) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN budget_usd REAL`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

@@ -49,6 +49,9 @@ export interface Session {
   verify_status?: string | null;
   verify_output?: string | null;
   verify_ran_at?: string | null;
+  /** #21 (migration 49): a lifetime USD budget cap for this session (80/100%
+   * alerts + opt-in fail-closed park at the cap). NULL = no budget. */
+  budget_usd?: number | null;
 }
 
 export interface Group {

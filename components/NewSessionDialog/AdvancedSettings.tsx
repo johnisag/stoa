@@ -12,6 +12,9 @@ interface AdvancedSettingsProps {
   onSkipPermissionsChange: (checked: boolean) => void;
   enableOrchestration: boolean;
   onEnableOrchestrationChange: (checked: boolean) => void;
+  /** #21: lifetime USD budget cap ("" = no budget). */
+  budgetUsd: string;
+  onBudgetUsdChange: (value: string) => void;
 }
 
 export function AdvancedSettings({
@@ -24,6 +27,8 @@ export function AdvancedSettings({
   onSkipPermissionsChange,
   enableOrchestration,
   onEnableOrchestrationChange,
+  budgetUsd,
+  onBudgetUsdChange,
 }: AdvancedSettingsProps) {
   const provider = getProviderDefinition(agentType);
   const supportsAutoApprove = Boolean(provider.autoApproveFlag);
@@ -119,6 +124,27 @@ export function AdvancedSettings({
                 and run commands without asking.
               </p>
             )}
+          </div>
+          {/* #21 per-session budget cap */}
+          <div>
+            <label htmlFor="budgetUsd" className="text-sm">
+              Budget (USD)
+            </label>
+            <input
+              type="number"
+              id="budgetUsd"
+              min="0"
+              step="0.01"
+              value={budgetUsd}
+              onChange={(e) => onBudgetUsdChange(e.target.value)}
+              placeholder="no budget"
+              className="border-border bg-background mt-1 block h-8 w-32 rounded border px-2 text-sm"
+            />
+            <p className="text-muted-foreground mt-1 text-xs">
+              Push alert at 80% and 100% of this session&apos;s spend. With
+              STOA_BUDGET_PARK=1 the session is parked at the cap (Stoa stops
+              feeding it queued work; you can still type). Blank = no budget.
+            </p>
           </div>
         </div>
       )}
