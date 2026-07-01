@@ -8,6 +8,11 @@ interface StatusResponse {
   statuses: Record<string, SessionStatus>;
 }
 
+// Stable empty fallback: returning a fresh `{}` before the first fetch would give
+// every consumer a new reference each render, defeating memoization (e.g. FleetBar).
+// One shared frozen object keeps the identity stable until real data arrives.
+const EMPTY_STATUSES: Record<string, SessionStatus> = Object.freeze({});
+
 async function fetchStatuses(): Promise<StatusResponse> {
   const res = await fetch("/api/sessions/status");
   if (!res.ok) throw new Error("Failed to fetch statuses");
@@ -74,7 +79,7 @@ export function useSessionStatusesQuery({
   }, [query.data, sessions, activeSessionId, checkStateChanges]);
 
   return {
-    sessionStatuses: query.data?.statuses ?? {},
+    sessionStatuses: query.data?.statuses ?? EMPTY_STATUSES,
     isLoading: query.isLoading,
   };
 }

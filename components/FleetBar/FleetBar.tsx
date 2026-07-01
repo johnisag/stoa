@@ -87,7 +87,7 @@ function FleetBarComponent({
   const summary =
     needsYou > 0
       ? `${needsYou} ${needsYou === 1 ? "session needs" : "sessions need"} you`
-      : "all caught up";
+      : "All caught up";
 
   return (
     <div
