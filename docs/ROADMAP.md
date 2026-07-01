@@ -295,11 +295,24 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     `lib/prompt-compose.ts`, `app/api/playbooks`, `data/playbooks`,
     `components/NewSessionDialog/PlaybookSelector.tsx`, `lib/command/{actions,create-session}.ts`.
     (Deferred: feeding the assisted workflow generator + a richer playbook editor.)
-14. **Reusable warm-environment snapshots + startup commands** — `feature` · M. A
-    named snapshot of a prepared worktree (deps/.env/build cache); new sessions boot
-    from it. _Why:_ cold `npm install`/build per worktree is the biggest fan-out tax
-    (worse on Windows). _Seam:_ `lib/env-setup.ts`, `lib/multi-repo-worktree.ts`,
-    `lib/workspace-session.ts`.
+14. ✅ **Reusable warm-environment snapshots (#14a)** — `feature` · M. **SHIPPED.**
+    A fresh git worktree ships without `node_modules`, so every fan-out worktree paid a
+    cold `npm install` — the biggest fan-out tax, worst on Windows (no copy-on-write).
+    `lib/env-snapshot.ts` content-addresses an installed `node_modules` by
+    `lockfile-hash + platform + Node-major`, caches it under
+    `${STOA_HOME:-~/.stoa}/env-snapshots/<key>/`, and copies it into the next worktree
+    with the same deps (skipping install). **FAIL-OPEN by construction:** any miss, copy
+    error, or unsupported case (Windows path length, pnpm symlink farm, publish race)
+    silently falls back to a normal install — it can only make a launch faster, never
+    break one. Atomic temp→rename publish (first-writer-wins), version-led key (a format
+    bump orphans old dirs cleanly), LRU prune (8) + stale-temp GC, capture is
+    fire-and-forget so it never delays the agent's launch, `fs.cp` with
+    `COPYFILE_FICLONE` (reflink on APFS/Btrfs, plain copy on Windows). Opt out with
+    `STOA_ENV_SNAPSHOTS=0`. _Seam:_ `lib/env-snapshot.ts`, `lib/env-setup.ts`
+    (`setupWorktree` install branch), `docs/setup/README.md`.
+    **Deferred → #14b: startup commands** — per-project configured commands run on
+    session boot (reuse the `dev-servers` `tokenizeCommand`+`resolveBinary`+
+    `resolveDevServerSpawn` safe-exec pattern; its own PR).
 15. **Attention-first fleet bar** — `feature` · M. An always-visible strip ranking
     live sessions by who needs you now (blocked > errored > idle-done > running).
     _Seam:_ `lib/session-status.ts`, `lib/session-attention.ts`, new strip component.

@@ -9,6 +9,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
+import { restoreSnapshot, captureSnapshot } from "./env-snapshot";
 
 const execAsync = promisify(exec);
 
@@ -222,25 +223,47 @@ export async function setupWorktree(options: {
       }
     }
   } else if (!skipInstall) {
-    // 4. Auto-detect and install dependencies
-    const pm = detectPackageManager(sourcePath);
-    if (pm) {
-      result.packageManager = pm.name;
-      const installResult = await runCommand(
-        pm.installCommand,
-        worktreePath,
-        envVars
-      );
+    // 4a. Try a warm snapshot first — a cached node_modules for this exact
+    // lockfile is copied in, skipping a cold install. Fail-open: any miss or
+    // error returns restored:false and falls through to the normal install below.
+    const restore = await restoreSnapshot(worktreePath);
+    if (restore.restored) {
+      result.packageManager = detectPackageManager(sourcePath)?.name;
       result.steps.push({
-        name: `Install dependencies (${pm.name})`,
-        command: pm.installCommand,
-        success: installResult.success,
-        output: installResult.output,
-        error: installResult.error,
+        name: "Restore dependencies (warm snapshot)",
+        command: "env-snapshot restore",
+        success: true,
+        output: `Restored node_modules from snapshot ${restore.key}`,
       });
+    } else {
+      // 4b. Auto-detect and install dependencies
+      const pm = detectPackageManager(sourcePath);
+      if (pm) {
+        result.packageManager = pm.name;
+        const installResult = await runCommand(
+          pm.installCommand,
+          worktreePath,
+          envVars
+        );
+        result.steps.push({
+          name: `Install dependencies (${pm.name})`,
+          command: pm.installCommand,
+          success: installResult.success,
+          output: installResult.output,
+          error: installResult.error,
+        });
 
-      if (!installResult.success) {
-        result.success = false;
+        if (!installResult.success) {
+          result.success = false;
+        } else {
+          // Cache node_modules so the next worktree with this lockfile skips
+          // install. Fire-and-forget: node_modules is complete + pristine now
+          // (install just finished), and we must NOT block the agent's launch on
+          // a multi-hundred-MB copy — the dispatch path awaits setupWorktree
+          // before spawning. captureSnapshot never rejects (fully fail-open); the
+          // trailing .catch is belt-and-suspenders against an unhandled rejection.
+          void captureSnapshot(worktreePath).catch(() => {});
+        }
       }
     }
   }
