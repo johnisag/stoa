@@ -19,6 +19,7 @@ import {
 } from "@/lib/mcp-config";
 import { expandHome, homeDir, isWindows } from "@/lib/platform";
 import { getLessonsBlockForCwd } from "@/lib/dispatch/lessons";
+import { composeLaunchPrompt } from "@/lib/prompt-compose";
 import {
   parseJsonBody,
   resolveSandboxedPath,
@@ -440,54 +441,54 @@ export async function POST(request: NextRequest) {
     const projectInitialPrompt = project?.initial_prompt?.trim();
     const sessionInitialPrompt = initialPrompt?.trim();
 
-    // Combine prompts: project prompt first, then session prompt
-    let combinedPrompt: string | undefined;
-    if (projectInitialPrompt && sessionInitialPrompt) {
-      combinedPrompt = `${projectInitialPrompt}\n\n${sessionInitialPrompt}`;
-    } else if (projectInitialPrompt) {
-      combinedPrompt = projectInitialPrompt;
-    } else if (sessionInitialPrompt) {
-      combinedPrompt = sessionInitialPrompt;
-    }
-
-    // Worktree sessions: prepend a boundary note so the agent edits inside the
-    // worktree (its cwd) rather than reaching back to the base checkout via
-    // absolute paths — the common cause of "changes don't show in the drawer".
+    // Cache-aware launch (#12): the worktree/workspace boundary NOTE is SPLIT — its
+    // stable, path-free instruction leads (so the agent still edits inside its cwd,
+    // not the base checkout — the "changes don't show in the drawer" fix), while the
+    // VOLATILE worktree path/branch trails as an annotation. Previously the unique
+    // worktree path sat at byte 0, so no two sessions ever shared a cacheable prefix.
+    let leadInstruction: string | undefined;
+    let volatileSuffix: string | undefined;
     if (worktreePath) {
-      const note =
-        `[Stoa] You are working inside a git worktree at ${worktreePath}` +
-        (branchName ? ` on branch "${branchName}"` : "") +
-        `. Make ALL file edits inside this directory — do not edit the base ` +
-        `checkout or any other branch.`;
-      combinedPrompt = combinedPrompt ? `${note}\n\n${combinedPrompt}` : note;
+      leadInstruction =
+        `[Stoa] You are working inside a git worktree — make ALL file edits inside ` +
+        `your current directory (its cwd), not the base checkout or any other branch.`;
+      volatileSuffix =
+        `[Stoa] Worktree: ${worktreePath}` +
+        (branchName ? ` · branch "${branchName}"` : "");
     } else if (workspacePaths && workspacePaths.length > 0) {
-      // Multi-repo workspace: tell the agent each subfolder is a separate repo's
-      // worktree on its own branch — work per-repo, open a PR per repo, and that
-      // each worktree is a FRESH checkout (no installed deps yet).
       const skipped =
         workspaceErrors.length > 0
           ? ` (skipped: ${workspaceErrors.map((e) => e.repoName).join(", ")})`
           : "";
-      const note =
-        `[Stoa] You are in a MULTI-REPO workspace at ${actualWorkingDirectory}. ` +
-        `Each subfolder is a git worktree of a SEPARATE repo` +
-        (workspaceBranch ? ` on branch "${workspaceBranch}"` : "") +
-        `: ${workspaceRepoNames.join(", ")}${skipped}. cd into a repo's folder to ` +
-        `work on it; commit and open a PR per repo. A change can't span two git ` +
-        `repos — keep edits within each subfolder, and do NOT edit the original ` +
-        `checkouts. Each worktree is a fresh checkout, so run that repo's install ` +
-        `step (e.g. npm install) before building or testing it.`;
-      combinedPrompt = combinedPrompt ? `${note}\n\n${combinedPrompt}` : note;
+      leadInstruction =
+        `[Stoa] You are in a MULTI-REPO workspace: each subfolder is a git worktree ` +
+        `of a SEPARATE repo. cd into a repo's folder to work on it; commit and open ` +
+        `a PR per repo. A change can't span two git repos — keep edits within each ` +
+        `subfolder, and do NOT edit the original checkouts. Each worktree is a fresh ` +
+        `checkout, so run that repo's install step (e.g. npm install) before ` +
+        `building or testing it.`;
+      volatileSuffix =
+        `[Stoa] Workspace: ${actualWorkingDirectory} · repos: ` +
+        `${workspaceRepoNames.join(", ")}${skipped}` +
+        (workspaceBranch ? ` · branch "${workspaceBranch}"` : "");
     }
 
-    // Fleet memory (#9): if this session is in a tracked dispatch repo, append its
-    // known pitfalls so interactive work benefits from the same memory as the
-    // dispatched fleet. Match the REPO ROOT the user chose (workingDirectory), not
-    // actualWorkingDirectory — a worktree session's actual cwd is the worktree, not
-    // the repo_path. Best-effort; only rides along with an existing prompt.
-    if (combinedPrompt) {
-      combinedPrompt += getLessonsBlockForCwd(workingDirectory);
-    }
+    // Fleet memory (#9): append this repo's known pitfalls, but only when there's
+    // already a prompt to ride along with (mirrors the prior behavior). Match the
+    // REPO ROOT the user chose (workingDirectory), not the worktree cwd.
+    const hasPromptContent =
+      !!leadInstruction || !!projectInitialPrompt || !!sessionInitialPrompt;
+    const lessons = hasPromptContent
+      ? getLessonsBlockForCwd(workingDirectory)
+      : "";
+
+    const combinedPrompt = composeLaunchPrompt({
+      leadInstruction,
+      projectPrompt: projectInitialPrompt,
+      sessionPrompt: sessionInitialPrompt,
+      lessons,
+      volatileSuffix,
+    });
 
     // Include setup result and initial prompt in response
     const response: {

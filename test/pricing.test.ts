@@ -3,6 +3,8 @@ import {
   priceForModel,
   computeCostUsd,
   totalTokens,
+  cacheHitRate,
+  cacheSavingsUsd,
   ZERO_USAGE,
 } from "../lib/pricing";
 
@@ -59,5 +61,51 @@ describe("totalTokens", () => {
     expect(
       totalTokens({ input: 10, output: 20, cacheRead: 30, cacheWrite: 40 })
     ).toBe(100);
+  });
+});
+
+describe("cacheHitRate (#12)", () => {
+  it("is cacheRead over the input-side total (input+cacheRead+cacheWrite)", () => {
+    // 900 cacheRead of 1000 input-side (50 fresh + 900 read + 50 write) = 0.9.
+    expect(
+      cacheHitRate({ input: 50, output: 999, cacheRead: 900, cacheWrite: 50 })
+    ).toBeCloseTo(0.9, 6);
+  });
+  it("ignores OUTPUT tokens entirely", () => {
+    expect(
+      cacheHitRate({
+        input: 0,
+        output: 1_000_000,
+        cacheRead: 100,
+        cacheWrite: 0,
+      })
+    ).toBe(1); // 100/100 input-side
+  });
+  it("is null when there is no input-side token yet", () => {
+    expect(cacheHitRate(ZERO_USAGE)).toBeNull();
+    expect(
+      cacheHitRate({ input: 0, output: 500, cacheRead: 0, cacheWrite: 0 })
+    ).toBeNull();
+  });
+});
+
+describe("cacheSavingsUsd (#12)", () => {
+  it("values cache reads at the (input - cacheRead) $/Mtok gap", () => {
+    // Sonnet: input 3, cacheRead 0.3 → 1M reads save (3 - 0.3) = $2.70.
+    expect(
+      cacheSavingsUsd(
+        { input: 0, output: 0, cacheRead: 1_000_000, cacheWrite: 0 },
+        "claude-sonnet-4-6"
+      )
+    ).toBeCloseTo(2.7, 6);
+  });
+  it("is zero with no cache reads, null when the model is unpriced", () => {
+    expect(cacheSavingsUsd(ZERO_USAGE, "claude-opus-4-8")).toBe(0);
+    expect(
+      cacheSavingsUsd(
+        { input: 0, output: 0, cacheRead: 1_000, cacheWrite: 0 },
+        "gpt-5"
+      )
+    ).toBeNull();
   });
 });
