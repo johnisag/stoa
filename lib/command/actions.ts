@@ -70,14 +70,15 @@ export interface CreateSessionParams {
   /** Optional seed prompt — sent as the first keystroke to the session after it
    * starts. Control bytes stripped, length-capped at INITIAL_PROMPT_MAX. */
   initialPrompt?: string;
+  /** Optional playbook (#13) recipe id — the route resolves + validates it (must be
+   * global or belong to this project) and seeds its body into the prompt. An opaque
+   * token; a bad/foreign id is simply ignored server-side. */
+  playbookId?: string;
 }
 
 /** Views the open_view action can navigate to (client-side navigation only). */
 export type CommandView =
-  | "analytics"
-  | "dispatch"
-  | "verdict-inbox"
-  | "fleet-board";
+  "analytics" | "dispatch" | "verdict-inbox" | "fleet-board";
 
 export const COMMAND_VIEWS: readonly CommandView[] = [
   "analytics",
@@ -135,8 +136,7 @@ export type CommandProposal =
   | { action: "best_of_n"; params: BestOfNParams };
 
 export type ProposalValidation =
-  | { ok: true; proposal: CommandProposal }
-  | { ok: false; reason: string };
+  { ok: true; proposal: CommandProposal } | { ok: false; reason: string };
 
 const NAME_MAX = 80;
 const INITIAL_PROMPT_MAX = 4000;
@@ -218,11 +218,15 @@ export function validateCreateSessionParams(
 
   const name = sanitizeText(raw.name, NAME_MAX);
   const initialPrompt = sanitizeText(raw.initialPrompt, INITIAL_PROMPT_MAX);
+  // An opaque id token — the /api/sessions route resolves + project-scopes it, so we
+  // only strip control bytes + cap length here (never trust it as a body).
+  const playbookId = sanitizeText(raw.playbookId, NAME_MAX);
 
   const params: CreateSessionParams = { projectId, agentType };
   if (model) params.model = model;
   if (name) params.name = name;
   if (initialPrompt) params.initialPrompt = initialPrompt;
+  if (playbookId) params.playbookId = playbookId;
   return { ok: true, params };
 }
 
@@ -369,30 +373,48 @@ export function validateProposal(raw: unknown): ProposalValidation {
     case "create_session": {
       const res = validateCreateSessionParams(paramsRaw);
       if (!res.ok) return res;
-      return { ok: true, proposal: { action: "create_session", params: res.params } };
+      return {
+        ok: true,
+        proposal: { action: "create_session", params: res.params },
+      };
     }
     case "dispatch_issue": {
       const res = validateDispatchIssueParams(paramsRaw);
       if (!res.ok) return res;
-      return { ok: true, proposal: { action: "dispatch_issue", params: res.params } };
+      return {
+        ok: true,
+        proposal: { action: "dispatch_issue", params: res.params },
+      };
     }
     case "open_view": {
       const res = validateOpenViewParams(paramsRaw);
       if (!res.ok) return res;
-      return { ok: true, proposal: { action: "open_view", params: res.params } };
+      return {
+        ok: true,
+        proposal: { action: "open_view", params: res.params },
+      };
     }
     case "list_sessions": {
       const res = validateListSessionsParams(paramsRaw);
       if (!res.ok) return res;
-      return { ok: true, proposal: { action: "list_sessions", params: res.params } };
+      return {
+        ok: true,
+        proposal: { action: "list_sessions", params: res.params },
+      };
     }
     case "best_of_n": {
       const res = validateBestOfNParams(paramsRaw);
       if (!res.ok) return res;
-      return { ok: true, proposal: { action: "best_of_n", params: res.params } };
+      return {
+        ok: true,
+        proposal: { action: "best_of_n", params: res.params },
+      };
     }
     default:
-      return { ok: false, reason: `"${String(obj.action)}" is not an action I can run` };
+      return {
+        ok: false,
+        reason: `"${String(obj.action)}" is not an action I can run`,
+      };
   }
 }
 
@@ -435,8 +457,7 @@ export interface ExecutePlanParams {
 }
 
 export type PlanValidation =
-  | { ok: true; name: string; steps: PlanStep[] }
-  | { ok: false; reason: string };
+  { ok: true; name: string; steps: PlanStep[] } | { ok: false; reason: string };
 
 const PLAN_NAME_MAX = 120;
 const PLAN_STEP_DESCRIPTION_MAX = 200;
@@ -601,8 +622,7 @@ const WORKFLOW_NAME_MAX = 120;
 /** A generated workflow design: either a laid-out BuilderDoc ready to load into
  * the canvas, or a reason it was rejected (which degrades to a plain answer). */
 export type WorkflowValidation =
-  | { ok: true; doc: BuilderDoc }
-  | { ok: false; reason: string };
+  { ok: true; doc: BuilderDoc } | { ok: false; reason: string };
 
 /**
  * Validate an LLM-generated workflow design into a laid-out BuilderDoc. This is
@@ -739,8 +759,7 @@ export function describeProposal(
   }
   if (proposal.action === "best_of_n") {
     const { n, task } = proposal.params;
-    const truncated =
-      task.length > 60 ? `${task.slice(0, 60)}...` : task;
+    const truncated = task.length > 60 ? `${task.slice(0, 60)}...` : task;
     const inProject = contextName ? ` in ${contextName}` : "";
     return `Run ${n} parallel sessions on: "${truncated}"${inProject} and compare their results.`;
   }

@@ -24,6 +24,10 @@ export interface LaunchPromptParts {
   /** A stable, PATH-FREE lead instruction (e.g. the worktree/workspace boundary
    *  RULE). Placed first so it's byte-identical across sibling sessions. */
   leadInstruction?: string | null;
+  /** Auto-recalled pinned KNOWLEDGE for the project (#13) — stable per project. */
+  pinnedKnowledge?: string | null;
+  /** A selected PLAYBOOK recipe's body (#13) — stable when siblings share a recipe. */
+  playbook?: string | null;
   /** The project-level prompt — stable for every session in a project. */
   projectPrompt?: string | null;
   /** The per-session task the user typed. */
@@ -49,6 +53,8 @@ export function composeLaunchPrompt(
 ): string | undefined {
   const ordered = [
     parts.leadInstruction,
+    parts.pinnedKnowledge,
+    parts.playbook,
     parts.projectPrompt,
     parts.sessionPrompt,
     parts.lessons,

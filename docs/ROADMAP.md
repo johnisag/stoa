@@ -281,10 +281,20 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     `app/api/sessions/route.ts`, `lib/pricing.ts`, `lib/agent-monitor.ts`,
     `components/views/AgentMonitorView`. (Deferred: an Insight/analytics cache-trend lens —
     needs new token-bucket plumbing through the analytics path.)
-13. **Project Playbooks + auto-recalled Knowledge** — `feature` · M. Named
-    launch-target recipes (success criteria/guardrails as seed) + short pinned
-    per-repo facts auto-prepended; feeds the assisted generator. _Seam:_ new
-    `lib/playbooks.ts`, `lib/prompt-compose.ts`, NewSessionDialog, `lib/command/actions.ts`.
+13. ✅ **Project Playbooks + auto-recalled Knowledge** — `feature` · M. **SHIPPED.**
+    ONE unified `playbooks` table (migration 45): a row is a named prompt snippet used
+    two ways — SELECT it as a RECIPE (its body seeds a session's prompt) or set
+    `pinned` on a project-scoped one so its body is AUTO-prepended to every session
+    there (curated per-project KNOWLEDGE). Composes cache-aware via `composeLaunchPrompt`
+    (pinned knowledge + recipe lead the stable prefix; see #12). Pure `lib/playbooks.ts`
+    (validate/buildKnowledgeBlock/rowToPlaybook) + server `lib/playbooks-server.ts`
+    (`resolvePlaybookParts` — project-scoped, so a foreign recipe id can't pull another
+    project's body). `/api/playbooks` CRUD, `data/playbooks` hooks, a compact
+    `PlaybookSelector` in NewSessionDialog (load / save-as / pin / delete), and
+    Command-Stoa `playbookId` support. _Seam:_ `lib/playbooks.ts`, `lib/playbooks-server.ts`,
+    `lib/prompt-compose.ts`, `app/api/playbooks`, `data/playbooks`,
+    `components/NewSessionDialog/PlaybookSelector.tsx`, `lib/command/{actions,create-session}.ts`.
+    (Deferred: feeding the assisted workflow generator + a richer playbook editor.)
 14. **Reusable warm-environment snapshots + startup commands** — `feature` · M. A
     named snapshot of a prepared worktree (deps/.env/build cache); new sessions boot
     from it. _Why:_ cold `npm install`/build per worktree is the biggest fan-out tax

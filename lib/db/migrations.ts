@@ -1111,6 +1111,31 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 45,
+    name: "add_playbooks",
+    up: (db) => {
+      // #13: Project Playbooks + auto-recalled Knowledge. A named prompt snippet;
+      // SELECT it as a recipe, or pin=1 with a project to auto-prepend it.
+      if (!hasTable(db, "playbooks")) {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS playbooks (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            body TEXT NOT NULL,
+            project_id TEXT,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+          );
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_playbooks_project ON playbooks(project_id)`
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

@@ -267,6 +267,23 @@ export function createSchema(db: Database.Database): void {
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE CASCADE
     );
 
+    -- Project Playbooks + auto-recalled Knowledge (#13). A playbook is a named,
+    -- reusable prompt snippet. Two uses from one row: SELECT it as a recipe (its body
+    -- seeds a new session's prompt), or set pinned=1 with a project so its body is
+    -- AUTO-prepended to every session in that project (curated per-project knowledge).
+    -- project_id NULL = a global recipe available everywhere (can't be pinned).
+    CREATE TABLE IF NOT EXISTS playbooks (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      project_id TEXT,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbooks_project ON playbooks(project_id);
+
     -- Agent-accessible shared memory: a fleet-wide key→value scratchpad any agent
     -- can read/write via the orchestration MCP server (memory_* tools) or the
     -- /api/memory route — the SAME shared surface a human UI would call.
