@@ -106,6 +106,33 @@ export function configuredAllowedOrigins(): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Tunnel origins registered at runtime by `stoa share` — one per line in
+ * ~/.stoa/shared-origins. Read LIVE on each WS upgrade (unioned with the env
+ * allowlist) so a share started AFTER the server is allow-listed without a
+ * restart. Absent/unreadable → [] (fail-safe: an unknown origin is denied). Only a
+ * process that can write ~/.stoa (which also holds the token) can add entries, so
+ * this opens no new trust boundary; a malformed line is skipped by isOriginAllowed.
+ */
+export const SHARED_ORIGINS_PATH = path.join(
+  os.homedir(),
+  ".stoa",
+  "shared-origins"
+);
+
+export function readSharedOrigins(
+  filePath: string = SHARED_ORIGINS_PATH
+): string[] {
+  try {
+    return readFileSync(filePath, "utf-8")
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /** Set-Cookie value for the auth cookie (HttpOnly, SameSite=Lax, 1y). */
 export function buildAuthCookie(token: string, secure: boolean): string {
   return [
@@ -273,8 +300,7 @@ export function decideHttpAuth(opts: {
 }
 
 export type WsAuthDecision =
-  | { type: "allow" }
-  | { type: "deny"; reason: "origin" | "token" };
+  { type: "allow" } | { type: "deny"; reason: "origin" | "token" };
 
 /** Decide WS upgrade: Origin allowlist ALWAYS, then the same token check. */
 export function decideWsAuth(opts: {

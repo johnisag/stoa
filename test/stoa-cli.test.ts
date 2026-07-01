@@ -44,6 +44,14 @@ const {
   isStoaStatusLine,
   mergeStatusLine,
   checkStatuslineHook,
+  selectTunnelProvider,
+  tunnelCommand,
+  parseTunnelUrl,
+  originFromUrl,
+  formatShareUrl,
+  addOriginToList,
+  removeOriginFromList,
+  decideShare,
 } = require(CLI_PATH) as {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
@@ -98,6 +106,27 @@ const {
     detail: string;
     hint?: string;
   };
+  selectTunnelProvider: (
+    tailscaleBin: string | null,
+    cloudflaredBin: string | null
+  ) => "tailscale" | "cloudflared" | null;
+  tunnelCommand: (
+    provider: string,
+    port: string | number
+  ) => { cmd: string; args: string[] } | null;
+  parseTunnelUrl: (provider: string, line: string) => string | null;
+  originFromUrl: (url: string) => string | null;
+  formatShareUrl: (publicUrl: string, token: string) => string | null;
+  addOriginToList: (list: string[], origin: string, max?: number) => string[];
+  removeOriginFromList: (list: string[], origin: string) => string[];
+  decideShare: (state: {
+    authOff?: boolean;
+    probeStatus?: number | "refused" | "error";
+    token?: string | null;
+    provider?: string | null;
+  }) =>
+    | { ok: true; provider: string }
+    | { ok: false; code: string; message: string };
 };
 
 function loadCliWith(env: Record<string, string | undefined>) {
@@ -603,5 +632,166 @@ describe("stoa CLI: statusline installer (M2b — never-clobber merge)", () => {
 
     // Malformed JSON reads as not installed, never throws.
     expect(checkStatuslineHook("{not json").status).toBe("warn");
+  });
+});
+
+// share (#11) — the tunnel-detection, URL-parsing, origin-registry, and (crucially)
+// the FAIL-CLOSED decision are pure helpers, tested without any real tunnel binary.
+describe("stoa share helpers", () => {
+  describe("selectTunnelProvider", () => {
+    it("prefers Tailscale, falls back to cloudflared, else null", () => {
+      expect(
+        selectTunnelProvider("/usr/bin/tailscale", "/usr/bin/cloudflared")
+      ).toBe("tailscale");
+      expect(selectTunnelProvider(null, "/usr/bin/cloudflared")).toBe(
+        "cloudflared"
+      );
+      expect(selectTunnelProvider("/usr/bin/tailscale", null)).toBe(
+        "tailscale"
+      );
+      expect(selectTunnelProvider(null, null)).toBeNull();
+    });
+  });
+
+  describe("tunnelCommand", () => {
+    it("builds the argv per provider (bare name, no shell string)", () => {
+      expect(tunnelCommand("tailscale", 3011)).toEqual({
+        cmd: "tailscale",
+        args: ["funnel", "3011"],
+      });
+      expect(tunnelCommand("cloudflared", "3011")).toEqual({
+        cmd: "cloudflared",
+        args: ["tunnel", "--url", "http://localhost:3011"],
+      });
+      expect(tunnelCommand("nope", 3011)).toBeNull();
+    });
+  });
+
+  describe("parseTunnelUrl", () => {
+    it("extracts the cloudflared trycloudflare.com URL from a noisy line", () => {
+      expect(
+        parseTunnelUrl(
+          "cloudflared",
+          "2026-07-01 INF |  https://tidy-otter-42.trycloudflare.com  |"
+        )
+      ).toBe("https://tidy-otter-42.trycloudflare.com");
+      expect(parseTunnelUrl("cloudflared", "starting tunnel…")).toBeNull();
+    });
+
+    it("extracts the Tailscale funnel ts.net URL", () => {
+      expect(
+        parseTunnelUrl(
+          "tailscale",
+          "Available on the internet:\n  https://my-box.tail1a2b.ts.net/"
+        )
+      ).toBe("https://my-box.tail1a2b.ts.net");
+      // never matches a non-funnel https URL
+      expect(
+        parseTunnelUrl("tailscale", "see https://tailscale.com/docs")
+      ).toBeNull();
+    });
+  });
+
+  describe("originFromUrl / formatShareUrl", () => {
+    it("derives the scheme://host origin", () => {
+      expect(originFromUrl("https://x.trycloudflare.com/path?q=1")).toBe(
+        "https://x.trycloudflare.com"
+      );
+      expect(originFromUrl("not a url")).toBeNull();
+    });
+    it("appends the token at the root path", () => {
+      expect(formatShareUrl("https://x.ts.net", "tok_ABC-123")).toBe(
+        "https://x.ts.net/?token=tok_ABC-123"
+      );
+      expect(formatShareUrl("garbage", "t")).toBeNull();
+    });
+  });
+
+  describe("addOriginToList / removeOriginFromList", () => {
+    it("dedup-adds and trims; remove drops exactly the origin", () => {
+      expect(addOriginToList([], "https://a.ts.net")).toEqual([
+        "https://a.ts.net",
+      ]);
+      expect(
+        addOriginToList([" https://a.ts.net ", ""], "https://a.ts.net")
+      ).toEqual(["https://a.ts.net"]); // already present (after trim) → no dupe
+      expect(addOriginToList(["https://a.ts.net"], "https://b.ts.net")).toEqual(
+        ["https://a.ts.net", "https://b.ts.net"]
+      );
+      expect(
+        removeOriginFromList(
+          ["https://a.ts.net", "https://b.ts.net"],
+          "https://a.ts.net"
+        )
+      ).toEqual(["https://b.ts.net"]);
+    });
+
+    it("caps the list to the newest `max` (bounds unbounded growth across runs)", () => {
+      const many = Array.from({ length: 25 }, (_, i) => `https://o${i}.ts.net`);
+      const out = addOriginToList(many, "https://new.ts.net", 20);
+      expect(out).toHaveLength(20);
+      expect(out[out.length - 1]).toBe("https://new.ts.net"); // newest kept
+      expect(out[0]).toBe("https://o6.ts.net"); // oldest dropped (26 - 20 = 6)
+    });
+  });
+
+  describe("decideShare (FAIL-CLOSED)", () => {
+    const ok = {
+      authOff: false,
+      probeStatus: 401 as const,
+      token: "tok",
+      provider: "tailscale",
+    };
+
+    it("shares only when auth on + server enforces token (401) + token + provider", () => {
+      expect(decideShare(ok)).toEqual({ ok: true, provider: "tailscale" });
+    });
+
+    it("refuses when auth is off (STOA_AUTH=off)", () => {
+      const d = decideShare({ ...ok, authOff: true });
+      expect(d.ok).toBe(false);
+      expect((d as { code: string }).code).toBe("auth-off");
+    });
+
+    it("refuses when nothing is listening / probe failed", () => {
+      expect(
+        (decideShare({ ...ok, probeStatus: "refused" }) as { code: string })
+          .code
+      ).toBe("not-running");
+      expect(
+        (decideShare({ ...ok, probeStatus: "error" }) as { code: string }).code
+      ).toBe("probe-failed");
+    });
+
+    it("refuses when the server trusts localhost (any non-401 to an unauthed probe) — the tunnel would bypass the token", () => {
+      for (const status of [200, 302, 404, 500]) {
+        const d = decideShare({ ...ok, probeStatus: status });
+        expect(d.ok).toBe(false);
+        expect((d as { code: string }).code).toBe("loopback-trusted");
+      }
+    });
+
+    it("refuses when the token is unknown, or no tunnel tool is present", () => {
+      expect(
+        (decideShare({ ...ok, token: null }) as { code: string }).code
+      ).toBe("no-token");
+      expect(
+        (decideShare({ ...ok, provider: null }) as { code: string }).code
+      ).toBe("no-tunnel");
+    });
+
+    it("checks auth-off BEFORE the probe (never leaks that it reached the server)", () => {
+      // auth-off + a would-be-safe probe still refuses with auth-off (order matters)
+      expect(
+        (
+          decideShare({
+            authOff: true,
+            probeStatus: 401,
+            token: "t",
+            provider: "x",
+          }) as { code: string }
+        ).code
+      ).toBe("auth-off");
+    });
   });
 });
