@@ -10,11 +10,7 @@
 import type { Session } from "./db";
 
 export type SessionStatusValue =
-  | "idle"
-  | "running"
-  | "waiting"
-  | "error"
-  | "dead";
+  "idle" | "running" | "waiting" | "error" | "dead";
 
 /** Statuses keyed by session id (only the `status` field is needed here). */
 type StatusMap = Record<string, { status: SessionStatusValue } | undefined>;
@@ -75,4 +71,73 @@ export function nextAttentionSessionId(
     currentId,
     statuses
   );
+}
+
+/**
+ * Attention tiers for the fleet bar (#15), most-urgent first: an agent BLOCKED on
+ * your input, then one that ERRORED, then one that finished and is IDLE-DONE
+ * (awaiting your glance), then the ones happily RUNNING (which don't need you at
+ * all), then OTHER (dead/unknown). This deliberately ranks idle-done ABOVE running
+ * — the "who needs me now" order, the OPPOSITE of the htop-style "what's active"
+ * view in lib/agent-monitor.ts (monitorStatusRank puts running above idle).
+ */
+export type AttentionTier =
+  "blocked" | "errored" | "idle-done" | "running" | "other";
+
+const TIER_RANK: Record<AttentionTier, number> = {
+  blocked: 0,
+  errored: 1,
+  "idle-done": 2,
+  running: 3,
+  other: 4,
+};
+
+/**
+ * Map a raw status to its attention tier. `waiting` = blocked on your input,
+ * `error` = errored, `idle` = finished/settled, `running` = busy, `dead`/unknown =
+ * other. v1 treats every `idle` as idle-done — a session only goes idle AFTER
+ * working, so the rare never-worked idle just sits in the same low tier (no new
+ * persisted "done" state needed).
+ */
+export function attentionTier(
+  status: SessionStatusValue | undefined
+): AttentionTier {
+  switch (status) {
+    case "waiting":
+      return "blocked";
+    case "error":
+      return "errored";
+    case "idle":
+      return "idle-done";
+    case "running":
+      return "running";
+    default:
+      return "other"; // dead / undefined
+  }
+}
+
+/** Attention priority for sorting — lower = more urgent (blocked 0 … other 4). */
+export function attentionRank(status: SessionStatusValue | undefined): number {
+  return TIER_RANK[attentionTier(status)];
+}
+
+/**
+ * Sessions ordered attention-first (blocked > errored > idle-done > running >
+ * other), preserving the input order WITHIN a tier via an index tiebreak — so the
+ * result is deterministic regardless of the engine's Array.sort stability. Pure →
+ * unit-tested; drives the fleet bar's chip order.
+ */
+export function rankSessionsByAttention(
+  sessions: Session[],
+  statuses: StatusMap | undefined
+): Session[] {
+  return sessions
+    .map((session, index) => ({ session, index }))
+    .sort((a, b) => {
+      const byRank =
+        attentionRank(statuses?.[a.session.id]?.status) -
+        attentionRank(statuses?.[b.session.id]?.status);
+      return byRank !== 0 ? byRank : a.index - b.index;
+    })
+    .map((x) => x.session);
 }

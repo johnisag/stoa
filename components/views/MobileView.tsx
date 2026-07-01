@@ -7,6 +7,7 @@ import { StartServerDialog } from "@/components/DevServers/StartServerDialog";
 import { SidebarFooter } from "@/components/SidebarFooter";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { PaneLayout } from "@/components/PaneLayout";
+import { FleetBar } from "@/components/FleetBar/FleetBar";
 import { SwipeSidebar } from "@/components/mobile/SwipeSidebar";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import type { ViewProps } from "./types";
@@ -147,6 +148,15 @@ export function MobileView({
           />
         </div>
       </SwipeSidebar>
+
+      {/* Attention-first fleet bar (#15) — always-visible, ranks live sessions by
+          who needs you now. A single thin row so it costs minimal terminal height. */}
+      <FleetBar
+        sessions={sessions}
+        sessionStatuses={sessionStatuses}
+        activeSessionId={focusedActiveTab?.sessionId || undefined}
+        onSelect={handleSelect}
+      />
 
       {/* Terminal fills the screen */}
       <div className="min-h-0 w-full flex-1">
