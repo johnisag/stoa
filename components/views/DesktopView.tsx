@@ -17,6 +17,7 @@ import {
   MoreHorizontal,
 } from "lucide-react";
 import { PaneLayout } from "@/components/PaneLayout";
+import { FleetBar } from "@/components/FleetBar/FleetBar";
 import {
   Tooltip,
   TooltipContent,
@@ -437,6 +438,15 @@ export function DesktopView({
             </Button>
           </div>
         </header>
+
+        {/* Attention-first fleet bar (#15) — always-visible, ranks live sessions
+            by who needs you now. Reads the same live statuses as the sidebar. */}
+        <FleetBar
+          sessions={sessions}
+          sessionStatuses={sessionStatuses}
+          activeSessionId={focusedActiveTab?.sessionId || undefined}
+          onSelect={handleSelect}
+        />
 
         {/* Pane Layout - full height */}
         <div className="min-h-0 flex-1">

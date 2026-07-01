@@ -313,9 +313,21 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     **Deferred → #14b: startup commands** — per-project configured commands run on
     session boot (reuse the `dev-servers` `tokenizeCommand`+`resolveBinary`+
     `resolveDevServerSpawn` safe-exec pattern; its own PR).
-15. **Attention-first fleet bar** — `feature` · M. An always-visible strip ranking
-    live sessions by who needs you now (blocked > errored > idle-done > running).
-    _Seam:_ `lib/session-status.ts`, `lib/session-attention.ts`, new strip component.
+15. ✅ **Attention-first fleet bar** — `feature` · M. **SHIPPED.** An always-visible
+    strip that ranks live sessions by WHO NEEDS YOU NOW. New pure core in
+    `lib/session-attention.ts` (`attentionTier`/`attentionRank`/`rankSessionsByAttention`)
+    orders blocked > errored > idle-done > running > other — deliberately ranking
+    idle-done ABOVE running (the "who needs me" order, the opposite of the htop-style
+    `monitorStatusRank`). The strip (`components/FleetBar`) chips only the ACTIONABLE
+    tiers (blocked/errored), ranked + clickable-to-focus, and summarizes idle/running
+    as trailing counts so it stays attention-focused, not a session dump. It reuses
+    `countNeedsAttention` for the "N need you" count (can't drift from the sidebar
+    badge) and reads the SAME live `sessionStatuses` (no new polling; React Query
+    structural sharing keeps the memo effective). Mounted in both DesktopView + MobileView
+    (one thin `h-8` row, minimal terminal cost). v1 keeps it simple — no new DB state
+    ("idle-done" = "idle", since a session only goes idle after working). _Seam:_
+    `lib/session-attention.ts`, `components/FleetBar/FleetBar.tsx`,
+    `components/views/{DesktopView,MobileView}.tsx`.
 16. **iOS push self-healing on launch** — `mobile` · M. On focus when
     standalone+subscribed, re-subscribe if the endpoint silently dropped; prune dead
     endpoints. _Why:_ directly fixes the known "iOS PWA push is flaky" gap. _Seam:_

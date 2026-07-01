@@ -4,6 +4,9 @@ import {
   countNeedsAttention,
   nextAttentionSessionId,
   nextAttentionSession,
+  attentionTier,
+  attentionRank,
+  rankSessionsByAttention,
   type SessionStatusValue,
 } from "@/lib/session-attention";
 import type { Session } from "@/lib/db";
@@ -128,5 +131,70 @@ describe("nextAttentionSession", () => {
     expect(nextAttentionSession(order, "a", st)).toBe("b"); // current not attention
     expect(nextAttentionSession(order, null, st)).toBe("b"); // no current
     expect(nextAttentionSession(order, "zzz", st)).toBe("b"); // current not in list
+  });
+});
+
+describe("attentionTier / attentionRank (#15)", () => {
+  it("maps each status to its tier", () => {
+    expect(attentionTier("waiting")).toBe("blocked");
+    expect(attentionTier("error")).toBe("errored");
+    expect(attentionTier("idle")).toBe("idle-done");
+    expect(attentionTier("running")).toBe("running");
+    expect(attentionTier("dead")).toBe("other");
+    expect(attentionTier(undefined)).toBe("other");
+  });
+
+  it("ranks blocked > errored > idle-done > running > other (lower = more urgent)", () => {
+    expect(attentionRank("waiting")).toBeLessThan(attentionRank("error"));
+    expect(attentionRank("error")).toBeLessThan(attentionRank("idle"));
+    // the crux: a finished/idle session outranks a running one for ATTENTION
+    expect(attentionRank("idle")).toBeLessThan(attentionRank("running"));
+    expect(attentionRank("running")).toBeLessThan(attentionRank("dead"));
+    expect(attentionRank(undefined)).toBe(attentionRank("dead"));
+  });
+});
+
+describe("rankSessionsByAttention (#15)", () => {
+  it("orders sessions attention-first, idle above running", () => {
+    const sessions = ["run", "wait", "idle", "err"].map(mkSession);
+    const st = statuses({
+      run: "running",
+      wait: "waiting",
+      idle: "idle",
+      err: "error",
+    });
+    expect(rankSessionsByAttention(sessions, st).map((s) => s.id)).toEqual([
+      "wait",
+      "err",
+      "idle",
+      "run",
+    ]);
+  });
+
+  it("is a STABLE sort — ties keep input order (no engine-dependent shuffle)", () => {
+    const sessions = ["a", "b", "c"].map(mkSession);
+    const st = statuses({ a: "waiting", b: "waiting", c: "waiting" });
+    expect(rankSessionsByAttention(sessions, st).map((s) => s.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("treats missing status as 'other' (sorts last), and doesn't mutate input", () => {
+    const sessions = ["known", "unknown"].map(mkSession);
+    const st = statuses({ known: "running" }); // 'unknown' has no status entry
+    const ranked = rankSessionsByAttention(sessions, st);
+    expect(ranked.map((s) => s.id)).toEqual(["known", "unknown"]);
+    expect(sessions.map((s) => s.id)).toEqual(["known", "unknown"]); // input intact
+  });
+
+  it("handles an empty roster and an undefined status map", () => {
+    expect(rankSessionsByAttention([], undefined)).toEqual([]);
+    const sessions = ["a", "b"].map(mkSession);
+    // all 'other' → preserves input order
+    expect(
+      rankSessionsByAttention(sessions, undefined).map((s) => s.id)
+    ).toEqual(["a", "b"]);
   });
 });
