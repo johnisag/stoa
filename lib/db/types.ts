@@ -156,6 +156,16 @@ export interface ProjectDevServer {
   sort_order: number;
 }
 
+/** #14b: a per-project startup command run on new-session boot (safe argv exec). */
+export interface ProjectStartupCommand {
+  id: string;
+  project_id: string;
+  name: string;
+  command: string;
+  sort_order: number;
+  created_at: string;
+}
+
 export interface ProjectRepository {
   id: string;
   project_id: string;

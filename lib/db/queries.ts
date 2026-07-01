@@ -289,6 +289,32 @@ export const queries = {
   deleteProjectDevServers: (db: Database.Database) =>
     getStmt(db, `DELETE FROM project_dev_servers WHERE project_id = ?`),
 
+  // Project startup commands (#14b)
+  createProjectStartupCommand: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO project_startup_commands (id, project_id, name, command, sort_order)
+       VALUES (?, ?, ?, ?, ?)`
+    ),
+
+  getProjectStartupCommand: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM project_startup_commands WHERE id = ?`),
+
+  getProjectStartupCommands: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM project_startup_commands WHERE project_id = ? ORDER BY sort_order ASC`
+    ),
+
+  updateProjectStartupCommand: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE project_startup_commands SET name = ?, command = ?, sort_order = ? WHERE id = ?`
+    ),
+
+  deleteProjectStartupCommand: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM project_startup_commands WHERE id = ?`),
+
   // Project repositories
   createProjectRepository: (db: Database.Database) =>
     getStmt(

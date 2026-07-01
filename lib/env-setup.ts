@@ -10,6 +10,10 @@ import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
 import { restoreSnapshot, captureSnapshot } from "./env-snapshot";
+import {
+  runStartupCommands,
+  type StartupCommandSpec,
+} from "./startup-commands";
 
 const execAsync = promisify(exec);
 
@@ -165,8 +169,13 @@ export async function setupWorktree(options: {
   sourcePath: string;
   port?: number;
   skipInstall?: boolean;
+  /** #14b: per-project startup commands (DB-backed, UI-authored) run AFTER deps
+   *  exist, each safe-exec'd as argv (never a shell string). Callers fetch the
+   *  rows and pass plain specs so this module stays DB-free. */
+  startupCommands?: StartupCommandSpec[];
 }): Promise<SetupResult> {
-  const { worktreePath, sourcePath, port, skipInstall } = options;
+  const { worktreePath, sourcePath, port, skipInstall, startupCommands } =
+    options;
 
   const result: SetupResult = {
     success: true,
@@ -265,6 +274,28 @@ export async function setupWorktree(options: {
           void captureSnapshot(worktreePath).catch(() => {});
         }
       }
+    }
+  }
+
+  // 5. Per-project startup commands (#14b) — AFTER deps exist (a build/codegen
+  // usually needs node_modules). Safe argv exec; env vars go via the spawn env
+  // (never string interpolation). A failed command marks the setup failed but
+  // the rest still run — a warmup step is non-fatal (the agent can redo it).
+  if (startupCommands && startupCommands.length > 0) {
+    const steps = await runStartupCommands(
+      startupCommands,
+      worktreePath,
+      envVars
+    );
+    for (const step of steps) {
+      result.steps.push({
+        name: `Startup: ${step.name}`,
+        command: step.command,
+        success: step.success,
+        output: step.output,
+        error: step.error,
+      });
+      if (!step.success) result.success = false;
     }
   }
 

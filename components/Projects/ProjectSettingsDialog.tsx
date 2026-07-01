@@ -27,6 +27,7 @@ import {
   GitBranch,
   Star,
   FolderOpen,
+  Play,
 } from "lucide-react";
 import { FolderPicker } from "@/components/FolderPicker";
 import { useUpdateProject } from "@/data/projects";
@@ -64,6 +65,14 @@ interface DevServerConfig {
   isDeleted?: boolean;
 }
 
+interface StartupCommandConfig {
+  id: string;
+  name: string;
+  command: string;
+  isNew?: boolean;
+  isDeleted?: boolean;
+}
+
 interface RepositoryConfig {
   id: string;
   name: string;
@@ -94,6 +103,9 @@ export function ProjectSettingsDialog({
   );
   const [initialPrompt, setInitialPrompt] = useState("");
   const [devServers, setDevServers] = useState<DevServerConfig[]>([]);
+  const [startupCommands, setStartupCommands] = useState<
+    StartupCommandConfig[]
+  >([]);
   const [repositories, setRepositories] = useState<RepositoryConfig[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
@@ -130,6 +142,13 @@ export function ProjectSettingsDialog({
           command: ds.command,
           port: ds.port || undefined,
           portEnvVar: ds.port_env_var || undefined,
+        }))
+      );
+      setStartupCommands(
+        (project.startupCommands || []).map((sc) => ({
+          id: sc.id,
+          name: sc.name,
+          command: sc.command,
         }))
       );
       setRepositories(
@@ -225,6 +244,40 @@ export function ProjectSettingsDialog({
   const updateDevServer = (id: string, updates: Partial<DevServerConfig>) => {
     setDevServers((prev) =>
       prev.map((ds) => (ds.id === id ? { ...ds, ...updates } : ds))
+    );
+  };
+
+  // Add new startup command (#14b)
+  const addStartupCommand = () => {
+    setStartupCommands((prev) => [
+      ...prev,
+      { id: `new_${Date.now()}`, name: "", command: "", isNew: true },
+    ]);
+  };
+
+  // Remove startup command
+  const removeStartupCommand = (id: string) => {
+    setStartupCommands(
+      (prev) =>
+        prev
+          .map((sc) =>
+            sc.id === id
+              ? sc.isNew
+                ? null // Remove new items completely
+                : { ...sc, isDeleted: true } // Mark existing for deletion
+              : sc
+          )
+          .filter(Boolean) as StartupCommandConfig[]
+    );
+  };
+
+  // Update startup command
+  const updateStartupCommand = (
+    id: string,
+    updates: Partial<StartupCommandConfig>
+  ) => {
+    setStartupCommands((prev) =>
+      prev.map((sc) => (sc.id === id ? { ...sc, ...updates } : sc))
     );
   };
 
@@ -376,6 +429,58 @@ export function ProjectSettingsDialog({
         }
       }
 
+      // Handle startup command changes (#14b) — surface a validation error
+      // (e.g. shell metacharacters rejected by the server) instead of silently
+      // dropping the command.
+      for (const sc of startupCommands) {
+        if (sc.isDeleted && !sc.isNew) {
+          await fetch(`/api/projects/${project.id}/startup-commands/${sc.id}`, {
+            method: "DELETE",
+          });
+        } else if (
+          sc.isNew &&
+          !sc.isDeleted &&
+          sc.name.trim() &&
+          sc.command.trim()
+        ) {
+          const res = await fetch(
+            `/api/projects/${project.id}/startup-commands`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name: sc.name.trim(),
+                command: sc.command.trim(),
+              }),
+            }
+          );
+          if (!res.ok) {
+            const data = await res.json().catch(() => null);
+            throw new Error(
+              data?.error || `Invalid startup command: ${sc.command}`
+            );
+          }
+        } else if (!sc.isNew && !sc.isDeleted) {
+          const res = await fetch(
+            `/api/projects/${project.id}/startup-commands/${sc.id}`,
+            {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name: sc.name.trim(),
+                command: sc.command.trim(),
+              }),
+            }
+          );
+          if (!res.ok) {
+            const data = await res.json().catch(() => null);
+            throw new Error(
+              data?.error || `Invalid startup command: ${sc.command}`
+            );
+          }
+        }
+      }
+
       // Handle repository changes
       for (const repo of repositories) {
         if (repo.isDeleted && !repo.isNew) {
@@ -413,7 +518,9 @@ export function ProjectSettingsDialog({
         }
       }
 
-      // Invalidate dev servers cache so list updates
+      // Invalidate dev servers cache so list updates. (Startup commands need no
+      // explicit invalidation: they have no separate query key — they ride the
+      // project payload, which useUpdateProject already invalidates.)
       queryClient.invalidateQueries({ queryKey: devServerKeys.list() });
       // Invalidate repositories cache
       queryClient.invalidateQueries({
@@ -424,7 +531,13 @@ export function ProjectSettingsDialog({
       onSave();
     } catch (err) {
       console.error("Failed to update project:", err);
-      setError("Failed to update project");
+      // Surface a specific message when we have one (e.g. a startup command
+      // rejected for shell metacharacters), else the generic fallback.
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Failed to update project"
+      );
     } finally {
       setIsLoading(false);
     }
@@ -437,6 +550,7 @@ export function ProjectSettingsDialog({
   };
 
   const visibleDevServers = devServers.filter((ds) => !ds.isDeleted);
+  const visibleStartupCommands = startupCommands.filter((sc) => !sc.isDeleted);
   const visibleRepositories = repositories.filter((repo) => !repo.isDeleted);
 
   const handleAgentTypeChange = (value: AgentType) => {
@@ -666,6 +780,82 @@ export function ProjectSettingsDialog({
                   ))}
                 </div>
               )}
+            </div>
+
+            {/* Startup Commands (#14b) */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Play className="h-4 w-4" />
+                  Startup Commands
+                </label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addStartupCommand}
+                >
+                  <Plus className="mr-1 h-3 w-3" />
+                  Add
+                </Button>
+              </div>
+
+              {visibleStartupCommands.length === 0 ? (
+                <p className="text-muted-foreground py-2 text-sm">
+                  No startup commands configured.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {visibleStartupCommands.map((sc) => (
+                    <div
+                      key={sc.id}
+                      className="bg-accent/30 space-y-2 rounded-lg p-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={sc.name}
+                          onChange={(e) =>
+                            updateStartupCommand(sc.id, {
+                              name: e.target.value,
+                            })
+                          }
+                          placeholder="Step name (e.g. Build)"
+                          className="h-8 flex-1"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => removeStartupCommand(sc.id)}
+                          className="text-red-500 hover:text-red-600"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                      <Input
+                        value={sc.command}
+                        onChange={(e) =>
+                          updateStartupCommand(sc.id, {
+                            command: e.target.value,
+                          })
+                        }
+                        placeholder="npm run build"
+                        className="h-8 font-mono"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-muted-foreground text-xs">
+                Run when a new session&apos;s worktree is set up (after
+                dependency install) — e.g.{" "}
+                <code className="font-mono">npm run build</code> or{" "}
+                <code className="font-mono">
+                  node scripts/gen.js --out dist
+                </code>
+                . Plain commands with flags and quoted arguments work; no pipes,
+                &amp;&amp; or $VARs (they run without a shell).
+              </p>
             </div>
 
             {/* Repositories */}

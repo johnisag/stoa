@@ -310,9 +310,24 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     `COPYFILE_FICLONE` (reflink on APFS/Btrfs, plain copy on Windows). Opt out with
     `STOA_ENV_SNAPSHOTS=0`. _Seam:_ `lib/env-snapshot.ts`, `lib/env-setup.ts`
     (`setupWorktree` install branch), `docs/setup/README.md`.
-    **Deferred → #14b: startup commands** — per-project configured commands run on
-    session boot (reuse the `dev-servers` `tokenizeCommand`+`resolveBinary`+
-    `resolveDevServerSpawn` safe-exec pattern; its own PR).
+    ✅ **#14b: startup commands — SHIPPED.** Per-project commands (build/codegen/
+    db-migrate) that run when a new session's worktree is set up, AFTER dependency
+    install — warming the worktree beyond `npm install`. Unlike the repo-file
+    `.stoa/worktrees.json` `setup[]` (shell strings, run as-authored), these are
+    UI-authored + DB-backed and follow the AGENTS.md hard rule: **safe argv exec
+    only** — `tokenizeCommand` (rejects shell metacharacters) → `resolveBinary` →
+    `.cmd`/`.bat` shims routed via `cmd.exe /c` with shell:false (CVE-2024-27980)
+    → `execFile`; env vars (WORKTREE_PATH/PORT) ride the spawn env, never string
+    interpolation. Runner (`lib/startup-commands.ts`) is deliberately DB-FREE with
+    injectable exec/resolve seams (OS-agnostic tests); a failed step is recorded
+    and non-fatal (the rest still run). Table `project_startup_commands`
+    (migration 46, CASCADE FK locked by test), CRUD mirroring `project_dev_servers`,
+    routes `/api/projects/[id]/startup-commands` (+`[cmdId]`) with tokenize
+    validation at save, a "Startup Commands" editor in ProjectSettingsDialog (with
+    inline help: plain commands, no pipes/&&/$VARs), and session-create passes the
+    project's commands into `setupWorktree`. _Seam:_ `lib/startup-commands.ts`,
+    `lib/env-setup.ts`, `lib/projects.ts`, `app/api/projects/[id]/startup-commands`,
+    `components/Projects/ProjectSettingsDialog.tsx`.
 15. ✅ **Attention-first fleet bar** — `feature` · M. **SHIPPED.** An always-visible
     strip that ranks live sessions by WHO NEEDS YOU NOW. New pure core in
     `lib/session-attention.ts` (`attentionTier`/`attentionRank`/`rankSessionsByAttention`)

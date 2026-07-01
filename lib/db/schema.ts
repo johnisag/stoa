@@ -121,6 +121,19 @@ export function createSchema(db: Database.Database): void {
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
+    -- Project startup commands (#14b): run on new-session boot to warm the
+    -- worktree beyond npm install (build, codegen, db migrate). Safe-exec only:
+    -- tokenizeCommand-validated at the API, spawned as argv (never a shell string).
+    CREATE TABLE IF NOT EXISTS project_startup_commands (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      command TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
     -- Project repositories (for multi-repo git support)
     CREATE TABLE IF NOT EXISTS project_repositories (
       id TEXT PRIMARY KEY,
@@ -452,6 +465,7 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_tool_calls_message_timestamp ON tool_calls(message_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
     CREATE INDEX IF NOT EXISTS idx_project_dev_servers_project ON project_dev_servers(project_id);
+    CREATE INDEX IF NOT EXISTS idx_project_startup_commands_project ON project_startup_commands(project_id);
     CREATE INDEX IF NOT EXISTS idx_project_repositories_project ON project_repositories(project_id);
     CREATE INDEX IF NOT EXISTS idx_dev_servers_project ON dev_servers(project_id);
     CREATE INDEX IF NOT EXISTS idx_bon_runs_project ON best_of_n_runs(project_id);

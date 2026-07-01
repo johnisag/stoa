@@ -327,11 +327,21 @@ export async function POST(request: NextRequest) {
         const capturedWorktreePath = worktreeInfo.worktreePath;
         const capturedSourcePath = workingDirectory;
         const capturedPort = port;
+        // #14b: the project's configured startup commands (build/codegen/…),
+        // run safe-exec'd after deps install. Fetched here (setupWorktree is
+        // deliberately DB-free) and captured for the background task.
+        const capturedStartupCommands = (
+          queries.getProjectStartupCommands(db).all(projectId) as Array<{
+            name: string;
+            command: string;
+          }>
+        ).map((c) => ({ name: c.name, command: c.command }));
         runInBackground(async () => {
           const result = await setupWorktree({
             worktreePath: capturedWorktreePath,
             sourcePath: capturedSourcePath,
             port: capturedPort,
+            startupCommands: capturedStartupCommands,
           });
           console.log("Worktree setup completed:", {
             port: capturedPort,
