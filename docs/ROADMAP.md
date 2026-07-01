@@ -243,10 +243,18 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
    makes a double-tap 409. _Seam:_ `app/sw.ts` (unchanged), `lib/notification-actions.ts`,
    `lib/session-status.ts`, `lib/auto-steer.ts`, `app/api/sessions/[id]/respond/route.ts`,
    `server.ts`.
-10. **Audit/activity timeline read surface + export** — `adoption` · M. `GET
-/api/sessions/[key]/events` + fleet `GET /api/audit` + an Activity panel
-    (filterable, JSON/CSV). _Seam:_ `lib/db/queries.ts`, `lib/command/audit.ts`,
-    new AuditView, `FLEET_NAV`.
+10. ✅ **Audit/activity timeline read surface + export** — `adoption` · M. **SHIPPED.**
+    A read/export surface over the existing `session_events` ledger (no migration):
+    `GET /api/sessions/[id]/events` (per-session) and fleet `GET /api/audit` (optional
+    `?session=<id>`, enriched with the human session name), both filterable by
+    `types`/`since`/`until` with `limit`/`offset` paging and a `?format=csv|json`
+    download. An **Activity** pane view (FLEET_NAV + Quick-switch) filters by time
+    window + category, pages the newest events, and exports the filtered set. The SQL
+    is built by a PURE, unit-tested core (`lib/audit/query.ts`) — every value a bound
+    placeholder, event types validated to the known set; CSV is formula-injection-guarded
+    (`lib/audit/csv.ts`). _Seam:_ `lib/audit/{query,csv,response}.ts`, `lib/db/queries.ts`,
+    `app/api/audit/route.ts`, `app/api/sessions/[id]/events/route.ts`,
+    `components/views/ActivityView`, `data/audit`, `FLEET_NAV`.
 11. **`stoa share` — one-command secure remote access** — `adoption` · M. Detect
     Tailscale funnel (else cloudflared), append `?token=`, print a QR, register the
     WS origin, fail-closed if auth is off. _Seam:_ `scripts/stoa.js`, `lib/auth.ts`.

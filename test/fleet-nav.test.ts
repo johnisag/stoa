@@ -13,6 +13,7 @@ import {
   LayoutGrid,
   Gauge,
   TerminalSquare,
+  History,
 } from "lucide-react";
 import { FLEET_NAV, fleetNavEntry } from "@/components/nav/fleet-nav";
 
@@ -30,6 +31,7 @@ describe("FLEET_NAV", () => {
       "fleet-board",
       "live-wall",
       "agent-monitor",
+      "activity",
       "ask-stoa",
       "notes",
       "commands",
@@ -48,6 +50,7 @@ describe("FLEET_NAV", () => {
     expect(icons["fleet-board"]).toBe(Columns3);
     expect(icons["live-wall"]).toBe(LayoutGrid);
     expect(icons["agent-monitor"]).toBe(Gauge);
+    expect(icons.activity).toBe(History);
     expect(icons["ask-stoa"]).toBe(Sparkles);
     expect(icons.notes).toBe(NotebookPen);
     expect(icons.commands).toBe(TerminalSquare);
@@ -75,6 +78,9 @@ describe("FLEET_NAV", () => {
     expect(aria["agent-monitor"]).toBe(
       "Agent Monitor (per-session telemetry — model, tokens, context, cost)"
     );
+    expect(aria.activity).toBe(
+      "Activity (the raw audit-event timeline — filterable, CSV/JSON export)"
+    );
     expect(aria["ask-stoa"]).toBe("Ask Stoa (chat about your fleet)");
     expect(aria.notes).toBe("Notes (shared knowledge base)");
     expect(aria.commands).toBe("Commands (author native slash commands)");
@@ -94,6 +100,7 @@ describe("FLEET_NAV", () => {
     expect(labels["fleet-board"]).toBe("Fleet Board");
     expect(labels["live-wall"]).toBe("Live Wall");
     expect(labels["agent-monitor"]).toBe("Agent Monitor");
+    expect(labels.activity).toBe("Activity");
     expect(labels["ask-stoa"]).toBe("Ask Stoa");
     expect(labels.notes).toBe("Notes");
     expect(labels.commands).toBe("Commands");

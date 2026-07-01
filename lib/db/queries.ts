@@ -1,4 +1,6 @@
 import type Database from "better-sqlite3";
+import type { SessionEvent } from "./types";
+import { buildAuditSql, type AuditQuery } from "../audit/query";
 
 // Prepared statement cache keyed by Database instance so statements are released
 // when the database is garbage-collected. A WeakMap prevents unbounded growth
@@ -1325,3 +1327,20 @@ export const queries = {
   getDispatchRepoBySlug: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM dispatch_repos WHERE repo_slug = ?`),
 };
+
+// Audit read surface (#10). Dynamic filters (types/time/pagination) mean the SQL
+// shape varies, so these build it via the pure builder and prepare through the same
+// per-db statement cache (one prepared statement per distinct filter shape).
+export function readAuditEvents(
+  db: Database.Database,
+  q: AuditQuery
+): SessionEvent[] {
+  const { sql, params } = buildAuditSql(q);
+  return getStmt(db, sql).all(...params) as SessionEvent[];
+}
+
+export function countAuditEvents(db: Database.Database, q: AuditQuery): number {
+  const { countSql, countParams } = buildAuditSql(q);
+  const row = getStmt(db, countSql).get(...countParams) as { n: number };
+  return row.n;
+}

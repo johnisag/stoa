@@ -26,6 +26,7 @@ import {
   LayoutGrid,
   Gauge,
   TerminalSquare,
+  History,
 } from "lucide-react";
 import { statusGlyph } from "@/components/status-glyph";
 import type { Session } from "@/lib/db";
@@ -117,6 +118,7 @@ interface QuickSwitcherProps {
   onOpenCommands?: () => void;
   onOpenLiveWall?: () => void;
   onOpenAgentMonitor?: () => void;
+  onOpenActivity?: () => void;
 }
 
 /**
@@ -143,6 +145,7 @@ export function QuickSwitcher({
   onOpenCommands,
   onOpenLiveWall,
   onOpenAgentMonitor,
+  onOpenActivity,
 }: QuickSwitcherProps) {
   const { isMobile } = useViewport();
   const [mode, setMode] = useState<SwitcherMode>("sessions");
@@ -244,6 +247,13 @@ export function QuickSwitcher({
       onOpenAgentMonitor,
       <Gauge className="h-4 w-4" />
     );
+    add(
+      "open-activity",
+      "Open Activity",
+      ["activity", "audit", "timeline", "events", "log", "history", "trail"],
+      onOpenActivity,
+      <History className="h-4 w-4" />
+    );
     return list;
   }, [
     onNewSession,
@@ -257,6 +267,7 @@ export function QuickSwitcher({
     onOpenCommands,
     onOpenLiveWall,
     onOpenAgentMonitor,
+    onOpenActivity,
   ]);
 
   // Fuzzy-match + rank commands by the same query the session lane uses.
