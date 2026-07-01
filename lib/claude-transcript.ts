@@ -39,16 +39,18 @@ export async function readClaudeTranscriptRaw(
  * Resolve the absolute path of a Claude session's JSONL transcript, or null when
  * the id is unsafe. Same path-traversal guard as the reader: `claudeSessionId` is
  * interpolated into the path and can come from a stored/POSTed field, so reject
- * anything that isn't a plain id token BEFORE building the path (keeps it inside
- * ~/.claude/projects — no `../` escape). Does a couple of cheap stat/dir lookups to
- * locate the project dir but NO transcript read, so the cost cache (#18) can call
- * it on its hot path to key + stat the file without paying the parse.
+ * anything that isn't a plain id token — letters, digits, `_`, `-` only (explicit
+ * ASCII, not `\w`, so the intent of a security guard can't be misread) — BEFORE
+ * building the path (keeps it inside ~/.claude/projects — no `../`/`.`/separator
+ * escape). Does a couple of cheap stat/dir lookups to locate the project dir but NO
+ * transcript read, so the cost cache (#18) can call it on its hot path to key + stat
+ * the file without paying the parse.
  */
 export function resolveClaudeTranscriptPath(
   cwd: string,
   claudeSessionId: string
 ): string | null {
-  if (!/^[\w-]+$/.test(claudeSessionId)) return null;
+  if (!/^[A-Za-z0-9_-]+$/.test(claudeSessionId)) return null;
   const expanded = expandHome(cwd);
   const projectDir =
     findClaudeProjectDir(expanded) ||

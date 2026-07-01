@@ -115,16 +115,43 @@ describe("createStatGatedCache", () => {
     expect(cache.stats().misses).toBe(missesBefore + 1);
   });
 
-  it("invalidate() drops one entry; reset() clears everything + counters", async () => {
+  it("reset() clears everything + counters", async () => {
     const { files, io } = fakeIO();
     files.set("/a", { mtimeMs: 1, size: 1, value: "A" });
     const cache = createStatGatedCache<string>();
     await cache.get("/a", io);
-    cache.invalidate("/a");
-    expect(cache.stats().size).toBe(0);
-    await cache.get("/a", io);
+    await cache.get("/a", io); // a hit, to move a counter
     cache.reset();
     expect(cache.stats()).toEqual({ size: 0, hits: 0, misses: 0 });
+  });
+
+  it("a rejecting load resolves to null (never poisons joiners) and retries next time", async () => {
+    let loadCalls = 0;
+    let rejectLoad: () => void = () => {};
+    const io: StatGatedIO<string> = {
+      stat: async () => ({ mtimeMs: 1, size: 1 }),
+      load: () => {
+        loadCalls++;
+        return new Promise<string | null>((_res, rej) => {
+          rejectLoad = () => rej(new Error("boom"));
+        });
+      },
+    };
+    const cache = createStatGatedCache<string>();
+    const a = cache.get("/p", io);
+    const b = cache.get("/p", io);
+    await new Promise((r) => setTimeout(r, 0));
+    rejectLoad();
+    // The reject is caught → null, not a thrown rejection, for BOTH callers.
+    expect(await a).toBeNull();
+    expect(await b).toBeNull();
+    expect(loadCalls).toBe(1); // still coalesced into one load
+    // pending was cleared → a later get retries with a fresh (now succeeding) load.
+    const io2: StatGatedIO<string> = {
+      stat: async () => ({ mtimeMs: 1, size: 1 }),
+      load: async () => "OK",
+    };
+    expect(await cache.get("/p", io2)).toBe("OK");
   });
 
   it("coalesces concurrent misses on the same path into ONE load", async () => {

@@ -38,8 +38,6 @@ export interface StatGatedCache<T> {
   /** Return the cached value when the file is unchanged, else load + cache it.
    *  Returns null (and forgets any stale entry) when the file is gone/unreadable. */
   get(path: string, io: StatGatedIO<T>): Promise<T | null>;
-  /** Drop a single path (e.g. when its session is deleted). */
-  invalidate(path: string): void;
   /** Clear everything (primarily for tests). */
   reset(): void;
   stats(): { size: number; hits: number; misses: number };
@@ -98,16 +96,18 @@ export function createStatGatedCache<T>(opts?: {
           }
           remember(path, st, value);
           return value;
+        } catch {
+          // Honor the load contract (null on failure) even if a caller's load
+          // rejects, so a rejection can never propagate to concurrent joiners or up
+          // into the cost computation. Best-effort: forget any stale entry.
+          map.delete(path);
+          return null;
         } finally {
           pending.delete(path);
         }
       })();
       pending.set(path, load);
       return load;
-    },
-    invalidate(path) {
-      map.delete(path);
-      pending.delete(path);
     },
     reset() {
       map.clear();
