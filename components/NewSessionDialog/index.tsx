@@ -227,6 +227,8 @@ export function NewSessionDialog({
                 onSkipPermissionsChange={form.handleSkipPermissionsChange}
                 enableOrchestration={form.enableOrchestration}
                 onEnableOrchestrationChange={form.setEnableOrchestration}
+                budgetUsd={form.budgetUsd}
+                onBudgetUsdChange={form.setBudgetUsd}
               />
 
               {form.error && (

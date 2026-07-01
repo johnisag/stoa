@@ -7,6 +7,9 @@ export interface SessionStatus {
   verifyStatus?: string | null;
   verifyOutput?: string | null;
   verifyRanAt?: string | null;
+  /** #21 budget badge: stage vs budget cap + parked flag. */
+  budgetStage?: string;
+  budgetParked?: boolean;
 }
 
 export interface SessionListProps {

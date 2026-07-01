@@ -307,6 +307,8 @@ export interface CreateSessionInput {
   enableOrchestration: boolean;
   useTmux: boolean;
   initialPrompt: string | null;
+  /** #21: lifetime USD budget cap (null = no budget). */
+  budgetUsd?: number | null;
 }
 
 interface CreateSessionResponse {

@@ -13,6 +13,7 @@ import {
 import { getDb } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
 import { claudeProjectDirName, findClaudeProjectDir } from "@/lib/platform";
+import { getBudgetStage, isBudgetParked } from "@/lib/budget-park";
 
 const backend = getSessionBackend();
 
@@ -31,6 +32,10 @@ interface SessionStatusResponse {
   verifyStatus?: string | null;
   verifyRanAt?: string | null;
   verifyOutput?: string | null;
+  /** #21 budget badge: the session's stage vs its budget cap (ok/warn80/cap)
+   * and whether the tick has PARKED it (fail-closed, no new work fed). */
+  budgetStage?: string;
+  budgetParked?: boolean;
 }
 
 async function getTmuxSessions(): Promise<string[]> {
@@ -265,6 +270,8 @@ export async function GET() {
         verifyStatus: v?.verify_status ?? null,
         verifyRanAt: v?.verify_ran_at ?? null,
         verifyOutput: v?.verify_output ? v.verify_output.slice(0, 400) : null,
+        budgetStage: getBudgetStage(id),
+        budgetParked: isBudgetParked(id),
       };
     }
 

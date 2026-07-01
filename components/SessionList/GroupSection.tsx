@@ -230,6 +230,12 @@ export function GroupSection({
                           verifyRanAt={
                             sessionStatuses?.[session.id]?.verifyRanAt
                           }
+                          budgetStage={
+                            sessionStatuses?.[session.id]?.budgetStage
+                          }
+                          budgetParked={
+                            sessionStatuses?.[session.id]?.budgetParked
+                          }
                           groups={groups}
                           onSelect={onSelectSession}
                           onFork={onForkSession}
@@ -262,6 +268,12 @@ export function GroupSection({
                             }
                             verifyRanAt={
                               sessionStatuses?.[worker.id]?.verifyRanAt
+                            }
+                            budgetStage={
+                              sessionStatuses?.[worker.id]?.budgetStage
+                            }
+                            budgetParked={
+                              sessionStatuses?.[worker.id]?.budgetParked
                             }
                             groups={groups}
                             onSelect={onSelectSession}

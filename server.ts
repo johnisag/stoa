@@ -28,6 +28,15 @@ import {
 import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
 import { sessionVerifyTick } from "./lib/session-verify";
 import {
+  decideBudgetActions,
+  applyBudgetDecision,
+  currentBudgetStages,
+  currentParked,
+  pruneBudgetState,
+  budgetParkEnabled,
+  isBudgetParked,
+} from "./lib/budget-park";
+import {
   actionsForKind,
   canApproveFromPrompt,
 } from "./lib/notification-actions";
@@ -609,6 +618,9 @@ app.prepare().then(() => {
         }
       }
       for (const s of curr) {
+        // #21: a budget-parked session gets NO new work (fail-closed park).
+        // The user can still type manually; the queue resumes on unpark.
+        if (isBudgetParked(s.id)) continue;
         // Cross-loop guard: never paste a queued prompt into a rate-limited session
         // (the resume loop below owns it — pasting here would hit the limited TUI
         // before its reset and lose the prompt) or one a channel push is mid-paste
@@ -689,6 +701,8 @@ app.prepare().then(() => {
         // Anchor the no-reset fallback at the moment the limit was first seen.
         if (!rateLimitParkedAt.has(s.id)) rateLimitParkedAt.set(s.id, rlNowMs);
         if (!AUTO_RESUME_ENABLED || rateLimitResumed.has(s.id)) continue;
+        // #21: a budget-parked session must not be auto-nudged back to work.
+        if (isBudgetParked(s.id)) continue;
         // Per-day resume budget: roll the counter over when the UTC day changes.
         let budget = rateLimitResumeDay.get(s.id);
         if (!budget || budget.day !== resumeDay) {
@@ -907,6 +921,8 @@ app.prepare().then(() => {
       // NEXT unread is delivered on a later tick (one message at a time).
       if (CHANNEL_DELIVER_ENABLED) {
         for (const s of curr) {
+          // #21: no channel pushes into a budget-parked session (fail-closed).
+          if (isBudgetParked(s.id)) continue;
           // Mutual exclusion with the other tick loops (all fire on "idle" off the
           // same snapshot): skip if a delivery is in flight, the queue already
           // pasted this idle period, the session is rate-limited (the resume loop
@@ -1031,6 +1047,80 @@ app.prepare().then(() => {
         budgetTickBusy = false;
       }
     }, 30000);
+  }
+
+  // ── #21 per-session budgets (always armed; near-free when none configured) ──
+  // A session with budget_usd set gets ONE push at 80% and ONE at 100% of its
+  // cap (edge-triggered), and — with STOA_BUDGET_PARK=1 — is PARKED at the cap:
+  // the prompt queue / auto-resume / channel delivery stop feeding it work
+  // (fail-closed), but nothing is killed and the user can still type. Distinct
+  // from the global STOA_BUDGET_* enforcement above (that kill is final).
+  {
+    let budgetParkBusy = false;
+    const runBudgetParkTick = async () => {
+      if (budgetParkBusy) return;
+      budgetParkBusy = true;
+      try {
+        const sessions = queries.getAllSessions(getDb()).all() as Session[];
+        pruneBudgetState(new Set(sessions.map((s) => s.id)));
+        const budgeted = sessions.filter(
+          (s) => s.budget_usd != null && s.budget_usd > 0
+        );
+        // Skip transcript reads when unused — but carried park/stage state must
+        // still flow through decide (a parked session whose budget was CLEARED
+        // is only unparked by its now-"ok" stage), so only bail when both the
+        // budgets and the state are empty.
+        if (
+          budgeted.length === 0 &&
+          currentParked().size === 0 &&
+          currentBudgetStages().size === 0
+        ) {
+          return;
+        }
+        const costs =
+          budgeted.length > 0 ? await computeSessionCosts(budgeted) : {};
+        const decision = decideBudgetActions({
+          sessions, // the WHOLE fleet: a cleared budget unparks via "ok"
+          costs,
+          prevStages: currentBudgetStages(),
+          parked: currentParked(),
+          parkEnabled: budgetParkEnabled(),
+        });
+        for (const a of decision.alert80) {
+          const name = sanitizeNotificationText(a.name, { fallback: a.id });
+          void sendPushToAll({
+            title: "Stoa budget",
+            body: `${name} is at 80% of its $${a.budgetUsd} budget (now $${a.costUsd.toFixed(2)})`,
+            tag: `budget-${a.id}-80`,
+            url: "/",
+          }).catch((err) => console.error("budget push failed:", err));
+        }
+        for (const a of decision.alert100) {
+          const name = sanitizeNotificationText(a.name, { fallback: a.id });
+          const parkedNote =
+            budgetParkEnabled() && decision.park.includes(a.id)
+              ? " — parked (no new work will be fed)"
+              : "";
+          void sendPushToAll({
+            title: "Stoa budget",
+            body: `${name} hit its $${a.budgetUsd} budget (now $${a.costUsd.toFixed(2)})${parkedNote}`,
+            tag: `budget-${a.id}-100`,
+            url: "/",
+          }).catch((err) => console.error("budget push failed:", err));
+        }
+        applyBudgetDecision(decision);
+      } catch (err) {
+        console.error("session budget tick failed:", err);
+      } finally {
+        budgetParkBusy = false;
+      }
+    };
+    const parkTimer = setInterval(runBudgetParkTick, 30000);
+    parkTimer.unref?.();
+    // Run once at startup: the park/stage state is in-memory, so a restart
+    // would otherwise leave a capped session unparked (and its badge blank)
+    // for a full 30s window before the first tick re-parks it.
+    void runBudgetParkTick();
   }
 
   // ── dispatch reconciler (GitHub issue → agent fleet) ──
