@@ -227,6 +227,9 @@ export function GroupSection({
                           verifyOutput={
                             sessionStatuses?.[session.id]?.verifyOutput
                           }
+                          verifyRanAt={
+                            sessionStatuses?.[session.id]?.verifyRanAt
+                          }
                           groups={groups}
                           onSelect={onSelectSession}
                           onFork={onForkSession}
@@ -256,6 +259,9 @@ export function GroupSection({
                             }
                             verifyOutput={
                               sessionStatuses?.[worker.id]?.verifyOutput
+                            }
+                            verifyRanAt={
+                              sessionStatuses?.[worker.id]?.verifyRanAt
                             }
                             groups={groups}
                             onSelect={onSelectSession}

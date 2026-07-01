@@ -101,6 +101,19 @@ export function sessionVerifyTick(
       `UPDATE sessions SET verify_status = NULL, verify_output = NULL, verify_ran_at = NULL WHERE verify_status = 'running'`
     ).run();
   }
+  try {
+    sessionVerifyLoop(db, curr);
+  } finally {
+    // Advance the transition source even if a per-session op threw mid-loop,
+    // so one bad row can't make the next tick re-detect stale boundaries.
+    prevStatusById = new Map(curr.map((s) => [s.id, s.status]));
+  }
+}
+
+function sessionVerifyLoop(
+  db: ReturnType<typeof getDb>,
+  curr: Array<{ id: string; status: string; prompt?: unknown }>
+): void {
   for (const s of curr) {
     const decision = decideSessionVerify({
       prevStatus: prevStatusById.get(s.id),
@@ -151,5 +164,4 @@ export function sessionVerifyTick(
       }
     }, `session-verify-${s.id}`);
   }
-  prevStatusById = new Map(curr.map((s) => [s.id, s.status]));
 }
