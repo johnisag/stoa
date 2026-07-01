@@ -7,7 +7,10 @@
  * id pointing at a non-existent transcript also returns null (best-effort).
  */
 import { describe, it, expect } from "vitest";
-import { readClaudeTranscriptRaw } from "../lib/claude-transcript";
+import {
+  readClaudeTranscriptRaw,
+  resolveClaudeTranscriptPath,
+} from "../lib/claude-transcript";
 
 describe("readClaudeTranscriptRaw — path-traversal guard", () => {
   it("rejects ids containing separators / dot-dot / spaces (returns null, no read)", async () => {
@@ -34,5 +37,28 @@ describe("readClaudeTranscriptRaw — path-traversal guard", () => {
         "stoa-test-nonexistent-0000"
       )
     ).resolves.toBeNull();
+  });
+});
+
+describe("resolveClaudeTranscriptPath — same guard, no read (#18 cache key)", () => {
+  it("returns null for unsafe ids (never builds an escaping path)", () => {
+    for (const bad of [
+      "../../etc/passwd",
+      "..\\..\\windows",
+      "a/b",
+      "a\\b",
+      "foo.bar",
+      "with space",
+      "",
+    ]) {
+      expect(resolveClaudeTranscriptPath("~/proj", bad)).toBeNull();
+    }
+  });
+
+  it("returns a `<id>.jsonl` path for a clean id (so the cache can stat it)", () => {
+    const p = resolveClaudeTranscriptPath("~/some-project", "abc-123_DEF");
+    expect(p).not.toBeNull();
+    // ends with the id + .jsonl, regardless of platform separator
+    expect(p!.replace(/\\/g, "/")).toMatch(/\/abc-123_DEF\.jsonl$/);
   });
 });

@@ -14,7 +14,16 @@ import type { Session } from "../lib/db";
 // controlled transcript (no real files) — locks that it actually nets the baseline.
 vi.mock("../lib/claude-transcript", () => ({
   readClaudeTranscriptRaw: vi.fn(),
+  resolveClaudeTranscriptPath: vi.fn(
+    (_cwd: string, id: string) => `/fake/${id}.jsonl`
+  ),
 }));
+
+// Exercise the cost LOGIC with the transcript cache OFF, so these tests read the
+// mocked transcript on every call (the #18 stat-gated cache is covered on its own
+// in test/transcript-cache.test.ts). readClaudeSessionUsage's kill-switch branch
+// then goes straight through readClaudeTranscriptRaw (the mocked fn above).
+process.env.STOA_TRANSCRIPT_CACHE = "0";
 
 // A few JSONL lines like Claude Code writes: user turns (no usage) + assistant
 // turns carrying message.usage, plus a blank + a malformed line to skip.

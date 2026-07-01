@@ -1,5 +1,13 @@
+import { stat as fsStat } from "fs/promises";
 import { ZERO_USAGE, computeCostUsd, type TokenUsage } from "./pricing";
-import { readClaudeTranscriptRaw } from "./claude-transcript";
+import {
+  readClaudeTranscriptRaw,
+  resolveClaudeTranscriptPath,
+} from "./claude-transcript";
+import {
+  createStatGatedCache,
+  transcriptCacheEnabled,
+} from "./transcript-cache";
 import type { Session } from "./db";
 import type { AgentType } from "./providers";
 
@@ -139,22 +147,62 @@ export function netForkUsage(
   };
 }
 
+type ClaudeUsage = { tokens: TokenUsage; contextTokens: number };
+
 /**
- * Read + sum usage for a Claude session from its on-disk transcript, plus the
- * live context-window occupancy (last turn's input). Async (so the cost route
- * can read all sessions concurrently without blocking the event loop). Returns
- * null when the transcript can't be read (best-effort).
+ * Stat-gated cache of parsed transcript usage (#18), shared across EVERY cost
+ * consumer — the cost route, the budget tick (30s), the cost sampler (60s), the
+ * auto-compact tick (60s), analytics, and the monitor all reach transcripts through
+ * `readClaudeSessionUsage`, so one cache spares them re-reading + re-parsing the
+ * same large append-only JSONL each tick (the biggest avoidable steady-state IO).
+ * Bounded so a long-lived fleet can't grow it without limit.
  */
-export async function readClaudeSessionUsage(
+const claudeUsageCache = createStatGatedCache<ClaudeUsage>({ max: 512 });
+
+/** Uncached read + dual-parse of a Claude transcript (the cache's load step and
+ *  the kill-switch fallback). Null when the transcript can't be read. */
+async function loadClaudeUsage(
   cwd: string,
   claudeSessionId: string
-): Promise<{ tokens: TokenUsage; contextTokens: number } | null> {
+): Promise<ClaudeUsage | null> {
   const raw = await readClaudeTranscriptRaw(cwd, claudeSessionId);
   if (raw == null) return null;
   return {
     tokens: parseClaudeUsage(raw),
     contextTokens: parseClaudeContextTokens(raw),
   };
+}
+
+/**
+ * Read + sum usage for a Claude session from its on-disk transcript, plus the live
+ * context-window occupancy (last turn's input). Async (so the cost route can read
+ * all sessions concurrently without blocking the event loop). Returns null when the
+ * transcript can't be read (best-effort). Served from a stat-gated cache: a cache
+ * hit costs one `resolve` + one `stat` and no read/parse, and is invalidated the
+ * instant the transcript's mtime or size changes (so budget/cost decisions never
+ * act on stale usage). Fork baselines are applied by the CALLER after this returns,
+ * so caching the raw parsed usage is safe.
+ */
+export async function readClaudeSessionUsage(
+  cwd: string,
+  claudeSessionId: string
+): Promise<ClaudeUsage | null> {
+  // Kill switch first, so a disabled cache never even stats the file and behaves
+  // byte-identically to the pre-cache path (read + parse on every call).
+  if (!transcriptCacheEnabled()) return loadClaudeUsage(cwd, claudeSessionId);
+  const path = resolveClaudeTranscriptPath(cwd, claudeSessionId);
+  if (!path) return null;
+  return claudeUsageCache.get(path, {
+    stat: async (p) => {
+      try {
+        const s = await fsStat(p);
+        return { mtimeMs: s.mtimeMs, size: s.size };
+      } catch {
+        return null; // missing/unreadable → treated as a cache miss + eviction
+      }
+    },
+    load: () => loadClaudeUsage(cwd, claudeSessionId),
+  });
 }
 
 /** Reads a provider's on-disk transcript and returns cumulative token usage +
