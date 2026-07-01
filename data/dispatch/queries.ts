@@ -274,6 +274,8 @@ export type UpdateRepoPatch = Partial<{
   mergeTrain: boolean;
   verifyGate: boolean;
   verifyCommand: string | null;
+  /** #20 cost-aware routing: the repo's worker base model (null = agent default). */
+  defaultModel: string | null;
   maintainerSurveyEnabled: boolean;
   maintainerSurveyGoal: string | null;
   maintainerSurveyCadence: string | null;
@@ -340,6 +342,9 @@ export function useUpdateRepo() {
                   : {}),
                 ...(patch.verifyCommand !== undefined
                   ? { verify_command: patch.verifyCommand }
+                  : {}),
+                ...(patch.defaultModel !== undefined
+                  ? { default_model: patch.defaultModel }
                   : {}),
                 ...(patch.maintainerSurveyEnabled !== undefined
                   ? {

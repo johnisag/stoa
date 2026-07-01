@@ -655,6 +655,13 @@ export const queries = {
       `UPDATE dispatch_repos SET agent_type = ?, daily_quota = ?, max_concurrency = ?, label_filter = ?, base_branch = ?, mode = ?, enabled = ?, review_gate = ?, ci_autofix = ?, merge_train = ?, verify_gate = ?, verify_command = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // #20 cost-aware routing: the repo's worker base model (NULL = agent default).
+  updateDispatchRepoDefaultModel: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE dispatch_repos SET default_model = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
   deleteDispatchRepo: (db: Database.Database) =>
     getStmt(db, `DELETE FROM dispatch_repos WHERE id = ?`),
 

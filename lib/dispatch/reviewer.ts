@@ -17,6 +17,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { getDb, queries } from "../db";
 import { resolveModelForAgent } from "../model-catalog";
+import { modelForFixRound } from "../model-router";
 import { getProvider, buildAgentArgs, shellQuoteArg } from "../providers";
 import type { AgentType } from "../providers";
 import { sessionKey } from "../providers/registry";
@@ -487,6 +488,10 @@ export interface WorktreeSpawnTarget {
   branchName: string | null;
   /** Identifier for error logs (e.g. "owner/repo#12" or "session abc123"). */
   label: string;
+  /** #20 cost-aware routing: the model to run (a repo base or an escalated
+   *  tier). Clamped through resolveModelForAgent below — null/undefined = the
+   *  agent's catalog default. */
+  model?: string | null;
 }
 
 /**
@@ -508,7 +513,13 @@ export async function spawnWorktreeWorker(
   try {
     const db = getDb();
     const provider = getProvider(target.agentType);
-    const model = resolveModelForAgent(target.agentType, undefined);
+    // #20: the routed/escalated model is still clamped through the catalog —
+    // an unknown or foreign value falls back to the agent default, so nothing
+    // un-vetted can reach the launch.
+    const model = resolveModelForAgent(
+      target.agentType,
+      target.model ?? undefined
+    );
     const cwd = expandHome(target.worktreePath);
     sessionId = randomUUID();
     const tmuxName = sessionKey({
@@ -561,8 +572,7 @@ export async function spawnWorktreeWorker(
       const db = getDb();
       if (sessionId) {
         const sess = queries.getSession(db).get(sessionId) as
-          | { id: string }
-          | undefined;
+          { id: string } | undefined;
         if (sess) queries.deleteSession(db).run(sessionId);
       }
     } catch (cleanupErr) {
@@ -582,7 +592,8 @@ export async function spawnInWorktree(
   d: IssueDispatch,
   sessionName: string,
   prompt: string,
-  onSpawn: (sessionId: string) => void
+  onSpawn: (sessionId: string) => void,
+  modelOverride?: string | null
 ): Promise<string | null> {
   return spawnWorktreeWorker(
     {
@@ -594,6 +605,9 @@ export async function spawnInWorktree(
       label: isLocalTask(d)
         ? `${repo.repo_slug} ${taskLabel(d)}`
         : `${repo.repo_slug}#${d.issue_number}`,
+      // #20: an explicit override (an escalated fixer tier) wins; otherwise the
+      // repo's routed base model; otherwise the agent default.
+      model: modelOverride ?? repo.default_model,
     },
     sessionName,
     prompt,
@@ -633,7 +647,10 @@ export async function spawnReviewPanel(
   return firstId;
 }
 
-/** Spawn a fixer that addresses review feedback (records fixer + bumps round). */
+/** Spawn a fixer that addresses review feedback (records fixer + bumps round).
+ *  #20 cascade escalation: round 1 runs the repo's base model; a LATER round —
+ *  a prior fixer at the base tier already failed the panel — climbs one tier
+ *  (deterministic per round, so a re-spawn can't compound the climb). */
 export async function spawnFixer(
   repo: DispatchRepo,
   d: IssueDispatch
@@ -644,6 +661,11 @@ export async function spawnFixer(
     d,
     `fix #${d.pr_number}`,
     buildFixPrompt(repo, d),
-    (sid) => queries.startFixRound(getDb()).run(sid, d.id)
+    (sid) => queries.startFixRound(getDb()).run(sid, d.id),
+    modelForFixRound(
+      repo.agent_type,
+      repo.default_model,
+      (d.fix_rounds ?? 0) + 1
+    )
   );
 }

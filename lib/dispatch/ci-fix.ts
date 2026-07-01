@@ -18,6 +18,7 @@ import { getSessionBackend } from "../session-backend";
 import { expandHome } from "../platform";
 import { getPrReadiness, type CheckSummary } from "./auto-merge";
 import { spawnInWorktree } from "./reviewer";
+import { modelForFixRound } from "../model-router";
 import type { DispatchRepo, IssueDispatch } from "./types";
 import { taskRef } from "./task-label";
 
@@ -81,7 +82,9 @@ export function buildCiFixPrompt(repo: DispatchRepo, d: IssueDispatch): string {
   );
 }
 
-/** Spawn a CI fixer in the worker's worktree (records ci_fixer + bumps round). */
+/** Spawn a CI fixer in the worker's worktree (records ci_fixer + bumps round).
+ *  #20 cascade escalation: a later round (a prior CI fixer already failed to
+ *  green the checks) climbs one model tier — deterministic per round. */
 export async function spawnCiFixer(
   repo: DispatchRepo,
   d: IssueDispatch
@@ -92,7 +95,12 @@ export async function spawnCiFixer(
     d,
     `ci-fix #${d.pr_number}`,
     buildCiFixPrompt(repo, d),
-    (sid) => queries.startCiFixRound(getDb()).run(sid, d.id)
+    (sid) => queries.startCiFixRound(getDb()).run(sid, d.id),
+    modelForFixRound(
+      repo.agent_type,
+      repo.default_model,
+      (d.ci_fix_rounds ?? 0) + 1
+    )
   );
 }
 
@@ -121,8 +129,7 @@ export async function ciFixPass(): Promise<void> {
   for (const d of prOpen) {
     if (d.pr_number == null || !d.worktree_path) continue;
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo || repo.ci_autofix !== 1) continue;
 
     // A fixer (CI / review / rebase) already working this worktree → skip entirely.

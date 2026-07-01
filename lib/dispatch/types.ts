@@ -40,6 +40,9 @@ export interface DispatchRepo {
   /** The command to run for verification (typecheck/test/build); steps chained with
    * `&&` (Stoa's own delimiter — never a shell). null = nothing armed. */
   verify_command: string | null;
+  /** #20 cost-aware routing (migration 48): pin this repo's dispatch workers to
+   * an economical catalog model (e.g. haiku). null = the agent's default. */
+  default_model?: string | null;
   /** 0/1 — opt-in autonomous maintainer: a survey agent proposes its own backlog
    * on a cadence (proposals NEVER auto-dispatch — they wait for one-tap Approve). */
   maintainer_survey_enabled: number;
@@ -141,8 +144,7 @@ export interface PlanTask {
 /** Result of parsing a planner's PLAN.md. Fail-closed (ok:false) on any malformed
  * output — never spawn workers off a plan we couldn't validate. */
 export type PlanParseResult =
-  | { ok: true; tasks: PlanTask[] }
-  | { ok: false; error: string };
+  { ok: true; tasks: PlanTask[] } | { ok: false; error: string };
 
 /** One maintenance task a survey agent proposed. `rationale` is the SPECIFIC signal
  * that triggered it (a failing test, an issue #, an outdated package) — required, so
@@ -157,8 +159,7 @@ export interface SurveyTask {
 /** Result of parsing a maintainer survey's artifact. Fail-closed; an EMPTY task
  * list is a valid "nothing needs doing" answer (ok:true, tasks:[]). */
 export type SurveyParseResult =
-  | { ok: true; tasks: SurveyTask[] }
-  | { ok: false; error: string };
+  { ok: true; tasks: SurveyTask[] } | { ok: false; error: string };
 
 /**
  * Coarse lifecycle marker for a session ceremony (drives the cockpit badge). The

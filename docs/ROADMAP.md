@@ -421,10 +421,26 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     `lib/session-verify.ts`, `server.ts` tick, `lib/db` migration 47,
     `app/api/projects/[id]`, `app/api/sessions/status`, `components/SessionCard.tsx`,
     `components/Projects/ProjectSettingsDialog.tsx`.
-20. **Cost-aware model routing + cascade escalation** — `orchestration` · L. Route
-    routine work to a Haiku-class model, mid to Sonnet, hard to frontier; escalate a
-    tier on verify/judge failure. _Why:_ Stoa persists cost but never acts on it.
-    _Seam:_ new `lib/model-router.ts`, `lib/model-catalog.ts`, `lib/orchestration.ts`.
+20. ✅ **Cost-aware model routing + cascade escalation** — `orchestration` · L.
+    **SHIPPED (v1).** Two deterministic levers, no speculative classifier:
+    **(1) Routing:** a dispatch repo can pin its workers to an economical catalog
+    model (`dispatch_repos.default_model`, migration 48 — a "worker model" field in
+    the Allocation Console, strictly validated at PATCH: `isSafeModel` + must be a
+    catalog member for static agents). The initial worker, the review panel (all 3
+    critics — same-tier invariant), and merge-train fixers all run the repo base.
+    **(2) Cascade escalation:** when a fix round FAILED and a new fixer spawns
+    (review fixer via `fix_rounds`, CI fixer via `ci_fix_rounds`), the new fixer
+    runs ONE tier above the base — `modelForFixRound(agent, base, round)`: round 1
+    → base, round ≥2 → base+1 tier. Purely derived from the round number:
+    deterministic, no history column, re-spawns can't compound the climb. New pure
+    `lib/model-router.ts` (`MODEL_TIER_LADDER` = claude: haiku→sonnet→opus, dated
+    variants tier-matched; Codex deferred — its mini/spark variants lack a clean
+    ladder; free-text agents are NEVER escalated — their model rides verbatim into
+    the launch). Every routed value re-clamps through `resolveModelForAgent` at
+    spawn (`WorktreeSpawnTarget.model`), so nothing un-vetted reaches `tmux -m`.
+    v2 deferred: task-difficulty classifier + cost-signal feedback. _Seam:_
+    `lib/model-router.ts`, `lib/dispatch/{dispatcher,reviewer,ci-fix}.ts`,
+    migration 48, `app/api/dispatch/repos/[id]`, AllocationConsole.
 21. **Per-session cost budgets with alert + opt-in auto-pause** — `adoption` · M.
     Daily/monthly budget, soft alert at 80/100%, opt-in fail-closed park at cap
     (reuse the rate-limit park decision). _Seam:_ `lib/cost-history.ts`,

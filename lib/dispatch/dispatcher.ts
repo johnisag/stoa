@@ -119,7 +119,13 @@ export async function dispatchOne(
 
   try {
     const provider = getProvider(repo.agent_type);
-    const model = resolveModelForAgent(repo.agent_type, undefined);
+    // #20 cost-aware routing: the repo may pin its workers to an economical
+    // catalog model (default_model, e.g. haiku); the clamp falls back to the
+    // agent default for null/unknown/foreign values.
+    const model = resolveModelForAgent(
+      repo.agent_type,
+      repo.default_model ?? undefined
+    );
 
     // 1. Worktree per task. Try to claim a pre-warmed worktree first (skips the
     // slow git+npm setup). Fall back to on-demand creation when none is ready.
@@ -241,8 +247,7 @@ export async function dispatchOne(
     try {
       if (sessionId) {
         const sess = queries.getSession(db).get(sessionId) as
-          | { id: string }
-          | undefined;
+          { id: string } | undefined;
         if (sess) queries.deleteSession(db).run(sessionId);
       }
     } catch (sessionCleanupErr) {
