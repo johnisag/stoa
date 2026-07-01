@@ -1136,6 +1136,31 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 46,
+    name: "add_project_startup_commands",
+    up: (db) => {
+      // #14b: per-project startup commands run on new-session boot (build,
+      // codegen, db migrate — warming the worktree beyond npm install).
+      // Safe-exec only: tokenizeCommand-validated at the API, spawned as argv.
+      if (!hasTable(db, "project_startup_commands")) {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS project_startup_commands (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            command TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+          );
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_project_startup_commands_project ON project_startup_commands(project_id)`
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

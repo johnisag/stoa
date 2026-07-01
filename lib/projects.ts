@@ -15,6 +15,7 @@ import {
   queries,
   type Project,
   type ProjectDevServer,
+  type ProjectStartupCommand,
   type ProjectRepository,
   type Session,
   type DevServerType,
@@ -70,6 +71,8 @@ export interface CreateRepositoryOptions {
 
 export interface ProjectWithDevServers extends Project {
   devServers: ProjectDevServer[];
+  /** #14b: per-project startup commands run on new-session boot. */
+  startupCommands: ProjectStartupCommand[];
 }
 
 export interface ProjectWithRepositories extends ProjectWithDevServers {
@@ -179,6 +182,7 @@ export function createProject(
     expanded: Boolean(project.expanded),
     is_uncategorized: Boolean(project.is_uncategorized),
     devServers,
+    startupCommands: [],
     repositories: [],
   };
 }
@@ -208,6 +212,9 @@ export function getProjectWithDevServers(
   const devServers = queries
     .getProjectDevServers(db)
     .all(id) as ProjectDevServer[];
+  const startupCommands = queries
+    .getProjectStartupCommands(db)
+    .all(id) as ProjectStartupCommand[];
   const rawRepos = queries.getProjectRepositories(db).all(id) as (Omit<
     ProjectRepository,
     "is_primary"
@@ -219,6 +226,7 @@ export function getProjectWithDevServers(
   return {
     ...project,
     devServers,
+    startupCommands,
     repositories,
   };
 }
@@ -244,6 +252,9 @@ export function getAllProjectsWithDevServers(): ProjectWithRepositories[] {
     const devServers = queries
       .getProjectDevServers(db)
       .all(p.id) as ProjectDevServer[];
+    const startupCommands = queries
+      .getProjectStartupCommands(db)
+      .all(p.id) as ProjectStartupCommand[];
     const rawRepos = queries.getProjectRepositories(db).all(p.id) as (Omit<
       ProjectRepository,
       "is_primary"
@@ -257,6 +268,7 @@ export function getAllProjectsWithDevServers(): ProjectWithRepositories[] {
     return {
       ...p,
       devServers,
+      startupCommands,
       repositories,
     };
   });
@@ -394,8 +406,7 @@ export function updateProjectDevServer(
   updates: Partial<CreateDevServerOptions & { sortOrder?: number }>
 ): ProjectDevServer | undefined {
   const existing = queries.getProjectDevServer(db).get(id) as
-    | ProjectDevServer
-    | undefined;
+    ProjectDevServer | undefined;
   if (!existing) return undefined;
 
   queries
@@ -418,6 +429,62 @@ export function updateProjectDevServer(
  */
 export function deleteProjectDevServer(id: string): void {
   queries.deleteProjectDevServer(db).run(id);
+}
+
+// Generate startup command config ID (#14b)
+function generateStartupCommandId(): string {
+  return `psc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/**
+ * Add a startup command to a project (#14b). The route validates the command
+ * with tokenizeCommand before calling this, so only argv-safe commands land.
+ */
+export function addProjectStartupCommand(
+  projectId: string,
+  opts: { name: string; command: string }
+): ProjectStartupCommand {
+  const id = generateStartupCommandId();
+  const existing = queries
+    .getProjectStartupCommands(db)
+    .all(projectId) as ProjectStartupCommand[];
+  const maxOrder = existing.reduce((max, c) => Math.max(max, c.sort_order), -1);
+
+  queries
+    .createProjectStartupCommand(db)
+    .run(id, projectId, opts.name, opts.command, maxOrder + 1);
+
+  return queries.getProjectStartupCommand(db).get(id) as ProjectStartupCommand;
+}
+
+/**
+ * Update a startup command (#14b)
+ */
+export function updateProjectStartupCommand(
+  id: string,
+  updates: Partial<{ name: string; command: string; sortOrder: number }>
+): ProjectStartupCommand | undefined {
+  const existing = queries.getProjectStartupCommand(db).get(id) as
+    ProjectStartupCommand | undefined;
+  if (!existing) return undefined;
+
+  queries
+    .updateProjectStartupCommand(db)
+    .run(
+      updates.name ?? existing.name,
+      updates.command ?? existing.command,
+      updates.sortOrder ?? existing.sort_order,
+      id
+    );
+
+  return queries.getProjectStartupCommand(db).get(id) as ProjectStartupCommand;
+}
+
+/**
+ * Delete a startup command (#14b)
+ */
+export function deleteProjectStartupCommand(id: string): void {
+  queries.deleteProjectStartupCommand(db).run(id);
 }
 
 /**
