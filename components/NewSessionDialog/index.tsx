@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { HelpCircle } from "lucide-react";
 import {
   Dialog,
@@ -33,6 +33,7 @@ export function NewSessionDialog({
   open,
   projects,
   selectedProjectId,
+  promptSeed,
   onClose,
   onCreated,
   onCreateProject,
@@ -48,6 +49,14 @@ export function NewSessionDialog({
     onClose,
     onCreateProject,
   });
+
+  // #17: seed the Initial Prompt from a Web Share Target redirect when the
+  // dialog opens. setInitialPrompt is a stable useState setter, so this fires
+  // only on an open/seed change — never clobbering the user's later edits.
+  const { setInitialPrompt } = form;
+  useEffect(() => {
+    if (open && promptSeed) setInitialPrompt(promptSeed);
+  }, [open, promptSeed, setInitialPrompt]);
 
   return (
     <>

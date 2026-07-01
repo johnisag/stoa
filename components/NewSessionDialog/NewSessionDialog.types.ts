@@ -133,6 +133,9 @@ export interface NewSessionDialogProps {
   open: boolean;
   projects: ProjectWithDevServers[];
   selectedProjectId?: string;
+  /** #17: seed the Initial Prompt field when the dialog opens (a shared
+   *  text/URL from the Web Share Target redirect). */
+  promptSeed?: string | null;
   onClose: () => void;
   onCreated: (sessionId: string) => void;
   onCreateProject?: (

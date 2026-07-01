@@ -25,6 +25,7 @@ export function MobileView({
   showNewSessionDialog,
   setShowNewSessionDialog,
   newSessionProjectId,
+  newSessionPromptSeed,
   showQuickSwitcher,
   setShowQuickSwitcher,
   onOpenDispatch,
@@ -187,6 +188,7 @@ export function MobileView({
         open={showNewSessionDialog}
         projects={projects}
         selectedProjectId={newSessionProjectId ?? undefined}
+        promptSeed={newSessionPromptSeed}
         onClose={() => setShowNewSessionDialog(false)}
         onCreated={handleSessionCreated}
         onCreateProject={handleCreateProject}

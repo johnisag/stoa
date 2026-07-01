@@ -53,6 +53,7 @@ export function DesktopView({
   showNewSessionDialog,
   setShowNewSessionDialog,
   newSessionProjectId,
+  newSessionPromptSeed,
   showNotificationSettings,
   setShowNotificationSettings,
   showQuickSwitcher,
@@ -459,6 +460,7 @@ export function DesktopView({
         open={showNewSessionDialog}
         projects={projects}
         selectedProjectId={newSessionProjectId ?? undefined}
+        promptSeed={newSessionPromptSeed}
         onClose={() => setShowNewSessionDialog(false)}
         onCreated={handleSessionCreated}
         onCreateProject={handleCreateProject}
