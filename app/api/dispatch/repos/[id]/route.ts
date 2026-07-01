@@ -97,6 +97,16 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     // write) but persisted AFTER the main update below, so a failure can't
     // leave a half-applied config.
     let nextDefaultModel: string | null | undefined = undefined;
+    // Switching the agent WITHOUT an explicit model clears the pinned model:
+    // the old value belongs to the previous agent's catalog (runtime clamping
+    // would ignore it anyway, but the stored config must not lie in the UI).
+    if (
+      body?.agentType !== undefined &&
+      agentType !== repo.agent_type &&
+      body?.defaultModel === undefined
+    ) {
+      nextDefaultModel = null;
+    }
     if (body?.defaultModel !== undefined) {
       nextDefaultModel =
         typeof body.defaultModel === "string" && body.defaultModel.trim()
@@ -122,35 +132,38 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    queries
-      .updateDispatchRepo(db)
-      .run(
-        agentType,
-        dailyQuota,
-        maxConcurrency,
-        labelFilter,
-        baseBranch,
-        mode,
-        enabled,
-        reviewGate,
-        ciAutofix,
-        mergeTrain,
-        verifyGate,
-        verifyCommand,
-        id
-      );
-    // The verify command changed → prior verdicts no longer reflect what would run;
-    // clear this repo's open dispatches so the next tick re-verifies (recovers a PR
-    // stuck on a now-fixed misconfiguration).
-    if (verifyCommand !== repo.verify_command) {
-      queries.clearVerifyForRepo(db).run(id);
-    }
-
-    // #20: persist the (already-validated) worker base model after the main
-    // update — a focused follow-up write, like the maintainer config below.
-    if (nextDefaultModel !== undefined) {
-      queries.updateDispatchRepoDefaultModel(db).run(nextDefaultModel, id);
-    }
+    // All config writes commit ATOMICALLY (better-sqlite3 transaction — the
+    // statements are synchronous): a crash mid-request can't leave the repo
+    // half-updated (e.g. a new agent_type persisted with the old default_model).
+    db.transaction(() => {
+      queries
+        .updateDispatchRepo(db)
+        .run(
+          agentType,
+          dailyQuota,
+          maxConcurrency,
+          labelFilter,
+          baseBranch,
+          mode,
+          enabled,
+          reviewGate,
+          ciAutofix,
+          mergeTrain,
+          verifyGate,
+          verifyCommand,
+          id
+        );
+      // The verify command changed → prior verdicts no longer reflect what would
+      // run; clear this repo's open dispatches so the next tick re-verifies
+      // (recovers a PR stuck on a now-fixed misconfiguration).
+      if (verifyCommand !== repo.verify_command) {
+        queries.clearVerifyForRepo(db).run(id);
+      }
+      // #20: the (already-validated) worker base model.
+      if (nextDefaultModel !== undefined) {
+        queries.updateDispatchRepoDefaultModel(db).run(nextDefaultModel, id);
+      }
+    })();
 
     // Autonomous-maintainer config (a focused, separate update — last_at is never
     // operator-settable; cadence is restricted to a real recurrence via normalize).
