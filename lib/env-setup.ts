@@ -212,7 +212,10 @@ export async function setupWorktree(options: {
     for (const cmd of config.setup) {
       // Expand `$KEY` references in user-provided setup commands.
       // NOTE: user `setup`/`dev` commands are shell-specific (this `$KEY`
-      // syntax is POSIX); they are run as-authored and not translated per OS.
+      // syntax is POSIX); BOTH run as-authored through a shell (exec) and are
+      // not translated per OS — unlike #14b startup commands, which are
+      // safe-argv exec'd with env vars via the spawn env (see
+      // lib/startup-commands.ts).
       let expandedCmd = cmd;
       for (const [key, value] of Object.entries(envVars)) {
         expandedCmd = expandedCmd.replace(new RegExp(`\\$${key}`, "g"), value);

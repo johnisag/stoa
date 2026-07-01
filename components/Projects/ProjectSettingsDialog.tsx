@@ -854,7 +854,11 @@ export function ProjectSettingsDialog({
                   node scripts/gen.js --out dist
                 </code>
                 . Plain commands with flags and quoted arguments work; no pipes,
-                &amp;&amp; or $VARs (they run without a shell).
+                &amp;&amp; or embedded $VAR references — these run without a
+                shell. PORT and WORKTREE_PATH are available to the command as
+                environment variables. For shell-scripted setup (pipes, $VAR
+                expansion), use setup[] in your repo&apos;s .stoa/worktrees.json
+                instead.
               </p>
             </div>
 
