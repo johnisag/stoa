@@ -27,7 +27,8 @@ export type ViewKind =
   | "ask"
   | "best-of-n"
   | "live-wall"
-  | "agent-monitor";
+  | "agent-monitor"
+  | "activity";
 
 export interface TabData {
   id: string;

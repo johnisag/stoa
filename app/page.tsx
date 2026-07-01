@@ -868,6 +868,7 @@ function HomeContent() {
     onOpenFleetBoard: () => addViewTab(focusedPaneId, "fleet-board"),
     onOpenLiveWall: () => addViewTab(focusedPaneId, "live-wall"),
     onOpenAgentMonitor: () => addViewTab(focusedPaneId, "agent-monitor"),
+    onOpenActivity: () => addViewTab(focusedPaneId, "activity"),
     onOpenAsk: () => addViewTab(focusedPaneId, "ask"),
     onShowShortcuts: () => setShowHelp(true),
     onShowGuide: () => setShowGuide(true),

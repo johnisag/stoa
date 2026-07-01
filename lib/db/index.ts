@@ -7,7 +7,7 @@ import { runMigrations } from "./migrations";
 
 // Re-export types and queries
 export * from "./types";
-export { queries } from "./queries";
+export { queries, readAuditEvents, countAuditEvents } from "./queries";
 
 /**
  * Resolve where the SQLite database lives. It MUST sit outside the repo clone so

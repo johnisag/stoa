@@ -48,6 +48,8 @@ export interface ViewProps {
   onOpenLiveWall: () => void;
   /** Open the Agent Monitor (per-session telemetry) as a pane tab. */
   onOpenAgentMonitor: () => void;
+  /** Open Activity (the raw audit-event timeline) as a pane tab. */
+  onOpenActivity: () => void;
   /** Open Ask Stoa (the chatbox) as a pane tab (it's a window now, not a dialog). */
   onOpenAsk: () => void;
   onShowShortcuts: () => void;

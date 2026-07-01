@@ -13,6 +13,7 @@ import {
   LayoutGrid,
   Gauge,
   TerminalSquare,
+  History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -90,6 +91,13 @@ export const FLEET_NAV: readonly FleetNavEntry[] = [
     icon: Gauge,
     ariaLabel:
       "Agent Monitor (per-session telemetry — model, tokens, context, cost)",
+  },
+  {
+    id: "activity",
+    label: "Activity",
+    icon: History,
+    ariaLabel:
+      "Activity (the raw audit-event timeline — filterable, CSV/JSON export)",
   },
   {
     id: "ask-stoa",

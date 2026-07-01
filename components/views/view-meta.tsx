@@ -7,6 +7,7 @@ import {
   Sparkles,
   Layers,
   Gauge,
+  History,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import type { ViewKind } from "@/lib/panes";
@@ -31,6 +32,7 @@ export const VIEW_META: Partial<Record<ViewKind, ViewMeta>> = {
   ask: { label: "Ask Stoa", Icon: Sparkles },
   "best-of-n": { label: "Best of N", Icon: Layers },
   "agent-monitor": { label: "Agent Monitor", Icon: Gauge },
+  activity: { label: "Activity", Icon: History },
 };
 
 /** The display metadata for a tab's view, or undefined for a terminal/unknown one. */

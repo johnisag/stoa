@@ -114,6 +114,11 @@ const AgentMonitorView = dynamic(
     ),
   { ssr: false }
 );
+const ActivityView = dynamic(
+  () =>
+    import("@/components/views/ActivityView").then((mod) => mod.ActivityView),
+  { ssr: false }
+);
 
 interface PaneProps {
   paneId: string;
@@ -600,6 +605,8 @@ export const Pane = memo(function Pane({
             onClose={() => closeTab(paneId, tab.id)}
           />
         );
+      case "activity":
+        return <ActivityView onClose={() => closeTab(paneId, tab.id)} />;
       default:
         return null;
     }
