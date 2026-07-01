@@ -3,6 +3,9 @@ export interface SessionStatus {
   status: "idle" | "running" | "waiting" | "error" | "dead";
   lastLine?: string;
   hasPrompt?: boolean;
+  /** #19 verify badge: last turn-boundary verdict + short failing-output head. */
+  verifyStatus?: string | null;
+  verifyOutput?: string | null;
 }
 
 export interface SessionListProps {

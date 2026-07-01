@@ -26,6 +26,11 @@ interface SessionStatusResponse {
   rateLimit?: RateLimitState | null;
   /** True when an ACTUAL prompt is on screen (vs "waiting" = finished its turn). */
   hasPrompt?: boolean;
+  /** #19 verify badge: last turn-boundary verdict (running/pass/fail/error),
+   * when it ran, and a short failing-output head for the tooltip. */
+  verifyStatus?: string | null;
+  verifyRanAt?: string | null;
+  verifyOutput?: string | null;
 }
 
 async function getTmuxSessions(): Promise<string[]> {
@@ -215,6 +220,13 @@ export async function GET() {
 
     const results = await Promise.all(sessionPromises);
 
+    // #19: attach the last verify verdict (written by the server tick's
+    // sessionVerifyTick) so the card can render the badge. The failing-output
+    // tail is capped small here — the tooltip needs a hint, not the full 8KB.
+    const verifyStmt = db.prepare(
+      "SELECT verify_status, verify_output, verify_ran_at FROM sessions WHERE id = ?"
+    );
+
     for (const {
       sessionName,
       id,
@@ -234,6 +246,14 @@ export async function GET() {
       }
       previousStatuses.set(id, status);
 
+      const v = verifyStmt.get(id) as
+        | {
+            verify_status?: string | null;
+            verify_output?: string | null;
+            verify_ran_at?: string | null;
+          }
+        | undefined;
+
       statusMap[id] = {
         sessionName,
         status,
@@ -242,6 +262,9 @@ export async function GET() {
         agentType,
         rateLimit,
         hasPrompt,
+        verifyStatus: v?.verify_status ?? null,
+        verifyRanAt: v?.verify_ran_at ?? null,
+        verifyOutput: v?.verify_output ? v.verify_output.slice(0, 400) : null,
       };
     }
 

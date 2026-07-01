@@ -9,7 +9,9 @@ const state = {
 
 vi.mock("@/lib/db", () => ({
   getDb: () => ({
-    prepare: () => ({ run: () => {} }),
+    // run for the status/claude-id updates; get for the #19 verify-badge read
+    // (undefined = no verdict — the route null-coalesces it).
+    prepare: () => ({ run: () => {}, get: () => undefined }),
   }),
   queries: {},
 }));

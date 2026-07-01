@@ -287,6 +287,7 @@ export function updateProject(
       | "agent_type"
       | "default_model"
       | "initial_prompt"
+      | "verify_command"
     >
   >
 ): Project | undefined {
@@ -312,6 +313,12 @@ export function updateProject(
         : project.initial_prompt,
       id
     );
+
+  // #19: the verify command is validated (parseVerifySteps) at the API layer
+  // before it reaches here; an explicit null clears it (badge disabled).
+  if (updates.verify_command !== undefined) {
+    queries.updateProjectVerifyCommand(db).run(updates.verify_command, id);
+  }
 
   return getProject(id);
 }

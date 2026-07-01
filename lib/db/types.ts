@@ -43,6 +43,12 @@ export interface Session {
    * only the fork's own spend counts. NULL for non-forks. Optional so existing
    * Session fixtures/builders don't all need it. (migration 44) */
   fork_cost_baseline?: string | null;
+  /** #19 verify badge (migration 47): the last turn-boundary verify verdict
+   * (running/pass/fail/error), its bounded failing-step output tail, and when it
+   * ran. Turn-scoped — cleared when a new turn starts. Optional for fixtures. */
+  verify_status?: string | null;
+  verify_output?: string | null;
+  verify_ran_at?: string | null;
 }
 
 export interface Group {
@@ -60,6 +66,9 @@ export interface Project {
   agent_type: AgentType;
   default_model: string;
   initial_prompt: string | null;
+  /** #19 (migration 47): the project's verify command for the turn-boundary
+   *  verify badge (Stoa no-shell grammar). NULL = badge disabled. */
+  verify_command?: string | null;
   expanded: boolean;
   sort_order: number;
   is_uncategorized: boolean;

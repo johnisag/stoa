@@ -7,6 +7,7 @@ import {
   InvalidModelError,
 } from "@/lib/projects";
 import { parseJsonBody } from "@/lib/api-security";
+import { parseVerifySteps } from "@/lib/dispatch/verify";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -40,6 +41,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     agentType?: string;
     defaultModel?: string;
     initialPrompt?: string;
+    verifyCommand?: string | null;
     expanded?: boolean;
   }>(request);
   if (!parsed.ok) return parsed.response;
@@ -52,8 +54,18 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       agentType,
       defaultModel,
       initialPrompt,
+      verifyCommand,
       expanded,
     } = parsed.data;
+
+    // #19: a non-empty verify command must pass Stoa's no-shell grammar BEFORE
+    // it can be stored (blank/null clears it — badge disabled).
+    if (typeof verifyCommand === "string" && verifyCommand.trim()) {
+      const check = parseVerifySteps(verifyCommand.trim());
+      if (!("steps" in check)) {
+        return NextResponse.json({ error: check.error }, { status: 400 });
+      }
+    }
 
     // Handle expanded toggle separately
     if (typeof expanded === "boolean") {
@@ -66,21 +78,22 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       workingDirectory ||
       agentType ||
       defaultModel ||
-      initialPrompt !== undefined
+      initialPrompt !== undefined ||
+      verifyCommand !== undefined
     ) {
       const project = updateProject(id, {
         name,
         working_directory: workingDirectory,
         agent_type: agentType as
-          | "claude"
-          | "codex"
-          | "hermes"
-          | "kilo"
-          | "kimi"
-          | "shell"
-          | undefined,
+          "claude" | "codex" | "hermes" | "kilo" | "kimi" | "shell" | undefined,
         default_model: defaultModel,
         initial_prompt: initialPrompt,
+        verify_command:
+          verifyCommand === undefined
+            ? undefined
+            : verifyCommand && verifyCommand.trim()
+              ? verifyCommand.trim()
+              : null,
       });
 
       if (!project) {

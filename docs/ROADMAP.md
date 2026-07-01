@@ -402,10 +402,25 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     with a fake filesystem (append/truncate/mtime invalidation, LRU, null handling).
     _Seam:_ `lib/transcript-cache.ts`, `lib/session-cost.ts`, `lib/claude-transcript.ts`,
     `docs/setup/README.md`.
-19. **Outcome-based verify badge on interactive sessions** — `feature` · L. On a
-    "done" claim, actually run the project's verify command and show a real
-    red/green badge — independent of the agent's self-report. _Seam:_
-    `lib/dispatch/verify.ts`, `lib/status-detector.ts`, `components/SessionCard.tsx`.
+19. ✅ **Outcome-based verify badge on interactive sessions** — `feature` · L.
+    **SHIPPED.** On a "done" claim (a running/waiting→idle turn boundary with no
+    real prompt on screen), Stoa actually RUNS the project's verify command in the
+    session's worktree and the session card shows a real red/green badge —
+    independent of the agent's self-report. Reuses the dispatch verify harness
+    wholesale (`runVerify`: no-shell argv steps chained with `&&`, timeout, bounded
+    output, never throws) + the same `VERIFY_MAX_CONCURRENT` local-CPU cap. New
+    `lib/session-verify.ts`: a pure turn-boundary decision matrix
+    (`decideSessionVerify`: done→run, new-turn-starts→CLEAR the stale verdict —
+    turn-scoped evidence, a green badge always refers to the tree as the agent left
+    it) + a fire-and-forget tick pass hooked into the server status tick. Config:
+    `projects.verify_command` (migration 47, edited in ProjectSettingsDialog,
+    validated with `parseVerifySteps` at PATCH — no shell ever). Opt-in by
+    construction: no command → no badge, zero cost. Verdict rides the existing
+    status poll (`/api/sessions/status`) into a SessionCard badge (pass=green,
+    fail=red w/ output-head tooltip, error=amber, running=spinner). _Seam:_
+    `lib/session-verify.ts`, `server.ts` tick, `lib/db` migration 47,
+    `app/api/projects/[id]`, `app/api/sessions/status`, `components/SessionCard.tsx`,
+    `components/Projects/ProjectSettingsDialog.tsx`.
 20. **Cost-aware model routing + cascade escalation** — `orchestration` · L. Route
     routine work to a Haiku-class model, mid to Sonnet, hard to frontier; escalate a
     tier on verify/judge failure. _Why:_ Stoa persists cost but never acts on it.

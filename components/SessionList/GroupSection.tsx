@@ -221,6 +221,12 @@ export function GroupSection({
                           tmuxStatus={sessionStatuses?.[session.id]?.status}
                           hasPrompt={sessionStatuses?.[session.id]?.hasPrompt}
                           conflictCount={conflictCounts?.[session.id]}
+                          verifyStatus={
+                            sessionStatuses?.[session.id]?.verifyStatus
+                          }
+                          verifyOutput={
+                            sessionStatuses?.[session.id]?.verifyOutput
+                          }
                           groups={groups}
                           onSelect={onSelectSession}
                           onFork={onForkSession}
@@ -245,6 +251,12 @@ export function GroupSection({
                             isActive={worker.id === activeSessionId}
                             tmuxStatus={sessionStatuses?.[worker.id]?.status}
                             hasPrompt={sessionStatuses?.[worker.id]?.hasPrompt}
+                            verifyStatus={
+                              sessionStatuses?.[worker.id]?.verifyStatus
+                            }
+                            verifyOutput={
+                              sessionStatuses?.[worker.id]?.verifyOutput
+                            }
                             groups={groups}
                             onSelect={onSelectSession}
                             onDelete={onDeleteSession}

@@ -22,6 +22,9 @@ interface SessionStatus {
   lastLine?: string;
   rateLimit?: RateLimitState | null;
   hasPrompt?: boolean;
+  /** #19 verify badge: last turn-boundary verdict + short failing-output head. */
+  verifyStatus?: string | null;
+  verifyOutput?: string | null;
 }
 
 interface ProjectsSectionProps {
@@ -323,6 +326,12 @@ export function ProjectsSection({
                                   sessionStatuses?.[session.id]?.rateLimit
                                     ?.resetAt ?? null
                                 }
+                                verifyStatus={
+                                  sessionStatuses?.[session.id]?.verifyStatus
+                                }
+                                verifyOutput={
+                                  sessionStatuses?.[session.id]?.verifyOutput
+                                }
                                 groups={groups}
                                 projects={projects}
                                 isSelected={selectedIds.has(session.id)}
@@ -402,6 +411,14 @@ export function ProjectsSection({
                                           rateLimitResetAt={
                                             sessionStatuses?.[worker.id]
                                               ?.rateLimit?.resetAt ?? null
+                                          }
+                                          verifyStatus={
+                                            sessionStatuses?.[worker.id]
+                                              ?.verifyStatus
+                                          }
+                                          verifyOutput={
+                                            sessionStatuses?.[worker.id]
+                                              ?.verifyOutput
                                           }
                                           groups={groups}
                                           projects={projects}
