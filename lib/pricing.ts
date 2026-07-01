@@ -74,3 +74,28 @@ export function computeCostUsd(
     1_000_000
   );
 }
+
+/**
+ * Prompt-cache hit rate (#12): the fraction of INPUT-side tokens served from the
+ * cache — `cacheRead / (input + cacheRead + cacheWrite)`, in 0..1, or null when the
+ * model processed no input yet. High = most of the re-sent context was a cheap
+ * ~0.1× cache read rather than a full-price fresh read. Pure → unit-tested.
+ */
+export function cacheHitRate(u: TokenUsage): number | null {
+  const inputSide = u.input + u.cacheRead + u.cacheWrite;
+  return inputSide > 0 ? u.cacheRead / inputSide : null;
+}
+
+/**
+ * Estimated USD SAVED by the prompt cache vs. paying full input price for the same
+ * tokens: `cacheRead × (input − cacheRead) $/Mtok`. Null when the model is unpriced.
+ * A concrete "the cache is earning its keep" figure. Pure → unit-tested.
+ */
+export function cacheSavingsUsd(
+  u: TokenUsage,
+  modelId: string | null | undefined
+): number | null {
+  const p = priceForModel(modelId);
+  if (!p) return null;
+  return (u.cacheRead * (p.input - p.cacheRead)) / 1_000_000;
+}

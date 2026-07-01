@@ -23,6 +23,8 @@ function row(over: Partial<MonitorRow> = {}): MonitorRow {
     contextTokens: 8000,
     contextPct: 0.04,
     contextTone: "ok",
+    cacheHitRate: null,
+    cacheSavingsUsd: null,
     supported: true,
     ...over,
   };

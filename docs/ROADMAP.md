@@ -266,9 +266,21 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     the internet with NO token. All tunnel detection/parsing/decision logic is pure +
     unit-tested (no real binaries); cross-platform binary resolution + spawn.
     _Seam:_ `scripts/stoa.js`, `lib/auth.ts` (`readSharedOrigins`), `server.ts`.
-12. **Prompt-cache-aware launch + cache-hit panel** — `perf` · M. Keep the cached
-    prefix byte-identical across turns/siblings; surface a cache-hit stat. _Seam:_
-    `lib/banner.ts`/`prompt-compose.ts`, `lib/cost-history.ts`, `lib/analytics/engine.ts`.
+12. ✅ **Prompt-cache-aware launch + cache-hit panel** — `perf` · M. **SHIPPED.**
+    Cache-aware launch: a pure `composeLaunchPrompt` (`lib/prompt-compose.ts`) orders the
+    initial prompt so the cacheable PREFIX is byte-identical across sibling sessions — the
+    worktree/workspace boundary note is SPLIT so its stable, path-free instruction leads
+    (still fixing worktree-drift) while the VOLATILE `${worktreePath}`/branch trails as an
+    annotation (it used to sit at byte 0, poisoning every prefix). Honest scope: the big
+    system-prompt/tools cache is **Claude Code's automatic** caching; this reorder is prefix
+    HYGIENE for Stoa's small initial message so a unique path doesn't poison what little
+    prefix siblings share. Cache-hit panel: pure `cacheHitRate` + `cacheSavingsUsd`
+    (`lib/pricing.ts`) over the cache-read/-write tokens Stoa already parses, surfaced in the
+    Agent Monitor — per-session cache % + a fleet total (`cache 84% (saved ~$0.42)`), which
+    mostly makes Claude Code's automatic caching VISIBLE. _Seam:_ `lib/prompt-compose.ts`,
+    `app/api/sessions/route.ts`, `lib/pricing.ts`, `lib/agent-monitor.ts`,
+    `components/views/AgentMonitorView`. (Deferred: an Insight/analytics cache-trend lens —
+    needs new token-bucket plumbing through the analytics path.)
 13. **Project Playbooks + auto-recalled Knowledge** — `feature` · M. Named
     launch-target recipes (success criteria/guardrails as seed) + short pinned
     per-repo facts auto-prepended; feeds the assisted generator. _Seam:_ new

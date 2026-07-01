@@ -16,7 +16,13 @@ import { Gauge, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSessionCosts } from "@/hooks/useSessionCosts";
 import { useMonitorProcesses } from "@/hooks/useMonitorProcesses";
-import { buildMonitorRows, formatTokens } from "@/lib/agent-monitor";
+import {
+  buildMonitorRows,
+  fleetCacheHitRate,
+  fleetCacheSavingsUsd,
+  formatPct,
+  formatTokens,
+} from "@/lib/agent-monitor";
 import type { ContextTone } from "@/lib/context-window";
 import { cn } from "@/lib/utils";
 import type { Session } from "@/lib/db";
@@ -48,6 +54,11 @@ export function AgentMonitorView({
   // with no estimate shows zeroes + "—" via buildMonitorRows.
   const { data } = useSessionCosts();
   const rows = buildMonitorRows(sessions, data?.sessions ?? {});
+  // Fleet-wide prompt-cache hit rate + $ saved (#12) — how much re-sent context is
+  // served from the cheap ~0.1× cache across the fleet, and the estimated dollars that
+  // saved vs. full input price. null (hidden) until there's data.
+  const fleetHit = fleetCacheHitRate(rows);
+  const fleetSaved = fleetCacheSavingsUsd(rows);
   // Per-session child-process / MCP-server fan-out (M3). On-demand (only while this view
   // is mounted); a session with no resolvable tree just shows "—".
   const { data: procData } = useMonitorProcesses(true);
@@ -65,6 +76,17 @@ export function AgentMonitorView({
           <span className="text-muted-foreground truncate text-xs">
             {rows.length} {rows.length === 1 ? "session" : "sessions"}
           </span>
+          {fleetHit != null && (
+            <span
+              className="text-muted-foreground flex-shrink-0 text-xs tabular-nums"
+              title="Fleet prompt-cache hit rate — share of re-sent context served from the cheap ~0.1× cache"
+            >
+              · cache {formatPct(fleetHit)}
+              {fleetSaved != null && fleetSaved >= 0.01
+                ? ` (saved ~$${fleetSaved.toFixed(2)})`
+                : ""}
+            </span>
+          )}
         </span>
         {win && (
           <span
@@ -161,6 +183,15 @@ export function AgentMonitorView({
                     <span className="text-muted-foreground flex-shrink-0 text-right text-[11px] tabular-nums">
                       {r.supported ? formatTokens(r.totalTokens) : "—"}
                       <span className="block text-[9px] uppercase">tok</span>
+                    </span>
+
+                    {/* Prompt-cache hit rate (#12) */}
+                    <span
+                      className="text-muted-foreground hidden flex-shrink-0 text-right text-[11px] tabular-nums sm:block"
+                      title="Prompt-cache hit rate — share of input served from the cheap ~0.1× cache"
+                    >
+                      {r.supported ? formatPct(r.cacheHitRate) : "—"}
+                      <span className="block text-[9px] uppercase">cache</span>
                     </span>
 
                     {/* Cost */}

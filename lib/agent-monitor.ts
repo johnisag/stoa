@@ -13,7 +13,13 @@
 
 import type { Session } from "./db";
 import type { SessionCost } from "./session-cost";
-import { ZERO_USAGE, totalTokens, type TokenUsage } from "./pricing";
+import {
+  ZERO_USAGE,
+  totalTokens,
+  cacheHitRate as computeCacheHitRate,
+  cacheSavingsUsd as computeCacheSavingsUsd,
+  type TokenUsage,
+} from "./pricing";
 import {
   contextWindowFor,
   tokenMeter,
@@ -39,6 +45,12 @@ export interface MonitorRow {
   contextPct: number;
   /** Tint band for the context gauge. */
   contextTone: ContextTone;
+  /** Prompt-cache hit rate 0..1 (#12) — cacheRead ÷ input-side; null when
+   *  unsupported / no input yet. High = most re-sent context was a cheap ~0.1× read. */
+  cacheHitRate: number | null;
+  /** Estimated USD the prompt cache saved this session vs. full input price (#12), or
+   *  null when the model is unpriced. */
+  cacheSavingsUsd: number | null;
   /** True when a cost/usage estimate is available (a Claude transcript today). */
   supported: boolean;
 }
@@ -88,6 +100,8 @@ export function buildMonitorRows(
       contextTokens,
       contextPct: meter.pct,
       contextTone: meter.tone,
+      cacheHitRate: computeCacheHitRate(tokens),
+      cacheSavingsUsd: computeCacheSavingsUsd(tokens, model),
       supported: cost?.supported ?? false,
     };
   });
@@ -96,6 +110,48 @@ export function buildMonitorRows(
       monitorStatusRank(a.status) - monitorStatusRank(b.status) ||
       a.name.localeCompare(b.name)
   );
+}
+
+/**
+ * Fleet-wide prompt-cache hit rate (#12): the POOLED cacheRead ÷ input-side across
+ * all rows (a session with no cost contributes zeroes), or null when the fleet has
+ * processed no input-side tokens yet. Pooling weights by volume — a big cached
+ * session dominates a tiny one, which is what a "fleet is caching well" read wants.
+ * Pure → unit-tested.
+ */
+export function fleetCacheHitRate(rows: MonitorRow[]): number | null {
+  const pooled = rows.reduce<TokenUsage>(
+    (acc, r) => ({
+      input: acc.input + r.tokens.input,
+      output: acc.output + r.tokens.output,
+      cacheRead: acc.cacheRead + r.tokens.cacheRead,
+      cacheWrite: acc.cacheWrite + r.tokens.cacheWrite,
+    }),
+    { ...ZERO_USAGE }
+  );
+  return computeCacheHitRate(pooled);
+}
+
+/**
+ * Fleet-wide estimated USD saved by the prompt cache (#12): the sum of each row's
+ * `cacheSavingsUsd` (unpriced/unsupported rows contribute nothing), or null when no
+ * row is priced. Pure → unit-tested.
+ */
+export function fleetCacheSavingsUsd(rows: MonitorRow[]): number | null {
+  let total = 0;
+  let priced = false;
+  for (const r of rows) {
+    if (r.cacheSavingsUsd != null) {
+      total += r.cacheSavingsUsd;
+      priced = true;
+    }
+  }
+  return priced ? total : null;
+}
+
+/** A 0..1 fraction as a rounded whole-percent string ("83%"), or "—" when null. Pure. */
+export function formatPct(fraction: number | null): string {
+  return fraction == null ? "—" : `${Math.round(fraction * 100)}%`;
 }
 
 /** Compact token count for a glanceable cell: 0, 980, 1.2k, 3.4M. Pure. */

@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   buildMonitorRows,
   monitorStatusRank,
+  fleetCacheHitRate,
+  fleetCacheSavingsUsd,
+  formatPct,
   formatTokens,
   type MonitorRow,
 } from "@/lib/agent-monitor";
@@ -58,6 +61,15 @@ describe("buildMonitorRows (#M1 — agent monitor telemetry)", () => {
     expect(rows[0].costUsd).toBeNull();
     expect(rows[0].supported).toBe(false);
     expect(rows[0].contextTokens).toBe(0);
+    expect(rows[0].cacheHitRate).toBeNull(); // no input-side tokens → null
+  });
+
+  it("computes the per-session prompt-cache hit rate + $ saved (#12)", () => {
+    // input-side = 100 + 200 + 10 = 310; cacheRead 200 → 0.645…
+    const rows = buildMonitorRows([session({ id: "a" })], { a: cost() });
+    expect(rows[0].cacheHitRate).toBeCloseTo(200 / 310, 6);
+    // Sonnet: 200 cacheRead × (3 − 0.3)/Mtok = 200 × 2.7 / 1e6.
+    expect(rows[0].cacheSavingsUsd).toBeCloseTo((200 * 2.7) / 1_000_000, 10);
   });
 
   it("sorts attention-first (waiting/error before running/idle), then by name", () => {
@@ -106,6 +118,65 @@ describe("monitorStatusRank", () => {
     );
     expect(monitorStatusRank("idle")).toBeLessThan(monitorStatusRank("dead"));
     expect(monitorStatusRank("dead")).toBeLessThan(monitorStatusRank("???"));
+  });
+});
+
+describe("fleetCacheHitRate (#12)", () => {
+  it("pools cacheRead over input-side across all rows (volume-weighted)", () => {
+    const rows = buildMonitorRows(
+      [session({ id: "a" }), session({ id: "b" })],
+      {
+        // a: input-side 310, cacheRead 200
+        a: cost(),
+        // b: input-side 1000 (900 read + 100 fresh), cacheRead 900
+        b: cost({
+          tokens: { input: 100, output: 0, cacheRead: 900, cacheWrite: 0 },
+        }),
+      }
+    );
+    // pooled cacheRead = 1100 over input-side 1310
+    expect(fleetCacheHitRate(rows)).toBeCloseTo(1100 / 1310, 6);
+  });
+  it("is null for an empty fleet / all-zero fleet", () => {
+    expect(fleetCacheHitRate([])).toBeNull();
+    expect(
+      fleetCacheHitRate(buildMonitorRows([session({ id: "z" })], {}))
+    ).toBeNull();
+  });
+});
+
+describe("fleetCacheSavingsUsd (#12)", () => {
+  it("sums each priced row's cache savings", () => {
+    const rows = buildMonitorRows(
+      [session({ id: "a" }), session({ id: "b" })],
+      {
+        a: cost(), // 200 cacheRead → 200×2.7/1e6
+        b: cost({
+          tokens: { input: 100, output: 0, cacheRead: 900, cacheWrite: 0 },
+        }), // 900×2.7/1e6
+      }
+    );
+    expect(fleetCacheSavingsUsd(rows)).toBeCloseTo(
+      (1100 * 2.7) / 1_000_000,
+      10
+    );
+  });
+  it("is null when NO row has a priced model (unknown model)", () => {
+    const rows = buildMonitorRows(
+      [session({ id: "u", model: "gpt-5-codex" })],
+      {}
+    );
+    expect(rows[0].cacheSavingsUsd).toBeNull();
+    expect(fleetCacheSavingsUsd(rows)).toBeNull();
+  });
+});
+
+describe("formatPct", () => {
+  it("rounds a 0..1 fraction to a whole percent, — for null", () => {
+    expect(formatPct(0)).toBe("0%");
+    expect(formatPct(0.833)).toBe("83%");
+    expect(formatPct(1)).toBe("100%");
+    expect(formatPct(null)).toBe("—");
   });
 });
 
