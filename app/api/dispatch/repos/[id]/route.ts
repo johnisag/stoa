@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries } from "@/lib/db";
 import { isValidAgentType } from "@/lib/providers";
 import { parseVerifySteps } from "@/lib/dispatch/verify";
+import { isSafeModel, resolveModelForAgent } from "@/lib/model-catalog";
 import { normalizeRecurrence } from "@/lib/dispatch/recurrence";
 import { cleanupPool } from "@/lib/dispatch/warm-pool";
 import { expandHome } from "@/lib/platform";
@@ -16,8 +17,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     const { id } = await params;
     const db = getDb();
     const repo = queries.getDispatchRepo(db).get(id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
@@ -90,6 +90,38 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       verifyCommand = next;
     }
 
+    // #20 cost-aware routing: the repo's worker base model. Strictly validated
+    // at save — a static-agent value must be a catalog member (the clamp
+    // returning something ELSE means it wasn't), and every value must be
+    // shell-safe. Blank/null clears (agent default). Validated HERE (before any
+    // write) but persisted AFTER the main update below, so a failure can't
+    // leave a half-applied config.
+    let nextDefaultModel: string | null | undefined = undefined;
+    if (body?.defaultModel !== undefined) {
+      nextDefaultModel =
+        typeof body.defaultModel === "string" && body.defaultModel.trim()
+          ? body.defaultModel.trim()
+          : null;
+      if (nextDefaultModel) {
+        if (!isSafeModel(nextDefaultModel)) {
+          return NextResponse.json(
+            { error: "Model contains unsafe characters" },
+            { status: 400 }
+          );
+        }
+        if (
+          resolveModelForAgent(agentType, nextDefaultModel) !== nextDefaultModel
+        ) {
+          return NextResponse.json(
+            {
+              error: `Model "${nextDefaultModel}" is not in the agent's catalog`,
+            },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
     queries
       .updateDispatchRepo(db)
       .run(
@@ -112,6 +144,12 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     // stuck on a now-fixed misconfiguration).
     if (verifyCommand !== repo.verify_command) {
       queries.clearVerifyForRepo(db).run(id);
+    }
+
+    // #20: persist the (already-validated) worker base model after the main
+    // update — a focused follow-up write, like the maintainer config below.
+    if (nextDefaultModel !== undefined) {
+      queries.updateDispatchRepoDefaultModel(db).run(nextDefaultModel, id);
     }
 
     // Autonomous-maintainer config (a focused, separate update — last_at is never
@@ -166,8 +204,7 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
     const db = getDb();
     // Read the repo path before deleting so we can clean up warm worktrees on disk.
     const repo = queries.getDispatchRepo(db).get(id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     // Clean up warm worktrees BEFORE deleteDispatchRepo: the CASCADE would delete
     // the warm_worktrees DB rows first, leaving orphaned directories on disk.
     if (repo) {

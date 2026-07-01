@@ -108,6 +108,7 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
   const [conc, setConc] = useState(String(repo.max_concurrency));
   const [label, setLabel] = useState(repo.label_filter ?? "");
   const [verifyCmd, setVerifyCmd] = useState(repo.verify_command ?? "");
+  const [workerModel, setWorkerModel] = useState(repo.default_model ?? "");
   const [maintainGoal, setMaintainGoal] = useState(
     repo.maintainer_survey_goal ?? ""
   );
@@ -357,6 +358,22 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
         >
           <Trash2 className="text-muted-foreground hover:text-destructive h-4 w-4" />
         </Button>
+      </div>
+      {/* #20 cost-aware routing: pin this repo's workers to an economical
+          catalog model (e.g. haiku); fix rounds auto-escalate one tier. Blank
+          = the agent's default. Validated server-side (catalog + shell-safe). */}
+      <div className="flex items-center gap-2 px-3 pb-1">
+        <span className="text-muted-foreground text-xs">worker model</span>
+        <Input
+          placeholder="agent default — e.g. haiku (fix rounds escalate a tier)"
+          value={workerModel}
+          onChange={(e) => setWorkerModel(e.target.value)}
+          onBlur={() => {
+            const next = workerModel.trim() || null;
+            if (next !== repo.default_model) patch({ defaultModel: next });
+          }}
+          className="h-8 flex-1 font-mono text-xs"
+        />
       </div>
       {repo.verify_gate === 1 && (
         <div className="flex items-center gap-2 px-3 pb-1">

@@ -1188,6 +1188,21 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 48,
+    name: "add_dispatch_repo_default_model",
+    up: (db) => {
+      // #20 cost-aware routing: a repo may pin its dispatch workers to an
+      // economical model tier (e.g. haiku). NULL = the agent's catalog default.
+      // Validated at the PATCH boundary (resolveModelForAgent + isSafeModel).
+      if (
+        hasTable(db, "dispatch_repos") &&
+        !hasColumn(db, "dispatch_repos", "default_model")
+      ) {
+        db.exec(`ALTER TABLE dispatch_repos ADD COLUMN default_model TEXT`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

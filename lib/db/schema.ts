@@ -172,6 +172,9 @@ export function createSchema(db: Database.Database): void {
       merge_train INTEGER NOT NULL DEFAULT 0,
       verify_gate INTEGER NOT NULL DEFAULT 0,
       verify_command TEXT,
+      -- #20 cost-aware routing (migration 48): pin this repo's dispatch workers
+      -- to an economical catalog model (e.g. haiku). NULL = agent default.
+      default_model TEXT,
       -- Autonomous maintainer (opt-in, default off): on a cadence, a survey agent
       -- proposes its OWN backlog against the goal. Proposals are NEVER auto-
       -- dispatched (the issue_dispatches.maintainer_proposed fence) — they wait for
