@@ -51,6 +51,14 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       command,
       sortOrder,
     });
+    // Defensive: the row vanished between the ownership check and the update
+    // (delete race) — don't 200 with an empty body.
+    if (!startupCommand) {
+      return NextResponse.json(
+        { error: "Startup command not found" },
+        { status: 404 }
+      );
+    }
 
     return NextResponse.json({ startupCommand });
   } catch (error) {
