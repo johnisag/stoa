@@ -26,6 +26,7 @@ import {
   type PushEvent,
 } from "./lib/session-status";
 import { sendPushToAll, hasPushSubscriptions } from "./lib/push";
+import { sessionVerifyTick } from "./lib/session-verify";
 import {
   actionsForKind,
   canApproveFromPrompt,
@@ -546,6 +547,15 @@ app.prepare().then(() => {
               console.error("web push failed:", err)
             );
         }
+      }
+      // #19 verify badge: observe each session's turn boundary — done → run the
+      // project's verify command (fire-and-forget, capped), new turn → clear
+      // the stale verdict. Keeps its own prev-map inside the module, so it's
+      // independent of the push gating above. Never throws / never awaits.
+      try {
+        sessionVerifyTick(curr);
+      } catch (err) {
+        console.error("session verify tick failed:", err);
       }
       if (SNAPSHOTS_ENABLED) {
         // Snapshot on a turn boundary: the agent went from working to settled.

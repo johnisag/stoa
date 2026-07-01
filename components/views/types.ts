@@ -14,6 +14,11 @@ export interface SessionStatus {
   /** True when an ACTUAL prompt is on screen (vs a finished turn that also reads
    * "waiting") — drives the "needs input" vs "ready" notification, not buttons. */
   hasPrompt?: boolean;
+  /** #19 verify badge: the last turn-boundary verify verdict for this session
+   * (running/pass/fail/error), when it ran, and a short failing-output head. */
+  verifyStatus?: string | null;
+  verifyRanAt?: string | null;
+  verifyOutput?: string | null;
 }
 
 export interface ViewProps {

@@ -113,6 +113,7 @@ export function useUpdateProject() {
       agentType,
       defaultModel,
       initialPrompt,
+      verifyCommand,
     }: {
       projectId: string;
       name?: string;
@@ -120,6 +121,7 @@ export function useUpdateProject() {
       agentType?: string;
       defaultModel?: string;
       initialPrompt?: string | null;
+      verifyCommand?: string | null;
     }) => {
       const res = await fetch(`/api/projects/${projectId}`, {
         method: "PATCH",
@@ -130,9 +132,15 @@ export function useUpdateProject() {
           agentType,
           defaultModel,
           initialPrompt,
+          verifyCommand,
         }),
       });
-      if (!res.ok) throw new Error("Failed to update project");
+      if (!res.ok) {
+        // Surface the server's message (e.g. a rejected verify command) so the
+        // dialog can show WHY instead of a generic failure.
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to update project");
+      }
       return res.json();
     },
     onSuccess: () => {

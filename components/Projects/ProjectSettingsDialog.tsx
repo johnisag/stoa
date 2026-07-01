@@ -102,6 +102,7 @@ export function ProjectSettingsDialog({
     getDefaultModelForAgent("claude")
   );
   const [initialPrompt, setInitialPrompt] = useState("");
+  const [verifyCommand, setVerifyCommand] = useState("");
   const [devServers, setDevServers] = useState<DevServerConfig[]>([]);
   const [startupCommands, setStartupCommands] = useState<
     StartupCommandConfig[]
@@ -134,6 +135,7 @@ export function ProjectSettingsDialog({
           : getDefaultModelForAgent(project.agent_type)
       );
       setInitialPrompt(project.initial_prompt || "");
+      setVerifyCommand(project.verify_command || "");
       setDevServers(
         project.devServers.map((ds) => ({
           id: ds.id,
@@ -386,6 +388,7 @@ export function ProjectSettingsDialog({
         agentType,
         defaultModel,
         initialPrompt: initialPrompt.trim() || null,
+        verifyCommand: verifyCommand.trim() || null,
       });
 
       // Handle dev server changes
@@ -780,6 +783,26 @@ export function ProjectSettingsDialog({
                   ))}
                 </div>
               )}
+            </div>
+
+            {/* Verify Command (#19) */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Verify Command</label>
+              <Input
+                value={verifyCommand}
+                onChange={(e) => setVerifyCommand(e.target.value)}
+                placeholder="npx tsc --noEmit && npm test"
+                className="font-mono"
+              />
+              <p className="text-muted-foreground text-xs">
+                Runs in the session&apos;s worktree each time an agent finishes
+                a turn; the session card shows a real pass/fail badge —
+                independent of the agent&apos;s self-report. The badge is
+                turn-scoped: it clears when the next turn starts, so green
+                always reflects the tree as the agent last left it. Chain steps
+                with &amp;&amp;; no pipes or $VARs (runs without a shell). Blank
+                disables the badge.
+              </p>
             </div>
 
             {/* Startup Commands (#14b) */}

@@ -1161,6 +1161,33 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 47,
+    name: "add_verify_badge",
+    up: (db) => {
+      // #19: outcome-based verify badge. A project may configure a verify
+      // command (validated with parseVerifySteps — Stoa's no-shell grammar);
+      // when an interactive session finishes a turn it runs in the session's
+      // worktree and the verdict lands on the sessions row (turn-scoped:
+      // cleared when the next turn starts).
+      const hasCol = (table: string, col: string) =>
+        (
+          db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        ).some((c) => c.name === col);
+      // hasTable guards: an upgrade fixture mid-migration may not have created
+      // these tables yet (they'd be born WITH the columns via schema.ts).
+      if (hasTable(db, "projects") && !hasCol("projects", "verify_command")) {
+        db.exec(`ALTER TABLE projects ADD COLUMN verify_command TEXT`);
+      }
+      if (hasTable(db, "sessions")) {
+        for (const col of ["verify_status", "verify_output", "verify_ran_at"]) {
+          if (!hasCol("sessions", col)) {
+            db.exec(`ALTER TABLE sessions ADD COLUMN ${col} TEXT`);
+          }
+        }
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

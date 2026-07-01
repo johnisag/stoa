@@ -251,6 +251,33 @@ export const queries = {
       `UPDATE projects SET name = ?, working_directory = ?, agent_type = ?, default_model = ?, initial_prompt = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // #19 verify badge
+  updateProjectVerifyCommand: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE projects SET verify_command = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // verify_ran_at is stamped only on COMPLETION (setSessionVerifyResult) — a
+  // 'running' row has no ran-at yet.
+  setSessionVerifyRunning: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE sessions SET verify_status = 'running', verify_output = NULL, verify_ran_at = NULL WHERE id = ?`
+    ),
+
+  setSessionVerifyResult: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE sessions SET verify_status = ?, verify_output = ?, verify_ran_at = datetime('now') WHERE id = ?`
+    ),
+
+  clearSessionVerify: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE sessions SET verify_status = NULL, verify_output = NULL, verify_ran_at = NULL WHERE id = ?`
+    ),
+
   updateProjectExpanded: (db: Database.Database) =>
     getStmt(db, `UPDATE projects SET expanded = ? WHERE id = ?`),
 

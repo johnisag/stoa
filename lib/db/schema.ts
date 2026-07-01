@@ -36,6 +36,12 @@ export function createSchema(db: Database.Database): void {
       -- native Claude fork inherits the parent's transcript, so the cost path nets
       -- this baseline out. NULL for non-forks. (migration 44)
       fork_cost_baseline TEXT,
+      -- #19 outcome-based verify badge (migration 47): the last turn-boundary
+      -- verify verdict (running/pass/fail/error), its bounded failing-step
+      -- output tail, and when it ran. Turn-scoped — cleared when a new turn starts.
+      verify_status TEXT,
+      verify_output TEXT,
+      verify_ran_at TEXT,
       FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
     );
 
@@ -101,6 +107,10 @@ export function createSchema(db: Database.Database): void {
       agent_type TEXT NOT NULL DEFAULT 'claude',
       default_model TEXT NOT NULL DEFAULT 'sonnet',
       initial_prompt TEXT,
+      -- #19 (migration 47): the project's verify command (typecheck/test/build),
+      -- run at each session turn boundary for the verify badge. Stoa's no-shell
+      -- grammar (parseVerifySteps): steps chained with &&, no shell metachars.
+      verify_command TEXT,
       expanded INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0,
       is_uncategorized INTEGER NOT NULL DEFAULT 0,

@@ -81,6 +81,13 @@ interface SessionCardProps {
    * reset (or null when the provider didn't state one). */
   rateLimited?: boolean;
   rateLimitResetAt?: number | null;
+  /** #19 outcome-based verify badge — the last turn-boundary verify verdict
+   * (running/pass/fail/error) plus a short failing-output head for the tooltip.
+   * Primitives so React.memo still skips unchanged repaints. Absent = no badge
+   * (no verify command configured, or no turn verified yet). */
+  verifyStatus?: string | null;
+  verifyOutput?: string | null;
+  verifyRanAt?: string | null;
   /** How many sessions (this one included, so always ≥2 when set) share this
    * session's working_directory — they edit the same files on the same branch and
    * can clobber each other. Undefined/0/1 = isolated (worktree or lone) = no badge.
@@ -163,6 +170,9 @@ function SessionCardComponent({
   lastLine,
   rateLimited,
   rateLimitResetAt,
+  verifyStatus,
+  verifyOutput,
+  verifyRanAt,
   conflictCount,
   groups = EMPTY_GROUPS,
   projects = EMPTY_PROJECTS,
@@ -651,6 +661,45 @@ function SessionCardComponent({
               m
             </span>
           )}
+        </span>
+      )}
+
+      {/* #19 verify badge — a REAL red/green verdict from running the project's
+          verify command at the last turn boundary, independent of the agent's
+          self-report. Turn-scoped: cleared when a new turn starts. */}
+      {verifyStatus && (
+        <span
+          className={cn(
+            "flex flex-shrink-0 items-center gap-0.5 rounded px-1 text-[10px]",
+            verifyStatus === "pass" &&
+              "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+            verifyStatus === "fail" &&
+              "bg-red-500/15 text-red-600 dark:text-red-400",
+            verifyStatus === "error" &&
+              "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+            verifyStatus === "running" && "bg-muted text-muted-foreground"
+          )}
+          title={
+            verifyStatus === "running"
+              ? "Verifying…"
+              : `Verify ${verifyStatus === "pass" ? "passed" : verifyStatus}${
+                  verifyRanAt
+                    ? ` · ${new Date(verifyRanAt + "Z").toLocaleTimeString()}`
+                    : ""
+                }${verifyOutput ? `\n${verifyOutput}` : ""}`
+          }
+          aria-label={`Verify ${verifyStatus}`}
+        >
+          {verifyStatus === "running" ? (
+            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          ) : verifyStatus === "pass" ? (
+            "✓"
+          ) : (
+            "✗"
+          )}
+          <span>
+            {verifyStatus === "running" ? "verify" : `verify ${verifyStatus}`}
+          </span>
         </span>
       )}
 
