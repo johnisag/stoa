@@ -650,10 +650,22 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
       for a non-github repo (harmless today — it runs a bare `gh issue list` in
       the worktree, never `gh --repo linear:…`, and its proposals are fenced out
       of auto-dispatch).
-35. **Reusable scoped subagent library** — `orchestration` · M. Promote workflow
-    roles into first-class subagent defs (tools allowlist + per-role model),
-    materialized into each provider's native subagent dir. _Seam:_
-    `lib/command/workflow-roles.ts`, `lib/skills.ts`, `saved-workflows.ts`.
+35. ✅ **Reusable scoped subagent library** — `orchestration` · M. **SHIPPED
+    (library + role mapping; Claude-only).** New `lib/subagents.ts`:
+    `SubagentDef {name, description, tools[] allowlist, model?, systemPrompt?}` +
+    a pure serializer to Claude Code's VERIFIED `~/.claude/agents/<name>/AGENT.md`
+    YAML-frontmatter format (confirmed against the real `code-reviewer/AGENT.md`,
+    not guessed), with the same hardening as `lib/skills.ts` (name/tool/model
+    charset guards so a hostile token can't forge a second frontmatter key or
+    traverse paths; empty tools ⇒ inherit-all). Materialization behind an
+    injectable `SubagentFs` seam; `roleToSubagentDef` maps a workflow role
+    (ADDITIVE — no existing behavior changed) to a scoped def (read-only roles
+    get Read/Grep/Glob, write roles add Edit/Write/Bash). Registry gains an
+    optional `agentsDir` (Claude only — other providers' native formats
+    unverified, so `supportedSubagentProviders()` lists only Claude). 31 tests.
+    _Deferred:_ an API route + Workflows-UI affordance to invoke it (left
+    decoupled/additive); wiring non-Claude providers once their format is
+    verified. _Seam:_ `lib/subagents.ts`, `lib/providers/registry.ts`.
 36. ✅ **Secrets guard at session creation** — `security` · S. **SHIPPED (warn
     half).** Pure name-only matcher `lib/secret-scan.ts`
     (`SECRET_FILE_PATTERNS` + `classifySecretFiles` — .env/.env.*, *.pem,
