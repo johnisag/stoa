@@ -82,7 +82,10 @@ export function SessionList({
   }, [sessions, sessionStatuses, activeSessionId, onSelect]);
 
   // All mutations via custom hook
-  const mutations = useSessionListMutations({ onSelectSession: onSelect });
+  const mutations = useSessionListMutations({
+    onSelectSession: onSelect,
+    activeSessionId,
+  });
 
   // Project creation mutation for folder picker
   const createProject = useCreateProject();

@@ -98,6 +98,9 @@ export function NotesDialog({ open, onOpenChange }: NotesDialogProps) {
     updateNote.mutateAsync({ id: n.id, pinned: !n.pinned });
 
   const remove = (n: Note) => {
+    // Double-fire guard (see undoable-action.ts: a reschedule would flush the
+    // first delete immediately and leave its twin to 404 later).
+    if (undoableNoteDelete.pending().includes(`note:${n.id}`)) return;
     // #37: hide the note now, hold the real DELETE for the undo window. Undo
     // cancels the pending delete and refetches (the server never saw it).
     undoableNoteDelete.schedule(
@@ -124,6 +127,8 @@ export function NotesDialog({ open, onOpenChange }: NotesDialogProps) {
         onClick: () => {
           undoableNoteDelete.cancel(`note:${n.id}`);
           queryClient.invalidateQueries({ queryKey: noteKeys.list() });
+          // Land back on the restored note, not the first-note fallback.
+          setSelectedId(n.id);
         },
       },
     });
