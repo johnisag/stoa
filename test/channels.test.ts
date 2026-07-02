@@ -2,7 +2,7 @@
  * Inter-agent channels — the service layer over a real in-memory SQLite (real
  * schema + migrations + queries, the `db` proxy mocked). Locks: send + recipient
  * validation, the order-independent pair key, the consuming inbox (read-once),
- * the non-consuming peek + thread, the single-oldest delivery pick + markDelivered,
+ * the non-consuming peek + thread, the single-oldest delivery pick + claimDelivery,
  * and the validation caps.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -28,7 +28,7 @@ import {
   consumeInbox,
   listThread,
   nextUnreadMessage,
-  markDelivered,
+  claimDelivery,
   channelPairKey,
   validateChannelBody,
   ChannelValidationError,
@@ -143,13 +143,13 @@ describe("inbox: peek (non-consuming) vs consume (read-once)", () => {
   });
 });
 
-describe("delivery pick + markDelivered (the opt-in push path)", () => {
+describe("delivery pick + claimDelivery (the opt-in push path)", () => {
   it("nextUnreadMessage returns the single oldest unread, then nothing after delivery", () => {
     const a = sendChannelMessage({ from: "bob", to: "alice", body: "1" });
     sendChannelMessage({ from: "bob", to: "alice", body: "2" });
     const first = nextUnreadMessage("alice");
     expect(first?.id).toBe(a.id);
-    markDelivered(a.id);
+    expect(claimDelivery(a.id)).toBe(true);
     // Delivered ⇒ read; the next pick is message "2".
     expect(nextUnreadMessage("alice")?.body).toBe("2");
     const row = db()
@@ -165,25 +165,25 @@ describe("delivery pick + markDelivered (the opt-in push path)", () => {
     expect(nextUnreadMessage("alice")).toBeNull();
   });
 
-  it("markDelivered is idempotent and loses to a prior pull", () => {
+  it("claimDelivery is idempotent (single winner) and loses to a prior pull", () => {
     const a = sendChannelMessage({ from: "bob", to: "alice", body: "1" });
-    markDelivered(a.id);
+    expect(claimDelivery(a.id)).toBe(true); // first claim wins
     const after1 = db()
       .prepare(
         "SELECT delivered_at, read_at FROM channel_messages WHERE id = ?"
       )
       .get(a.id) as { delivered_at: string; read_at: string };
-    // A second mark must not re-stamp delivered_at.
-    markDelivered(a.id);
+    // A second claim must LOSE (changes === 0) and not re-stamp delivered_at.
+    expect(claimDelivery(a.id)).toBe(false);
     const after2 = db()
       .prepare("SELECT delivered_at FROM channel_messages WHERE id = ?")
       .get(a.id) as { delivered_at: string };
     expect(after2.delivered_at).toBe(after1.delivered_at);
 
-    // A message already consumed by a pull is NOT later stamped delivered.
+    // A message already consumed by a pull is NOT later claimed by the push.
     const b = sendChannelMessage({ from: "bob", to: "alice", body: "2" });
     consumeInbox("alice"); // pull marks b read
-    markDelivered(b.id); // push loses the race — no-op
+    expect(claimDelivery(b.id)).toBe(false); // push loses the race
     const bRow = db()
       .prepare("SELECT delivered_at FROM channel_messages WHERE id = ?")
       .get(b.id) as { delivered_at: string | null };

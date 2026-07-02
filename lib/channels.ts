@@ -150,11 +150,6 @@ export function nextUnreadMessage(sessionId: string): ChannelMessageRow | null {
   );
 }
 
-/** Mark a message delivered (the opt-in terminal push) — also consumes it. */
-export function markDelivered(id: string): void {
-  queries.markChannelDelivered(db).run(id);
-}
-
 /**
  * Atomically CLAIM a message for the opt-in terminal push and report whether
  * THIS caller won the claim. A single UPDATE stamps delivered_at + read_at
@@ -170,6 +165,18 @@ export function markDelivered(id: string): void {
  */
 export function claimDelivery(id: string): boolean {
   return queries.markChannelDelivered(db).run(id).changes === 1;
+}
+
+/**
+ * Un-claim a message this push CLAIMED but failed to paste, returning it to the
+ * pending state so the NEXT tick re-delivers it. Without this a transient paste
+ * failure (the recipient pane died between the tick's snapshot and the paste, a
+ * tmux exec hiccup) would leave the row stamped delivered+read — invisible to
+ * both the push scan and the pull inbox — silently and permanently undelivered.
+ * Only reverts a push-claimed row (delivered_at set); never un-consumes a pull.
+ */
+export function resetDelivery(id: string): void {
+  queries.resetChannelDelivery(db).run(id);
 }
 
 /** Delete every channel message a session sent OR received — orphan cleanup when

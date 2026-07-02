@@ -11,6 +11,8 @@
  * The fix: `claimDelivery(id)` atomically stamps the row (delivered_at/read_at)
  * WHERE it is still pending and returns `changes === 1` — only the ONE winner
  * that flips the row gets to paste; a concurrent loser gets `false` and skips.
+ * `resetDelivery(id)` un-claims a row whose paste later failed so the next tick
+ * re-delivers it (at-least-once is preserved without reopening the race).
  *
  * The first test models the two concurrent deliverers exactly as server.ts does
  * (both decide off one snapshot). It contrasts the OLD decision (peek-then-paste,
@@ -39,6 +41,7 @@ import {
   sendChannelMessage,
   nextUnreadMessage,
   claimDelivery,
+  resetDelivery,
 } from "@/lib/channels";
 
 function db() {
@@ -120,5 +123,36 @@ describe("claimDelivery — atomic claim gates the terminal paste", () => {
 
   it("claiming an unknown id is a no-op false (never throws)", () => {
     expect(claimDelivery("does-not-exist")).toBe(false);
+  });
+
+  it("resetDelivery re-arms a claimed-but-failed message so the next tick re-delivers", () => {
+    const m = sendChannelMessage({ from: "bob", to: "alice", body: "retry" });
+    // Tick 1: claim wins, then the paste FAILS (pane died mid-tick) → un-claim.
+    expect(claimDelivery(m.id)).toBe(true);
+    resetDelivery(m.id);
+    // The message is pending again — visible to the push scan AND re-claimable.
+    expect(nextUnreadMessage("alice")?.id).toBe(m.id);
+    // Tick 2: re-claim succeeds and (on a good paste) it stays consumed.
+    expect(claimDelivery(m.id)).toBe(true);
+    const row = db()
+      .prepare(
+        "SELECT delivered_at, read_at FROM channel_messages WHERE id = ?"
+      )
+      .get(m.id) as { delivered_at: string | null; read_at: string | null };
+    expect(row.delivered_at).not.toBeNull();
+    expect(row.read_at).not.toBeNull();
+  });
+
+  it("resetDelivery never un-consumes a message a PULL already read", () => {
+    const m = sendChannelMessage({ from: "bob", to: "alice", body: "pulled" });
+    // A pull consumes it (sets read_at only; delivered_at stays NULL).
+    db()
+      .prepare(
+        "UPDATE channel_messages SET read_at = datetime('now') WHERE id = ?"
+      )
+      .run(m.id);
+    // A stray reset must NOT resurrect a pulled message (delivered_at IS NULL guard).
+    resetDelivery(m.id);
+    expect(nextUnreadMessage("alice")).toBeNull();
   });
 });
