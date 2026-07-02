@@ -680,7 +680,8 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     on the arm→release edge, and reuses the list's existing refresh; it is
     cooperative (never `preventDefault`s, so it doesn't fight touch-scroll)
     and gated `isMobile`, reading the Radix viewport via a new optional
-    `viewportRef`. 26 pure tests. _Seam:_ `hooks/useHaptics.ts`,
+    `viewportRef`. 30 tests (26 pure + 4 rendered-hook). _Seam:_
+    `hooks/useHaptics.ts`,
     `hooks/usePullToRefresh.ts`, `components/SessionList/*`.
 42. ✅ **Single-pass transcript parse** — `perf` · S. **SHIPPED.** New
     `parseClaudeTranscriptUsage(jsonl)` walks the JSONL ONCE returning

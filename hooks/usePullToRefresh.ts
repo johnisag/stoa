@@ -238,6 +238,11 @@ export function usePullToRefresh({
         clearTimeout(timer);
         settle();
       });
+    // Cancel a still-pending settle timer on unmount / phase change so it can't
+    // fire into a dead component. (Safe: this effect only re-runs when phase
+    // leaves "refreshing" — never while a refetch is still in flight — so the
+    // timeout is never cleared out from under a live refresh.)
+    return () => clearTimeout(timer);
   }, [state.phase, dispatch]);
 
   const onTouchStart = useCallback(

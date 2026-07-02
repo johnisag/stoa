@@ -1,7 +1,5 @@
 "use client";
 
-import { useCallback } from "react";
-
 /**
  * #41 — Tap haptics for mobile.
  *
@@ -75,14 +73,4 @@ export function triggerHaptic(kind: HapticKind): void {
     // Some engines throw instead of returning false — swallow: haptics are
     // a nice-to-have, never a failure path for the action that triggered them.
   }
-}
-
-/**
- * Hook wrapper: returns a stable `haptic(kind)` callback so components can wire a
- * one-line tick at a tap handler without re-importing the module function. The
- * identity is stable (empty deps) so it doesn't defeat a memo'd child.
- */
-export function useHaptics(): { haptic: (kind: HapticKind) => void } {
-  const haptic = useCallback((kind: HapticKind) => triggerHaptic(kind), []);
-  return { haptic };
 }
