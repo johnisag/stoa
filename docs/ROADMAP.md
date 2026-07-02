@@ -703,9 +703,16 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     checkpoint timeline (worktree state + transcript point) with rewind + "fork from
     here"; watchdog auto-rewinds wedged workers. _Seam:_ `lib/snapshots.ts`,
     `lib/fork.ts`, `lib/db/migrations.ts`, `lib/fleet-board`, `lib/watchdog.ts`.
-45. **OpenTelemetry GenAI trace export** — `orchestration` · M. An OTLP exporter
-    (no-op unless `STOA_OTEL_ENDPOINT` set) emitting GenAI spans per run/turn/tool/
-    model. _Why:_ instant Langfuse/any-OTEL compatibility. _Seam:_ new
+45. ✅ **OpenTelemetry GenAI trace export** — `orchestration` · M. **SHIPPED.**
+    A dependency-light OTLP/HTTP-JSON exporter in new `lib/telemetry/otel.ts`
+    that is a hard NO-OP unless `STOA_OTEL_ENDPOINT` is set (guarded up front —
+    zero overhead, nothing loaded when unset). Pure span-builder helpers emit
+    GenAI-semantic-convention spans (`gen_ai.system`/operation/request.model/
+    usage tokens; timestamps injected, not `Date.now`) for the run (spawnWorker)
+    and tool (MCP CallTool) boundaries; emit failures are swallowed (never throw
+    into a run). 23-test pure suite (span attributes, endpoint-unset no-op, OTLP
+    payload shape). _Deferred:_ cross-process parent/child span linking + per-
+    turn/model hooks in the pipeline executor (out of the named-file scope). _Seam:_
     `lib/telemetry/otel.ts`, `lib/orchestration.ts`, `mcp/orchestration-server.ts`.
 46. **Read-only spectator share links** — `adoption` · L. A scoped OBSERVER token
     that can stream the Live Wall WS but is rejected by every mutating op. _Why:_
