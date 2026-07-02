@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import {
   parseClaudeUsage,
   parseClaudeContextTokens,
@@ -23,7 +23,16 @@ vi.mock("../lib/claude-transcript", () => ({
 // mocked transcript on every call (the #18 stat-gated cache is covered on its own
 // in test/transcript-cache.test.ts). readClaudeSessionUsage's kill-switch branch
 // then goes straight through readClaudeTranscriptRaw (the mocked fn above).
-process.env.STOA_TRANSCRIPT_CACHE = "0";
+// The switch is read live per call; suite-scoped hooks keep it from leaking to
+// other test files in the same worker.
+const prevCacheEnv = process.env.STOA_TRANSCRIPT_CACHE;
+beforeAll(() => {
+  process.env.STOA_TRANSCRIPT_CACHE = "0";
+});
+afterAll(() => {
+  if (prevCacheEnv === undefined) delete process.env.STOA_TRANSCRIPT_CACHE;
+  else process.env.STOA_TRANSCRIPT_CACHE = prevCacheEnv;
+});
 
 // A few JSONL lines like Claude Code writes: user turns (no usage) + assistant
 // turns carrying message.usage, plus a blank + a malformed line to skip.
@@ -228,6 +237,102 @@ describe("computeSessionCosts (#1 — applies the fork baseline end-to-end)", ()
       cacheRead: 0,
       cacheWrite: 0,
     });
+  });
+});
+
+describe("computeSessionCosts (#22 — direct: short-circuits + bounded concurrency)", () => {
+  // This function feeds the budget-kill loop and the budget-park tick — its
+  // contract is locked here: an entry for EVERY input session, supported:false
+  // short-circuits that never touch the fs, best-effort zero on unreadable
+  // transcripts, and transcript reads bounded at 12 concurrent.
+  // Loose override type: the tests exercise null transcript ids / models,
+  // which the DB row can hold even where the TS type says string.
+  function cs(over: Record<string, unknown> = {}): Session {
+    return {
+      id: "s",
+      name: "sess",
+      agent_type: "claude",
+      claude_session_id: "cid",
+      working_directory: "/repo",
+      model: "claude-sonnet-4-6",
+      fork_cost_baseline: null,
+      ...over,
+    } as unknown as Session;
+  }
+
+  it("short-circuits supported:false WITHOUT touching the reader: no reader / no transcript id / no cwd", async () => {
+    vi.mocked(readClaudeTranscriptRaw).mockClear();
+    const costs = await computeSessionCosts([
+      cs({ id: "codex", agent_type: "codex" }), // provider has no reader
+      cs({ id: "noid", claude_session_id: null }), // transcript id never captured
+      cs({ id: "nocwd", working_directory: null }), // cwd unset
+    ]);
+    for (const id of ["codex", "noid", "nocwd"]) {
+      expect(costs[id]).toMatchObject({
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        costUsd: null,
+        contextTokens: 0,
+        supported: false,
+      });
+    }
+    expect(readClaudeTranscriptRaw).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable transcript is best-effort ZERO (still supported, never a throw)", async () => {
+    vi.mocked(readClaudeTranscriptRaw).mockResolvedValue(null);
+    const costs = await computeSessionCosts([cs({ id: "gone" })]);
+    expect(costs["gone"]).toMatchObject({
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      costUsd: 0, // priced model × zero usage
+      contextTokens: 0,
+      supported: true,
+    });
+  });
+
+  it("an unpriced model reports its tokens but costUsd null (the UI shows —)", async () => {
+    vi.mocked(readClaudeTranscriptRaw).mockResolvedValue(
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "m", usage: { input_tokens: 10, output_tokens: 5 } },
+      })
+    );
+    const costs = await computeSessionCosts([cs({ id: "u", model: "gpt-5" })]);
+    expect(costs["u"].tokens.input).toBe(10);
+    expect(costs["u"].costUsd).toBeNull();
+    expect(costs["u"].supported).toBe(true);
+  });
+
+  it("returns an entry for EVERY input session (callers key budget decisions on it)", async () => {
+    vi.mocked(readClaudeTranscriptRaw).mockResolvedValue(null);
+    const costs = await computeSessionCosts([
+      cs({ id: "a" }),
+      cs({ id: "b", agent_type: "hermes" }),
+      cs({ id: "c", claude_session_id: null }),
+      cs({ id: "d", model: null }),
+    ]);
+    expect(Object.keys(costs).sort()).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("caps concurrent transcript reads at 12 (fd-exhaustion guard on large fleets)", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    vi.mocked(readClaudeTranscriptRaw).mockImplementation(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 1)); // hold the slot across a tick
+      inFlight--;
+      return JSON.stringify({
+        type: "assistant",
+        message: { id: "m", usage: { input_tokens: 1, output_tokens: 1 } },
+      });
+    });
+    const sessions = Array.from({ length: 30 }, (_, i) =>
+      cs({ id: `s${i}`, claude_session_id: `c${i}` })
+    );
+    const costs = await computeSessionCosts(sessions);
+    expect(Object.keys(costs)).toHaveLength(30); // none dropped by batching
+    expect(peak).toBe(12); // locks COST_READ_CONCURRENCY — batches fill fully…
+    expect(inFlight).toBe(0); // …and drain fully
   });
 });
 

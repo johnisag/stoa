@@ -456,10 +456,16 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     deferred: daily/monthly windows (cost-history already keeps per-day data).
     _Seam:_ `lib/budget-park.ts`, migration 49, `server.ts` tick + 3 park skips,
     `app/api/sessions` (+`/status`), AdvancedSettings, SessionCard.
-22. **`computeSessionCosts` direct test (budget-kill path)** — `test` · M. Inject a
-    fake usage reader; assert short-circuits, concurrency cap, and that the cost GET
-    never 500s. _Why:_ this feeds the loop that can kill sessions, yet only the pure
-    parsers are tested. _Seam:_ `test/session-cost.test.ts`.
+22. ✅ **`computeSessionCosts` direct test (budget-kill path)** — `test` · M.
+    **SHIPPED.** Direct contract tests over the mocked transcript boundary
+    (`test/session-cost.test.ts`): supported:false short-circuits never touch
+    the reader (no reader / no transcript id / no cwd), unreadable transcript =
+    best-effort zero, unpriced model = tokens with costUsd null, an entry for
+    EVERY input session, and the 12-wide concurrency cap (in-flight peak
+    tracked across a 30-session fleet). Plus `test/session-cost-route.test.ts`:
+    GET /api/sessions/cost against a real in-memory DB — 200 on empty fleet /
+    mixed fleet / garbage transcripts, budget-level mapping, and a catastrophic
+    DB failure returning a clean 500 JSON error (never an unhandled crash).
 23. **Clickable `file:line` jump-to-error in terminal** — `feature` · M. An xterm
     link provider over a pure extractor; click opens the file at the line (or inserts
     the path on mobile). _Seam:_ `components/Terminal/hooks/terminal-init.ts`, new
