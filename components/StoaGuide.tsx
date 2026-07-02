@@ -111,7 +111,7 @@ const COCKPIT: Item[] = [
     icon: FolderGit2,
     title: "Multi-repo workspace",
     blurb:
-      "Point a new session at a folder of repos (not itself a repo) and pick the ones to work on — each gets its own worktree as a subfolder of one workspace the agent runs in, all on the same feature branch (one branch/PR per repo). Deleting the session tears every worktree down.",
+      "Point a new session at a folder of repos (not itself a repo) and pick the ones to work on — each gets its own worktree as a subfolder of one workspace the agent runs in, all on the same feature branch (one branch/PR per repo). Deleting the session cleans its worktrees up too — commit or push anything you want to keep first.",
   },
   {
     icon: TriangleAlert,
