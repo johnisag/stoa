@@ -66,6 +66,17 @@ describe("detectGesture", () => {
     expect(detectGesture(samples, 60)).toBe("scroll");
   });
 
+  it("holds the EXACT slop boundary: at TAP_SLOP_PX it is still a tap, one past hands off to scroll", () => {
+    // Locks the coexistence contract with touch-scroll.ts's 8px direction
+    // threshold (its `delta > 8` engages one pixel past the slop too) — if
+    // either constant drifts, this boundary pair breaks loudly.
+    expect(TAP_SLOP_PX).toBe(8);
+    const atSlop = [s(100, 100, 0), s(100, 100 + TAP_SLOP_PX, 60)];
+    expect(detectGesture(atSlop, 120)).toBe("tap");
+    const pastSlop = [s(100, 100, 0), s(100, 100 + TAP_SLOP_PX + 1, 60)];
+    expect(detectGesture(pastSlop, 120)).toBe("scroll");
+  });
+
   it("classifies a stationary hold past the threshold as a long-press", () => {
     expect(detectGesture([s(100, 100, 0)], LONG_PRESS_MS)).toBe("long-press");
   });
