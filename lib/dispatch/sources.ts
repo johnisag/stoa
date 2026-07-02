@@ -42,8 +42,10 @@ const emptyIssueSource: IssueSource = {
 /**
  * Pick the IssueSource for a repo. GitHub is the default (unprefixed slug), so
  * every pre-#34 repo resolves to the untouched gh path. A `linear:`-prefixed
- * slug gets a Linear source; a `jira:` prefix is NOT wired yet (deferred) and
- * falls back to GitHub with a warning rather than silently doing nothing.
+ * slug gets a Linear source; a `jira:` prefix (deferred) resolves to an EMPTY
+ * source that ingests nothing — NOT a gh fallback (which would error every tick
+ * against a `jira:` slug). Add-repo already rejects a `jira:` slug up front, so
+ * this only guards a hand-inserted row.
  *
  * `transport` is an escape hatch for tests / a pre-built Linear transport; in
  * production it is omitted and the Linear source builds its own fetch transport.

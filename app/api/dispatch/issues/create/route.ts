@@ -93,6 +93,20 @@ export async function POST(request: NextRequest) {
     if (!repo) {
       return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
     }
+    // #34: creating a GitHub ISSUE (source !== "local") runs `gh issue create
+    // --repo <slug>` — for a Linear/other slug that's `gh … --repo linear:TEAM`,
+    // which fails. Gate BEFORE createIssue runs. Local tasks never touch gh, so
+    // they're allowed for any source (their "now" dispatch is still blocked by
+    // the dispatchSupported gate below). Linear repos are intake/browse-only.
+    if (source !== "local" && !dispatchSupported(repo)) {
+      return NextResponse.json(
+        {
+          error:
+            "Creating a GitHub issue isn't supported for this repo — Linear repos are intake/browse-only. Add a local task, or use a GitHub repo.",
+        },
+        { status: 400 }
+      );
+    }
 
     // 1+2. Record a candidate. issue_created_at = now so the backlog shows
     // "raised just now". A "scheduled" disposition parks it as 'scheduled' until

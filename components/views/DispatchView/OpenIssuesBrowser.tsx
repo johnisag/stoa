@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DispatchRepo } from "@/lib/dispatch/types";
+import { issueSourceKind } from "@/lib/dispatch/issue-source";
 import {
   useOpenIssuesQuery,
   useTriageDispatch,
@@ -25,6 +26,10 @@ export function OpenIssuesBrowser({ repo }: { repo: DispatchRepo }) {
   const q = useOpenIssuesQuery(repo.id, applied, true);
   const triage = useTriageDispatch();
   const issues = q.data ?? [];
+  // #34: free-text search + one-tap Dispatch are GitHub-only. A Linear repo can
+  // be BROWSED (its issues list) but not gh-searched or dispatched here yet, so
+  // those controls are disabled/hidden rather than presented as silent no-ops.
+  const isGithub = issueSourceKind(repo) === "github";
 
   const dispatch = (issue: TriageIssue) => {
     triage.mutate(
@@ -46,10 +51,15 @@ export function OpenIssuesBrowser({ repo }: { repo: DispatchRepo }) {
     <div className="bg-muted/20 ml-2 space-y-2 rounded-md border border-dashed p-3 text-sm sm:ml-8">
       <div className="flex items-center gap-2">
         <Input
-          placeholder="Filter (gh search, e.g. label:bug sort:created-desc)"
+          placeholder={
+            isGithub
+              ? "Filter (gh search, e.g. label:bug sort:created-desc)"
+              : "Search not available for this source"
+          }
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && setApplied(search)}
+          onKeyDown={(e) => e.key === "Enter" && isGithub && setApplied(search)}
+          disabled={!isGithub}
           className="h-8 flex-1"
           aria-label={`Search open issues in ${repo.repo_slug}`}
         />
@@ -57,7 +67,7 @@ export function OpenIssuesBrowser({ repo }: { repo: DispatchRepo }) {
           size="sm"
           variant="secondary"
           onClick={() => setApplied(search)}
-          disabled={q.isFetching}
+          disabled={q.isFetching || !isGithub}
         >
           {q.isFetching ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -73,8 +83,10 @@ export function OpenIssuesBrowser({ repo }: { repo: DispatchRepo }) {
         </div>
       ) : q.isError ? (
         <p className="text-destructive py-3 text-xs">
-          Couldn&apos;t load issues — is gh installed &amp; authenticated for{" "}
-          {repo.repo_slug}?
+          Couldn&apos;t load issues for {repo.repo_slug} —{" "}
+          {isGithub
+            ? "is gh installed & authenticated?"
+            : "is LINEAR_API_KEY set?"}
         </p>
       ) : issues.length === 0 ? (
         <p className="text-muted-foreground py-3 text-xs">
@@ -117,16 +129,21 @@ export function OpenIssuesBrowser({ repo }: { repo: DispatchRepo }) {
                     {meta.label}
                   </span>
                 ) : (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 shrink-0"
-                    disabled={triage.isPending}
-                    onClick={() => dispatch(i)}
-                    aria-label={`Dispatch issue ${i.number}`}
-                  >
-                    <Send className="mr-1 h-3 w-3" /> Dispatch
-                  </Button>
+                  // Dispatch is GitHub-only for now (#34) — a Linear repo browses
+                  // but can't dispatch, so the button is omitted rather than
+                  // shown-then-rejected with a toast.
+                  isGithub && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 shrink-0"
+                      disabled={triage.isPending}
+                      onClick={() => dispatch(i)}
+                      aria-label={`Dispatch issue ${i.number}`}
+                    >
+                      <Send className="mr-1 h-3 w-3" /> Dispatch
+                    </Button>
+                  )
                 )}
               </li>
             );
