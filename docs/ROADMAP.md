@@ -710,10 +710,15 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     GenAI-semantic-convention spans (`gen_ai.system`/operation/request.model/
     usage tokens; timestamps injected, not `Date.now`) for the run (spawnWorker)
     and tool (MCP CallTool) boundaries; emit failures are swallowed (never throw
-    into a run). 23-test pure suite (span attributes, endpoint-unset no-op, OTLP
-    payload shape). _Deferred:_ cross-process parent/child span linking + per-
-    turn/model hooks in the pipeline executor (out of the named-file scope). _Seam:_
-    `lib/telemetry/otel.ts`, `lib/orchestration.ts`, `mcp/orchestration-server.ts`.
+    into a run) with a warn-once diagnostic. Hardened per review: the endpoint
+    FAILS CLOSED (validated http(s) URL, else off + warn — no SSRF/fetch-to-
+    garbage), the fetch is bounded (5s AbortSignal timeout + a 64 in-flight cap
+    so a black-hole collector can't pin sockets under load), CSPRNG span ids,
+    and clamped timestamps. Documented in `.env.example` (STOA_OTEL_ENDPOINT +
+    STOA_OTEL_HEADERS). 26-test pure suite. _Deferred:_ cross-process
+    parent/child span linking + per-turn/model hooks in the pipeline executor.
+    _Seam:_ `lib/telemetry/otel.ts`, `lib/orchestration.ts`,
+    `mcp/orchestration-server.ts`, `.env.example`.
 46. **Read-only spectator share links** — `adoption` · L. A scoped OBSERVER token
     that can stream the Live Wall WS but is rejected by every mutating op. _Why:_
     today the only token is the master = full control. _Seam:_ `lib/auth.ts`, new
