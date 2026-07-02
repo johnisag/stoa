@@ -815,6 +815,15 @@ Condensed record (full detail in git history). All of the below is **done**.
   subscribe it to `SNIPPETS_CHANGED_EVENT` like the chip bar; (3) the useState
   initializer reads raw storage (one-frame flash in a contrived remount) — use
   `getVisibleSnippets()` there too.
+- **Guard: pin the `package.json` "prettier" field (prettier-pass round 2)** —
+  prettier's config search ranks a package.json `"prettier"` key ABOVE
+  `.prettierrc` (verified on 3.9.2), so the byte-pinned `.prettierrc` has a
+  one-rank-higher residual bypass: a merged package.json edit adding
+  `"prettier": {"plugins": ["./payload.js"]}` still executes via the pinned
+  pre-commit hook. Extend the guard to violation on an unpinned prettier key in
+  package.json (and on a root `package.yaml`) while `.prettierrc` is pinned.
+  Every LOWER-ranked config filename (`.prettierrc.js`, `prettier.config.*`) is
+  already shadowed by the pinned `.prettierrc`.
 
 ### Bigger bets (full features)
 
