@@ -21,6 +21,15 @@ import {
   useRemoveDevServer,
 } from "@/data/dev-servers";
 import { sessionKeys } from "@/data/sessions/keys";
+import {
+  removeSessionFromCache,
+  type SessionsCache,
+} from "@/data/sessions/optimistic";
+import { createUndoableRunner, UNDO_DELAY_MS } from "@/lib/undoable-action";
+
+// #37: module-scoped so a pending delete survives re-renders/unmounts. The real
+// DELETE only fires when the undo window elapses (or the same id is replaced).
+const undoableSessionDelete = createUndoableRunner({ delayMs: UNDO_DELAY_MS });
 
 interface UseSessionListMutationsOptions {
   onSelectSession: (sessionId: string) => void;
@@ -75,14 +84,43 @@ export function useSessionListMutations({
           title: "Delete session?",
           description:
             "This permanently deletes the session and, if it has one, its git " +
-            "worktree (the branch is kept). It cannot be undone.",
+            "worktree (the branch is kept). You get a few seconds to undo.",
           confirmLabel: "Delete",
         }))
       )
         return;
-      await deleteSession(sessionId);
+      // #37: hide the row now, hold the real DELETE for the undo window. Undo
+      // cancels the pending delete and refetches (the server never saw it);
+      // the timeout executes it for real.
+      const cached = queryClient.getQueryData<SessionsCache>(
+        sessionKeys.list()
+      );
+      const name = cached?.sessions.find((s) => s.id === sessionId)?.name;
+      undoableSessionDelete.schedule(
+        `session:${sessionId}`,
+        () => {
+          deleteSession(sessionId).catch(() => {
+            toast.error("Failed to delete session");
+            queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
+          });
+        },
+        () =>
+          queryClient.setQueryData<SessionsCache>(sessionKeys.list(), (old) =>
+            removeSessionFromCache(old, sessionId)
+          )
+      );
+      toast(name ? `Deleted "${name}"` : "Session deleted", {
+        duration: UNDO_DELAY_MS,
+        action: {
+          label: "Undo",
+          onClick: () => {
+            undoableSessionDelete.cancel(`session:${sessionId}`);
+            queryClient.invalidateQueries({ queryKey: sessionKeys.list() });
+          },
+        },
+      });
     },
-    [confirm, deleteSession]
+    [confirm, deleteSession, queryClient]
   );
 
   const handleRenameSession = useCallback(

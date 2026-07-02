@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { toast } from "sonner";
 import { X, Plus, Trash2 } from "lucide-react";
 import {
   type Snippet,
@@ -9,12 +10,18 @@ import {
   removeSnippet,
 } from "@/lib/snippets";
 import { formatTerminalTextForAgent } from "@/lib/path-display";
+import { createUndoableRunner, UNDO_DELAY_MS } from "@/lib/undoable-action";
 
 // The shared snippet store lives in localStorage; read/write through it so both
 // the mobile toolbar and the desktop tab bar surface the same list.
 function browserStorage() {
   return window.localStorage;
 }
+
+// #37: module-scoped so a pending delete survives re-renders/unmounts (and is
+// shared by every SnippetsModal instance — the store is one list). The storage
+// write only happens when the undo window elapses.
+const undoableSnippetDelete = createUndoableRunner({ delayMs: UNDO_DELAY_MS });
 
 // Snippets modal for saving/inserting common commands. Reused by both the mobile
 // terminal toolbar and the desktop tab bar so a saved prompt is insertable on
@@ -44,8 +51,25 @@ export function SnippetsModal({
     }
   };
 
-  const handleDelete = (id: string) => {
-    setSnippets(removeSnippet(browserStorage(), snippets, id));
+  const handleDelete = (snippet: Snippet) => {
+    // #37: hide it from local state now; the storage write happens after the
+    // undo window (re-reading storage at execute time so a snippet added on
+    // another surface meanwhile isn't clobbered).
+    setSnippets((prev) => prev.filter((s) => s.id !== snippet.id));
+    undoableSnippetDelete.schedule(`snippet:${snippet.id}`, () => {
+      const storage = browserStorage();
+      removeSnippet(storage, getStoredSnippets(storage), snippet.id);
+    });
+    toast(`Deleted "${snippet.name}"`, {
+      duration: UNDO_DELAY_MS,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          undoableSnippetDelete.cancel(`snippet:${snippet.id}`);
+          setSnippets(getStoredSnippets(browserStorage()));
+        },
+      },
+    });
   };
 
   const handleInsert = (content: string) => {
@@ -57,9 +81,17 @@ export function SnippetsModal({
   };
 
   // Re-sync from localStorage on each open so a snippet added on another surface
-  // (another pane / the mobile toolbar) appears here without a reload.
+  // (another pane / the mobile toolbar) appears here without a reload. Skip ids
+  // whose delete is still inside its undo window — storage hasn't been written
+  // yet, but the user already deleted them.
   useEffect(() => {
-    if (open) setSnippets(getStoredSnippets(browserStorage()));
+    if (!open) return;
+    const pendingDeletes = new Set(undoableSnippetDelete.pending());
+    setSnippets(
+      getStoredSnippets(browserStorage()).filter(
+        (s) => !pendingDeletes.has(`snippet:${s.id}`)
+      )
+    );
   }, [open]);
 
   // Escape closes (parity with the other modals).
@@ -153,7 +185,7 @@ export function SnippetsModal({
                   </div>
                 </button>
                 <button
-                  onClick={() => handleDelete(snippet.id)}
+                  onClick={() => handleDelete(snippet)}
                   className="hover:bg-destructive/20 text-muted-foreground hover:text-destructive rounded-md p-2"
                 >
                   <Trash2 className="h-4 w-4" />
