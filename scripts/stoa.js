@@ -581,14 +581,189 @@ function isGitInstall(dir = REPO_DIR) {
   return fs.existsSync(path.join(dir, ".git"));
 }
 
+// ---------------------------------------------------------------------------
+// update channel (#56) — opt-in pin to a verified release tag
+// ---------------------------------------------------------------------------
+//
+// TRUST BOUNDARY: `stoa update` on the DEFAULT `main` channel keeps today's
+// behavior exactly (fetch + fast-forward the `main` branch to its HEAD). The
+// `release` channel is a stricter, OPT-IN posture: instead of tracking whatever
+// is on `main` this instant, it checks out the newest published *release tag* —
+// an immutable, reviewed point-in-time (a maintainer cuts the tag deliberately).
+// It is guarded (never the default) so a routine update can't silently jump a
+// checkout onto an untested tip, and so the tag-verification path is explicit.
+
+const UPDATE_CHANNELS = ["main", "release"];
+const DEFAULT_UPDATE_CHANNEL = "main";
+
 /**
- * update: pull the latest `main` and rebuild.
+ * Resolve the update channel from an explicit `--channel <x>` CLI flag and the
+ * STOA_UPDATE_CHANNEL env var. Precedence: CLI flag > env > default ("main").
+ * An unknown value is REJECTED (returns { error }) rather than silently falling
+ * back — a typo like `--channel realese` must not quietly track `main` when the
+ * user asked to pin. Pure → unit-tested.
+ *
+ * @param {string[]} argv  argv AFTER the subcommand (e.g. ["--channel","release"]).
+ * @param {string|undefined} envChannel  process.env.STOA_UPDATE_CHANNEL.
+ */
+function resolveUpdateChannel(argv = [], envChannel = undefined) {
+  let source = "default";
+  let raw = DEFAULT_UPDATE_CHANNEL;
+
+  const envVal = typeof envChannel === "string" ? envChannel.trim() : "";
+  if (envVal) {
+    raw = envVal;
+    source = "env (STOA_UPDATE_CHANNEL)";
+  }
+
+  const list = Array.isArray(argv) ? argv : [];
+  for (let i = 0; i < list.length; i++) {
+    const tok = String(list[i]);
+    if (tok === "--channel") {
+      raw = String(list[i + 1] || "").trim();
+      source = "--channel";
+      i++;
+    } else if (tok.startsWith("--channel=")) {
+      raw = tok.slice("--channel=".length).trim();
+      source = "--channel";
+    }
+  }
+
+  const channel = raw.toLowerCase();
+  if (!UPDATE_CHANNELS.includes(channel)) {
+    return {
+      error: `Unknown update channel "${raw || "(empty)"}" (from ${source}). Use one of: ${UPDATE_CHANNELS.join(", ")}.`,
+    };
+  }
+  return { channel, source };
+}
+
+/**
+ * Parse `git ls-remote --tags <url>` output into a de-duplicated list of tag
+ * names. Each line is "<sha>\t<ref>"; we keep only refs/tags/* and strip the
+ * `^{}` suffix git appends to the *dereferenced* (peeled) entry of an annotated
+ * tag — that peeled line names the SAME tag, so keeping it would double-list it.
+ * Pure → unit-tested.
+ */
+function parseRemoteTags(lsRemoteOutput) {
+  const out = [];
+  const seen = new Set();
+  for (const rawLine of String(lsRemoteOutput || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const tab = line.indexOf("\t");
+    if (tab === -1) continue;
+    let ref = line.slice(tab + 1).trim();
+    if (!ref.startsWith("refs/tags/")) continue;
+    let name = ref.slice("refs/tags/".length);
+    if (name.endsWith("^{}")) name = name.slice(0, -3); // peeled annotated tag
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
+/**
+ * Parse a release tag of the shape `vMAJOR.MINOR.PATCH` (optionally with a
+ * `-prerelease` suffix) into sortable parts, or null if it doesn't match. The
+ * leading `v` is optional. A prerelease (e.g. `v1.2.0-rc.1`) ranks BELOW the
+ * same version's final release, per semver. Pure → unit-tested.
+ */
+function parseReleaseTag(tag) {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(
+    String(tag || "").trim()
+  );
+  if (!m) return null;
+  return {
+    tag: String(tag).trim(),
+    major: parseInt(m[1], 10),
+    minor: parseInt(m[2], 10),
+    patch: parseInt(m[3], 10),
+    prerelease: m[4] || null,
+  };
+}
+
+/** Compare two parsed release tags (semver-ish). Returns <0 if a<b, >0 if a>b.
+ *  A prerelease sorts below its corresponding final release. Pure. */
+function compareReleaseTags(a, b) {
+  if (a.major !== b.major) return a.major - b.major;
+  if (a.minor !== b.minor) return a.minor - b.minor;
+  if (a.patch !== b.patch) return a.patch - b.patch;
+  // Equal core version: a final release (no prerelease) outranks any prerelease.
+  if (!a.prerelease && b.prerelease) return 1;
+  if (a.prerelease && !b.prerelease) return -1;
+  if (!a.prerelease && !b.prerelease) return 0;
+  // Both prereleases: dotted identifier compare (numeric-aware), then length.
+  const pa = a.prerelease.split(".");
+  const pb = b.prerelease.split(".");
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const xa = pa[i];
+    const xb = pb[i];
+    if (xa === undefined) return -1; // shorter prerelease is lower
+    if (xb === undefined) return 1;
+    const na = /^\d+$/.test(xa);
+    const nb = /^\d+$/.test(xb);
+    if (na && nb) {
+      const d = parseInt(xa, 10) - parseInt(xb, 10);
+      if (d !== 0) return d;
+    } else if (na !== nb) {
+      return na ? -1 : 1; // numeric identifiers rank below alphanumeric
+    } else if (xa !== xb) {
+      return xa < xb ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Select the latest VERIFIED release tag from a list of tag names (typically
+ * parseRemoteTags(...) output). Ignores anything that isn't a clean
+ * `vMAJOR.MINOR.PATCH[-pre]` tag, so a stray/hostile ref name can't be picked.
+ * By default prereleases are excluded (a `release` channel wants stable tags);
+ * pass { includePrerelease:true } to allow them. Returns the tag string, or
+ * null if none qualify. Pure → unit-tested.
+ */
+function selectLatestReleaseTag(tags, { includePrerelease = false } = {}) {
+  const parsed = (Array.isArray(tags) ? tags : [])
+    .map(parseReleaseTag)
+    .filter((p) => p !== null)
+    .filter((p) => includePrerelease || !p.prerelease);
+  if (!parsed.length) return null;
+  let best = parsed[0];
+  for (let i = 1; i < parsed.length; i++) {
+    if (compareReleaseTags(parsed[i], best) > 0) best = parsed[i];
+  }
+  return best.tag;
+}
+
+/**
+ * update: fast-forward the tracked `main` (default) OR check out the latest
+ * verified release tag (opt-in `release` channel), then rebuild.
  *
  * Hardened for already-installed clones: it pins to `main` (so an old or
  * feature-branch checkout still updates), refuses to clobber local edits, and
- * tells npm-global installs to update via npm instead of git.
+ * tells npm-global installs to update via npm instead of git. The `release`
+ * channel (STOA_UPDATE_CHANNEL=release or `stoa update --channel release`) is a
+ * guarded, OPT-IN trust boundary that pins to an immutable published tag instead
+ * of tracking main's HEAD; `--channel main` is the documented escape hatch back.
  */
-function cmdUpdate() {
+function cmdUpdate(argv = []) {
+  // Channel selection (#56). CLI `--channel <x>` > STOA_UPDATE_CHANNEL env >
+  // default "main". `main` = today's behavior (track main's HEAD); `release` =
+  // opt-in pin to the latest verified release tag. An unknown value hard-fails so
+  // a typo never silently tracks the wrong channel.
+  const channelResult = resolveUpdateChannel(
+    argv,
+    process.env.STOA_UPDATE_CHANNEL
+  );
+  if (channelResult.error) {
+    error(channelResult.error);
+    process.exit(1);
+    return;
+  }
+  const channel = channelResult.channel;
+
   // npm-global installs aren't git checkouts — they can't self-update via git.
   if (!isGitInstall()) {
     error("This install isn't a git checkout, so it can't update via git.");
@@ -645,18 +820,50 @@ function cmdUpdate() {
     if (runSync(cmd, args, { allowFail: true }) !== 0) recover(what);
   };
 
-  const origin = gitCapture(["remote", "get-url", "origin"]) || "origin";
-  info(`Updating from ${origin}`);
+  const originUrl = gitCapture(["remote", "get-url", "origin"]);
+  const origin = originUrl || "origin";
+  info(`Updating from ${origin} (channel: ${channel})`);
   const before = gitCapture(["rev-parse", "--short", "HEAD"]);
 
+  // Fetch refs + tags once for either channel (execFile, no shell pipes). Kept
+  // byte-identical to the pre-#56 fetch so the default `main` path is unchanged.
   step("git fetch", "git", ["fetch", "origin", "--tags"]);
-  // Pin to main: an install left on a (now-deleted) feature branch still updates.
-  step("git checkout main", "git", ["checkout", "main"]);
-  step(
-    "git pull (local main may have diverged — try `git stash` or reclone)",
-    "git",
-    ["pull", "--ff-only", "origin", "main"]
-  );
+
+  if (channel === "release") {
+    // OPT-IN release channel: pin to the newest VERIFIED release tag instead of
+    // tracking main's HEAD. Resolve the tag list from the remote over git's own
+    // transport (git ls-remote --tags, execFile — no shell, no GitHub API token),
+    // pick the highest semver, then check that immutable tag out in DETACHED HEAD.
+    // `--channel main` / STOA_UPDATE_CHANNEL=main is the escape hatch back.
+    info("Resolving the latest release tag…");
+    const lsRemote = gitCapture(["ls-remote", "--tags", origin]);
+    if (lsRemote == null) {
+      recover(
+        "git ls-remote --tags failed (couldn't reach the remote to list release tags)"
+      );
+    }
+    const tag = selectLatestReleaseTag(parseRemoteTags(lsRemote));
+    if (!tag) {
+      // No published release tag yet. Fail LOUD rather than silently tracking main
+      // — the user explicitly opted into the pinned channel.
+      recover(
+        "no verified release tag found on the remote. Use `--channel main` (or STOA_UPDATE_CHANNEL=main) to track the main branch instead"
+      );
+    }
+    info(`Latest release tag: ${tag}`);
+    // Check out the immutable tag (detached HEAD). The prior fetch --tags brought
+    // the tag object local, so this needs no network.
+    step(`git checkout ${tag}`, "git", ["checkout", "--force", `tags/${tag}`]);
+  } else {
+    // DEFAULT `main` channel — behavior-identical to before this change.
+    // Pin to main: an install left on a (now-deleted) feature branch still updates.
+    step("git checkout main", "git", ["checkout", "main"]);
+    step(
+      "git pull (local main may have diverged — try `git stash` or reclone)",
+      "git",
+      ["pull", "--ff-only", "origin", "main"]
+    );
+  }
 
   const after = gitCapture(["rev-parse", "--short", "HEAD"]);
   if (before && after && before === after) {
@@ -1566,7 +1773,9 @@ function cmdHelp() {
   console.log("  restart     Restart the server");
   console.log("  status      Show server status and URL");
   console.log("  logs        Tail server logs");
-  console.log("  update      Update to the latest version");
+  console.log(
+    "  update      Update to the latest version (see --channel below)"
+  );
   console.log("  doctor      Run preflight environment checks");
   console.log(
     "  statusline  Install the Claude rate-limit statusline hook (Agent Monitor quota)"
@@ -1575,9 +1784,27 @@ function cmdHelp() {
     "  share       Share securely over a tunnel (Tailscale/cloudflared) with a QR"
   );
   console.log("");
+  console.log("Update options:");
+  console.log(
+    "  update --channel <main|release>   Choose the update source (default: main)."
+  );
+  console.log(
+    "    main     Track the main branch's latest commit (the default; today's behavior)."
+  );
+  console.log(
+    "    release  OPT-IN: pin to the latest verified, immutable release tag instead of"
+  );
+  console.log(
+    "             tracking main. Safer for production; `--channel main` reverts."
+  );
+  console.log("");
   console.log("Environment variables:");
-  console.log("  STOA_HOME   Home directory (default: ~/.stoa)");
-  console.log("  STOA_PORT   Server port (default: 3011)");
+  console.log("  STOA_HOME             Home directory (default: ~/.stoa)");
+  console.log("  STOA_PORT             Server port (default: 3011)");
+  console.log(
+    "  STOA_UPDATE_CHANNEL   Default update channel: main (default) or release."
+  );
+  console.log("                        A `--channel` flag overrides it.");
   console.log("");
 }
 
@@ -1611,7 +1838,9 @@ function main() {
       cmdLogs();
       break;
     case "update":
-      cmdUpdate();
+      // Pass the args AFTER the subcommand so `update --channel release` (and
+      // `--channel=release`) reach the channel resolver.
+      cmdUpdate(process.argv.slice(3));
       break;
     case "doctor":
       // Fire-and-forget async: surface any unexpected throw as a clean failure
@@ -1656,6 +1885,14 @@ module.exports = {
   commandSpec,
   buildIsComplete,
   waitUntilDead,
+  // update channel (#56) — pure helpers, unit-tested
+  UPDATE_CHANNELS,
+  DEFAULT_UPDATE_CHANNEL,
+  resolveUpdateChannel,
+  parseRemoteTags,
+  parseReleaseTag,
+  compareReleaseTags,
+  selectLatestReleaseTag,
   // doctor (DX #14) — pure helpers, unit-tested
   parseNodeMajor,
   checkNodeVersion,
