@@ -607,9 +607,14 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
 36. **Secrets guard at session creation** — `security` · S. Scan the chosen dir for
     `.env`/credentials, warn that agents auto-load them, offer a one-click deny rule.
     _Seam:_ new scanner, NewSessionDialog, `stoa doctor`, `lib/skills.ts`.
-37. **Undo toast for destructive actions** — `feature` · S. Delay+cancel wrapper for
-    kill session, Git discard, Notes/Snippets delete; "Restart that session" where a
-    true undo is impossible. _Seam:_ new `lib/undoable-action.ts` + existing sonner.
+37. ✅ **Undo toast for destructive actions** — `feature` · S. **SHIPPED.** A
+    delay+cancel wrapper (`lib/undoable-action.ts`: `createUndoableRunner` —
+    schedule/cancel/flush, idempotent, same-id reschedule flushes the
+    predecessor so no delete is ever lost; fake-timer test matrix) wired to
+    session delete (`useSessionListMutations`), Notes delete, and Snippets
+    delete — each shows a sonner "Deleted X — Undo" toast for the grace window
+    before the destructive call actually fires. _Deferred:_ Git discard (call
+    site entangled), "restart that session" pseudo-undo.
 38. **Recents + pinned in the Quick Switcher** — `feature` · S. Give the ⌘K palette a
     memory (MRU + pinned), mirroring `lib/prompt-history.ts`. _Seam:_
     `components/QuickSwitcher.tsx`, new `lib/palette-recents.ts`.
