@@ -11,9 +11,11 @@ import {
   FileText,
   MousePointer2,
   Copy,
+  FileCode,
   MessageSquarePlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toMarkdownBlock } from "@/lib/markdown-block";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { SnippetsModal } from "./SnippetsModal";
 
@@ -120,6 +122,7 @@ export function TerminalToolbar({
   const [showSnippetsModal, setShowSnippetsModal] = useState(false);
   const [shiftActive, setShiftActive] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [markdownFeedback, setMarkdownFeedback] = useState(false);
 
   // Send text character-by-character to terminal
   const sendText = useCallback(
@@ -158,6 +161,20 @@ export function TerminalToolbar({
       setTimeout(() => setCopyFeedback(false), 1000);
     }
   }, [onCopy]);
+
+  // Copy the selection as a fenced Markdown code block (ANSI/control bytes
+  // stripped), ready to paste into an issue / notes / channel. Reads the DOM
+  // selection directly: this action only renders in select mode, where the
+  // selectable text is the overlay <pre> — a real DOM selection, the same
+  // source the parent's select-mode Copy/Attach actions read. An empty
+  // selection is a silent no-op (matches handleCopy's no-feedback behavior).
+  const handleCopyMarkdown = useCallback(() => {
+    const markdown = toMarkdownBlock(window.getSelection()?.toString() ?? "");
+    if (!markdown || !navigator.clipboard?.writeText) return;
+    navigator.clipboard.writeText(markdown).catch(() => {});
+    setMarkdownFeedback(true);
+    setTimeout(() => setMarkdownFeedback(false), 1000);
+  }, []);
 
   if (!visible) return null;
 
@@ -275,6 +292,30 @@ export function TerminalToolbar({
             )}
           >
             <Copy className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* Copy-as-Markdown button - shown next to Copy in select mode. Wraps
+            the selection in a fenced code block ready to paste into an
+            issue/Notes/channel. */}
+        {selectMode && onCopy && (
+          <button
+            type="button"
+            title="Copy selection as Markdown"
+            aria-label="Copy selection as Markdown"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCopyMarkdown();
+            }}
+            className={cn(
+              "flex-shrink-0 rounded-md px-2.5 py-1.5 text-xs font-medium",
+              markdownFeedback
+                ? "bg-green-500 text-white"
+                : "bg-secondary text-secondary-foreground active:bg-primary active:text-primary-foreground"
+            )}
+          >
+            <FileCode className="h-4 w-4" />
           </button>
         )}
 
