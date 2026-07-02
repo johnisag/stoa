@@ -593,10 +593,20 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
 
 ### Tier 2 — Medium impact (ranks 33–49)
 
-33. **Customizable snippet/quick-command chips + template variables** — `mobile` · M.
-    A user-editable snippet bar above the keyboard + `{{placeholder}}` fill-in.
-    _Seam:_ `components/Terminal/VirtualKeyboard.tsx`, `SnippetsModal.tsx`, new
-    `lib/snippets.ts`.
+33. ✅ **Customizable snippet/quick-command chips + template variables** —
+    `mobile` · M. **SHIPPED.** One-tap snippet chips above the mobile toolbar
+    (`SnippetChipBar`, hidden when no snippets) + `{{placeholder}}` fill-in
+    (`SnippetFillInDialog`, shared by the chips and both SnippetsModal
+    surfaces). Pure template core in new `lib/snippets.ts`
+    (extract/substitute/build — single-pass, `$`-inert, own-properties-only,
+    null-prototype map so `{{__proto__}}`/`{{toString}}` can't pollute), every
+    insert sanitized via `formatTerminalTextForAgent`, and ALL mobile snippet
+    inserts route through xterm's bracketed paste (one paste, never
+    char-by-char — a multi-line snippet must not auto-execute per newline;
+    parity with the desktop Pane path). Surfaces sync via
+    `SNIPPETS_CHANGED_EVENT`. _Seam:_ `lib/snippets.ts`,
+    `components/Terminal/SnippetChipBar.tsx`, `SnippetFillInDialog.tsx`,
+    `SnippetsModal.tsx`, `TerminalToolbar.tsx`.
 34. **Issue-tracker intake beyond GitHub (Linear/Jira)** — `feature` · M. Generalize
     the issue source behind an interface; add Linear/Jira clients + a source picker.
     _Seam:_ `lib/dispatch/issues.ts`, `lib/dispatch/github.ts`, new Linear client.
