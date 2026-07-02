@@ -775,7 +775,8 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     all fail LOUD rather than silently tracking main. `install.sh`/`install.ps1`
     take a matching `--channel`/`-Channel`/`STOA_CHANNEL`, default unchanged,
     symmetric across platforms. Checksum/signature verify deferred (tags ride
-    git's authenticated transport). 22 pure tests; scripts re-pinned. _Seam:_
+    git's authenticated transport). 30 pure tests (incl. an installer↔updater
+    regex-parity lock); scripts re-pinned. _Seam:_
     `scripts/stoa.js`, `scripts/install.sh`, `scripts/install.ps1`.
 57. **Extract `WorkflowBuilder` into hooks + sibling components** — `tech-debt` · L.
     Decompose the 1800-line/27-hook component into `useWorkflowDoc`/`useCanvasSelection`/

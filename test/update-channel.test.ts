@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createRequire } from "module";
+import { readFileSync } from "fs";
 
 // Roadmap #56 — pin install/update to a verified release tag. The channel
 // selection and tag-resolution logic is extracted into PURE helpers on the CLI
@@ -22,6 +23,7 @@ const {
   parseReleaseTag,
   compareReleaseTags,
   selectLatestReleaseTag,
+  formatRefLabel,
 } = require(CLI_PATH) as {
   UPDATE_CHANNELS: string[];
   DEFAULT_UPDATE_CHANNEL: string;
@@ -42,6 +44,11 @@ const {
     tags: string[],
     opts?: { includePrerelease?: boolean }
   ) => string | null;
+  formatRefLabel: (parts: {
+    branch: string | null;
+    tag: string | null;
+    sha: string | null;
+  }) => string | null;
 };
 
 describe("update channel: constants (#56)", () => {
@@ -173,15 +180,12 @@ describe("update channel: parseReleaseTag", () => {
 
 // The two piped installers (scripts/install.sh, scripts/install.ps1) select the
 // release tag with a git-native `git tag --sort=-v:refname` filtered by an
-// embedded regex — they CANNOT import this JS at bootstrap time. This test locks
-// that regex's semantics to parseReleaseTag's "stable release" definition so the
-// install-time and update-time selectors can never drift (a prerelease or a
-// 4-segment tag must be excluded by BOTH). If parseReleaseTag's shape changes,
-// update the regex string in BOTH installers to match and this fixture.
+// embedded regex — they CANNOT import this JS at bootstrap time. This test reads
+// the ACTUAL regex string out of each installer and locks it to parseReleaseTag's
+// "stable release" definition, so the install-time and update-time selectors can
+// never drift (a prerelease or a 4-segment tag must be excluded by BOTH). If a
+// maintainer loosens an installer's real pattern, this test fails.
 describe("installer/updater release-tag parity (#56)", () => {
-  // MUST stay byte-identical to the pattern in install.sh (grep -E) and
-  // install.ps1 (-match). Anchored MAJOR.MINOR.PATCH, no prerelease, no 4th seg.
-  const INSTALLER_STABLE_RE = /^v\d+\.\d+\.\d+$/;
   const isStableForUpdater = (tag: string) => {
     const p = parseReleaseTag(tag);
     return p !== null && p.prerelease === null;
@@ -195,11 +199,58 @@ describe("installer/updater release-tag parity (#56)", () => {
     "nightly",
     "v1.2",
   ];
-  for (const tag of CASES) {
-    it(`installer regex and updater agree on ${tag}`, () => {
-      expect(INSTALLER_STABLE_RE.test(tag)).toBe(isStableForUpdater(tag));
-    });
+
+  // Pull the single-quoted anchored `^v…$` pattern out of each installer's real
+  // source (bash `grep -E '…'`, PowerShell `-match '…'`) and compile it as JS.
+  function installerRegex(relPath: string): RegExp {
+    const src = readFileSync(new URL(relPath, import.meta.url), "utf8");
+    const m = src.match(/'(\^v[^']+\$)'/);
+    if (!m) throw new Error(`no anchored ^v…$ tag regex found in ${relPath}`);
+    return new RegExp(m[1]);
   }
+
+  const installers: Array<[string, string]> = [
+    ["install.sh", "../scripts/install.sh"],
+    ["install.ps1", "../scripts/install.ps1"],
+  ];
+
+  for (const [name, rel] of installers) {
+    const re = installerRegex(rel);
+    for (const tag of CASES) {
+      it(`${name} regex and updater agree on ${tag}`, () => {
+        expect(re.test(tag)).toBe(isStableForUpdater(tag));
+      });
+    }
+  }
+});
+
+describe("update channel: formatRefLabel (stoa status Version line)", () => {
+  it("reports the BRANCH even when the branch HEAD also carries a release tag", () => {
+    // The bug this locks out: a normal `main` install sitting on a tagged commit
+    // (true right after a release is cut) must NOT read as a pinned release.
+    expect(
+      formatRefLabel({ branch: "main", tag: "v1.4.0", sha: "abc123" })
+    ).toBe("main (tracking)");
+  });
+
+  it("reports a pinned release only on a DETACHED HEAD at a release tag", () => {
+    expect(
+      formatRefLabel({ branch: null, tag: "v1.4.0", sha: "abc123" })
+    ).toContain("v1.4.0 (release channel — pinned");
+  });
+
+  it("labels a detached non-release tag and a bare detached commit", () => {
+    expect(
+      formatRefLabel({ branch: null, tag: "nightly", sha: "abc123" })
+    ).toBe("nightly (detached)");
+    expect(formatRefLabel({ branch: null, tag: null, sha: "abc123" })).toBe(
+      "abc123 (detached)"
+    );
+  });
+
+  it("returns null when nothing is resolvable", () => {
+    expect(formatRefLabel({ branch: null, tag: null, sha: null })).toBeNull();
+  });
 });
 
 describe("update channel: compareReleaseTags (semver ordering)", () => {
