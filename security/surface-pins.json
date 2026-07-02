@@ -25,7 +25,7 @@
     ".github/workflows/test.yml": "e709d7e52254cfe5d14c74623a18713e330ce3a903cb6db8364a6a7cc9902adf",
     ".husky/pre-commit": "042eaf5386ffbfccd14639db8112e12d297a7d4d2caf25c36a4b10edcb822fc2",
     "scripts/claude-statusline-hook.js": "ceaa102289a1c91894dac45b1829cd56adaeae182e2ff7e4f06b428cfdb165f9",
-    "scripts/guard-surfaces.mjs": "e0865472565942a572f2832c7a4f781800f9c273a7f166572c6bd14a5aa6e36f",
+    "scripts/guard-surfaces.mjs": "fe18554f0ebf71709f84dac42ad168f2bf74a1e5873e0dce380b09e401c4a22e",
     "scripts/install.ps1": "95b67316e2546cb9d56d742d457176dd4d6ed98fbedfca4bc577738bd74a74ef",
     "scripts/install.sh": "40faad388f4c3640e49e4ed49e97c0f248ed18f72e7e43c7068f10fac1e34d09",
     "scripts/lib/ai-clis.sh": "209457010f89b2e7893e5ed6f039cdafaa1110c36070efcc2226a4c07c345d96",

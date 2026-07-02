@@ -496,6 +496,14 @@ function walkRel(root, skipDirs, dir = root, acc = []) {
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name)) continue;
+      const rel = relative(root, join(dir, entry.name)).split(sep).join("/");
+      // Transient git-worktree checkouts (parallel-wave builders). Each is a
+      // full copy of an ALREADY-REVIEWED commit, so scanning them (a) hard-fails
+      // on copies of the root's own pinned hook-bearing files and (b) drowns the
+      // advisories. They never feed THIS checkout's auto-execution surfaces — a
+      // session launched inside one reads its own committed (reviewed) content.
+      // Path-pinned (not a name in skipDirs) so only this exact tree is exempt.
+      if (rel === ".claude/worktrees") continue;
       walkRel(root, skipDirs, join(dir, entry.name), acc);
     } else {
       acc.push(relative(root, join(dir, entry.name)).split(sep).join("/"));
