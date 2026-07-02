@@ -65,6 +65,17 @@ describe("toMarkdownBlock", () => {
     expect(toMarkdownBlock(input)).toBe("```\nok done\n```");
   });
 
+  it("strips OSC strings on the ST terminator and dangling ones at end-of-input", () => {
+    // A review panel once misread the character-class escaping here and
+    // called the OSC pattern broken — these lock the WHOLE-sequence strip
+    // (payload included, which no downstream C0 strip could ever remove)
+    // across all three terminator shapes.
+    const st = `${ESC}]2;titled${ESC}\\after`;
+    expect(toMarkdownBlock(st)).toBe("```\nafter\n```");
+    const dangling = `before ${ESC}]0;no terminator here`;
+    expect(toMarkdownBlock(dangling)).toBe("```\nbefore\n```");
+  });
+
   it("keeps tab and newline layout", () => {
     const input = `col1${TAB}col2\nrow2`;
     expect(toMarkdownBlock(input)).toBe("```\n" + input + "\n```");

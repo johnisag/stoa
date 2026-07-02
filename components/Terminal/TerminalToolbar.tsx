@@ -164,16 +164,24 @@ export function TerminalToolbar({
 
   // Copy the selection as a fenced Markdown code block (ANSI/control bytes
   // stripped), ready to paste into an issue / notes / channel. Reads the DOM
-  // selection directly: this action only renders in select mode, where the
-  // selectable text is the overlay <pre> — a real DOM selection, the same
-  // source the parent's select-mode Copy/Attach actions read. An empty
-  // selection is a silent no-op (matches handleCopy's no-feedback behavior).
+  // selection directly — DELIBERATELY a different source than the sibling
+  // Copy (which delegates to xterm's selection via onCopy): this action only
+  // renders in select mode, where the selectable text is the overlay <pre>,
+  // a real DOM selection and the same source the parent's select-mode
+  // Copy/Attach actions read. An empty selection is a silent no-op (matches
+  // handleCopy's no-feedback behavior).
   const handleCopyMarkdown = useCallback(() => {
     const markdown = toMarkdownBlock(window.getSelection()?.toString() ?? "");
     if (!markdown || !navigator.clipboard?.writeText) return;
-    navigator.clipboard.writeText(markdown).catch(() => {});
-    setMarkdownFeedback(true);
-    setTimeout(() => setMarkdownFeedback(false), 1000);
+    // Flash success only when the write actually LANDED — a rejected write
+    // (permissions policy, focus loss) must not lie with a green check.
+    navigator.clipboard
+      .writeText(markdown)
+      .then(() => {
+        setMarkdownFeedback(true);
+        setTimeout(() => setMarkdownFeedback(false), 1000);
+      })
+      .catch(() => {});
   }, []);
 
   if (!visible) return null;
