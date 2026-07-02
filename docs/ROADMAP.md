@@ -805,10 +805,18 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     git's authenticated transport). 41 pure tests (incl. an installer↔updater
     regex-parity lock read from the real scripts); scripts re-pinned. _Seam:_
     `scripts/stoa.js`, `scripts/install.sh`, `scripts/install.ps1`.
-57. **Extract `WorkflowBuilder` into hooks + sibling components** — `tech-debt` · L.
-    Decompose the 1800-line/27-hook component into `useWorkflowDoc`/`useCanvasSelection`/
-    `useWorkflowPersistence` + sibling toolbar/inspector/canvas. No behavior change.
-    _Seam:_ `components/views/WorkflowsView/WorkflowBuilder.tsx`.
+57. ✅ **Extract `WorkflowBuilder` into hooks + sibling components** —
+    `tech-debt` · L. **SHIPPED.** The ~1800-line component is decomposed to ~600:
+    three hooks — `useWorkflowDoc` (doc state + selection-coupled mutations,
+    composing the existing `useBuilderHistory` undo/redo reducer),
+    `useCanvasSelection` (node/edge selection), `useWorkflowPersistence`
+    (load/save/saved-workflows store) — plus sibling components `WorkflowToolbar`,
+    `WorkflowInspector`, `WorkflowDesignPanel`, `WorkflowCollapsibleSection`, and
+    pure `builder-helpers.ts`. NO behavior change (byte-identical render/DAG/
+    engine/store); a handful of DOM-orchestration handlers (export/import/fit/
+    copy-JSON) stayed in the shell by design. 4 new tests for the extracted pure
+    hook logic. _Seam:_ `components/views/WorkflowsView/*`, `hooks/useWorkflow*`,
+    `hooks/useCanvasSelection.ts`.
 
 ---
 
