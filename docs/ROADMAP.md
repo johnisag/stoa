@@ -872,7 +872,10 @@ Condensed record (full detail in git history). All of the below is **done**.
   (2) `lib/notification-policy-idb.ts` opens the DB per call; cache a
   module-level `dbPromise` like `lib/offline-queue-idb.ts` if push volume ever
   makes the extra `open` matter. (3) An optional "allow urgent (waiting/error)
-  during quiet hours" toggle, if blanket DND proves too aggressive.
+  during quiet hours" toggle, if blanket DND proves too aggressive. (4) Prune
+  `mutedSessionIds` against live sessions on delete — a muted-then-deleted
+  session leaves a harmless stale id in localStorage + the IDB mirror forever
+  (bounded by manual muting; intersect with live ids in `checkStateChanges`).
 - **Guard: pin the `package.json` "prettier" field (prettier-pass round 2)** —
   prettier's config search ranks a package.json `"prettier"` key ABOVE
   `.prettierrc` (verified on 3.9.2), so the byte-pinned `.prettierrc` has a
