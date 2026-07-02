@@ -549,10 +549,22 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     over the worktree dev-server URL with a device selector + element-picker that
     turns a note into a structured message to the worker. _Seam:_ new PreviewPanel,
     `lib/dev-servers.ts`, `lib/diff-comment.ts`.
-29. **Terminal gestures (cursor-drag, swipe, pinch)** — `mobile` · L. Long-press-drag
-    to move the cursor, double-tap=Tab, pinch=font size, swipe=switch session. _Why:_
-    positioning the cursor / hitting Tab is the worst part of a phone CLI. _Seam:_
-    `components/Terminal/index.tsx`, new `hooks/useTerminalGestures.ts`.
+29. ✅ **Terminal gestures (cursor-drag, double-tap, pinch)** — `mobile` · L.
+    **SHIPPED.** A pure gesture state machine
+    (`components/Terminal/hooks/useTerminalGestures.ts`: detectGesture /
+    dragToArrowKeys / pinchToFontSize + a `gestureStep` reducer over {x,y,t}
+    samples — 47-test matrix, no DOM simulation) with a thin hook wiring:
+    LONG-PRESS(400ms)+DRAG moves the cursor via arrow-key sequences (one per
+    cell, diagonal dominance, sub-cell remainder carried, runaway cap),
+    DOUBLE-TAP sends Tab, PINCH sets the font size clamped 8–24px (refresh +
+    resize, mirroring updateTerminalForMobile). Escape sequences built via
+    `String.fromCharCode(27)` (no literal control bytes). Touch-scroll safety:
+    capture-phase listeners + `TAP_SLOP_PX` (8) matched to touch-scroll's 8px
+    direction threshold (invariant documented in both files) — plain scrolling
+    and select mode untouched; gated `isMobile && !selectMode`. Guide card
+    added. _Deferred:_ swipe-to-switch-session (needs pane-level wiring; would
+    collide with horizontal touch-scroll), pinch-size persistence across the
+    mobile/desktop breakpoint.
 30. **First-run onboarding wizard** — `adoption` · M. A 3–5 step checklist on the
     empty state: detect a CLI, confirm auth, pick a dir, enable remote access (QR),
     create the first session. _Seam:_ new OnboardingChecklist + a readiness endpoint

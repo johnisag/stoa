@@ -34,6 +34,7 @@ import {
   LineChart,
   WifiOff,
   MousePointerClick,
+  Hand,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -141,6 +142,12 @@ const COCKPIT: Item[] = [
     title: "Fork conversation",
     blurb:
       "Branch any agent's session into a new one. Claude forks natively (the full branched conversation); every other agent forks by seeding a fresh session with the parent's recent scrollback.",
+  },
+  {
+    icon: Hand,
+    title: "Touch gestures",
+    blurb:
+      "On a phone: long-press then drag to move the cursor (arrow keys under the hood), double-tap for Tab completion, pinch to resize the font. Plain scrolling and select mode are untouched.",
   },
   {
     icon: MousePointerClick,
