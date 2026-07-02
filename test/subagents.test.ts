@@ -27,10 +27,8 @@ import {
   validateSubagentModel,
   validateSubagentDef,
   buildSubagentFileContent,
-  supportedSubagentProviders,
   agentsDirForProvider,
   subagentFilePath,
-  subagentPathForProvider,
   materializeSubagent,
   roleToSubagentDef,
   materializeRoleSubagent,
@@ -270,11 +268,8 @@ describe("validateSubagentDef", () => {
   });
 });
 
-describe("supportedSubagentProviders / agentsDirForProvider", () => {
-  it("lists claude (and not shell) and resolves the dir under home", () => {
-    const ids = supportedSubagentProviders().map((p) => p.id);
-    expect(ids).toContain("claude");
-    expect(ids).not.toContain("shell");
+describe("agentsDirForProvider", () => {
+  it("resolves claude's dir under home and returns null for a provider with none", () => {
     expect(agentsDirForProvider("claude")).toBe(claudeAgentsDir());
     expect(agentsDirForProvider("shell")).toBeNull();
   });
@@ -289,18 +284,6 @@ describe("supportedSubagentProviders / agentsDirForProvider", () => {
       path.join(dir, "researcher", SUBAGENT_FILE_NAME)
     );
     expect(() => subagentFilePath(dir, "..")).toThrow(SubagentValidationError);
-  });
-
-  it("subagentPathForProvider reports where a subagent would land", () => {
-    expect(subagentPathForProvider("claude", "researcher")).toBe(
-      path.join(claudeAgentsDir(), "researcher", SUBAGENT_FILE_NAME)
-    );
-    expect(() => subagentPathForProvider("shell", "x")).toThrow(
-      /no native subagent/
-    );
-    expect(() => subagentPathForProvider("nope", "x")).toThrow(
-      /unknown provider/
-    );
   });
 });
 
@@ -374,6 +357,17 @@ describe("roleToSubagentDef (role → def mapping)", () => {
     }
   });
 
+  it("uses a real persona body, not the generator's fleet-topology guidance", () => {
+    // The systemPrompt must read as instructions to THIS agent — a read-only role
+    // restates its no-write scope — and must NOT leak the generator-facing node
+    // counts / DAG-shape prose from ROLE_GUIDANCE ("roots", "the sink").
+    const researcher = roleToSubagentDef("researcher").systemPrompt ?? "";
+    expect(researcher).toMatch(/do not modify code/i);
+    expect(researcher).not.toMatch(/roots|in parallel|the sink/i);
+    const gate = roleToSubagentDef("review-gate").systemPrompt ?? "";
+    expect(gate).not.toMatch(/\bsink\b/i);
+  });
+
   it("scopes read-only roles without Edit/Write/Bash, write roles with them", () => {
     expect(roleToSubagentDef("researcher").tools).toEqual([
       "Read",
@@ -434,17 +428,30 @@ describe("materializeRoleSubagent", () => {
 });
 
 describe("materializeAllRoles (bulk install, non-destructive)", () => {
-  it("writes every materializable role and reports them", () => {
+  it("writes every materializable role and reports them (with the destination dir)", () => {
     const { io, files } = fakeFs();
-    const { written, skipped } = materializeAllRoles("claude", { io });
+    const { written, skipped, dir } = materializeAllRoles("claude", { io });
     expect(written.sort()).toEqual([...MATERIALIZABLE_ROLES].sort());
     expect(skipped).toEqual([]);
+    // The destination is reported so a caller can tell the user where files went.
+    expect(dir).toBe(claudeAgentsDir());
     // One AGENT.md per role landed on the fake disk.
     expect(Object.keys(files)).toHaveLength(MATERIALIZABLE_ROLES.length);
     for (const role of MATERIALIZABLE_ROLES) {
       const file = path.join(claudeAgentsDir(), role, SUBAGENT_FILE_NAME);
       expect(files[file]).toMatch(new RegExp(`^name: ${role}$`, "m"));
     }
+  });
+
+  it("validates the provider once up front (a bad id throws before any write)", () => {
+    const { io, files } = fakeFs();
+    expect(() => materializeAllRoles("nope", { io })).toThrow(
+      /unknown provider/
+    );
+    expect(() => materializeAllRoles("shell", { io })).toThrow(
+      /no native subagent/
+    );
+    expect(Object.keys(files)).toEqual([]);
   });
 
   it("leaves a pre-existing (hand-authored) role file untouched and reports it skipped", () => {
