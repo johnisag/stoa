@@ -49,6 +49,15 @@ export const defaultSettings: NotificationSettings = {
 
 const SETTINGS_KEY = "stoaNotificationSettings";
 
+/**
+ * Same-tab broadcast that the shared notification settings changed. Two hooks
+ * write this one key (useNotifications for quiet-hours/events, useSessionMute
+ * for per-session mutes); each listens for this event (and `storage` for
+ * cross-tab) and re-reads, so no hook's stale in-memory copy can clobber
+ * another's write. `storage` events only fire in OTHER tabs, hence this.
+ */
+export const SETTINGS_CHANGED_EVENT = "stoa:notification-settings-changed";
+
 export function loadSettings(): NotificationSettings {
   if (typeof window === "undefined") return defaultSettings;
   try {
@@ -74,13 +83,23 @@ export function loadSettings(): NotificationSettings {
   return defaultSettings;
 }
 
-export function saveSettings(settings: NotificationSettings): void {
-  if (typeof window === "undefined") return;
+/**
+ * Persist the settings. Returns whether the IndexedDB MIRROR write landed — a
+ * caller should warn the user on `false`, because a stale mirror could keep the
+ * SW suppressing a session's pushes after an un-mute / quiet-off (the SW reads
+ * only the mirror). Resolves `true` when there's nothing to mirror (SSR / no
+ * IndexedDB — the per-device gate simply doesn't apply there).
+ */
+export function saveSettings(settings: NotificationSettings): Promise<boolean> {
+  if (typeof window === "undefined") return Promise.resolve(true);
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  // Tell other mounted hooks in THIS tab to re-read before their next write, so
+  // neither hook's stale copy can clobber the other's field (storage fires
+  // cross-tab only). No loop: listeners re-read but don't re-save.
+  window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT));
   // Mirror the display-gate policy (quiet hours + mutes) into IndexedDB so the
   // service worker — which can't read localStorage — can apply it on each push.
-  // Best-effort; savePolicyToIdb swallows a blocked/absent IndexedDB.
-  void savePolicyToIdb({
+  return savePolicyToIdb({
     quietHours: settings.quietHours,
     mutedSessionIds: settings.mutedSessionIds,
   });

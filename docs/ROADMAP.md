@@ -760,19 +760,22 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     **SHIPPED.** All four gates apply PER-DEVICE in the service worker (the
     server fans push to every device and can't know a device's local prefs).
     New pure `lib/notification-policy.ts`: `isQuietTime` (minutes-since-midnight,
-    correctly wraps midnight, default OFF), `notificationTag(sessionId)` (stable
-    per-session grouping so a newer notification REPLACES the older banner),
-    `isSilentKind`/`shouldRenotify` (waiting/error loud+renotify, done
-    silent+no-renotify), and `decideNotify(...)` with precedence
-    test > mute > quiet-hours > show. Because the SW can't read localStorage,
-    `lib/notification-policy-idb.ts` mirrors the policy into IndexedDB (reads
-    fail LOUD → a needs-you push is never silently swallowed; `coercePolicy`
-    guards hostile blobs). `PushPayload` gains `kind`; `server.ts` pushFor uses
-    the stable tag + kind. Quiet-hours toggle in `NotificationSettings`, a
-    per-session Mute toggle on `SessionCard` (`hooks/useSessionMute.ts`).
-    31-test pure-core suite. _Seam:_ `lib/notification-policy.ts`,
-    `lib/notification-policy-idb.ts`, `app/sw.ts`, `server.ts`,
-    `components/NotificationSettings.tsx`, `components/SessionCard.tsx`.
+    correctly wraps midnight, blanket-DND default OFF), `notificationTag` (needs-you
+    kinds share a per-session tag so a newer prompt REPLACES the older banner;
+    "done" gets its OWN tag so a silent completion can't dismiss an unanswered
+    needs-you banner), `isSilentKind`/`shouldRenotify`, and `decideNotify(...)`
+    with precedence test > mute > quiet-hours > show. Because the SW can't read
+    localStorage, `lib/notification-policy-idb.ts` mirrors the policy into
+    IndexedDB (reads fail LOUD → a needs-you push is never silently swallowed;
+    a write retries once and returns success so a stale-after-unmute mirror is
+    surfaced; `coercePolicy` guards hostile blobs). The two writers of the
+    shared settings key (Bell menu + per-session mute) converge via
+    `SETTINGS_CHANGED_EVENT` and merge-onto-fresh-read so neither clobbers the
+    other. StoaGuide card added. `PushPayload` gains `kind`. 46 tests. _Seam:_
+    `lib/notification-policy.ts`, `lib/notification-policy-idb.ts`, `app/sw.ts`,
+    `server.ts`, `lib/notifications.ts`, `hooks/useNotifications.ts`,
+    `hooks/useSessionMute.ts`, `components/NotificationSettings.tsx`,
+    `components/SessionCard.tsx`.
 53. **Jump-between-commands + sticky command header** — `feature` · L. Prompt-boundary
     navigation over the captured VT buffer (the Warp-blocks 80%, no OSC needed).
     _Seam:_ `components/Terminal/index.tsx`, new `lib/terminal-blocks.ts`,
@@ -862,6 +865,14 @@ Condensed record (full detail in git history). All of the below is **done**.
   subscribe it to `SNIPPETS_CHANGED_EVENT` like the chip bar; (3) the useState
   initializer reads raw storage (one-frame flash in a contrived remount) — use
   `getVisibleSnippets()` there too.
+- **Notification follow-ups (#52 review)** — (1) a MUTED session's budget-hit
+  ("out of money", `kind:"error"` with the `budget-*` tag) is currently
+  suppressed by the per-session mute; decide whether a terminal budget alert
+  should pierce mute (exempt the budget tag) or stay silenced (document it).
+  (2) `lib/notification-policy-idb.ts` opens the DB per call; cache a
+  module-level `dbPromise` like `lib/offline-queue-idb.ts` if push volume ever
+  makes the extra `open` matter. (3) An optional "allow urgent (waiting/error)
+  during quiet hours" toggle, if blanket DND proves too aggressive.
 - **Guard: pin the `package.json` "prettier" field (prettier-pass round 2)** —
   prettier's config search ranks a package.json `"prettier"` key ABOVE
   `.prettierrc` (verified on 3.9.2), so the byte-pinned `.prettierrc` has a

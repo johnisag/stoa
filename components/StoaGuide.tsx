@@ -39,6 +39,7 @@ import {
   FolderGit2,
   Layers,
   Wand2,
+  BellOff,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -206,6 +207,12 @@ const COCKPIT: Item[] = [
     title: "Spend history",
     blurb:
       "Estimated token spend, now persisted per day — a durable per-day curve in the cost badge that survives a session being deleted or its transcript scrolling off (the live estimate can't). Accrues whenever the cost badge is open, or unattended with STOA_AUTO_COST_SAMPLE=1.",
+  },
+  {
+    icon: BellOff,
+    title: "Quiet hours & mute",
+    blurb:
+      "Tame push fatigue: set quiet hours (a nightly do-not-disturb window that silences closed-tab pushes) and mute a noisy session from its card. Both apply PER-DEVICE to lock-screen/closed-tab pushes only — an open tab still highlights, so a muted session that needs you is never hidden while you're watching. A session's newer notification replaces its older one instead of stacking.",
   },
   {
     icon: Workflow,

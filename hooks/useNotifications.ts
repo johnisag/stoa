@@ -8,6 +8,7 @@ import {
   defaultSettings,
   loadSettings,
   saveSettings,
+  SETTINGS_CHANGED_EVENT,
   requestNotificationPermission,
   canSendBrowserNotification,
   sendBrowserNotification,
@@ -71,10 +72,21 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
   const onSeeChangesRef = useRef(onSeeChanges);
   onSeeChangesRef.current = onSeeChanges;
 
-  // Load settings on mount
+  // Load settings on mount, and RE-HYDRATE whenever another writer changes the
+  // shared key — the SessionCard mute hook writes the same localStorage blob, so
+  // without this our in-memory copy goes stale and the next write below would
+  // clobber a mute the user just set. Same-tab via SETTINGS_CHANGED_EVENT,
+  // cross-tab via storage.
   useEffect(() => {
-    setSettings(loadSettings());
+    const sync = () => setSettings(loadSettings());
+    sync();
     setPermissionGranted(canSendBrowserNotification());
+    window.addEventListener(SETTINGS_CHANGED_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(SETTINGS_CHANGED_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
   }, []);
 
   // Request permission
@@ -84,31 +96,34 @@ export function useNotifications(options: UseNotificationsOptions = {}) {
     return granted;
   }, []);
 
-  // Update settings
+  // Merge onto a FRESH read (never the possibly-stale React state): the mute
+  // hook writes the same key, and spreading a stale copy would erase a mute the
+  // user just set. saveSettings mirrors to IndexedDB — warn if that fails, since
+  // the SW reads only the mirror.
+  const persist = useCallback((updated: NotificationSettings) => {
+    saveSettings(updated).then((ok) => {
+      if (!ok) {
+        toast.error(
+          "Couldn't sync notification settings to closed-tab alerts — they may not apply until you retry."
+        );
+      }
+    });
+    setSettings(updated);
+  }, []);
+
   const updateSettings = useCallback(
     (newSettings: Partial<NotificationSettings>) => {
-      setSettings((prev) => {
-        const updated = { ...prev, ...newSettings };
-        saveSettings(updated);
-        return updated;
-      });
+      persist({ ...loadSettings(), ...newSettings });
     },
-    []
+    [persist]
   );
 
-  // Toggle a specific event
   const toggleEvent = useCallback(
     (event: NotificationEvent, enabled: boolean) => {
-      setSettings((prev) => {
-        const updated = {
-          ...prev,
-          events: { ...prev.events, [event]: enabled },
-        };
-        saveSettings(updated);
-        return updated;
-      });
+      const current = loadSettings();
+      persist({ ...current, events: { ...current.events, [event]: enabled } });
     },
-    []
+    [persist]
   );
 
   // Send notification for an event

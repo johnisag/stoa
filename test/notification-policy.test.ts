@@ -87,6 +87,25 @@ describe("notificationTag — stable per-session grouping", () => {
     expect(notificationTag("abc")).not.toBe("stoa-test");
     expect(notificationTag("abc").startsWith("stoa-session-")).toBe(true);
   });
+
+  it("groups needs-you kinds (waiting/error) under the SAME tag", () => {
+    // A newer prompt replaces the older needs-you banner — the grouping win.
+    expect(notificationTag("abc", "waiting")).toBe(notificationTag("abc"));
+    expect(notificationTag("abc", "error")).toBe(
+      notificationTag("abc", "waiting")
+    );
+  });
+
+  it("gives 'done' its OWN tag so a silent completion can't replace a needs-you banner", () => {
+    // The blocker regression: a done sharing the session tag would silently
+    // dismiss an unanswered waiting/error banner.
+    expect(notificationTag("abc", "done")).not.toBe(
+      notificationTag("abc", "waiting")
+    );
+    expect(notificationTag("abc", "done")).toBe("stoa-session-abc-done");
+    // done still groups among done's for the same session.
+    expect(notificationTag("abc", "done")).toBe(notificationTag("abc", "done"));
+  });
 });
 
 describe("silent-vs-loud + renotify classification", () => {

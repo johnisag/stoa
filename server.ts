@@ -499,11 +499,11 @@ app.prepare().then(() => {
     return sendPushToAll({
       title: "Stoa",
       body: `${name} ${verb}`,
-      // #52 grouping: a STABLE per-session tag so a session's newer notification
-      // REPLACES its older one instead of stacking a pile. The SW adds `renotify`
-      // only for the needs-you kinds (waiting/error), so a routine "done" quietly
-      // swaps the banner.
-      tag: notificationTag(ev.id),
+      // #52 grouping: needs-you kinds share a per-session tag so a newer prompt
+      // REPLACES the older needs-you banner; "done" gets its OWN tag (via the
+      // kind arg) so a silent completion can't dismiss an unanswered needs-you
+      // banner. The SW adds `renotify` only for waiting/error.
+      tag: notificationTag(ev.id, ev.kind),
       url: "/",
       // #52: the transition kind rides the wire so the SW applies the display
       // policy (silent "done" vs loud needs-you) + quiet-hours/mute gate.
