@@ -455,6 +455,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // an agent-supplied `conductorId` is only used when there's no baked id (some
 // agents pass their own provider session id, which would break the worker FK).
 
+// handleToolCall catches its OWN errors and RETURNS an "Error: …" text result
+// (it rarely throws), so a plain try/catch would tag almost every failed tool as
+// an OK span and under-report error rates. Read the result: an `isError` flag or
+// a leading "Error:" in the first text part means the call failed.
+function toolResultStatus(result: unknown): { code: 1 | 2; message?: string } {
+  const r = result as { isError?: boolean; content?: Array<{ text?: string }> };
+  const firstText = r?.content?.[0]?.text;
+  const failed =
+    r?.isError === true ||
+    (typeof firstText === "string" && firstText.startsWith("Error:"));
+  return failed ? { code: 2, message: firstText } : { code: 1 };
+}
+
 // Wrap the tool handler with a GenAI "tool" span at the natural tool boundary.
 // No-op unless STOA_OTEL_ENDPOINT is set, and best-effort — the span emit can
 // never change the tool's result or throw (emitGenAiEvent swallows its errors).
@@ -463,6 +476,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const toolName = request.params.name;
   try {
     const result = await handleToolCall(request);
+    const status = toolResultStatus(result);
     void emitGenAiEvent({
       operation: "tool",
       // The conductor MCP surface runs under Claude Code (anthropic); the tool
@@ -471,7 +485,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       startMs,
       endMs: Date.now(),
       toolName,
-      statusCode: 1, // OK
+      statusCode: status.code,
+      statusMessage: status.message,
       extra: { "stoa.mcp.tool": toolName },
     });
     return result;
