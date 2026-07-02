@@ -643,9 +643,16 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
 41. **Pull-to-refresh + tap haptics** — `mobile` · S. Pull-to-refresh on the session
     list + feature-detected `vibrate` on send/approve/kill/copy. _Seam:_ new
     `hooks/useHaptics.ts`, `components/SessionList/*`.
-42. **Single-pass transcript parse** — `perf` · S. Merge the usage + context-token
-    parsers into one walk over the JSONL. _Why:_ two full passes per read today.
-    _Seam:_ `lib/session-cost.ts`.
+42. ✅ **Single-pass transcript parse** — `perf` · S. **SHIPPED.** New
+    `parseClaudeTranscriptUsage(jsonl)` walks the JSONL ONCE returning
+    `{tokens, contextTokens}`; `parseClaudeUsage`/`parseClaudeContextTokens`
+    remain as thin wrappers (exports + exact semantics LOCKED by the existing
+    suite — separate message-id dedupe sets preserved, so a main-thread turn
+    reusing a sidechain turn's id still sets the context reading while staying
+    deduped from the cumulative total); `loadClaudeUsage` (the #18 cache's
+    load step) now calls the core once. Equivalence + exact-merged-value +
+    divergent-dedupe + delegation-shape tests added; no existing assertion
+    weakened. Behavior byte-identical (this feeds the budget-kill loop).
 43. **StoaGuide in-app docs drift fix** — `docs` · S. Add Guide entries for
     Ask/Command Stoa, the Quick Switcher, multi-repo sessions, Best-of-N. _Why:_ all
     shipped + in README but absent from the in-app Guide. _Seam:_
