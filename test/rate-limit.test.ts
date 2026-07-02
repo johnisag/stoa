@@ -88,6 +88,24 @@ describe("detectRateLimit", () => {
     expect(r).not.toBeNull();
     expect(r?.resetAt).toBeNull();
   });
+
+  it("detects the error/rate-limit overlap screen AND parses its reset (#51 fixture)", () => {
+    // The screen the status detector's precedence fix relies on: error wording
+    // ("API Error", "Rate limit exceeded") + a limit notice with a reset time.
+    // detectRateLimit must both match AND carry the parsed resetAt, so the
+    // classifier can prefer the rate-limited (recoverable) classification.
+    const screen = [
+      '⎿ API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded."}}',
+      "You've reached your usage limit. Your rate limit will reset at 3:30 pm.",
+    ].join("\n");
+    const r = detectRateLimit(screen, NOW);
+    expect(r).not.toBeNull();
+    expect(r?.resetAt).not.toBeNull();
+    const d = new Date(r!.resetAt!);
+    expect(d.getHours()).toBe(15);
+    expect(d.getMinutes()).toBe(30);
+    expect(r!.resetAt!).toBeGreaterThan(NOW);
+  });
 });
 
 describe("parseResetTime — relative forms", () => {
