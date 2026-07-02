@@ -635,7 +635,10 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
       routes, the DispatchView renderers + PlanConsole/OpenIssuesBrowser,
       `.env.example`. _Deferred:_ Jira; the Linear dispatch→PR loop (source-aware
       `buildIssuePrompt` + PR-linking); Linear free-text browse search; a
-      DispatchHelp Linear section.
+      DispatchHelp Linear section; skipping the github-flavored maintainer survey
+      for a non-github repo (harmless today — it runs a bare `gh issue list` in
+      the worktree, never `gh --repo linear:…`, and its proposals are fenced out
+      of auto-dispatch).
 35. **Reusable scoped subagent library** — `orchestration` · M. Promote workflow
     roles into first-class subagent defs (tools allowlist + per-role model),
     materialized into each provider's native subagent dir. _Seam:_
