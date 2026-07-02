@@ -565,10 +565,21 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     added. _Deferred:_ swipe-to-switch-session (needs pane-level wiring; would
     collide with horizontal touch-scroll), pinch-size persistence across the
     mobile/desktop breakpoint.
-30. **First-run onboarding wizard** — `adoption` · M. A 3–5 step checklist on the
-    empty state: detect a CLI, confirm auth, pick a dir, enable remote access (QR),
-    create the first session. _Seam:_ new OnboardingChecklist + a readiness endpoint
-    reusing `stoa doctor` checks.
+30. ✅ **First-run onboarding wizard** — `adoption` · M. **SHIPPED.** A 5-step
+    checklist on the empty state (`components/OnboardingChecklist.tsx`, mounted
+    in Desktop+Mobile views behind `sessions.length === 0`): install an agent
+    CLI → sign in → pick a working directory → open-from-your-phone hint →
+    create the first session (the CTA drives the SAME NewSessionDialog handler
+    the header uses; steps 3+5 resolve through that dialog's own directory
+    picker). Server side: `stoa doctor`'s checks live in a non-importable CJS
+    script, so a minimal equivalent ships as `lib/readiness-server.ts`
+    (resolveBinary probes for claude/codex/hermes/kilo/kimi + gh, best-effort
+    sign-in evidence at the known credential paths — all dependency-injected
+    for tests) behind `GET /api/readiness`; the PURE step logic lives in
+    client-safe `lib/readiness.ts` (the established client/server split).
+    Auth step requires BOTH a found CLI and auth evidence (a stale
+    ~/.claude.json can't read as signed-in). Dismissible (localStorage), never
+    nags. 18-test payload→steps matrix.
 31. **Refactor `server.ts` tick into a write-arbiter orchestrator** — `tech-debt` · L.
     A `TickContext` + ordered pure "tick actors" each exposing `decide()` with one
     shared `claimWrite()` arbiter, so "one write per session per tick" is structural,
