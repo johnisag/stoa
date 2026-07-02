@@ -652,6 +652,21 @@ export function useTerminalGestures({
       apply({ type: "cancel" });
     };
 
+    // iOS: a long-press on text otherwise raises the native magnifier/callout
+    // menu before any preventDefault can run — suppress selection UI on the
+    // container while gestures own it, restoring the prior inline values on
+    // cleanup (select mode re-enables its own selectable overlay).
+    const style = el.style as CSSStyleDeclaration & {
+      webkitUserSelect?: string;
+      webkitTouchCallout?: string;
+    };
+    const prevUserSelect = style.userSelect;
+    const prevWebkitUserSelect = style.webkitUserSelect;
+    const prevTouchCallout = style.webkitTouchCallout;
+    style.userSelect = "none";
+    style.webkitUserSelect = "none";
+    style.webkitTouchCallout = "none";
+
     // Capture phase: an active drag/pinch must stopPropagation() BEFORE
     // touch-scroll's listeners on .xterm-screen run. touchstart stays passive
     // (down events are never swallowed); moves/ends need preventDefault to
@@ -671,11 +686,17 @@ export function useTerminalGestures({
     el.addEventListener("touchcancel", onTouchCancel, { capture: true });
 
     return () => {
+      // Order matters: drop the timer first (a late long-press must not fire
+      // into a detached closure), then remove listeners. Gesture state itself
+      // is closure-local — a re-run starts fresh from initialGestureState().
       clearLongPress();
       el.removeEventListener("touchstart", onTouchStart, { capture: true });
       el.removeEventListener("touchmove", onTouchMove, { capture: true });
       el.removeEventListener("touchend", onTouchEnd, { capture: true });
       el.removeEventListener("touchcancel", onTouchCancel, { capture: true });
+      style.userSelect = prevUserSelect;
+      style.webkitUserSelect = prevWebkitUserSelect ?? "";
+      style.webkitTouchCallout = prevTouchCallout ?? "";
     };
   }, [enabled, terminalRef, xtermRef]);
 }

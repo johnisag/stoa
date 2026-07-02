@@ -88,6 +88,11 @@ export function setupTouchScroll(config: TouchScrollConfig): () => void {
       if (scrollDirection === null) {
         const deltaX = Math.abs(touch.clientX - startX);
         const deltaY = Math.abs(touch.clientY - startY);
+        // INVARIANT: this 8px direction threshold MUST stay in sync with
+        // TAP_SLOP_PX (8) in useTerminalGestures.ts — the gesture layer hands
+        // a fast move off as a scroll at the same distance this lock engages,
+        // so drifting the two apart lets a gesture arm mid-scroll (or vice
+        // versa). Change them together.
         if (deltaX > 8 || deltaY > 8) {
           scrollDirection = deltaX > deltaY ? "horizontal" : "vertical";
         }
