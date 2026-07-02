@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { PaneLayout } from "@/components/PaneLayout";
 import { FleetBar } from "@/components/FleetBar/FleetBar";
+import { OnboardingChecklist } from "@/components/OnboardingChecklist";
 import {
   Tooltip,
   TooltipContent,
@@ -448,6 +449,16 @@ export function DesktopView({
           activeSessionId={focusedActiveTab?.sessionId || undefined}
           onSelect={handleSelect}
         />
+
+        {/* First-run onboarding (#30) — only on the true empty state (no
+            sessions yet); dismissible, so it never nags a returning user. */}
+        {sessions.length === 0 && (
+          <OnboardingChecklist
+            sessionCount={sessions.length}
+            hasProjects={projects.length > 0}
+            onCreateSession={() => setShowNewSessionDialog(true)}
+          />
+        )}
 
         {/* Pane Layout - full height */}
         <div className="min-h-0 flex-1">
