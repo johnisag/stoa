@@ -37,6 +37,10 @@ describe("classifySecretFiles — name matcher matrix", () => {
     ["server.pem", true],
     ["id_rsa", true],
     ["id_ed25519", true],
+    ["id_ecdsa", true],
+    ["id_dsa", true],
+    ["tls.key", true], // generic private-key extension
+    ["server.key", true],
     ["credentials.json", true],
     [".npmrc", true], // name match only — contents are never read
     // non-matches
@@ -46,6 +50,8 @@ describe("classifySecretFiles — name matcher matrix", () => {
     [".environment", false],
     ["id_rsa.pub", false], // public half of the keypair — not a secret
     ["id_ed25519.pub", false],
+    ["keyboard.md", false], // ".key" must be an EXTENSION, not a substring
+    ["monkey", false],
     ["credentials.json.bak", false],
     ["pem", false],
     // Documented decision: .envrc is direnv CODE (layout/use directives), not a
@@ -91,11 +97,13 @@ describe("classifySecretFiles — name matcher matrix", () => {
 
 // ── route ──
 
-function req(params: Record<string, string>): NextRequest {
+function req(params: Record<string, string>, host = "localhost"): NextRequest {
   const url = new URL("http://localhost/api/secret-scan");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  // The handler only touches request.nextUrl.searchParams.
-  return { nextUrl: url } as unknown as NextRequest;
+  // The handler touches request.nextUrl.searchParams + requireLocalhost, which
+  // (with no connection IP) falls back to the Host header.
+  const headers = new Headers({ host });
+  return { nextUrl: url, headers } as unknown as NextRequest;
 }
 
 let tmpRoot: string;
@@ -137,6 +145,11 @@ afterAll(() => {
 });
 
 describe("GET /api/secret-scan", () => {
+  it("403s a non-localhost request (recon oracle — localhost-gated)", async () => {
+    const res = await GET(req({ path: tmpRoot }, "evil.example.com"));
+    expect(res.status).toBe(403);
+  });
+
   it("400s when no path is given", async () => {
     const res = await GET(req({}));
     expect(res.status).toBe(400);

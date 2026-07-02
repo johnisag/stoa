@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import {
   getAllowedPathRoots,
   resolveSandboxedPathOrHome,
+  requireLocalhost,
 } from "@/lib/api-security";
 import { classifySecretFiles } from "@/lib/secret-scan";
 
@@ -13,14 +14,21 @@ import { classifySecretFiles } from "@/lib/secret-scan";
  * picked working directory (entry names only — no recursion, no file contents)
  * run through the pure name matchers in lib/secret-scan.
  *
- * Path validation mirrors /api/git/check — the sibling call in this exact
- * dir-pick flow: sandboxed to the registered workspace roots PLUS the home
+ * LOCALHOST-GATED: a 200 with findings signals that id_rsa/.env/credentials
+ * EXIST at an arbitrary home-tree path, so on a tunneled/shared instance this
+ * is a filesystem-reconnaissance oracle (worse than the #30 readiness route,
+ * which this now matches). The scan only ever runs for the local operator
+ * picking a directory in the New Session dialog.
+ *
+ * Path validation: sandboxed to the registered workspace roots PLUS the home
  * tree (resolveSandboxedPathOrHome, since a new session's directory may not be
  * registered yet), 403 outside. /api/files' `browse` relaxation is deliberately
  * NOT offered here. Advisory only: an unreadable / nonexistent directory is an
  * empty result, not an error — this route never blocks session creation.
  */
 export async function GET(request: NextRequest) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
   try {
     const inputPath = request.nextUrl.searchParams.get("path");
     if (!inputPath) {
