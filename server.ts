@@ -53,22 +53,18 @@ import {
 import { dueSchedules, fireSchedule } from "./lib/scheduler";
 import {
   nextRateLimitAction,
-  autoResumeEnabled,
   RESUME_MAX_PER_DAY,
   RESUME_FALLBACK_MS,
 } from "./lib/rate-limit";
 import { utcDay } from "./lib/utc-day";
 import {
   nextAutoAnswerAction,
-  autoAnswerEnabled,
-  pushApproveEnabled,
   promptSignature,
   shouldRearmAutoAnswer,
   shouldAcknowledgeQueued,
 } from "./lib/auto-steer";
 import {
   nextErrorLoopAction,
-  errorLoopEnabled,
   buildLoopPushBody,
   normalizeErrorSig,
   ERROR_LOOP_THRESHOLD,
@@ -77,7 +73,6 @@ import {
 } from "./lib/error-loop";
 import {
   nextStuckAction,
-  watchdogEnabled,
   buildStuckPushBody,
   WATCHDOG_STUCK_MS,
   WATCHDOG_MAX_GAP_MS,
@@ -87,7 +82,6 @@ import { dispatchBackoffThreshold } from "./lib/rate-limit-window";
 import { tokenMeter, contextWindowFor } from "./lib/context-window";
 import {
   nextCompactAction,
-  autoCompactEnabled,
   COMPACT_THRESHOLD,
   COMPACT_COOLDOWN_MS,
   COMPACT_MAX_PER_DAY,
@@ -106,7 +100,6 @@ import { readClaudeTranscriptRaw } from "./lib/claude-transcript";
 import { mkdir, writeFile } from "fs/promises";
 import { join as joinNativePath, dirname as nativeDirname } from "path";
 import {
-  channelDeliverEnabled,
   isChannelDeliveryTurn,
   buildChannelDeliveryText,
 } from "./lib/channel-delivery";
@@ -122,7 +115,6 @@ import {
 } from "./lib/tick-guards";
 import { computeSessionCosts } from "./lib/session-cost";
 import {
-  costSampleEnabled,
   persistCostSamples,
   shouldSampleCost,
   COST_SAMPLE_INTERVAL_MS,
@@ -137,7 +129,12 @@ import {
   type BudgetLevel,
 } from "./lib/budget";
 import { backendKeyForSession } from "./lib/providers/registry";
-import { makeGuardedInterval } from "./lib/auto-features";
+import {
+  makeGuardedInterval,
+  getAutoFeatures,
+  anyTickEnabled,
+  describeEnabled,
+} from "./lib/auto-features";
 import { homeDir, defaultInteractiveShell } from "./lib/platform";
 import { getDb, queries, type Session } from "./lib/db";
 import { REMOTE_ADDR_HEADER } from "./lib/api-security";
@@ -324,10 +321,20 @@ app.prepare().then(() => {
   // (mirrors the in-app checkStateChanges cooldown).
   const lastPushAt = new Map<string, number>();
   const PUSH_COOLDOWN_MS = 15000;
+  // One typed snapshot of the STOA_AUTO_* posture, read once at startup (each
+  // flag is a `=== "1"` read, so the value is fixed for the process lifetime).
+  // Every X_ENABLED below reads from this, so the flags have ONE source of truth
+  // that can't drift from a second inline read.
+  const auto = getAutoFeatures();
+  // One at-a-glance posture line before the per-feature detail banners below.
+  const autoSummary = describeEnabled(auto);
+  if (autoSummary !== "none") {
+    console.log(`> Unattended auto-features enabled: ${autoSummary}.`);
+  }
   // Opt-in per-turn working-tree snapshots (refs/stoa/snap/*). Off by default —
   // it writes shadow commits to the session's repo. Tracks prev status so we
   // snapshot only on a running→settled turn boundary.
-  const SNAPSHOTS_ENABLED = process.env.STOA_SNAPSHOTS === "1";
+  const SNAPSHOTS_ENABLED = auto.snapshots;
   let lastSnapStatusById = new Map<string, SessionStatus>();
   // Sessions with a queued prompt already sent this idle period (cleared when the
   // session next goes non-idle) — so one prompt dispatches per idle, not per tick.
@@ -336,7 +343,7 @@ app.prepare().then(() => {
   // on). Tracks sessions we've already nudged once per rate-limited episode, so
   // we resume exactly once at reset — not every 2.5s tick — and clear it when the
   // session is no longer rate-limited (next episode can resume again).
-  const AUTO_RESUME_ENABLED = autoResumeEnabled();
+  const AUTO_RESUME_ENABLED = auto.resume;
   const rateLimitResumed = new Set<string>();
   // When the limit was first seen this episode (per session) — anchors the
   // opt-in no-reset fallback. Cleared when the limit clears.
@@ -355,7 +362,7 @@ app.prepare().then(() => {
   // always on). Maps a session → the prompt line we last answered, so we press
   // Enter once per distinct prompt — not every 2.5s tick — and re-arm when a NEW
   // prompt appears or the prompt clears.
-  const AUTO_ANSWER_ENABLED = autoAnswerEnabled();
+  const AUTO_ANSWER_ENABLED = auto.answer;
   const autoAnswered = new Map<string, string>();
   if (AUTO_ANSWER_ENABLED) {
     console.log(
@@ -365,7 +372,7 @@ app.prepare().then(() => {
   // One-tap push Approve (opt-in via STOA_PUSH_APPROVE=1). Adds an "Approve" button to the
   // lock-screen push for a waiting session at a SAFE press-Enter-to-continue prompt; the tap
   // presses Enter (re-verified server-side). OFF by default → notifications stay attention-only.
-  const PUSH_APPROVE_ENABLED = pushApproveEnabled();
+  const PUSH_APPROVE_ENABLED = auto.pushApprove;
   if (PUSH_APPROVE_ENABLED) {
     console.log(
       "> Push Approve on (STOA_PUSH_APPROVE=1): a lock-screen Approve button one-taps Enter on a press-Enter-to-continue / [Y/n] prompt (re-verified at tap); permission menus and risky prompts stay attention-only."
@@ -375,7 +382,7 @@ app.prepare().then(() => {
   // session's persisting error signature so we PAGE ONCE per distinct error when it
   // sticks for >= the threshold ticks AND >= the elapsed window — the terminal is
   // never written to, so a false positive costs only one extra notification.
-  const ERROR_LOOP_ENABLED = errorLoopEnabled();
+  const ERROR_LOOP_ENABLED = auto.errorLoop;
   const errorLoops = new Map<string, LoopTrack>();
   if (ERROR_LOOP_ENABLED) {
     console.log(
@@ -388,7 +395,7 @@ app.prepare().then(() => {
   // stuck episode — the terminal is never written to, so a false positive costs
   // only one extra notification. Any turn boundary (a non-"running" tick) resets
   // the streak, so a normally-iterating agent never pages.
-  const WATCHDOG_ENABLED = watchdogEnabled();
+  const WATCHDOG_ENABLED = auto.watchdog;
   const stuckSessions = new Map<string, StuckTrack>();
   if (WATCHDOG_ENABLED) {
     console.log(
@@ -409,7 +416,7 @@ app.prepare().then(() => {
   // terminal at a clean turn boundary — off by default, since writing into a
   // session is the risky part (same stance as auto-resume). `channelDelivering`
   // keeps one delivery in flight per session so a slow paste can't double-send.
-  const CHANNEL_DELIVER_ENABLED = channelDeliverEnabled();
+  const CHANNEL_DELIVER_ENABLED = auto.channelDeliver;
   const channelDelivering = new Set<string>();
   if (CHANNEL_DELIVER_ENABLED) {
     console.log(
@@ -428,7 +435,7 @@ app.prepare().then(() => {
   // session), so it's safe to leave on; it's opt-in only to keep default DB
   // writes unchanged. The guarded interval below guards the slow transcript reads;
   // `lastCostSampleMs` drives the interval-independent cadence gate.
-  const COST_SAMPLE_ENABLED = costSampleEnabled();
+  const COST_SAMPLE_ENABLED = auto.costSample;
   let lastCostSampleMs: number | null = null;
   if (COST_SAMPLE_ENABLED) {
     console.log(
@@ -440,7 +447,7 @@ app.prepare().then(() => {
   // by default and fires ONLY at an idle boundary (the pure nextCompactAction decides).
   // `lastCompactAt` tracks the per-session cooldown; the guarded interval below
   // guards the slow reads.
-  const AUTO_COMPACT_ENABLED = autoCompactEnabled();
+  const AUTO_COMPACT_ENABLED = auto.compact;
   const lastCompactAt = new Map<string, number>();
   // Per-session UTC-day compaction count, so a stuck-high session can't /compact forever.
   const compactDay = new Map<string, { day: string; count: number }>();
@@ -541,18 +548,15 @@ app.prepare().then(() => {
     // push subscription exists (computeManagedStatuses is cheap when idle).
     const pushEnabled = hasPushSubscriptions();
     const queuesPending = hasAnyQueued();
-    // When auto-resume is armed, keep the ticker running with no UI/push/queue:
-    // a rate-limited session resumes itself only if we keep capturing screens.
+    // When any screen-observing auto-feature is armed, keep the ticker running
+    // with no UI/push/queue: a rate-limited session resumes itself only if we
+    // keep capturing screens. anyTickEnabled(auto) is exactly the snapshots /
+    // resume / answer / error-loop / watchdog / channel-deliver set.
     if (
       !wsListening &&
       !pushEnabled &&
-      !SNAPSHOTS_ENABLED &&
       !queuesPending &&
-      !AUTO_RESUME_ENABLED &&
-      !AUTO_ANSWER_ENABLED &&
-      !ERROR_LOOP_ENABLED &&
-      !WATCHDOG_ENABLED &&
-      !CHANNEL_DELIVER_ENABLED
+      !anyTickEnabled(auto)
     ) {
       if (lastStatusSnapshot.size) lastStatusSnapshot = new Map();
       if (lastPushStatusById.size) lastPushStatusById = new Map();

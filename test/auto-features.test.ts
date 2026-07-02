@@ -17,7 +17,7 @@ import {
   anyTickEnabled,
   describeEnabled,
   makeGuardedInterval,
-  snapshotsEnabled,
+  perTurnSnapshotsEnabled,
   type AutoFeatures,
 } from "@/lib/auto-features";
 
@@ -90,10 +90,10 @@ describe("getAutoFeatures", () => {
     expect(f.channelDeliver).toBe(false);
   });
 
-  it("snapshotsEnabled tracks STOA_SNAPSHOTS", () => {
-    expect(snapshotsEnabled()).toBe(false);
+  it("perTurnSnapshotsEnabled tracks STOA_SNAPSHOTS", () => {
+    expect(perTurnSnapshotsEnabled()).toBe(false);
     process.env.STOA_SNAPSHOTS = "1";
-    expect(snapshotsEnabled()).toBe(true);
+    expect(perTurnSnapshotsEnabled()).toBe(true);
     expect(getAutoFeatures().snapshots).toBe(true);
   });
 });
