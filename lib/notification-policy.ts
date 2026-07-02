@@ -83,13 +83,21 @@ export function isQuietTime(nowMin: number, quiet: QuietHours): boolean {
 }
 
 /**
- * The stable per-session grouping tag. Every push about a session carries the
- * SAME tag so the OS REPLACES the session's older notification with its newer
- * one instead of stacking a pile (the #52 grouping win). Namespaced so it can't
- * collide with the diagnostic "stoa-test" tag. Pure → unit-tested.
+ * The per-session grouping tag. NEEDS-YOU kinds (waiting/error) share one tag so
+ * a newer prompt REPLACES the older needs-you banner (the #52 grouping win).
+ * "done" is deliberately SEPARATED onto its own tag: a silent completion must
+ * NEVER replace — and thereby silently dismiss — an unanswered needs-you banner
+ * (a session that flaps waiting→done would otherwise erase the "needs input"
+ * ping the user never saw). Completions still group among themselves under the
+ * `-done` tag. Namespaced so it can't collide with the "stoa-test" tag. Pure →
+ * unit-tested.
  */
-export function notificationTag(sessionId: string): string {
-  return `stoa-session-${sessionId}`;
+export function notificationTag(
+  sessionId: string,
+  kind?: NotificationKind
+): string {
+  const base = `stoa-session-${sessionId}`;
+  return kind === "done" ? `${base}-done` : base;
 }
 
 /**
@@ -144,6 +152,10 @@ export interface NotifyDecision {
  *   2. muted session → suppress entirely (highest user intent).
  *   3. quiet hours → suppress the ping. (A muted session is already gone by 2.)
  *   4. otherwise → show; "done" is silent, needs-you is loud + renotify.
+ * Quiet hours is a BLANKET Do-Not-Disturb: during the window even a needs-you
+ * (waiting/error) push is suppressed, matching a phone's DND. The user opted in
+ * (default OFF); an "allow urgent during quiet hours" carve-out is a possible
+ * future toggle, not today's behavior.
  * Pure → unit-tested; the SW passes real values straight in.
  */
 export function decideNotify(input: NotifyDecisionInput): NotifyDecision {

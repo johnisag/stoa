@@ -73,19 +73,31 @@ export function coercePolicy(raw: unknown): NotificationPolicy {
   };
 }
 
-/** Persist the policy so the SW can read it on the next push. Best-effort. */
+/**
+ * Persist the policy so the SW reads it on the next push. Returns whether the
+ * write LANDED. A transient failure right after the user un-mutes / turns quiet
+ * hours OFF would otherwise leave the SW reading the STALE (still-suppressing)
+ * mirror and silently dropping that session's needs-you pushes — so one retry
+ * absorbs a transient error, and the boolean lets the caller warn on a real
+ * failure. No IndexedDB at all (Safari private / hardened WebView) returns true:
+ * the per-device gate can't apply here, which is not a failure to warn about.
+ */
 export async function savePolicyToIdb(
   policy: NotificationPolicy
-): Promise<void> {
-  if (!hasIdb()) return;
-  try {
-    const db = await openDb();
-    const tx = db.transaction(STORE, "readwrite");
-    await promisify(tx.objectStore(STORE).put(policy, KEY));
-  } catch {
-    // Best-effort: a blocked IndexedDB (Safari private / hardened WebView) just
-    // means the SW falls back to the default (loud) policy — never a crash.
+): Promise<boolean> {
+  if (!hasIdb()) return true;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const db = await openDb();
+      const tx = db.transaction(STORE, "readwrite");
+      await promisify(tx.objectStore(STORE).put(policy, KEY));
+      return true;
+    } catch {
+      // A brief lock / version-change abort often clears on a second try.
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 50));
+    }
   }
+  return false;
 }
 
 /**
