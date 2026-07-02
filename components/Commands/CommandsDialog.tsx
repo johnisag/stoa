@@ -9,7 +9,8 @@
  */
 
 import { useEffect, useState } from "react";
-import { TerminalSquare, Plus, Trash2, X } from "lucide-react";
+import { TerminalSquare, Plus, Trash2, X, Bot } from "lucide-react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -94,6 +95,39 @@ export function CommandsDialog({
 
   const providerName =
     providers.find((p) => p.id === provider)?.name ?? provider;
+
+  // #35: one-click install of the Stoa workflow ROLES as reusable scoped
+  // subagents (~/.claude/agents/<role>/AGENT.md), each with a per-role tools
+  // allowlist. Existing hand-authored files are left alone.
+  const [installingRoles, setInstallingRoles] = useState(false);
+  const installRoles = async () => {
+    setInstallingRoles(true);
+    try {
+      const res = await fetch("/api/subagents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      const data = (await res.json()) as {
+        written?: string[];
+        skipped?: string[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error || "Failed to install subagents");
+      const w = data.written?.length ?? 0;
+      const s = data.skipped?.length ?? 0;
+      toast.success(
+        `Installed ${w} workflow role${w === 1 ? "" : "s"} as ${providerName} subagents` +
+          (s ? ` (${s} already existed, left untouched)` : "")
+      );
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : "Failed to install subagents"
+      );
+    } finally {
+      setInstallingRoles(false);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -229,6 +263,23 @@ export function CommandsDialog({
                   </Button>
                 </div>
               </div>
+            </div>
+
+            {/* #35: install the workflow ROLES as reusable scoped subagents. */}
+            <div className="border-border flex items-center justify-between gap-2 border-t pt-3">
+              <span className="text-muted-foreground text-xs">
+                Install Stoa&apos;s workflow roles as reusable {providerName}{" "}
+                subagents (each scoped to a tools allowlist).
+              </span>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={installRoles}
+                disabled={installingRoles}
+              >
+                <Bot className="mr-1 h-3.5 w-3.5" />
+                {installingRoles ? "Installing…" : "Install roles"}
+              </Button>
             </div>
           </div>
         )}

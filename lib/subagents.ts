@@ -37,11 +37,9 @@ import {
 } from "./providers/registry";
 import {
   ROLE_GUIDANCE,
-  ROLE_TO_AGENT,
   isWorkflowRole,
   type WorkflowRole,
 } from "./command/workflow-roles";
-import { getDefaultModelForAgent } from "./model-catalog";
 
 /** Max subagent name length (a directory stem). */
 export const SUBAGENT_NAME_MAX_LENGTH = 64;
@@ -104,11 +102,13 @@ export interface SubagentDef {
 /** The minimal fs surface materialization needs — injectable so tests run without
  * touching disk. Defaults to the real node `fs` (sync API, matching skills.ts). */
 export interface SubagentFs {
+  existsSync(file: string): boolean;
   mkdirSync(dir: string, opts: { recursive: boolean }): void;
   writeFileSync(file: string, data: string, encoding: "utf-8"): void;
 }
 
 const realFs: SubagentFs = {
+  existsSync: (file) => fs.existsSync(file),
   mkdirSync: (dir, opts) => {
     fs.mkdirSync(dir, opts);
   },
@@ -362,15 +362,22 @@ export function materializeSubagent(
     model?: unknown;
     systemPrompt?: unknown;
   },
-  io: SubagentFs = realFs
-): string {
+  opts: { overwrite?: boolean; io?: SubagentFs } = {}
+): { path: string; written: boolean } {
+  const io = opts.io ?? realFs;
   const { dir } = requireAgentsDir(providerId);
   const validated = validateSubagentDef(def);
   const subDir = subagentDir(dir, validated.name);
   const file = subagentFilePath(dir, validated.name);
+  // Clobber guard: with overwrite=false, an existing AGENT.md (a user's
+  // hand-authored subagent) is LEFT ALONE — bulk role-install must not silently
+  // stomp user files. An explicit single write passes overwrite=true.
+  if (opts.overwrite === false && io.existsSync(file)) {
+    return { path: file, written: false };
+  }
   io.mkdirSync(subDir, { recursive: true });
   io.writeFileSync(file, buildSubagentFileContent(validated), "utf-8");
-  return file;
+  return { path: file, written: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -428,35 +435,44 @@ export function roleToSubagentDef(
 /**
  * Materialize a workflow role as a native subagent for a provider (validates,
  * writes `<agentsDir>/<role>/AGENT.md`). Convenience over
- * roleToSubagentDef + materializeSubagent. fs is injectable for tests. Returns
- * the absolute path written.
- *
- * `opts.model === "role-default"` derives the role's executable agent's default
- * model from the catalog (e.g. researcher → claude → "sonnet") and pins it; any
- * other non-empty string is validated and used verbatim; omitted leaves the
- * subagent on the session model.
+ * roleToSubagentDef + materializeSubagent. fs is injectable for tests. `model`
+ * is left unset (session model) unless an explicit override is passed;
+ * `overwrite` defaults true. Returns the path and whether it was written.
  */
 export function materializeRoleSubagent(
   providerId: unknown,
   role: WorkflowRole,
-  opts: { model?: string } = {},
-  io: SubagentFs = realFs
-): string {
-  const model =
-    opts.model === "role-default" ? defaultModelForRole(role) : opts.model;
-  const def = roleToSubagentDef(role, { model });
-  return materializeSubagent(providerId, def, io);
+  opts: { model?: string; overwrite?: boolean; io?: SubagentFs } = {}
+): { path: string; written: boolean } {
+  const def = roleToSubagentDef(role, { model: opts.model });
+  return materializeSubagent(providerId, def, {
+    overwrite: opts.overwrite,
+    io: opts.io,
+  });
 }
 
-/** The catalog default model for a role's executable agent, or undefined when the
- * agent has no static default (a free-text agent). Pure helper for the
- * "role-default" model policy above — never invents a model, just reads the
- * single-sourced catalog. */
-export function defaultModelForRole(role: WorkflowRole): string | undefined {
-  if (!isWorkflowRole(role)) return undefined;
-  // Reuse the single-sourced ROLE_TO_AGENT map to pick the agent, then read its
-  // catalog default. getDefaultModelForAgent returns "" for a free-text agent →
-  // normalize to undefined so no `model:` key is emitted.
-  const model = getDefaultModelForAgent(ROLE_TO_AGENT[role]);
-  return model || undefined;
+/** Every workflow role that can be materialized as a subagent (the ROLE_TOOLS
+ *  keys — the roles this module scopes a tools allowlist for). */
+export const MATERIALIZABLE_ROLES = Object.keys(ROLE_TOOLS) as WorkflowRole[];
+
+/**
+ * Bulk-install ALL workflow roles as subagents for a provider. Existing
+ * hand-authored files are LEFT ALONE (overwrite=false) — this is a one-click
+ * "install the role library" action, not a stomp. Returns which roles were
+ * written vs skipped (already present). The `io` seam keeps it testable.
+ */
+export function materializeAllRoles(
+  providerId: unknown,
+  opts: { io?: SubagentFs } = {}
+): { written: WorkflowRole[]; skipped: WorkflowRole[] } {
+  const written: WorkflowRole[] = [];
+  const skipped: WorkflowRole[] = [];
+  for (const role of MATERIALIZABLE_ROLES) {
+    const r = materializeRoleSubagent(providerId, role, {
+      overwrite: false,
+      io: opts.io,
+    });
+    (r.written ? written : skipped).push(role);
+  }
+  return { written, skipped };
 }
