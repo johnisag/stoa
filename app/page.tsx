@@ -133,6 +133,24 @@ const NAV_KEYBINDINGS: Keybinding[] = [
     action: "pane-prev-tab",
     description: "Previous tab (focused pane)",
   },
+  // #53 Jump between command blocks (prompt-boundary navigation) in the focused
+  // pane's terminal. UNLIKE the pane toggles above these ARE allowInInput: the
+  // user drives them WHILE focused in the terminal (that's the whole point), so
+  // the .xterm guard must NOT suppress them. mod+shift+arrow up/down are free
+  // (left/right are the tab-nav chords) and xterm doesn't bind them, so nothing
+  // is stolen from the terminal.
+  {
+    chord: "mod+shift+arrowup",
+    action: "jump-prev-block",
+    allowInInput: true,
+    description: "Jump to the previous command block (focused pane)",
+  },
+  {
+    chord: "mod+shift+arrowdown",
+    action: "jump-next-block",
+    allowInInput: true,
+    description: "Jump to the next command block (focused pane)",
+  },
   {
     chord: "shift+?",
     action: "show-help",
@@ -709,6 +727,10 @@ function HomeContent() {
       paneCommandActions.send("toggle-shell");
     else if (action === "pane-next-tab") paneCommandActions.send("next-tab");
     else if (action === "pane-prev-tab") paneCommandActions.send("prev-tab");
+    else if (action === "jump-prev-block")
+      paneCommandActions.send("jump-prev-block");
+    else if (action === "jump-next-block")
+      paneCommandActions.send("jump-next-block");
     else if (action === "show-help") setShowHelp(true);
     else if (action === "open-dispatch") addViewTab(focusedPaneId, "dispatch");
     else if (action === "open-workflows") addWorkflowsTab(focusedPaneId);

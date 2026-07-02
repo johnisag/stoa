@@ -27,6 +27,17 @@ import { SearchBar } from "./SearchBar";
 import { ScrollToBottomButton } from "./ScrollToBottomButton";
 import { TerminalToolbar } from "./TerminalToolbar";
 import {
+  CommandBlockHeader,
+  type CommandBlockHeaderState,
+} from "./CommandBlockHeader";
+import {
+  parseTerminalBlocks,
+  blockIndexForLine,
+  nextBlockLine,
+  truncateLabel,
+  type TerminalBlock,
+} from "@/lib/terminal-blocks";
+import {
   useTerminalConnection,
   useTerminalGestures,
   useTerminalSearch,
@@ -66,6 +77,10 @@ export interface TerminalHandle {
   /** Inject the current terminal selection into the agent's prompt as context
    * (bracketed paste, no Enter). Returns false if there's nothing selected. */
   attachSelectionToAgent: () => boolean;
+  /** #53 Jump the viewport to the previous (-1) / next (+1) command block —
+   *  prompt-boundary navigation over the rendered buffer. No-op if there's no
+   *  block in that direction. */
+  jumpBlock: (direction: -1 | 1) => void;
 }
 
 interface TerminalProps {
@@ -369,6 +384,74 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       return true;
     }, [selectMode, xtermRef, paste, focus]);
 
+    // #53 Command-block navigation. State drives the sticky header; only shown
+    // after the first jump so a fresh terminal isn't cluttered. The parse itself
+    // is the pure lib/terminal-blocks — this host only bridges the xterm buffer.
+    const [commandBlock, setCommandBlock] =
+      useState<CommandBlockHeaderState | null>(null);
+    const [blockNavActive, setBlockNavActive] = useState(false);
+
+    // Read the FULL rendered buffer (scrollback + screen) as an array of lines,
+    // then parse it into command blocks. Same buffer traversal select mode uses.
+    const readBlocks = useCallback((): {
+      blocks: TerminalBlock[];
+      viewportY: number;
+    } | null => {
+      const term = xtermRef.current;
+      if (!term) return null;
+      const buffer = term.buffer.active;
+      const endRow = buffer.baseY + term.rows;
+      const lines: string[] = [];
+      for (let i = 0; i < endRow; i++) {
+        const line = buffer.getLine(i);
+        lines.push(line ? line.translateToString(true) : "");
+      }
+      return {
+        blocks: parseTerminalBlocks(lines),
+        viewportY: buffer.viewportY,
+      };
+    }, [xtermRef]);
+
+    // Recompute the header for whatever block the top of the viewport sits in.
+    const refreshBlockHeader = useCallback(() => {
+      const read = readBlocks();
+      if (!read || read.blocks.length === 0) {
+        setCommandBlock(null);
+        return;
+      }
+      const idx = blockIndexForLine(read.blocks, read.viewportY);
+      const block = read.blocks[idx];
+      setCommandBlock({
+        index: idx + 1,
+        total: read.blocks.length,
+        label: truncateLabel(block.label),
+        kind: block.kind,
+      });
+    }, [readBlocks]);
+
+    const jumpBlock = useCallback(
+      (direction: -1 | 1) => {
+        const term = xtermRef.current;
+        const read = readBlocks();
+        if (!term || !read || read.blocks.length === 0) return;
+        setBlockNavActive(true);
+        const target = nextBlockLine(read.blocks, read.viewportY, direction);
+        if (target !== null) term.scrollToLine(target);
+        // Recompute against the post-scroll viewport (scrollToLine is synchronous).
+        refreshBlockHeader();
+      },
+      [xtermRef, readBlocks, refreshBlockHeader]
+    );
+
+    // Keep the header in sync as the user scrolls by hand (only once nav is
+    // active, so we don't pay the parse on every scroll of an untouched pane).
+    useEffect(() => {
+      const term = xtermRef.current;
+      if (!term || !blockNavActive) return;
+      const disposable = term.onScroll(() => refreshBlockHeader());
+      return () => disposable.dispose();
+    }, [xtermRef, blockNavActive, refreshBlockHeader]);
+
     // Expose imperative methods
     useImperativeHandle(ref, () => ({
       sendCommand,
@@ -383,6 +466,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       pasteFromClipboard: handlePasteFromClipboard,
       openFilePicker: () => setShowFilePicker(true),
       attachSelectionToAgent,
+      jumpBlock,
     }));
 
     // Extract terminal text for select mode overlay
@@ -440,6 +524,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           onFindNext={findNext}
           onFindPrevious={findPrevious}
           onClose={closeSearch}
+        />
+
+        {/* #53 Sticky command-block header — hidden in select mode (its overlay
+            owns the surface) and until the first block jump. */}
+        <CommandBlockHeader
+          state={commandBlock}
+          visible={blockNavActive && !selectMode}
         />
 
         {/* Terminal container - NO padding! FitAddon reads offsetHeight which includes padding */}
