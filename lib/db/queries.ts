@@ -497,6 +497,26 @@ export const queries = {
        WHERE id = ? AND read_at IS NULL`
     ),
 
+  // The DISTINCT recipients with at least one unread message — the opt-in push
+  // tick reads this ONCE per tick instead of probing every live session's inbox,
+  // then picks the oldest unread per recipient. Ordered for determinism.
+  listPendingChannelRecipients: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT DISTINCT to_session_id FROM channel_messages
+       WHERE read_at IS NULL ORDER BY to_session_id ASC`
+    ),
+
+  // Orphan cleanup on session hard-delete: remove every message the session sent
+  // OR received. channel_messages has no FK cascade, so a delete must run this.
+  // (Bind the same session id to both placeholders.)
+  deleteChannelMessagesForSession: (db: Database.Database) =>
+    getStmt(
+      db,
+      `DELETE FROM channel_messages
+       WHERE from_session_id = ? OR to_session_id = ?`
+    ),
+
   // Scheduler (fire a prompt into a session on a cadence)
   createSchedule: (db: Database.Database) =>
     getStmt(
@@ -557,6 +577,12 @@ export const queries = {
 
   deleteSchedule: (db: Database.Database) =>
     getStmt(db, `DELETE FROM schedules WHERE id = ?`),
+
+  // Orphan cleanup on session hard-delete: remove every schedule targeting the
+  // session. schedules has no FK on session_id (the tick otherwise disables an
+  // orphan as a fallback), so a hard delete must run this to avoid dead rows.
+  deleteSchedulesForSession: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM schedules WHERE session_id = ?`),
 
   // Opt-in push: record the terminal delivery and consume the message in one step.
   // Idempotent AND loses to a pull: `read_at IS NULL` means a message already

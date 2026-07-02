@@ -109,7 +109,11 @@ import {
   isChannelDeliveryTurn,
   buildChannelDeliveryText,
 } from "./lib/channel-delivery";
-import { nextUnreadMessage, markDelivered } from "./lib/channels";
+import {
+  nextUnreadMessage,
+  claimDelivery,
+  sessionsWithPendingDelivery,
+} from "./lib/channels";
 import {
   queueDispatchBlocked,
   channelDeliveryBlocked,
@@ -949,13 +953,22 @@ app.prepare().then(() => {
       // unattended PUSH — injecting one unread message into the recipient's
       // terminal at a clean turn boundary so a sibling doesn't have to poll.
       // Mirrors the prompt-queue dispatch: gate on a settled, ready session (the
-      // pure isChannelDeliveryTurn), deliver the single oldest unread with a
-      // directive "from another agent" wrapper, mark it delivered on a successful
-      // paste. One delivery in flight per session (channelDelivering) so a slow
-      // paste can't double-send; the once-guard clears on success/failure so the
+      // pure isChannelDeliveryTurn), pick the single oldest unread, atomically
+      // CLAIM it (mark delivered) BEFORE pasting the directive "from another
+      // agent" wrapper — so two concurrent delivery attempts can't both paste the
+      // same message. One delivery in flight per session (channelDelivering) so a
+      // slow paste can't overlap; the once-guard clears on success/failure so the
       // NEXT unread is delivered on a later tick (one message at a time).
       if (CHANNEL_DELIVER_ENABLED) {
-        for (const s of curr) {
+        // One SELECT DISTINCT for the recipients with an unread message, instead
+        // of probing every live session's inbox — then process only those that
+        // are actually live this snapshot. Behavior-identical to the old per-
+        // session loop (a session with no pending message just fell through the
+        // `if (!msg) continue` below), but no per-session query.
+        const byId = new Map(curr.map((s) => [s.id, s]));
+        for (const recipientId of sessionsWithPendingDelivery()) {
+          const s = byId.get(recipientId);
+          if (!s) continue; // pending for a session not live in this snapshot
           // #21: no channel pushes into a budget-parked session (fail-closed).
           if (isBudgetParked(s.id)) continue;
           // Mutual exclusion with the other tick loops (all fire on "idle" off the
@@ -979,13 +992,19 @@ app.prepare().then(() => {
             continue;
           const msg = nextUnreadMessage(s.id);
           if (!msg) continue;
+          // ATOMICALLY CLAIM the row BEFORE pasting so two concurrent delivery
+          // attempts of the same pending message can't both paste it (the old
+          // flow pasted first, then marked — a double-deliver window). claimDelivery
+          // flips delivered_at/read_at WHERE still-pending; only the caller that
+          // wins (changes === 1) pastes. A loser (or a message a pull just
+          // consumed) skips. The paste is best-effort after the claim; a failed
+          // paste doesn't un-claim (matching the prior mark-once semantics — the
+          // message is consumed, not re-pushed on the next tick).
+          if (!claimDelivery(msg.id)) continue;
           channelDelivering.add(s.id);
           const text = buildChannelDeliveryText(msg);
           void getSessionBackend()
             .pasteText(s.name, text, { enter: true })
-            .then(() => {
-              markDelivered(msg.id);
-            })
             .catch((err) => {
               console.error("channel delivery failed:", err);
             })

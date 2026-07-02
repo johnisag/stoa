@@ -16,6 +16,8 @@ import { getSessionBackend } from "@/lib/session-backend";
 import { backendKeyForSession } from "@/lib/providers/registry";
 import { removeConductorMarker } from "@/lib/mcp-config";
 import { clearQueue } from "@/lib/prompt-queue";
+import { deleteChannelMessagesForSession } from "@/lib/channels";
+import { deleteSchedulesForSession } from "@/lib/scheduler";
 import { expandHome } from "@/lib/platform";
 import {
   parseJsonBody,
@@ -278,6 +280,10 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       }
       queries.deleteSession(db).run(worker.id);
       clearQueue(worker.id);
+      // Orphan cleanup: channel_messages + schedules have no FK cascade on
+      // session_id, so remove this worker's rows explicitly (else they linger).
+      deleteChannelMessagesForSession(worker.id);
+      deleteSchedulesForSession(worker.id);
     }
 
     // Kill this session's OWN agent process — not just its workers. Without it a
@@ -306,6 +312,11 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     // Delete from database immediately for instant UI feedback
     queries.deleteSession(db).run(id);
     clearQueue(id);
+    // Orphan cleanup: channel_messages + schedules have no FK cascade on
+    // session_id, so remove this session's rows explicitly (else a deleted
+    // session leaves dead channel messages and un-fireable schedules behind).
+    deleteChannelMessagesForSession(id);
+    deleteSchedulesForSession(id);
 
     // Multi-repo workspace session: tear down EVERY worktree this session created
     // (one per picked sub-repo), unregistering each from its parent repo, then
