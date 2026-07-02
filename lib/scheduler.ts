@@ -208,6 +208,15 @@ export function deleteSchedule(id: string): boolean {
   return queries.deleteSchedule(db).run(id).changes > 0;
 }
 
+/** Delete every schedule targeting a session — orphan cleanup when the session
+ * is hard-deleted. schedules has no FK on session_id (the tick disables an
+ * orphan as an app-level fallback), so a hard delete must remove them here;
+ * otherwise a deleted session leaves dead rows that only ever get disabled.
+ * Returns the number of rows removed. */
+export function deleteSchedulesForSession(sessionId: string): number {
+  return queries.deleteSchedulesForSession(db).run(sessionId).changes;
+}
+
 /**
  * Record that a schedule fired at `nowMs`: a recurring one advances to its next
  * occurrence; a one-shot (or an un-advanceable recurrence) is stamped + disabled.

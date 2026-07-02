@@ -155,6 +155,42 @@ export function markDelivered(id: string): void {
   queries.markChannelDelivered(db).run(id);
 }
 
+/**
+ * Atomically CLAIM a message for the opt-in terminal push and report whether
+ * THIS caller won the claim. A single UPDATE stamps delivered_at + read_at
+ * WHERE the row is still pending (delivered_at IS NULL AND read_at IS NULL);
+ * `changes === 1` means this caller flipped it and is the one allowed to paste.
+ *
+ * This closes the double-deliver race: the old flow peeked the row
+ * (nextUnreadMessage, non-consuming), pasted, then marked — so two concurrent
+ * delivery attempts both saw the row as unread and both pasted. Claiming BEFORE
+ * the paste means only one caller ever pastes. It also loses to a prior pull
+ * (channel_inbox) that already set read_at — the guard returns 0 changes, so the
+ * pushed copy is skipped and the pulled/pushed state stays coherent.
+ */
+export function claimDelivery(id: string): boolean {
+  return queries.markChannelDelivered(db).run(id).changes === 1;
+}
+
+/** Delete every channel message a session sent OR received — orphan cleanup when
+ * the session is hard-deleted (no FK cascade exists on channel_messages). */
+export function deleteChannelMessagesForSession(sessionId: string): number {
+  return queries.deleteChannelMessagesForSession(db).run(sessionId, sessionId)
+    .changes;
+}
+
+/** The distinct recipients that currently have at least one unread message —
+ * one SELECT DISTINCT instead of probing every live session's inbox per tick.
+ * Order is by the recipient id (deterministic); the per-recipient pick still
+ * uses nextUnreadMessage for the oldest unread. */
+export function sessionsWithPendingDelivery(): string[] {
+  return (
+    queries.listPendingChannelRecipients(db).all() as {
+      to_session_id: string;
+    }[]
+  ).map((r) => r.to_session_id);
+}
+
 /** The full conversation between two sessions (both directions), oldest first.
  * NON-consuming — a review of the thread, distinct from the consuming inbox. */
 export function listThread(a: unknown, b: unknown): ChannelMessageRow[] {
