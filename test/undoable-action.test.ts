@@ -16,6 +16,25 @@ describe("createUndoableRunner", () => {
     expect(UNDO_DELAY_MS).toBeGreaterThan(0);
   });
 
+  it("flushAll runs every pending action now (the page-unload path)", () => {
+    const runner = createUndoableRunner({ delayMs: DELAY });
+    const a = vi.fn();
+    const b = vi.fn();
+    runner.schedule("a", a);
+    runner.schedule("b", b);
+
+    runner.flushAll();
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledTimes(1);
+    expect(runner.pending()).toEqual([]);
+
+    // Idempotent + timers cleared: nothing re-fires later.
+    runner.flushAll();
+    vi.advanceTimersByTime(DELAY * 2);
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledTimes(1);
+  });
+
   it("schedule -> timeout executes exactly once", () => {
     const runner = createUndoableRunner({ delayMs: DELAY });
     const execute = vi.fn();

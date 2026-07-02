@@ -52,6 +52,10 @@ export function SnippetsModal({
   };
 
   const handleDelete = (snippet: Snippet) => {
+    // Double-fire guard (see undoable-action.ts: a reschedule would flush the
+    // first delete immediately and its twin would clobber storage again).
+    if (undoableSnippetDelete.pending().includes(`snippet:${snippet.id}`))
+      return;
     // #37: hide it from local state now; the storage write happens after the
     // undo window (re-reading storage at execute time so a snippet added on
     // another surface meanwhile isn't clobbered).

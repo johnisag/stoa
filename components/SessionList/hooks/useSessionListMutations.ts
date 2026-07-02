@@ -33,10 +33,14 @@ const undoableSessionDelete = createUndoableRunner({ delayMs: UNDO_DELAY_MS });
 
 interface UseSessionListMutationsOptions {
   onSelectSession: (sessionId: string) => void;
+  /** The currently selected session — deleting IT jumps selection to the next
+   * session so the pane doesn't sit on a ghost for the undo window. */
+  activeSessionId?: string;
 }
 
 export function useSessionListMutations({
   onSelectSession,
+  activeSessionId,
 }: UseSessionListMutationsOptions) {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -79,6 +83,11 @@ export function useSessionListMutations({
   // Session handlers
   const handleDeleteSession = useCallback(
     async (sessionId: string) => {
+      // Double-fire guard: a second delete of the SAME session inside the undo
+      // window would flush the first (immediate delete) and leave its twin to
+      // 404 later with a misleading error toast.
+      if (undoableSessionDelete.pending().includes(`session:${sessionId}`))
+        return;
       if (
         !(await confirm({
           title: "Delete session?",
@@ -109,6 +118,13 @@ export function useSessionListMutations({
             removeSessionFromCache(old, sessionId)
           )
       );
+      // Deleting the session you're LOOKING AT: move selection to the next one
+      // so the pane doesn't render a ghost during the grace window (an Undo
+      // simply restores the row; re-selecting it re-attaches).
+      if (sessionId === activeSessionId) {
+        const next = cached?.sessions.find((s) => s.id !== sessionId);
+        if (next) onSelectSession(next.id);
+      }
       toast(name ? `Deleted "${name}"` : "Session deleted", {
         duration: UNDO_DELAY_MS,
         action: {
@@ -120,7 +136,7 @@ export function useSessionListMutations({
         },
       });
     },
-    [confirm, deleteSession, queryClient]
+    [confirm, deleteSession, queryClient, activeSessionId, onSelectSession]
   );
 
   const handleRenameSession = useCallback(
