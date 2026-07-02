@@ -8,7 +8,16 @@ import { proxy } from "valtio";
  * then clears the request so it doesn't re-fire.
  */
 export type PaneCommand =
-  "toggle-git" | "toggle-files" | "toggle-shell" | "next-tab" | "prev-tab";
+  | "toggle-git"
+  | "toggle-files"
+  | "toggle-shell"
+  | "next-tab"
+  | "prev-tab"
+  // #53 jump between command blocks (prompt-boundary navigation) in the focused
+  // pane's terminal — routed here so the global shortcut reaches the pane's
+  // terminal handle without lifting its ref up.
+  | "jump-prev-block"
+  | "jump-next-block";
 
 export interface PaneCommandRequest {
   command: PaneCommand;

@@ -304,9 +304,16 @@ export const Pane = memo(function Pane({
         }
         break;
       }
+      // #53 Prompt-boundary navigation in the focused pane's active terminal.
+      case "jump-prev-block":
+        terminalRef?.jumpBlock(-1);
+        break;
+      case "jump-next-block":
+        terminalRef?.jumpBlock(1);
+        break;
     }
     paneCommandActions.clear();
-  }, [paneCommand, isFocused, paneData, paneId, switchTab]);
+  }, [paneCommand, isFocused, paneData, paneId, switchTab, terminalRef]);
 
   const handleFocus = useCallback(() => {
     // Don't steal focus on the click that completes a drag-select in this pane's

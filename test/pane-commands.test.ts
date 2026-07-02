@@ -24,4 +24,21 @@ describe("paneCommandStore", () => {
     paneCommandActions.clear();
     expect(paneCommandStore.request).toBeNull();
   });
+
+  it("carries the #53 command-block jump commands", () => {
+    paneCommandActions.send("jump-prev-block");
+    expect(paneCommandStore.request?.command).toBe("jump-prev-block");
+    paneCommandActions.send("jump-next-block");
+    expect(paneCommandStore.request?.command).toBe("jump-next-block");
+  });
+
+  it("gives repeated sends of the same command distinct ids (key-repeat re-fires)", () => {
+    paneCommandActions.send("jump-next-block");
+    const first = paneCommandStore.request?.id;
+    paneCommandActions.send("jump-next-block");
+    const second = paneCommandStore.request?.id;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(second).not.toBe(first);
+  });
 });
