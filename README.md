@@ -16,7 +16,7 @@ The in-app **Guide** (compass icon in the sidebar) gives a plain-English tour of
 - **Worktree-conflict warning** — get warned when two live sessions share a checkout and could overwrite each other's edits.
 - **Fork** — branch any agent's conversation: natively for Claude (full history), via a scrollback fallback for every other agent (see [Supported Agents](#supported-agents)).
 - **Cross-session output search** — find a session by what its agent actually said (⌘K → Output), e.g. _"which agent hit a `TypeError`?"_ (Claude transcripts today).
-- **Quick Switcher** — ⌘K fuzzy-jumps to any session (with its live status), runs commands (new session, open any view), and hosts the Code and Output search tabs.
+- **Quick Switcher** — ⌘K fuzzy-jumps to any session (with its live status), runs commands (new session, open any view), and hosts the Code Search and Output tabs.
 
 **Coordinate them**
 
