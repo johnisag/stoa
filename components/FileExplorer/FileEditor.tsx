@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView, keymap } from "@codemirror/view";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -24,6 +24,9 @@ interface FileEditorProps {
   readOnly?: boolean;
   onChange: (content: string) => void;
   onSave?: () => void;
+  /** #23 jump-to-line: scroll/select this 1-based line. `token` re-fires the
+   *  jump even when the line repeats (each click is a fresh token). */
+  jumpToLine?: { line: number; token: number } | null;
 }
 
 // Theme that uses CSS variables from the app
@@ -170,6 +173,7 @@ export function FileEditor({
   readOnly = false,
   onChange,
   onSave,
+  jumpToLine,
 }: FileEditorProps) {
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [previewMode, setPreviewMode] = useState(false);
@@ -181,6 +185,30 @@ export function FileEditor({
   // (and recreate the keymap) when the parent passes a fresh arrow each render.
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
+
+  // #23 jump-to-line: the view may not exist yet when the jump arrives (fresh
+  // open — CodeMirror mounts after the fetch), so stash the pending jump and
+  // apply it from BOTH the effect (view already live) and onCreateEditor
+  // (view arrives later). Clamped to the document, cursor placed on the line.
+  const viewRef = useRef<EditorView | null>(null);
+  const pendingJumpRef = useRef<{ line: number; token: number } | null>(null);
+  const appliedTokenRef = useRef<number>(0);
+  const applyJump = useCallback((view: EditorView) => {
+    const jump = pendingJumpRef.current;
+    if (!jump || appliedTokenRef.current === jump.token) return;
+    appliedTokenRef.current = jump.token;
+    const ln = Math.min(Math.max(1, jump.line), view.state.doc.lines);
+    const pos = view.state.doc.line(ln).from;
+    view.dispatch({
+      selection: { anchor: pos },
+      effects: EditorView.scrollIntoView(pos, { y: "center" }),
+    });
+  }, []);
+  useEffect(() => {
+    if (!jumpToLine) return;
+    pendingJumpRef.current = jumpToLine;
+    if (viewRef.current) applyJump(viewRef.current);
+  }, [jumpToLine, applyJump]);
 
   useEffect(() => {
     const langExt = getLanguageExtension(language);
@@ -252,6 +280,10 @@ export function FileEditor({
             theme="none"
             extensions={extensions}
             onChange={onChange}
+            onCreateEditor={(view) => {
+              viewRef.current = view;
+              applyJump(view);
+            }}
             readOnly={readOnly}
             basicSetup={{
               lineNumbers: true,

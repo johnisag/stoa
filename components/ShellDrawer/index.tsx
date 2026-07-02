@@ -112,6 +112,7 @@ export function ShellDrawer({
           ref={terminalRef}
           onConnected={handleConnected}
           showImageButton={false}
+          filePickerInitialPath={workingDirectory}
         />
       </div>
     </div>
