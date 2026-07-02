@@ -16,6 +16,7 @@ The in-app **Guide** (compass icon in the sidebar) gives a plain-English tour of
 - **Worktree-conflict warning** — get warned when two live sessions share a checkout and could overwrite each other's edits.
 - **Fork** — branch any agent's conversation: natively for Claude (full history), via a scrollback fallback for every other agent (see [Supported Agents](#supported-agents)).
 - **Cross-session output search** — find a session by what its agent actually said (⌘K → Output), e.g. _"which agent hit a `TypeError`?"_ (Claude transcripts today).
+- **Quick Switcher** — ⌘K fuzzy-jumps to any session (with its live status), runs commands (new session, open any view), and hosts the Code and Output search tabs.
 
 **Coordinate them**
 
@@ -30,6 +31,7 @@ The in-app **Guide** (compass icon in the sidebar) gives a plain-English tour of
 - **Scheduler** — fire a prompt into a session once or hourly/daily/weekly (a nightly test run, a scheduled summary), enqueued to land at the session's next idle turn.
 - **Custom commands** — author a slash command in the UI; Stoa writes it to the agent's native command dir (`~/.claude/commands/`) so it becomes a real `/name` the terminal autocompletes.
 - **Ask / Command Stoa** — drive Stoa itself in plain language from a chatbox.
+- **Best of N** — fan one task out to 2–3 Claude agents in parallel worktrees, compare their diffs, and keep the winner (launched from Ask Stoa).
 
 **Keep it running unattended**
 
