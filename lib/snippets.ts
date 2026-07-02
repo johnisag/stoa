@@ -27,9 +27,12 @@ export const SNIPPETS_CHANGED_EVENT = "stoa:snippets-changed";
 
 // --- Template variables (roadmap #33) -------------------------------------
 // A snippet body may contain {{name}} tokens where name is letters, digits,
-// "_" or "-". Anything else between braces ({{}}, {{a b}}, unbalanced braces)
-// is NOT a token and passes through untouched. Shared const is safe: matchAll
-// clones the regex and replace() resets lastIndex for /g patterns.
+// "_" or "-". The regex finds every well-formed {{name}} ANYWHERE in the
+// text — including inside extra braces: "{{{a}}}" substitutes its inner
+// {{a}} and keeps the surrounding braces. Malformed tokens ({{}}, {{a b}},
+// unbalanced single braces) are not tokens and pass through untouched.
+// Shared const is safe: matchAll clones the regex and replace() resets
+// lastIndex for /g patterns.
 const PLACEHOLDER_RE = /\{\{([A-Za-z0-9_-]+)\}\}/g;
 
 /**
@@ -71,6 +74,8 @@ export function substitutePlaceholders(
  * what the user typed for `placeholders[i]`. A BLANK (or absent) input is
  * treated as "not provided" so its token stays verbatim in the inserted text
  * rather than vanishing. Pure — the dialog stays a thin shell over this.
+ * Caller contract: `placeholders` must come from extractPlaceholders on the
+ * SAME body being substituted — names are not validated here.
  */
 export function buildPlaceholderValues(
   placeholders: string[],
