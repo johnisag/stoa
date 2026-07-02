@@ -65,6 +65,19 @@ export interface ProviderDefinition {
   // this dir descriptor.
   commandsDir?: string; // e.g. ".claude/commands"
 
+  // Native reusable subagents (#35): the directory, relative to the user's home,
+  // where this provider reads subagent definitions — each subagent is a scoped
+  // persona with a tools allowlist and an optional per-subagent model. Stoa
+  // materializes a workflow ROLE into this dir so a role can be dispatched as the
+  // provider's own native subagent. UNSET = no native subagent convention wired.
+  // Only Claude Code's `~/.claude/agents/` is VERIFIED today (on-disk format:
+  // `<agentsDir>/<name>/AGENT.md`, YAML frontmatter `name`/`description`/`tools`
+  // (comma-separated allowlist)/optional `model` + a markdown system-prompt body).
+  // NOTE: lib/subagents.ts writes THAT format — wiring a provider whose subagent
+  // file layout differs needs a per-provider builder there too, not just this dir
+  // descriptor (mirrors the commandsDir caveat above).
+  agentsDir?: string; // e.g. ".claude/agents"
+
   // Initial prompt configuration
   // undefined = no support, '' = positional arg, string = flag (e.g., '--prompt')
   initialPromptFlag?: string;
@@ -100,6 +113,11 @@ export const PROVIDERS: ProviderDefinition[] = [
     // Claude Code reads ~/.claude/commands/<name>.md as native `/<name>` slash
     // commands (optional YAML frontmatter + a markdown prompt body). Verified.
     commandsDir: ".claude/commands",
+    // Claude Code reads ~/.claude/agents/<name>/AGENT.md as native reusable
+    // subagents: YAML frontmatter (name, description, comma-separated tools
+    // allowlist, optional model) + a markdown system-prompt body. Verified on
+    // disk against .claude/agents/code-reviewer/AGENT.md.
+    agentsDir: ".claude/agents",
   },
   {
     id: "codex",
