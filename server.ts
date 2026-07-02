@@ -1010,8 +1010,14 @@ app.prepare().then(() => {
               // row so the next tick re-delivers it. Without this the claim
               // would leave it stamped delivered+read: invisible to both push
               // and pull, silently lost. The atomic claim still prevented the
-              // concurrent double-deliver; this restores at-least-once.
-              resetDelivery(msg.id);
+              // concurrent double-deliver; this restores at-least-once. Guarded
+              // so a DB error during un-claim can't surface as an unhandled
+              // rejection out of this .catch.
+              try {
+                resetDelivery(msg.id);
+              } catch (resetErr) {
+                console.error("channel un-claim failed:", resetErr);
+              }
             })
             .finally(() => {
               channelDelivering.delete(s.id);
