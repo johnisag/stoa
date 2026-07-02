@@ -604,9 +604,19 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     roles into first-class subagent defs (tools allowlist + per-role model),
     materialized into each provider's native subagent dir. _Seam:_
     `lib/command/workflow-roles.ts`, `lib/skills.ts`, `saved-workflows.ts`.
-36. **Secrets guard at session creation** — `security` · S. Scan the chosen dir for
-    `.env`/credentials, warn that agents auto-load them, offer a one-click deny rule.
-    _Seam:_ new scanner, NewSessionDialog, `stoa doctor`, `lib/skills.ts`.
+36. ✅ **Secrets guard at session creation** — `security` · S. **SHIPPED (warn
+    half).** Pure name-only matcher `lib/secret-scan.ts`
+    (`SECRET_FILE_PATTERNS` + `classifySecretFiles` — .env/.env.*, *.pem,
+    id_rsa/id_ed25519, credentials.json, .npmrc; case-insensitive, sorted,
+    capped 10; `.envrc` deliberately excluded — direnv code, not a dotenv,
+    documented + test-locked) behind `GET /api/secret-scan?path=` (ONE shallow
+    readdir, names only, never file contents; sandboxed via
+    resolveSandboxedPathOrHome mirroring the sibling /api/git/check the same
+    dialog fires — strict resolveSandboxedPath would 403 every not-yet-
+    registered dir a user browses to). WorkingDirectoryInput shows a debounced
+    amber warning ("agents launched here can read these files") — advisory,
+    never blocks. 28-test matrix + db-holder route tests. _Deferred:_ the
+    one-click deny rule (needs provider-level settings work).
 37. ✅ **Undo toast for destructive actions** — `feature` · S. **SHIPPED.** A
     delay+cancel wrapper (`lib/undoable-action.ts`: `createUndoableRunner` —
     schedule/cancel/flush, idempotent, same-id reschedule flushes the
