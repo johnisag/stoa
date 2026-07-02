@@ -806,6 +806,15 @@ Condensed record (full detail in git history). All of the below is **done**.
   failures (best-effort, background via `runInBackground`) should surface
   instead of only logging — orphaned worktrees are invisible today (#43
   red-team).
+- **Snippet-store undo-window edges (pre-existing, #33 round-3)** — three small
+  SnippetsModal gaps around the #37 undo window, all verified pre-existing on
+  main: (1) `handleAdd` persists from the modal's OPTIMISTIC list, committing a
+  still-pending delete early so its Undo silently restores nothing — base the
+  add on storage + re-sync via `getVisibleSnippets`, with a two-pending-actions
+  regression test; (2) a second OPEN modal (desktop split-pane) goes stale —
+  subscribe it to `SNIPPETS_CHANGED_EVENT` like the chip bar; (3) the useState
+  initializer reads raw storage (one-frame flash in a contrived remount) — use
+  `getVisibleSnippets()` there too.
 
 ### Bigger bets (full features)
 
