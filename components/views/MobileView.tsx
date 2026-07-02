@@ -8,6 +8,7 @@ import { SidebarFooter } from "@/components/SidebarFooter";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { PaneLayout } from "@/components/PaneLayout";
 import { FleetBar } from "@/components/FleetBar/FleetBar";
+import { OnboardingChecklist } from "@/components/OnboardingChecklist";
 import { SwipeSidebar } from "@/components/mobile/SwipeSidebar";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import type { ViewProps } from "./types";
@@ -158,6 +159,16 @@ export function MobileView({
         activeSessionId={focusedActiveTab?.sessionId || undefined}
         onSelect={handleSelect}
       />
+
+      {/* First-run onboarding (#30) — only on the true empty state (no
+          sessions yet); dismissible, so it never nags a returning user. */}
+      {sessions.length === 0 && (
+        <OnboardingChecklist
+          sessionCount={sessions.length}
+          hasProjects={projects.length > 0}
+          onCreateSession={() => setShowNewSessionDialog(true)}
+        />
+      )}
 
       {/* Terminal fills the screen */}
       <div className="min-h-0 w-full flex-1">
