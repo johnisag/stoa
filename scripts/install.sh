@@ -90,10 +90,14 @@ fi
 if [[ "$CHANNEL" == "release" ]]; then
     log_info "Resolving the latest release tag (release channel)..."
     git fetch --tags --quiet
-    # Newest semver-ish vMAJOR.MINOR.PATCH tag, ignoring anything else. `git tag`
-    # with a version sort keeps this to git's own transport (no shell pipe soup):
-    # list, filter to clean release tags, take the highest.
-    latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+    # Newest STABLE vMAJOR.MINOR.PATCH tag. The trailing grep is load-bearing:
+    # it must mirror stoa.js parseReleaseTag EXACTLY — three numeric segments,
+    # NO prerelease suffix and NO 4th segment — so `install --channel release`
+    # and `stoa update --channel release` always land on the SAME tag. Without
+    # it, git's -v:refname sort ranks a prerelease (v2.0.0-rc.1) above the
+    # highest stable (v1.10.0) and a release candidate would reach production.
+    latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
     if [[ -z "$latest_tag" ]]; then
         log_error "No verified release tag found. Re-run without --channel release (or with --channel main) to track main."
         exit 1

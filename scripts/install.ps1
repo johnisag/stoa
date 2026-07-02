@@ -44,7 +44,10 @@ $InstallDir = Join-Path $AgentHome "repo"
 
 # Channel selection (#56): -Channel param > STOA_CHANNEL env > default "main".
 # Default is a no-op (clone/pull already leaves us on main); "release" is opt-in.
-if ([string]::IsNullOrWhiteSpace($Channel)) {
+# Only fall back to the env/default when -Channel was NOT bound at all: a
+# -Channel that WAS passed but is empty is an error (exits 1 at validation),
+# matching install.sh and stoa.js resolveUpdateChannel exactly.
+if (-not $PSBoundParameters.ContainsKey('Channel')) {
     if (-not [string]::IsNullOrWhiteSpace($env:STOA_CHANNEL)) {
         $Channel = $env:STOA_CHANNEL
     } else {
@@ -135,10 +138,14 @@ if ($Channel -eq "release") {
     Write-Info "Resolving the latest release tag (release channel)..."
     & git fetch --tags --quiet
     if (-not $?) { Pop-Location; Write-Err "git fetch --tags failed."; exit 1 }
-    # Newest semver-ish vMAJOR.MINOR.PATCH tag via git's own version sort; ignore
-    # anything that isn't a clean release tag. Select-Object -First 1 is the native
-    # `head -n 1` equivalent (no external tools).
+    # Newest STABLE vMAJOR.MINOR.PATCH tag. The Where-Object is load-bearing: it
+    # must mirror stoa.js parseReleaseTag EXACTLY — three numeric segments, NO
+    # prerelease suffix and NO 4th segment — so install and `stoa update` on the
+    # release channel always select the SAME tag. Without it git's -v:refname
+    # sort ranks a prerelease (v2.0.0-rc.1) above the highest stable and a
+    # release candidate would reach production.
     $latestTag = (& git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
+        Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
         Select-Object -First 1)
     if ([string]::IsNullOrWhiteSpace($latestTag)) {
         Pop-Location

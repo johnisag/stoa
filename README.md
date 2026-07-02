@@ -164,6 +164,21 @@ Stops the server (if running), pulls the latest `main`, reinstalls dependencies,
 rebuilds, and restarts after the production build artifacts are verified. It
 pins to `main`; if an update fails, it refuses to start from an incomplete build.
 
+### Release channel (opt-in)
+
+By default `stoa update` tracks `main`. To pin instead to the latest verified,
+immutable **release tag** (stable `vX.Y.Z` only — prereleases are excluded):
+
+```bash
+stoa update --channel release          # or: STOA_UPDATE_CHANNEL=release stoa update
+```
+
+This checks the release tag out in a detached HEAD (`stoa status` shows which
+tag you're pinned to). Return to tracking `main` any time with
+`stoa update --channel main`. The piped installers take the same opt-in — pass
+`STOA_CHANNEL=release` (the one-liner can't pass a flag), e.g.
+`curl -fsSL … | STOA_CHANNEL=release bash`.
+
 ## Mobile Access
 
 Use [Tailscale](https://tailscale.com) for secure access from your phone:
