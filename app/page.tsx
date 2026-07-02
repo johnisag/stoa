@@ -41,12 +41,10 @@ import {
   shellQuoteArg,
   escapeForDoubleQuotes,
   buildTmuxFlags,
+  buildAgentArgs,
 } from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
-import {
-  resolveSessionLaunchOptions,
-  buildAgentArgsForSession,
-} from "@/lib/session-launch";
+import { resolveSessionLaunchOptions } from "@/lib/session-launch";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
@@ -427,12 +425,12 @@ function HomeContent() {
       const command =
         backend === "tmux" ? await getInitScriptCommand(agentCmd) : agentCmd;
 
-      // Structured argv for the native pty backend (no shell quoting) — from the
-      // SAME resolved options, so the tmux and pty argv can't diverge.
-      const { binary, args } = buildAgentArgsForSession(session, {
-        initialPrompt: initialPrompt || undefined,
-        allSessions: sessions,
-      });
+      // Structured argv for the native pty backend (no shell quoting) — built from
+      // the SAME resolved object as the tmux flags above (not a second resolve),
+      // so the tmux and pty argv are guaranteed identical by construction.
+      const { binary, args } = resolved
+        ? buildAgentArgs(resolved.agentType, resolved.options)
+        : { binary: "", args: [] };
 
       return {
         sessionName,

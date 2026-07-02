@@ -4,9 +4,12 @@
  * Every Session-shaped launch path (app/page.tsx's buildSessionCommand tmux+pty,
  * lib/client/backend.ts's buildSpawnForSession re-attach, components/Pane) routes
  * through resolveSessionLaunchOptions / buildAgentArgsForSession. These tests lock:
- *   (a) the injection-defense model clamp fires on EVERY path — a foreign / bogus /
- *       injection-shaped model is dropped to the safe catalog default, and it is
- *       IMPOSSIBLE to reach the CLI with an unclamped model; and
+ *   (a) the STATIC-agent model clamp fires on EVERY path — a foreign / bogus /
+ *       injection-shaped model for claude/codex is dropped to the safe catalog
+ *       default before it can reach the CLI. (A FREE-TEXT agent like hermes
+ *       forwards its model VERBATIM by design — see the model-is-passed-through
+ *       case below; its injection safety is the write-boundary isSafeModel gate
+ *       + shell-less argv, NOT this clamp, per the module header.)
  *   (b) for a normal case the produced argv is byte-identical to calling
  *       buildAgentArgs directly with the (clamped) options — this is a refactor.
  */

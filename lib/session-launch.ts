@@ -6,13 +6,20 @@
  * drift or forget a step. This module funnels ALL of that into ONE resolver so the
  * pieces can't diverge and, crucially, so the model clamp is NON-BYPASSABLE.
  *
- * SECURITY-CRITICAL: `resolveModelForAgent` clamps an untrusted/legacy/LLM-chosen
- * model to the STATIC catalog (or, for a free-text agent like Hermes, to the safe
- * configured default when it matches no catalog / is foreign) BEFORE it can reach
- * `--model <value>`. A free-text agent forwards its model verbatim into the POSIX
- * tmux `-m` launch, so a metacharacter-bearing value would be shell injection.
- * Because every Session→argv path routes through `resolveSessionLaunchOptions`,
- * there is no launch path that skips the clamp.
+ * SECURITY: the model clamp here is ONE layer of a LAYERED defense — it is not
+ * the sole guarantee, so don't rely on it alone.
+ *   - STATIC agents (claude/codex): `resolveModelForAgent` drops a legacy /
+ *     foreign / injection-shaped model to the STATIC-catalog value (or the
+ *     agent's default) HERE, so it can never reach `--model`.
+ *   - FREE-TEXT agents (Hermes/Kilo/Kimi): a legitimate model is forwarded
+ *     VERBATIM (the whole point of a free-text agent), so this clamp does NOT
+ *     neutralize it. What keeps THAT safe lives at the BOUNDARIES: the session
+ *     create route rejects a non-`isSafeModel` model and the model is immutable
+ *     afterward, and every launch uses a shell-less pty argv (one discrete
+ *     token) or shell-quoted tmux flags — so a metacharacter can't inject.
+ * Routing every Session→argv path through here is what keeps the static-agent
+ * clamp and the MCP/fork resolution from DRIFTING; the free-text injection
+ * defense is the write-boundary gate + shell-less argv, not this function alone.
  *
  * Pure (no I/O) so it can be unit-tested and shared by the client (pty re-attach in
  * lib/client/backend.ts + components/Pane) and the first-launch path (app/page.tsx).
@@ -76,8 +83,11 @@ export function resolveSessionLaunchOptions(
     sessionId: session.claude_session_id,
     parentSessionId,
     autoApprove: session.auto_approve,
-    // NON-BYPASSABLE clamp: a legacy/foreign/injection-shaped model is dropped to
-    // the safe catalog value (or the agent's default) before it can reach the CLI.
+    // Static-agent clamp: a legacy/foreign model is dropped to the safe catalog
+    // value here. A free-text agent (hermes/kilo/kimi) forwards its model
+    // VERBATIM — kept safe not by this clamp but by the write-boundary
+    // isSafeModel gate (model immutable after create) + shell-less argv / tmux
+    // quoting (see the module header).
     model: resolveModelForAgent(agentType, session.model),
     // Replay the conductor's persisted MCP wiring (e.g. Codex's
     // `-c mcp_servers.stoa.*`). Parsed via the shared helper so no launch path
