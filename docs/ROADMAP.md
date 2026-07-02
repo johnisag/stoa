@@ -615,9 +615,15 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     delete — each shows a sonner "Deleted X — Undo" toast for the grace window
     before the destructive call actually fires. _Deferred:_ Git discard (call
     site entangled), "restart that session" pseudo-undo.
-38. **Recents + pinned in the Quick Switcher** — `feature` · S. Give the ⌘K palette a
-    memory (MRU + pinned), mirroring `lib/prompt-history.ts`. _Seam:_
-    `components/QuickSwitcher.tsx`, new `lib/palette-recents.ts`.
+38. ✅ **Recents + pinned in the Quick Switcher** — `feature` · S. **SHIPPED.**
+    Pure, storage-injected `lib/palette-recents.ts` (mirrors prompt-history):
+    MRU recents (capped 20, deduped), pin toggle, and `rankWithRecents` whose
+    contract is explicit — pins/recents only reorder the EMPTY-query default
+    list (pinned → MRU → rest); with an active query fuzzyScore stays king
+    (an order-preserving no-op over searchSessions output). Malformed stored
+    JSON degrades to empty; storage failures swallowed. QuickSwitcher records
+    on select (click + Enter + Output mode), renders a pin toggle per row
+    (visible on hover/highlight/pinned). 21-test matrix.
 39. **Screen Wake Lock while watching a live run** — `mobile` · S. Acquire
     `wakeLock` when a terminal/Live Wall pane is foregrounded with an active agent.
     _Seam:_ new `hooks/useWakeLock.ts`, `components/Terminal/index.tsx`, Live Wall.
