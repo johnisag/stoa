@@ -177,7 +177,10 @@ export const ERROR_PATTERNS: RegExp[] = [
   // Provider API error envelope: an HTTP code AND a request-error type together.
   /\bError code: \d{3}\b[^\n]*\binvalid_request_error\b/i,
   /You're out of (extra )?usage/i, // credit/usage exhausted
-  /\b(quota|rate limit) (exceeded|exhausted)\b/i,
+  // Quota/credit exhaustion only — deliberately NOT "rate limit exceeded":
+  // pure rate-limit phrasing is the rate-limit detector's bucket (a recoverable
+  // count-down-and-resume wait, surfaced via detectRateLimit), not an error (#51).
+  /\bquota (exceeded|exhausted)\b/i,
   /\binsufficient[_ ](quota|credit|balance)\b/i,
 ];
 
@@ -444,7 +447,16 @@ class SessionStatusDetector {
     // 3. Error markers on the current screen (not working, not awaiting input).
     //    Checked after busy/waiting so an actively-retrying agent still reads
     //    as running; surfaces a turn that failed and needs attention.
-    if (checkErrorPatterns(content)) return "error";
+    //    EXCEPTION (#51): error and rate-limit phrasings overlap on real screens
+    //    ("API Error: 429 … Rate limit exceeded … resets at 3:30 pm"). When the
+    //    SAME screen carries a rate-limit notice WITH a parsed reset time, that
+    //    is a recoverable count-down-and-resume wait, not a failed turn — an
+    //    "error" status here would block auto-resume upstream (the tick never
+    //    nudges an errored session). No reset time → still an error.
+    if (checkErrorPatterns(content)) {
+      const limit = detectRateLimit(content);
+      if (!limit || limit.resetAt == null) return "error";
+    }
 
     // 4. Spike detection
     const spikeResult = this.processSpikeDetection(tracker, timestamp);

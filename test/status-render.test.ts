@@ -164,6 +164,61 @@ describe("error-state detection", () => {
   });
 });
 
+describe("rate-limit vs error precedence (#51)", () => {
+  // Regression: a screen carrying BOTH error wording ("API Error", "Rate limit
+  // exceeded") AND a rate-limit notice WITH a reset time used to classify as
+  // "error" — and the auto-resume tick never nudges an errored session, so the
+  // episode was never resumed. With a reset time present, the rate-limited
+  // classification must win (a count-down-and-resume wait, not a failed turn).
+  it("a rate-limit screen WITH a reset time is NOT classified as error", async () => {
+    const s = spawnSession("vt-rl-reset", {
+      binary: "node",
+      args: printAndHold(
+        '  ⎿ API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded."}}\r\n' +
+          "  You've reached your usage limit. Your rate limit will reset at 3:30 pm.\r\n"
+      ),
+      cwd: process.cwd(),
+    });
+    expect(
+      await waitFor(() => s.capture().includes("reset at 3:30 pm"), 12000)
+    ).toBe(true);
+    // Must settle on waiting/idle (parked at the limit) — never wedge on error.
+    const settled = await waitFor(async () => {
+      const st = await statusDetector.getStatus("vt-rl-reset");
+      return st === "waiting" || st === "idle";
+    }, 12000);
+    expect(settled).toBe(true);
+    const detail = await statusDetector.getStatusDetail("vt-rl-reset");
+    expect(detail.status).not.toBe("error");
+    // The rate-limit state (with its parsed reset) rides the same capture, so
+    // the auto-resume tick can count down and act.
+    expect(detail.rateLimit).not.toBeNull();
+    expect(detail.rateLimit?.resetAt).not.toBeNull();
+    killSession("vt-rl-reset");
+  });
+
+  it("error + rate-limit wording WITHOUT a reset time still classifies as error", async () => {
+    // No reset time → nothing to count down to; the error classification (and
+    // its needs-attention surfacing) must be preserved.
+    const s = spawnSession("vt-rl-noreset", {
+      binary: "node",
+      args: printAndHold(
+        "You're out of extra usage. HTTP 429 Too Many Requests.\r\n"
+      ),
+      cwd: process.cwd(),
+    });
+    expect(
+      await waitFor(() => s.capture().includes("Too Many Requests"), 12000)
+    ).toBe(true);
+    const ok = await waitFor(
+      async () => (await statusDetector.getStatus("vt-rl-noreset")) === "error",
+      12000
+    );
+    expect(ok).toBe(true);
+    killSession("vt-rl-noreset");
+  });
+});
+
 describe("ERROR_PATTERNS (session/provider failures only, kept narrow)", () => {
   const hit = (s: string) => ERROR_PATTERNS.some((p) => p.test(s));
 
@@ -173,7 +228,6 @@ describe("ERROR_PATTERNS (session/provider failures only, kept narrow)", () => {
     ).toBe(true);
     expect(hit("You're out of extra usage. Add more at ...")).toBe(true);
     expect(hit("quota exceeded")).toBe(true);
-    expect(hit("rate limit exceeded")).toBe(true);
     expect(hit("insufficient_quota")).toBe(true);
   });
 
@@ -185,5 +239,14 @@ describe("ERROR_PATTERNS (session/provider failures only, kept narrow)", () => {
     expect(hit("'type': 'invalid_request_error'")).toBe(false); // mention, no HTTP code
     expect(hit("I fixed the error and all tests pass.")).toBe(false);
     expect(hit("> ")).toBe(false);
+  });
+
+  it("does NOT bucket pure rate-limit phrasing as error (#51 — the rate-limit detector owns it)", () => {
+    // These are all caught by detectRateLimit (lib/rate-limit.ts) and must
+    // surface as a recoverable rate-limited state, never as a red error.
+    expect(hit("rate limit exceeded")).toBe(false);
+    expect(hit("rate limit exhausted")).toBe(false);
+    expect(hit("You've reached your usage limit")).toBe(false);
+    expect(hit("Your rate limit will reset at 3:30 pm")).toBe(false);
   });
 });
