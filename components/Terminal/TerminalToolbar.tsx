@@ -40,7 +40,9 @@ interface TerminalToolbarProps {
    * go through THIS so a multi-line snippet lands as ONE paste — char-by-char
    * onKeyPress would submit at every newline, auto-executing lines the user
    * never confirmed (the desktop Pane already inserts snippets via
-   * terminalRef.paste for the same reason). Falls back to key-by-key sending
+   * terminalRef.paste for the same reason). The ESC[200~/201~ wrapping only
+   * applies when the running app enables bracketed paste (mode 2004) — the
+   * same residual as the desktop path. Falls back to key-by-key sending
    * when absent. */
   onPaste?: (text: string) => void;
   onFilePicker?: () => void;

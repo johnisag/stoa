@@ -96,7 +96,11 @@ export function SnippetsModal({
         label: "Undo",
         onClick: () => {
           undoableSnippetDelete.cancel(`snippet:${snippet.id}`);
-          setSnippets(getStoredSnippets(browserStorage()));
+          // Re-sync through getVisibleSnippets (NOT raw storage): another
+          // delete may still be inside its own undo window — storage isn't
+          // written yet, so a raw read would resurrect it here while the
+          // chip bar correctly keeps hiding it.
+          setSnippets(getVisibleSnippets());
           emitSnippetsChanged();
         },
       },

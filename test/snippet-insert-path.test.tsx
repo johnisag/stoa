@@ -72,6 +72,25 @@ describe("mobile snippet insert path (#33)", () => {
     expect(onKeyPress).not.toHaveBeenCalled();
   });
 
+  it("SnippetsModal mount also inserts via the single paste (second surface)", () => {
+    seedSnippets([MULTILINE]);
+    const onKeyPress = vi.fn();
+    const onPaste = vi.fn();
+    const { getByLabelText, getByText } = render(
+      <TerminalToolbar onKeyPress={onKeyPress} onPaste={onPaste} />
+    );
+
+    fireEvent.click(getByLabelText("Insert snippet")); // opens the modal
+    // Select by the content PREVIEW — only the modal row renders the body as
+    // text (the chip shows it in a title attribute), so this cannot
+    // accidentally exercise the chip path.
+    fireEvent.click(getByText(/for i in 1 2 3/));
+
+    expect(onPaste).toHaveBeenCalledTimes(1);
+    expect(onPaste).toHaveBeenCalledWith("for i in 1 2 3; do\necho $i\ndone");
+    expect(onKeyPress).not.toHaveBeenCalled();
+  });
+
   it("falls back to char-by-char sending when no onPaste is wired", () => {
     seedSnippets([{ id: "s3", name: "Status", content: "git status" }]);
     const onKeyPress = vi.fn();
