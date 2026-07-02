@@ -36,6 +36,13 @@ const SPECIAL_KEYS = {
 
 interface TerminalToolbarProps {
   onKeyPress: (key: string) => void;
+  /** Bracketed-paste injector (the Terminal's xterm `paste`). Snippet inserts
+   * go through THIS so a multi-line snippet lands as ONE paste — char-by-char
+   * onKeyPress would submit at every newline, auto-executing lines the user
+   * never confirmed (the desktop Pane already inserts snippets via
+   * terminalRef.paste for the same reason). Falls back to key-by-key sending
+   * when absent. */
+  onPaste?: (text: string) => void;
   onFilePicker?: () => void;
   onCopy?: () => boolean; // Returns true if selection was copied
   onAttachSelection?: () => boolean; // Inject the selection into the agent's prompt
@@ -111,6 +118,7 @@ function PasteModal({
 
 export function TerminalToolbar({
   onKeyPress,
+  onPaste,
   onFilePicker,
   onCopy,
   onAttachSelection,
@@ -208,12 +216,13 @@ export function TerminalToolbar({
       <SnippetsModal
         open={showSnippetsModal}
         onClose={() => setShowSnippetsModal(false)}
-        onInsert={sendText}
+        onInsert={onPaste ?? sendText}
       />
       {/* #33: one-tap snippet chips, above the key row. This toolbar only
           mounts on mobile (isMobile in the parent Terminal), so the chips are
-          desktop-hidden for free; the bar hides itself when no snippets. */}
-      <SnippetChipBar onInsert={sendText} />
+          desktop-hidden for free; the bar hides itself when no snippets.
+          Inserts route through onPaste (bracketed paste) — see the prop doc. */}
+      <SnippetChipBar onInsert={onPaste ?? sendText} />
       <div
         className="bg-background/95 border-border scrollbar-none flex items-center gap-1 overflow-x-auto border-t px-2 py-1.5 backdrop-blur"
         onTouchEnd={(e) => e.stopPropagation()}

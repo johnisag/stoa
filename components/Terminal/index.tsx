@@ -595,6 +595,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         {isMobile && (
           <TerminalToolbar
             onKeyPress={sendInput}
+            onPaste={paste}
             onFilePicker={() => setShowFilePicker(true)}
             onCopy={copySelection}
             onAttachSelection={attachSelectionToAgent}

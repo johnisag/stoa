@@ -17,6 +17,10 @@ import { SnippetFillInDialog } from "./SnippetFillInDialog";
 // every path sanitizes through formatTerminalTextForAgent before touching the
 // pty. Renders nothing when no snippets exist; desktop never mounts it (the
 // parent toolbar is mobile-only via the existing isMobile plumbing).
+// Design intent: the bar trades one row of mobile screen space for one-tap
+// snippet discoverability (vs. burying them behind the modal); it costs
+// nothing when the user has no snippets. Revisit with a collapse affordance
+// only if real usage complains.
 export function SnippetChipBar({
   onInsert,
 }: {

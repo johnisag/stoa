@@ -204,6 +204,12 @@ describe("substitutePlaceholders", () => {
     );
   });
 
+  it("substitutes the inner {{a}} of {{{a}}}, keeping the outer braces", () => {
+    // Documented in PLACEHOLDER_RE's comment: extra surrounding braces are
+    // not a rejection — the well-formed inner token still substitutes.
+    expect(substitutePlaceholders("{{{a}}}", { a: "X" })).toBe("{X}");
+  });
+
   it("only honors OWN properties — inherited keys keep their token", () => {
     expect(substitutePlaceholders("{{toString}} {{constructor}}", {})).toBe(
       "{{toString}} {{constructor}}"
