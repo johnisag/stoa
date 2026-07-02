@@ -112,6 +112,7 @@ import {
 import {
   nextUnreadMessage,
   claimDelivery,
+  resetDelivery,
   sessionsWithPendingDelivery,
 } from "./lib/channels";
 import {
@@ -997,9 +998,7 @@ app.prepare().then(() => {
           // flow pasted first, then marked — a double-deliver window). claimDelivery
           // flips delivered_at/read_at WHERE still-pending; only the caller that
           // wins (changes === 1) pastes. A loser (or a message a pull just
-          // consumed) skips. The paste is best-effort after the claim; a failed
-          // paste doesn't un-claim (matching the prior mark-once semantics — the
-          // message is consumed, not re-pushed on the next tick).
+          // consumed) skips.
           if (!claimDelivery(msg.id)) continue;
           channelDelivering.add(s.id);
           const text = buildChannelDeliveryText(msg);
@@ -1007,6 +1006,12 @@ app.prepare().then(() => {
             .pasteText(s.name, text, { enter: true })
             .catch((err) => {
               console.error("channel delivery failed:", err);
+              // The paste failed (e.g. the pane died mid-tick) — UN-CLAIM the
+              // row so the next tick re-delivers it. Without this the claim
+              // would leave it stamped delivered+read: invisible to both push
+              // and pull, silently lost. The atomic claim still prevented the
+              // concurrent double-deliver; this restores at-least-once.
+              resetDelivery(msg.id);
             })
             .finally(() => {
               channelDelivering.delete(s.id);

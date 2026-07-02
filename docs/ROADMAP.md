@@ -731,14 +731,14 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     NON-consuming SELECT, PASTED it, then marked delivered — so two concurrent
     delivery attempts off one snapshot both pasted (double-deliver, reproduced
     first). Fix: `claimDelivery(id)` — a single atomic `UPDATE … WHERE
-still-pending` using `changes===1` as the claim; only the winner pastes
-    (documented tradeoff: a message is consumed even if the paste later fails —
-    no retry, trading a rare lost-on-failure for zero double-deliver). Orphan
+still-pending` using `changes===1` as the claim; only the winner pastes, and
+    a failed paste calls `resetDelivery(id)` to un-claim so the next tick
+    re-delivers (at-least-once preserved without reopening the race). Orphan
     cleanup: schema has NO FK on `channel_messages`/`schedules.session_id` (a
     test PROVES this), so session delete now explicitly removes both (session +
     each worker). The per-session tick probe is replaced by one `SELECT DISTINCT
 to_session_id … WHERE read_at IS NULL` intersected with the live snapshot.
-    13 tests (regression fails pre-fix). _Seam:_ `server.ts`, `lib/channels.ts`,
+    15 tests (regression fails pre-fix). _Seam:_ `server.ts`, `lib/channels.ts`,
     `lib/db/queries.ts`, `app/api/sessions/[id]/route.ts`, `lib/scheduler.ts`.
 51. ✅ 🐛 **Resolve rate-limit vs error classification** — `bug` · M.
     **SHIPPED (verify-then-fix).** Reproduced end-to-end first: a screen with

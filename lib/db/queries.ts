@@ -598,6 +598,19 @@ export const queries = {
        WHERE id = ? AND delivered_at IS NULL AND read_at IS NULL`
     ),
 
+  // Un-claim a message the push CLAIMED but then failed to paste, so the next
+  // tick re-delivers it (restores at-least-once when a transient paste error —
+  // e.g. the pane died mid-tick — would otherwise silently drop it). Guarded on
+  // `delivered_at IS NOT NULL` so it only reverts a PUSH-claimed row and can
+  // never un-consume a message a PULL already read (pull sets read_at only).
+  resetChannelDelivery: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE channel_messages
+       SET delivered_at = NULL, read_at = NULL
+       WHERE id = ? AND delivered_at IS NOT NULL`
+    ),
+
   // Dev servers
   createDevServer: (db: Database.Database) =>
     getStmt(
