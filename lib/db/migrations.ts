@@ -1218,6 +1218,34 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 50,
+    name: "add_judge_gate",
+    up: (db) => {
+      // #26 LLM-as-judge rubric gate: opt-in per repo (fail-closed default 0);
+      // the verdict trio mirrors verify_status/verify_output/verify_sha —
+      // SHA-pinned so a stale pass can never greenlight a newer push.
+      if (
+        hasTable(db, "dispatch_repos") &&
+        !hasColumn(db, "dispatch_repos", "judge_gate")
+      ) {
+        db.exec(
+          `ALTER TABLE dispatch_repos ADD COLUMN judge_gate INTEGER NOT NULL DEFAULT 0`
+        );
+      }
+      // Column order matches schema.ts's issue_dispatches judge block, so a
+      // fresh-start DB and a migrated DB agree.
+      if (
+        hasTable(db, "issue_dispatches") &&
+        !hasColumn(db, "issue_dispatches", "judge_status")
+      ) {
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN judge_status TEXT`);
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN judge_output TEXT`);
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN judge_sha TEXT`);
+        db.exec(`ALTER TABLE issue_dispatches ADD COLUMN judge_ran_at TEXT`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

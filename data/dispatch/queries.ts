@@ -274,6 +274,8 @@ export type UpdateRepoPatch = Partial<{
   mergeTrain: boolean;
   verifyGate: boolean;
   verifyCommand: string | null;
+  /** #26 rubric judge: gate auto-merge on a binary LLM rubric pass per PR head. */
+  judgeGate: boolean;
   /** #20 cost-aware routing: the repo's worker base model (null = agent default). */
   defaultModel: string | null;
   maintainerSurveyEnabled: boolean;
@@ -342,6 +344,9 @@ export function useUpdateRepo() {
                   : {}),
                 ...(patch.verifyCommand !== undefined
                   ? { verify_command: patch.verifyCommand }
+                  : {}),
+                ...(patch.judgeGate !== undefined
+                  ? { judge_gate: patch.judgeGate ? 1 : 0 }
                   : {}),
                 ...(patch.defaultModel !== undefined
                   ? { default_model: patch.defaultModel }

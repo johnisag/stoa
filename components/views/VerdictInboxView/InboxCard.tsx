@@ -65,6 +65,23 @@ const VERIFY: Record<string, { label: string; badge: string }> = {
   running: { label: "verifying…", badge: "bg-muted text-muted-foreground" },
 };
 
+// #26 rubric-judge verdict (binary LLM rubric over the PR diff).
+const JUDGE: Record<string, { label: string; badge: string }> = {
+  pass: {
+    label: "judge pass",
+    badge: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  },
+  fail: {
+    label: "judge fail",
+    badge: "bg-red-500/15 text-red-600 dark:text-red-400",
+  },
+  error: {
+    label: "judge error",
+    badge: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  },
+  running: { label: "judging…", badge: "bg-muted text-muted-foreground" },
+};
+
 // Friendly labels for ceremony steps (dispatch statuses reuse STATUS_META).
 const CEREMONY_LABEL: Record<string, string> = {
   queued: "Queued",
@@ -138,7 +155,10 @@ export function InboxCard({
         (item.state === "ready" || item.state === "awaiting_merge")) &&
     // If the verify harness is armed, don't offer a one-tap Merge on a non-passing
     // build — the server's auto-merge gate would refuse it anyway (matches it).
-    (!item.verifyGate || item.verifyStatus === "pass");
+    (!item.verifyGate || item.verifyStatus === "pass") &&
+    // #26: same contract for the rubric judge — a judge-gated item needs a PASS
+    // before the manual Merge is offered (the merge endpoint enforces it too).
+    (!item.judgeGate || item.judgeStatus === "pass");
   // Dispatch dismiss is server-gated to failed; ceremony cancel (DELETE) is always valid.
   const canDismiss = item.type === "ceremony" || item.state === "failed";
 
@@ -202,6 +222,16 @@ export function InboxCard({
                 {VERIFY[item.verifyStatus].label}
               </span>
             )}
+          {item.judgeGate && item.judgeStatus && JUDGE[item.judgeStatus] && (
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[11px]",
+                JUDGE[item.judgeStatus].badge
+              )}
+            >
+              {JUDGE[item.judgeStatus].label}
+            </span>
+          )}
           <span
             className={cn("rounded px-1.5 py-0.5 text-[11px]", verdict.badge)}
           >

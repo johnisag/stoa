@@ -137,8 +137,7 @@ export async function sessionCeremonyPass(): Promise<void> {
 
   for (const c of ceremonies) {
     const session = queries.getSession(db).get(c.session_id) as
-      | Session
-      | undefined;
+      Session | undefined;
     // The session was deleted, or never had a branch/worktree → can't proceed.
     if (!session || !session.worktree_path || !session.branch_name) {
       setStep(c.id, "stuck");
@@ -337,10 +336,12 @@ export async function sessionCeremonyPass(): Promise<void> {
         reviewSha: c.review_sha,
         mergeable: readiness.mergeable,
         checks: readiness.checks,
-        // The verify harness is dispatch-only (a ceremony has no per-repo
-        // verify_command); inert here — never adds a gate.
+        // The verify harness + rubric judge are dispatch-only (per-repo
+        // gates a ceremony doesn't have); inert here — never add a gate.
         verifyGate: false,
         verifyStatus: null,
+        judgeGate: false,
+        judgeStatus: null,
       }) === "merge";
 
     if (!ready) {

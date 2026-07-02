@@ -70,6 +70,13 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
           ? 1
           : 0
         : repo.verify_gate;
+    // #26 rubric judge gate (persisted via a focused query below, #20 pattern).
+    const judgeGate =
+      body?.judgeGate !== undefined
+        ? body.judgeGate
+          ? 1
+          : 0
+        : repo.judge_gate;
     let verifyCommand = repo.verify_command;
     if (body?.verifyCommand !== undefined) {
       const next =
@@ -162,6 +169,10 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       // #20: the (already-validated) worker base model.
       if (nextDefaultModel !== undefined) {
         queries.updateDispatchRepoDefaultModel(db).run(nextDefaultModel, id);
+      }
+      // #26: the rubric-judge gate.
+      if (judgeGate !== repo.judge_gate) {
+        queries.updateDispatchRepoJudgeGate(db).run(judgeGate, id);
       }
     })();
 

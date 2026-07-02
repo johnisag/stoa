@@ -32,6 +32,7 @@ import { captureLessons } from "./lessons";
 import { mergeTrainPass } from "./merge-train";
 import { reconcileStaleDispatches } from "./stale";
 import { verifyPass } from "./verify";
+import { judgePass } from "./judge";
 import { sessionCeremonyPass } from "./session-ceremony";
 import { nextOccurrence, isRecurrenceDue } from "./recurrence";
 import { isLocalTask } from "./task-label";
@@ -344,9 +345,15 @@ export async function reconcileTick(): Promise<void> {
     // landing. No-op for non-armed repos.
     await verifyPass();
 
+    // 8b. Rubric judge (#26, opt-in per repo): run the binary LLM judge over each
+    // open PR's diff, once per head. Fire-and-forget like verify; after the merge
+    // train / verify so the judged head is current, before auto-merge so a 'pass'
+    // gates the landing. No-op for non-armed repos.
+    await judgePass();
+
     // 9. Auto-merge (opt-in per issue): merge any ready PR whose row asked for it.
-    // After the reviewer + CI + verify passes so a just-approved, just-green,
-    // just-verified PR can merge.
+    // After the reviewer + CI + verify + judge passes so a just-approved,
+    // just-green, just-verified, just-judged PR can merge.
     await autoMergePass();
 
     // 10. Session "go to auto": drive any session a user handed off through the

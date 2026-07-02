@@ -519,11 +519,27 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
        v2 ideas: agent-driven flush (ask the model to write its own TODO state)
        and NOTES-table integration. _Seam:_ `lib/compact-memory.ts`,
        `lib/auto-compact.ts` (#329), `server.ts` tick, `lib/summarize.ts` helpers.
-26. **LLM-as-judge rubric review gate** — `orchestration` · M. A binary rubric judge
-    (tests added? no secret left? matches AGENTS.md? no injection shape?) alongside
-    typecheck/test/build; block/downgrade auto-merge on failure. _Why:_ the
-    safeguard that makes cheap-model routing safe. _Seam:_ `lib/dispatch/reviewer.ts`,
-    `verify.ts`, `lib/verdict-inbox.ts`, `lib/dispatch/auto-merge.ts`.
+26. ✅ **LLM-as-judge rubric review gate** — `orchestration` · M. **SHIPPED.**
+    Opt-in per repo (`dispatch_repos.judge_gate`, migration 50; "judge" toggle
+    in the Allocation Console): the reconciler runs a BINARY rubric judge over
+    each open PR's diff — tests added? no secret left? matches AGENTS.md
+    conventions? no injection shape? — alongside the critic panel + verify
+    harness, and gates auto-merge on a pass. Mirrors verify.ts's anatomy
+    (`lib/dispatch/judge.ts`): SHA-pinned verdict trio
+    (judge_status/output/sha), once per head, fire-and-forget off the tick,
+    stale verdicts cleared on head moves, crash recovery for wedged 'running'
+    rows, concurrency-capped. The diff is read via `gh pr diff` (argv, no
+    shell) from the stable checkout, bounded (60k head-biased + truncation
+    note), and fed to `runClaudeOneshot` with the diff EXPLICITLY marked
+    untrusted (instructions inside it are data). The parser is FAIL-CLOSED:
+    only a well-formed, internally consistent PASS (all four checks true)
+    passes; an inconsistent PASS is a fail; unparseable output is an 'error'
+    that waits visibly in the Verdict Inbox — never a silent merge. The
+    auto-merge gate is ADDITIVE (like verify) and the merge pin chain is
+    review_sha ?? verify_sha ?? judge_sha ?? head. _Why:_ the safeguard that
+    makes cheap-model routing (#20) safe. _Seam:_ `lib/dispatch/judge.ts`,
+    migration 50, `auto-merge.ts`, `reconciler.ts`, `verdict-inbox.ts`,
+    AllocationConsole, repos PATCH route.
 27. **OS-level sandbox launch tier (replace all-or-nothing yolo)** — `security` · L.
     Tri-state Prompt/Sandboxed-auto/Full-bypass; wrap the agent in FS+net isolation
     (Seatbelt/bubblewrap/restricted-worktree+proxy). _Why:_ workers run with full

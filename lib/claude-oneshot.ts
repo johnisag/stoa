@@ -12,8 +12,8 @@
  * (never argv — an argv prompt under a shell would be command-injectable).
  */
 
-import { spawn } from "child_process";
-import { resolveBinary, isWindows } from "./platform";
+import { spawn, type ChildProcess } from "child_process";
+import { resolveBinary, isWindows, killTreeArgs } from "./platform";
 
 /** A resolved one-shot spawn plan. The prompt is NEVER here — it is always piped
  *  on stdin by {@link runClaudeOneshot} (see the module note). */
@@ -40,16 +40,45 @@ export function buildClaudeOneshotPlan(): ClaudeOneshotPlan {
   };
 }
 
+/** Kill a spawned one-shot child — its whole tree on Windows, else child.kill().
+ *  Mirrors lib/ask.ts's killChildTree (a `.cmd` shim under a shell leaves the
+ *  real node process as a grandchild a bare kill() would orphan). */
+function killChildTree(child: ChildProcess): void {
+  const argv = child.pid ? killTreeArgs(child.pid, isWindows) : null;
+  if (!argv) {
+    child.kill();
+    return;
+  }
+  try {
+    const killer = spawn(argv[0], argv.slice(1), {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    // A killer launch failure surfaces as an ASYNC 'error' event — listen so it
+    // can't crash the process, and degrade to the parent-only kill.
+    killer.on("error", () => child.kill());
+  } catch {
+    child.kill();
+  }
+}
+
+/** Ceiling on accumulated stdout — a runaway reply is killed, not buffered
+ *  into an OOM (the callers keep only small heads/tails of the output anyway). */
+const MAX_STDOUT_BYTES = 16 * 1024 * 1024;
+
 /**
  * Run `claude -p` once, piping `prompt` on stdin, and resolve the RAW stdout on a
- * clean exit. Rejects on a non-zero exit (surfacing stderr) or a spawn error. The
- * caller post-processes the reply (e.g. cleanCommitMessage / sanitizeDigest).
- * Cross-platform via {@link buildClaudeOneshotPlan} — Windows `.cmd`-shim safe.
- *
- * No timeout (these are bounded, non-interactive `-p` prompts) — a future caller
- * that can wedge could grow one, like lib/ask.ts's runAsk kill-tree timeout.
+ * clean exit. Rejects on a non-zero exit (surfacing stderr), a spawn error, a
+ * runaway reply (stdout cap), or — when `opts.timeoutMs` is set — a timeout,
+ * KILLING the child tree in the latter two cases (an abandoned `claude -p` would
+ * otherwise keep burning CPU + API quota). The caller post-processes the reply
+ * (e.g. cleanCommitMessage / sanitizeDigest). Cross-platform via
+ * {@link buildClaudeOneshotPlan} — Windows `.cmd`-shim safe.
  */
-export function runClaudeOneshot(prompt: string): Promise<string> {
+export function runClaudeOneshot(
+  prompt: string,
+  opts?: { timeoutMs?: number }
+): Promise<string> {
   const plan = buildClaudeOneshotPlan();
   return new Promise((resolve, reject) => {
     const child = spawn(plan.binary, plan.args, {
@@ -60,14 +89,42 @@ export function runClaudeOneshot(prompt: string): Promise<string> {
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const fail = (err: Error, kill: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (kill) killChildTree(child);
+      if (timer) clearTimeout(timer);
+      reject(err);
+    };
+    const timer = opts?.timeoutMs
+      ? setTimeout(
+          () =>
+            fail(
+              new Error(
+                `Claude CLI timed out after ${Math.round((opts.timeoutMs ?? 0) / 1000)}s`
+              ),
+              true
+            ),
+          opts.timeoutMs
+        )
+      : null;
+    timer?.unref?.();
+
     child.stdout.on("data", (data) => {
       stdout += data.toString();
+      if (stdout.length > MAX_STDOUT_BYTES) {
+        fail(new Error("Claude CLI output exceeded the size cap"), true);
+      }
     });
     child.stderr.on("data", (data) => {
       stderr += data.toString();
     });
 
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
       if (code === 0) {
         resolve(stdout);
       } else {
@@ -75,7 +132,7 @@ export function runClaudeOneshot(prompt: string): Promise<string> {
         reject(new Error(`Claude CLI exited with code ${code}`));
       }
     });
-    child.on("error", reject);
+    child.on("error", (err) => fail(err, false));
 
     // The prompt is handed over on stdin (read by `claude -p`), never argv.
     child.stdin.write(prompt);
