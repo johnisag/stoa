@@ -169,7 +169,7 @@ const COCKPIT: Item[] = [
     icon: Hand,
     title: "Touch gestures",
     blurb:
-      "On a phone: long-press until the haptic pulse, then drag to move the cursor (arrow keys under the hood); double-tap for Tab completion; pinch to resize the font. Plain scrolling and select mode are untouched.",
+      "On a phone: long-press until the haptic pulse, then drag to move the cursor (arrow keys under the hood); double-tap for Tab completion; pinch to resize the font; pull down from the top of the session list to refresh it. Subtle haptic taps confirm send/stop/copy. Plain scrolling and select mode are untouched.",
   },
   {
     icon: MousePointerClick,
