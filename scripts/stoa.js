@@ -474,19 +474,36 @@ function cmdRestart() {
 
 /** status: report running state and URL. */
 /**
- * A human label for what the install is pinned to (#56): a detached release-tag
- * checkout reads as the pinned tag + how to get back; otherwise the tracked
- * branch. Returns null for a non-git (npm-global) install. Best-effort — any git
- * failure yields null rather than throwing in a status readout.
+ * Pure: turn the resolved git ref state into the `stoa status` Version label.
+ * BRANCH is checked FIRST — an attached checkout (a normal `main` install)
+ * reports its branch even when the branch HEAD commit also carries a release
+ * tag, which is true right after a release is cut. Only a DETACHED HEAD (no
+ * symbolic-ref) is a pinned release checkout. Exported so the ordering is
+ * unit-tested without a git repo.
+ */
+function formatRefLabel({ branch, tag, sha }) {
+  if (branch) return `${branch} (tracking)`;
+  if (tag) {
+    return parseReleaseTag(tag)
+      ? `${tag} (release channel — pinned; \`stoa update --channel main\` to track main)`
+      : `${tag} (detached)`;
+  }
+  return sha ? `${sha} (detached)` : null;
+}
+
+/**
+ * A human label for what the install is pinned to (#56). Gathers the git ref
+ * state (best-effort — any git failure yields null rather than throwing in a
+ * status readout) and formats it via the pure formatRefLabel. Returns null for
+ * a non-git (npm-global) install.
  */
 function currentRefLabel() {
   if (!isGitInstall()) return null;
-  const tag = gitCapture(["describe", "--tags", "--exact-match"]);
-  if (tag && parseReleaseTag(tag)) {
-    return `${tag} (release channel — pinned; \`stoa update --channel main\` to track main)`;
-  }
-  const branch = gitCapture(["symbolic-ref", "--short", "-q", "HEAD"]);
-  return branch ? `${branch} (tracking)` : null;
+  return formatRefLabel({
+    branch: gitCapture(["symbolic-ref", "--short", "-q", "HEAD"]),
+    tag: gitCapture(["describe", "--tags", "--exact-match"]),
+    sha: gitCapture(["rev-parse", "--short", "HEAD"]),
+  });
 }
 
 function cmdStatus() {
@@ -1937,6 +1954,7 @@ module.exports = {
   parseReleaseTag,
   compareReleaseTags,
   selectLatestReleaseTag,
+  formatRefLabel,
   // doctor (DX #14) — pure helpers, unit-tested
   parseNodeMajor,
   checkNodeVersion,
