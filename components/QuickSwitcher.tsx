@@ -664,7 +664,10 @@ export function QuickSwitcher({
                               isPinned ? "Unpin session" : "Pin to top of ⌘K"
                             }
                             role="button"
-                            tabIndex={0}
+                            // -1: keyboard-activatable when focused (Enter/
+                            // Space) but NOT a Tab stop — a stop per row would
+                            // double the palette's tab sequence.
+                            tabIndex={-1}
                             aria-pressed={isPinned}
                             aria-label={
                               isPinned ? "Unpin session" : "Pin session"
