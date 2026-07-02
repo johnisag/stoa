@@ -76,6 +76,7 @@ export function OnboardingChecklist({
       .finally(() => clearTimeout(timeout));
     return () => {
       cancelled = true;
+      clearTimeout(timeout); // unmount before settle must not orphan the timer
     };
   }, [show]);
 
