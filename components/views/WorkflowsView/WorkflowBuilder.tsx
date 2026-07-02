@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
-import { GitBranch, Layers, Loader2, Play, X } from "lucide-react";
+import { GitBranch, Layers, Loader2, Play } from "lucide-react";
 import {
   connect,
   deleteNodes,
