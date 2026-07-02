@@ -79,7 +79,7 @@ const COCKPIT: Item[] = [
     icon: Command,
     title: "Quick Switcher",
     blurb:
-      "One keystroke to anywhere (Cmd/Ctrl+K): fuzzy-jump to any session (each shown with its live status), run a command — new session, open any view — or flip to the Code and Output search tabs.",
+      "One keystroke to anywhere (Cmd/Ctrl+K): fuzzy-jump to any session (each shown with its live status), run a command — new session, open any view — or flip to the Code Search and Output tabs.",
   },
   {
     icon: Search,
@@ -163,7 +163,7 @@ const COCKPIT: Item[] = [
     icon: Layers,
     title: "Best of N",
     blurb:
-      "Fan one task out to 2–3 Claude agents in parallel, each in its own worktree; when they finish, compare each candidate's diff and pick the winner — the losing sessions and worktrees are cleaned up automatically. Launched from Ask Stoa.",
+      "Fan one task out to 2–3 Claude agents in parallel, each in its own worktree; when they finish, compare each candidate's diff and pick the winner — the losing sessions and worktrees are cleaned up (commit or push anything you want to keep from a losing branch first). Launched from Ask Stoa.",
   },
   {
     icon: Hand,
