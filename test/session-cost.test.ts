@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import {
   parseClaudeUsage,
   parseClaudeContextTokens,
+  parseClaudeTranscriptUsage,
   costReaderFor,
   parseForkBaseline,
   netForkUsage,
@@ -112,6 +113,101 @@ describe("parseClaudeContextTokens", () => {
         JSON.stringify({ type: "user", message: { content: "hi" } })
       )
     ).toBe(0);
+  });
+});
+
+describe("parseClaudeTranscriptUsage (#42 — single-pass core)", () => {
+  const usageLine = (
+    id: string,
+    usage: Record<string, number>,
+    extra: Record<string, unknown> = {}
+  ) => JSON.stringify({ type: "assistant", ...extra, message: { id, usage } });
+
+  // A mixed fixture stressing every branch the two former walks handled:
+  // user turns, blank + malformed lines, a usage-less assistant turn, a
+  // message-id replay, and a sidechain turn.
+  const MIXED = [
+    JSON.stringify({ type: "user", message: { content: "hi" } }),
+    usageLine("m1", {
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_creation_input_tokens: 10,
+      cache_read_input_tokens: 200,
+    }),
+    "",
+    "{ not valid json",
+    JSON.stringify({ type: "assistant", message: { content: [] } }), // no usage
+    // A replayed turn (killed→resumed re-append): deduped by message id.
+    usageLine("m1", { input_tokens: 100, output_tokens: 50 }),
+    // A Task sub-agent (sidechain) turn: counts toward the cumulative total
+    // but must NOT become the context reading.
+    usageLine(
+      "side",
+      { input_tokens: 7, output_tokens: 3 },
+      { isSidechain: true }
+    ),
+    usageLine("m2", {
+      input_tokens: 5,
+      output_tokens: 7,
+      cache_read_input_tokens: 40,
+    }),
+  ].join("\n");
+
+  it("returns both totals from ONE walk, identical to calling both wrappers", () => {
+    expect(parseClaudeTranscriptUsage(MIXED)).toEqual({
+      tokens: parseClaudeUsage(MIXED),
+      contextTokens: parseClaudeContextTokens(MIXED),
+    });
+  });
+
+  it("computes the exact values (dedupe + sidechain-in-total + LAST-turn context)", () => {
+    expect(parseClaudeTranscriptUsage(MIXED)).toEqual({
+      tokens: { input: 112, output: 60, cacheRead: 240, cacheWrite: 10 },
+      contextTokens: 45, // m2: 5 + 40 — the LAST non-sidechain turn, not "side"
+    });
+  });
+
+  it("keeps SEPARATE dedupe sets: a sidechain id never blocks a later main-thread turn's context reading", () => {
+    // The context pass skips sidechain turns BEFORE recording ids (exactly as
+    // the former standalone walk did), so the main-thread turn reusing "x" is
+    // deduped from the cumulative total yet still sets the context reading.
+    const jsonl = [
+      usageLine(
+        "x",
+        { input_tokens: 3, output_tokens: 1 },
+        { isSidechain: true }
+      ),
+      usageLine("x", {
+        input_tokens: 1000,
+        output_tokens: 2,
+        cache_read_input_tokens: 500,
+      }),
+    ].join("\n");
+    const merged = parseClaudeTranscriptUsage(jsonl);
+    expect(merged).toEqual({
+      tokens: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0 },
+      contextTokens: 1500,
+    });
+    // …and stays byte-identical to the wrappers on this divergent-dedupe case.
+    expect(merged.tokens).toEqual(parseClaudeUsage(jsonl));
+    expect(merged.contextTokens).toBe(parseClaudeContextTokens(jsonl));
+  });
+
+  it("is all-zero for empty input", () => {
+    expect(parseClaudeTranscriptUsage("")).toEqual({
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextTokens: 0,
+    });
+  });
+
+  it("the exported wrappers delegate to the single-pass core (perf shape)", () => {
+    // The whole point of #42 is ONE walk per transcript read — the wrappers
+    // must not re-grow a walk of their own. Locked structurally: each wrapper's
+    // body calls the core (vitest doesn't minify, so the identifier survives).
+    expect(String(parseClaudeUsage)).toContain("parseClaudeTranscriptUsage(");
+    expect(String(parseClaudeContextTokens)).toContain(
+      "parseClaudeTranscriptUsage("
+    );
   });
 });
 
