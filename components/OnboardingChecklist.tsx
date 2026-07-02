@@ -11,7 +11,7 @@
  * to the SAME handler the header's New Session button uses.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, Circle, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,8 +39,10 @@ export function OnboardingChecklist({
 }: OnboardingChecklistProps) {
   // Raw flag (not a boolean) so the pure shouldShowOnboarding decides. The
   // views only mount this after hydration, so localStorage is available; the
-  // try/catch covers denied storage (e.g. some private-browsing modes).
+  // typeof guard makes SSR safety explicit if the render boundary ever shifts,
+  // and the try/catch covers denied storage (some private-browsing modes).
   const [dismissedFlag, setDismissedFlag] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
     try {
       return localStorage.getItem(ONBOARDING_DISMISSED_KEY);
     } catch {
@@ -49,20 +51,29 @@ export function OnboardingChecklist({
   });
   // null = probe still in flight (render a placeholder, not all-todo lies).
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
+  // One-shot: readiness facts don't change while the app sits open, so a
+  // dismiss→create→delete remount must not re-probe (each probe spawns the
+  // platform binary resolvers server-side).
+  const fetchedRef = useRef(false);
 
   const show = shouldShowOnboarding(sessionCount, dismissedFlag);
 
   useEffect(() => {
-    if (!show) return;
+    if (!show || fetchedRef.current) return;
+    fetchedRef.current = true;
     let cancelled = false;
-    fetch("/api/readiness")
+    // A stalled probe must not leave "Checking your setup…" forever.
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), 5000);
+    fetch("/api/readiness", { signal: abort.signal })
       .then((res) => (res.ok ? res.json() : null))
       .then((data: ReadinessPayload | null) => {
         if (!cancelled) setReadiness(data ?? EMPTY_READINESS);
       })
       .catch(() => {
         if (!cancelled) setReadiness(EMPTY_READINESS);
-      });
+      })
+      .finally(() => clearTimeout(timeout));
     return () => {
       cancelled = true;
     };

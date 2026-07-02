@@ -9,6 +9,8 @@
 
 import { describe, it, expect } from "vitest";
 import path from "path";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import {
   READINESS_AGENTS,
   EMPTY_READINESS,
@@ -25,6 +27,7 @@ import {
   detectAgentBinaries,
   hasAgentAuthEvidence,
   collectReadiness,
+  fileExists,
   AUTH_EVIDENCE_FILES,
 } from "@/lib/readiness-server";
 
@@ -262,6 +265,24 @@ describe("hasAgentAuthEvidence (injected fs)", () => {
         throw new Error("EACCES");
       }, home)
     ).toBe(false);
+  });
+
+  it("the default probe is FILE-typed: a directory named like a marker is not evidence", () => {
+    // fileExists stats and requires isFile() — a folder called .claude.json
+    // (accidental or planted) must not read as signed-in. Uses a real temp dir
+    // so the DEFAULT probe (not an injected one) is exercised, 3-OS safe.
+    const dir = mkdtempSync(path.join(tmpdir(), "stoa-readiness-"));
+    try {
+      const asDir = path.join(dir, ".claude.json");
+      mkdirSync(asDir);
+      expect(fileExists(asDir)).toBe(false);
+      const asFile = path.join(dir, "real.json");
+      writeFileSync(asFile, "{}");
+      expect(fileExists(asFile)).toBe(true);
+      expect(fileExists(path.join(dir, "missing.json"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

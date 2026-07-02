@@ -12,7 +12,7 @@
  * home directory (AGENTS.md: no real binaries in tests).
  */
 
-import { existsSync } from "fs";
+import { statSync } from "fs";
 import path from "path";
 import { homeDir, resolveBinary } from "@/lib/platform";
 import {
@@ -21,14 +21,27 @@ import {
   type ReadinessPayload,
 } from "@/lib/readiness";
 
-/** Injectable probes (defaults are the real ones). */
+/** Injectable probes (defaults are the real ones). `exists` answers "is a
+ *  regular FILE at p" — a DIRECTORY named like a marker (e.g. a folder called
+ *  .claude.json) must not read as sign-in evidence. */
 export interface ReadinessProbes {
   resolve?: (name: string) => string | null;
   exists?: (p: string) => boolean;
   home?: () => string;
 }
 
-/** PATH presence for every agent CLI, via resolveBinary (`where`/`which`). */
+/** Default `exists` probe: statSync().isFile(), never throws. */
+export function fileExists(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** PATH presence for every agent CLI, via resolveBinary (`where`/`which`).
+ *  NOTE: each probe SPAWNS the platform resolver (not a stat) — fine for the
+ *  checklist's one-shot mount fetch; do not put this on a polling path. */
 export function detectAgentBinaries(
   resolve: (name: string) => string | null = resolveBinary
 ): Record<ReadinessAgent, boolean> {
@@ -49,9 +62,9 @@ export const AUTH_EVIDENCE_FILES: readonly string[][] = [
   [".codex", "auth.json"],
 ];
 
-/** Best-effort: does ANY known sign-in marker exist under the home dir? */
+/** Best-effort: does ANY known sign-in marker exist (as a FILE) under home? */
 export function hasAgentAuthEvidence(
-  exists: (p: string) => boolean = existsSync,
+  exists: (p: string) => boolean = fileExists,
   home: () => string = homeDir
 ): boolean {
   const h = home();
