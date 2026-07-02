@@ -688,10 +688,21 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     `channel_messages`+`schedules` on delete; replace the per-session tick scan with
     one `SELECT DISTINCT`. _Seam:_ `server.ts`, `lib/channels.ts`,
     `lib/channel-delivery.ts`, `app/api/sessions/[id]/route.ts`, `lib/db/queries.ts`.
-51. 🐛 **Resolve rate-limit vs error classification** — `bug` · M. Prefer the
-    rate-limited classification when a reset time is present; tighten `ERROR_PATTERNS`
-    so pure rate-limit wording isn't bucketed as error. _Why:_ those episodes are
-    never auto-resumed today. _Seam:_ `lib/status-detector.ts`, `lib/rate-limit.ts`.
+51. ✅ 🐛 **Resolve rate-limit vs error classification** — `bug` · M.
+    **SHIPPED (verify-then-fix).** Reproduced end-to-end first: a screen with
+    BOTH error wording ("API Error: 429 … rate_limit_error") AND a reset time
+    tripped `ERROR_PATTERNS` → status 'error' → the auto-resume loop hard-
+    skips errored sessions → never resumed. Two minimal changes in
+    `lib/status-detector.ts` (lib/rate-limit.ts needed none — its
+    LIMIT_PATTERNS already parsed the reset): (1) precedence — an error-
+    pattern hit with a detected limit carrying a non-null resetAt falls
+    through to waiting/idle (no reset → still error); (2) ERROR_PATTERNS
+    tightened from `(quota|rate limit) (exceeded|exhausted)` to quota-only.
+    Deliberate behavior change: bare rate-limit wording with NO reset now
+    classifies waiting + surfaced rateLimit (resumable via the opt-in
+    fallback window) instead of error; bare "quota exceeded" REMAINS error
+    (credit exhaustion isn't countdown-able). TDD-locked: the regression
+    fixture failed before the fix; 157 tests across 12 suites green.
 52. **Notification grouping + quiet hours + per-session mute** — `mobile` · M. Stable
     per-session tag, silent low-priority completions, a quiet-hours gate + mute swipe.
     _Why:_ fleet notification fatigue → users disable push entirely. _Seam:_

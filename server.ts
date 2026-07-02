@@ -722,9 +722,11 @@ app.prepare().then(() => {
           rateLimitBudgetLogged.delete(s.id);
           continue;
         }
-        // A "rate limit exceeded" line can ALSO classify the session as `error`
-        // (the patterns overlap). Never nudge an errored/dead session — that's not
-        // a recoverable count-down-and-resume wait.
+        // Never nudge an errored/dead session — that's not a recoverable
+        // count-down-and-resume wait. (#51 removed the old pattern overlap:
+        // pure rate-limit wording no longer classifies as error, and a screen
+        // with BOTH error wording AND a reset time now classifies rate-limited
+        // — this guard stays as defense for GENUINE errors.)
         if (s.status === "error" || s.status === "dead") {
           rateLimitResumed.delete(s.id);
           rateLimitParkedAt.delete(s.id);
