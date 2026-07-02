@@ -756,10 +756,23 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     fallback window) instead of error; bare "quota exceeded" REMAINS error
     (credit exhaustion isn't countdown-able). TDD-locked: the regression
     fixture failed before the fix; 157 tests across 12 suites green.
-52. **Notification grouping + quiet hours + per-session mute** — `mobile` · M. Stable
-    per-session tag, silent low-priority completions, a quiet-hours gate + mute swipe.
-    _Why:_ fleet notification fatigue → users disable push entirely. _Seam:_
-    `app/sw.ts`, `lib/push.ts`, `components/SessionCard.tsx`, `lib/notifications.ts`.
+52. ✅ **Notification grouping + quiet hours + per-session mute** — `mobile` · M.
+    **SHIPPED.** All four gates apply PER-DEVICE in the service worker (the
+    server fans push to every device and can't know a device's local prefs).
+    New pure `lib/notification-policy.ts`: `isQuietTime` (minutes-since-midnight,
+    correctly wraps midnight, default OFF), `notificationTag(sessionId)` (stable
+    per-session grouping so a newer notification REPLACES the older banner),
+    `isSilentKind`/`shouldRenotify` (waiting/error loud+renotify, done
+    silent+no-renotify), and `decideNotify(...)` with precedence
+    test > mute > quiet-hours > show. Because the SW can't read localStorage,
+    `lib/notification-policy-idb.ts` mirrors the policy into IndexedDB (reads
+    fail LOUD → a needs-you push is never silently swallowed; `coercePolicy`
+    guards hostile blobs). `PushPayload` gains `kind`; `server.ts` pushFor uses
+    the stable tag + kind. Quiet-hours toggle in `NotificationSettings`, a
+    per-session Mute toggle on `SessionCard` (`hooks/useSessionMute.ts`).
+    31-test pure-core suite. _Seam:_ `lib/notification-policy.ts`,
+    `lib/notification-policy-idb.ts`, `app/sw.ts`, `server.ts`,
+    `components/NotificationSettings.tsx`, `components/SessionCard.tsx`.
 53. **Jump-between-commands + sticky command header** — `feature` · L. Prompt-boundary
     navigation over the captured VT buffer (the Warp-blocks 80%, no OSC needed).
     _Seam:_ `components/Terminal/index.tsx`, new `lib/terminal-blocks.ts`,
