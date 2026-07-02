@@ -9,8 +9,13 @@
  * - Feature-detected: a browser without `navigator.wakeLock` is a silent no-op.
  * - `request()` rejections (NotAllowedError on battery saver, permissions
  *   policy, etc.) are swallowed — a wake lock is never worth an error surface.
- * - The UA auto-releases the sentinel when the tab is hidden; we track that
- *   via the sentinel's "release" event and re-acquire on visibilitychange back.
+ * - The UA auto-releases the sentinel when the tab is hidden; the sentinel's
+ *   "release" event only clears our (identity-guarded) reference so we never
+ *   hold a dead sentinel — the re-acquire itself happens when the next
+ *   visibilitychange sync() sees the lock is gone.
+ * - A request() that never settles (broken UA) is raced against a timeout so
+ *   the serialized queue can never wedge; a sentinel that resolves after the
+ *   timeout is released, never adopted.
  *
  * The DECISION is a pure exported function (`decideWakeLock`) and the async
  * request/release mechanics live in an injectable controller
@@ -55,6 +60,14 @@ export interface WakeLockController {
   hasLock(): boolean;
 }
 
+/**
+ * Upper bound on how long an in-flight request() may pend before the queue
+ * moves on without it — a hung request (broken UA) must not wedge the
+ * serialized queue for the rest of the session. Real requests settle in
+ * milliseconds; this only ever fires on a defective implementation.
+ */
+export const WAKE_LOCK_REQUEST_TIMEOUT_MS = 5_000;
+
 export function createWakeLockController(
   getWakeLock: () => WakeLockApiLike | undefined
 ): WakeLockController {
@@ -74,12 +87,48 @@ export function createWakeLockController(
       return; // hostile getter — treat as "no API"
     }
     if (!api) return; // feature-detect: silent no-op
-    let next: WakeLockSentinelLike;
+
+    // Normalize every failure mode of request() (sync throw, rejection —
+    // NotAllowedError on battery saver, permissions policy, etc.) into one
+    // settled shape, so the race below can never leak an unhandled rejection.
+    let settled: Promise<WakeLockSentinelLike | null>;
     try {
-      next = await api.request("screen");
+      settled = Promise.resolve(api.request("screen")).catch(() => null);
     } catch {
-      return; // NotAllowedError (battery saver, permissions policy) etc.
+      return; // request() threw synchronously
     }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const winner = await Promise.race([
+      settled,
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(
+          () => resolve("timeout"),
+          WAKE_LOCK_REQUEST_TIMEOUT_MS
+        );
+      }),
+    ]);
+    clearTimeout(timer);
+
+    if (winner === "timeout") {
+      // If the orphaned request EVER resolves, release that sentinel right
+      // away. It is deliberately never adopted: adoption would mutate
+      // `sentinel` outside the queue and could interleave with a newer
+      // in-flight acquire (two live sentinels, one leaked). The next sync()
+      // re-acquires if a lock is still wanted.
+      void settled.then((late) => {
+        if (!late) return;
+        try {
+          void late.release().catch(() => {});
+        } catch {
+          /* hostile release — fine */
+        }
+      });
+      return;
+    }
+    if (winner === null) return; // request() rejected — swallowed above
+    const next = winner;
+
     if (!(wantActive && wantVisible)) {
       // State flipped while the request was in flight — don't keep it.
       try {
