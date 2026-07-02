@@ -607,9 +607,23 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     `SNIPPETS_CHANGED_EVENT`. _Seam:_ `lib/snippets.ts`,
     `components/Terminal/SnippetChipBar.tsx`, `SnippetFillInDialog.tsx`,
     `SnippetsModal.tsx`, `TerminalToolbar.tsx`.
-34. **Issue-tracker intake beyond GitHub (Linear/Jira)** — `feature` · M. Generalize
-    the issue source behind an interface; add Linear/Jira clients + a source picker.
-    _Seam:_ `lib/dispatch/issues.ts`, `lib/dispatch/github.ts`, new Linear client.
+34. ✅ **Issue-tracker intake beyond GitHub (Linear)** — `feature` · M.
+    **SHIPPED (Jira deferred).** The Dispatch issue source is generalized behind
+    an `IssueSource` interface (`lib/dispatch/issue-source.ts`:
+    `listEligible`/`listOpen` → a normalized `EligibleIssue[]`, degrade-to-`[]`
+    on failure). GitHub becomes one adapter (`github-source.ts`, delegating to
+    the untouched `issues.ts` gh functions — byte-identical argv + contract);
+    a new `LinearIssueSource` (`linear.ts`) runs Linear's GraphQL over an
+    injectable transport (real impl fetch-over-HTTPS, AbortController timeout,
+    `LINEAR_API_KEY`), with STRUCTURED filter objects so a hostile label rides
+    as a `{eq}` value never as query text, and every failure degrades to `[]`.
+    Source is picked by repo slug — plain `owner/name` → GitHub (default),
+    `linear:TEAM` → Linear — so NO schema/migration was needed;
+    `resolveIssueSource` wires kind→impl (Jira reserved, falls back to GitHub +
+    warns). GitHub Dispatch flows are byte-identical. 63 tests. _Seam:_
+    `lib/dispatch/issue-source.ts`, `github-source.ts`, `linear.ts`,
+    `sources.ts`, `reconciler.ts`, `.env.example`. _Deferred:_ Jira (different
+    auth + REST/JQL shape — a drop-in `JiraIssueSource` later).
 35. **Reusable scoped subagent library** — `orchestration` · M. Promote workflow
     roles into first-class subagent defs (tools allowlist + per-role model),
     materialized into each provider's native subagent dir. _Seam:_
