@@ -26,8 +26,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
     const db = getDb();
     const repo = queries.getDispatchRepo(db).get(run.repoId) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo) {
       return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
     }

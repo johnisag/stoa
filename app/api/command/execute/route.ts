@@ -32,13 +32,15 @@ export async function POST(request: NextRequest) {
   // context in the audit entry without re-reading the already-consumed stream.
   const body = await request.json().catch(() => ({}));
   try {
-
     // Plan execution: body carries { kind: "plan", name, steps }. Delegate to the
     // sequential plan executor (which re-validates all steps internally).
     if ((body as Record<string, unknown>).kind === "plan") {
       const result = await executePlan(body);
       if (!result.ok) {
-        return NextResponse.json({ error: `Refused: ${result.reason}` }, { status: 400 });
+        return NextResponse.json(
+          { error: `Refused: ${result.reason}` },
+          { status: 400 }
+        );
       }
       return NextResponse.json({ ok: true, results: result.results });
     }
@@ -116,9 +118,8 @@ export async function POST(request: NextRequest) {
     // ── dispatch_issue ───────────────────────────────────────────────────────
     if (proposal.action === "dispatch_issue") {
       const db = getDb();
-      const repo = queries.getDispatchRepo(db).get(
-        proposal.params.repoId
-      ) as DispatchRepo | undefined;
+      const repo = queries.getDispatchRepo(db).get(proposal.params.repoId) as
+        DispatchRepo | undefined;
       if (!repo) {
         auditCommand("command_rejected", {
           stage: "execute",
@@ -257,10 +258,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Should never reach here — validateProposal is exhaustive over the allowlist.
-    return NextResponse.json(
-      { error: "Unhandled action" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Unhandled action" }, { status: 400 });
   } catch (error) {
     // Unexpected throw before the inner handlers (e.g. a DB fault in getProject):
     // audit it so the ledger has no blind spot, then surface a 500. Include the

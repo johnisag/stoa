@@ -49,7 +49,7 @@ function stripNonCode(src: string): string {
   const blank = (i: number) => {
     if (a[i] !== "\n") a[i] = " ";
   };
-  for (let i = 0; i < a.length; ) {
+  for (let i = 0; i < a.length;) {
     const c = a[i];
     const d = a[i + 1];
     if (c === "/" && d === "/") {

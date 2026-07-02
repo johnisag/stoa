@@ -50,7 +50,9 @@ const WORKER_STATUS_META: Record<
 };
 
 function workerStatusMeta(workerStatus: string | null) {
-  return WORKER_STATUS_META[workerStatus ?? "pending"] ?? WORKER_STATUS_META.pending;
+  return (
+    WORKER_STATUS_META[workerStatus ?? "pending"] ?? WORKER_STATUS_META.pending
+  );
 }
 
 // ── diff stat summary ──
@@ -114,12 +116,7 @@ function CandidatePanel({
             candidate.worker_status === "running" && "animate-pulse"
           )}
         />
-        <span
-          className={cn(
-            "rounded px-1.5 py-0.5 text-[11px]",
-            sm.badge
-          )}
-        >
+        <span className={cn("rounded px-1.5 py-0.5 text-[11px]", sm.badge)}>
           {isWinner ? "Winner" : sm.label}
         </span>
         {candidate.branch_name && (
@@ -133,7 +130,9 @@ function CandidatePanel({
       {/* diff stat summary */}
       {isCompleted && hasDiff && stat.files > 0 && (
         <div className="text-muted-foreground flex gap-3 text-xs">
-          <span>{stat.files} file{stat.files !== 1 ? "s" : ""} changed</span>
+          <span>
+            {stat.files} file{stat.files !== 1 ? "s" : ""} changed
+          </span>
           <span className="text-emerald-600 dark:text-emerald-400">
             +{stat.additions}
           </span>
@@ -177,7 +176,7 @@ function CandidatePanel({
           <Button
             variant="default"
             size="sm"
-            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            className="bg-emerald-600 text-white hover:bg-emerald-700"
             disabled={isPicking || !isCompleted}
             onClick={() => setConfirmPick(true)}
           >
@@ -198,7 +197,7 @@ function CandidatePanel({
               <Button
                 variant="default"
                 size="sm"
-                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                className="bg-emerald-600 text-white hover:bg-emerald-700"
                 disabled={isPicking}
                 onClick={() => {
                   setConfirmPick(false);
@@ -222,7 +221,7 @@ function CandidatePanel({
           </div>
         )}
         {isWinner && (
-          <span className="text-emerald-600 dark:text-emerald-400 text-xs self-center">
+          <span className="self-center text-xs text-emerald-600 dark:text-emerald-400">
             Winner selected
           </span>
         )}
@@ -332,8 +331,8 @@ export function BestOfNView({
             {runStatus === "running"
               ? "Running"
               : runStatus === "done"
-              ? "Done"
-              : "Failed"}
+                ? "Done"
+                : "Failed"}
           </span>
           {run && (
             <span className="text-muted-foreground truncate text-xs">

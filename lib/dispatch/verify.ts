@@ -323,8 +323,7 @@ export async function verifyPass(): Promise<void> {
     if (d.pr_number == null || !d.worktree_path) continue;
     // Armed == gate on AND a command set (matches autoMergePass / listInboxItems).
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo || repo.verify_gate !== 1 || !repo.verify_command) continue;
 
     // Our own verify already running for this row → the gh call is pointless (we

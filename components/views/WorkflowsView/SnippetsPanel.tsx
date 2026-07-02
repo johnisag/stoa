@@ -9,7 +9,10 @@ export function AgentsPanel({
   onDragStart,
 }: {
   onSelectSnippet: (id: string) => void;
-  onDragStart?: (snippetId: string, e: React.DragEvent<HTMLButtonElement>) => void;
+  onDragStart?: (
+    snippetId: string,
+    e: React.DragEvent<HTMLButtonElement>
+  ) => void;
 }) {
   return (
     <div className="flex flex-col gap-3 rounded-md border p-3">

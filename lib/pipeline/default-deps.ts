@@ -103,8 +103,7 @@ export function defaultExecutorDeps(conductorSessionId: string): ExecutorDeps {
       _step: PipelineStep
     ): Promise<StepOutcome> {
       const session = queries.getSession(db).get(sessionId) as
-        | Session
-        | undefined;
+        Session | undefined;
       if (!session) return "failed";
       const provider = getProvider(session.agent_type || "claude");
       const key =

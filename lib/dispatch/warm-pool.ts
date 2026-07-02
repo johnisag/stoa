@@ -121,8 +121,7 @@ export async function claimWarm(
   }
 
   const row = queries.claimWarmWorktree(db).get(repoId) as
-    | { id: string; worktree_path: string; branch_name: string }
-    | undefined;
+    { id: string; worktree_path: string; branch_name: string } | undefined;
   if (!row) return null;
 
   try {

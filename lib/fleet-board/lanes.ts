@@ -11,12 +11,7 @@ import { needsMe } from "@/lib/verdict-inbox-selectors";
 import type { IssueDispatch } from "@/lib/dispatch/types";
 
 export type LaneId =
-  | "queued"
-  | "working"
-  | "in_review"
-  | "verified"
-  | "merged"
-  | "failed";
+  "queued" | "working" | "in_review" | "verified" | "merged" | "failed";
 
 export const LANES: { id: LaneId; label: string }[] = [
   { id: "queued", label: "Queued" },

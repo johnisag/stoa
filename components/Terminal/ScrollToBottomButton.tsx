@@ -26,8 +26,8 @@ export function ScrollToBottomButton({
         "transition-all duration-200 hover:scale-105 active:scale-95",
         "animate-bounce",
         visible
-          ? "opacity-100 pointer-events-auto"
-          : "opacity-0 pointer-events-none"
+          ? "pointer-events-auto opacity-100"
+          : "pointer-events-none opacity-0"
       )}
       title="Scroll to bottom"
     >

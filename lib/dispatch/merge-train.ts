@@ -154,8 +154,7 @@ export async function mergeTrainPass(): Promise<void> {
   for (const d of prOpen) {
     if (d.pr_number == null || !d.worktree_path) continue;
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo || repo.merge_train !== 1) continue;
 
     // A rebase fixer that has FINISHED (id set, session gone): clear it so the

@@ -20,7 +20,12 @@ import { validatePlan } from "./actions";
 import { executeCreateSession } from "./create-session";
 import { executeDispatchIssue } from "./dispatch-issue";
 import { auditCommand } from "./audit";
-import type { PlanStep, CreateSessionParams, DispatchIssueParams, StepResult } from "./actions";
+import type {
+  PlanStep,
+  CreateSessionParams,
+  DispatchIssueParams,
+  StepResult,
+} from "./actions";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 
 // Re-export so existing imports of StepResult from this module continue to work.
@@ -90,8 +95,7 @@ async function executeSteps(steps: PlanStep[]): Promise<StepResult[]> {
         const params = step.params as DispatchIssueParams;
         const db = getDb();
         const repo = queries.getDispatchRepo(db).get(params.repoId) as
-          | DispatchRepo
-          | undefined;
+          DispatchRepo | undefined;
         if (!repo) {
           result = {
             stepId: step.stepId,
@@ -164,8 +168,7 @@ async function executeSteps(steps: PlanStep[]): Promise<StepResult[]> {
 export async function executePlan(
   rawBody: unknown
 ): Promise<
-  | { ok: true; results: StepResult[] }
-  | { ok: false; reason: string }
+  { ok: true; results: StepResult[] } | { ok: false; reason: string }
 > {
   // Extract the steps from the raw body sent by the client.
   const bodyObj =

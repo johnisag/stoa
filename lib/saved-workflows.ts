@@ -82,8 +82,7 @@ export function createSavedWorkflow(input: {
     .createSavedWorkflow(db)
     .run(id, name, serializeBuilderDoc(input.doc), "[]");
   const row = queries.getSavedWorkflow(db).get(id) as
-    | SavedWorkflowRow
-    | undefined;
+    SavedWorkflowRow | undefined;
   // The row was just inserted in the same synchronous better-sqlite3 call, so a
   // miss is effectively unreachable — but guard the cast so a surprise surfaces a
   // clear error, not a confusing TypeError deref inside toSavedWorkflow.
@@ -101,8 +100,7 @@ export function listSavedWorkflows(): SavedWorkflow[] {
 
 export function getSavedWorkflow(id: string): SavedWorkflow | undefined {
   const row = queries.getSavedWorkflow(db).get(id) as
-    | SavedWorkflowRow
-    | undefined;
+    SavedWorkflowRow | undefined;
   return row ? toSavedWorkflow(row) : undefined;
 }
 

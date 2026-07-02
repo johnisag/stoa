@@ -349,8 +349,7 @@ export async function startServer(
 
   // Validate workingDirectory resolves inside the project's workspace.
   const project = queries.getProject(db).get(opts.projectId) as
-    | { working_directory: string }
-    | undefined;
+    { working_directory: string } | undefined;
   if (!project) {
     throw new Error("Project not found");
   }

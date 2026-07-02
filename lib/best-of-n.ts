@@ -58,7 +58,9 @@ export async function createBonRun(
   const baseBranch = opts.baseBranch?.trim() || "main";
 
   if (n < BON_N_MIN || n > BON_N_MAX || !Number.isInteger(n)) {
-    throw new Error(`n must be an integer between ${BON_N_MIN} and ${BON_N_MAX}`);
+    throw new Error(
+      `n must be an integer between ${BON_N_MIN} and ${BON_N_MAX}`
+    );
   }
 
   const runId = randomUUID();
@@ -247,9 +249,7 @@ export async function pickBonWinner(
 
   const winner = candidates.find((c) => c.id === candidateId);
   if (!winner) {
-    throw new Error(
-      `Candidate ${candidateId} not found in run ${runId}`
-    );
+    throw new Error(`Candidate ${candidateId} not found in run ${runId}`);
   }
 
   const winnerSessionId = winner.session_id;

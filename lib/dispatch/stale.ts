@@ -94,8 +94,7 @@ export async function reconcileOneStale(
   }
 
   const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-    | DispatchRepo
-    | undefined;
+    DispatchRepo | undefined;
   // Armored: read from the STABLE main checkout + --repo, never the per-task
   // worktree (which may have been reclaimed → a misleading gh ENOENT).
   const probeCwd = repo

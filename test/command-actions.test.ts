@@ -362,7 +362,11 @@ describe("describeProposal", () => {
     const longPrompt = "a".repeat(100);
     const res = validateProposal({
       action: "create_session",
-      params: { projectId: "p", agentType: "claude", initialPrompt: longPrompt },
+      params: {
+        projectId: "p",
+        agentType: "claude",
+        initialPrompt: longPrompt,
+      },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -426,7 +430,10 @@ describe("validateCreateSessionParams — initialPrompt field", () => {
 
   it("strips control bytes from initialPrompt", () => {
     const dirty = "Hello" + String.fromCharCode(1) + "World";
-    const res = validateCreateSessionParams({ projectId: "p", initialPrompt: dirty });
+    const res = validateCreateSessionParams({
+      projectId: "p",
+      initialPrompt: dirty,
+    });
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.params.initialPrompt).toBe("HelloWorld");
@@ -434,7 +441,10 @@ describe("validateCreateSessionParams — initialPrompt field", () => {
   });
 
   it("omits initialPrompt when empty/whitespace", () => {
-    const res = validateCreateSessionParams({ projectId: "p", initialPrompt: "   " });
+    const res = validateCreateSessionParams({
+      projectId: "p",
+      initialPrompt: "   ",
+    });
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.params.initialPrompt).toBeUndefined();
@@ -444,7 +454,11 @@ describe("validateCreateSessionParams — initialPrompt field", () => {
   it("passes through to validateProposal", () => {
     const res = validateProposal({
       action: "create_session",
-      params: { projectId: "p", agentType: "claude", initialPrompt: "say hello" },
+      params: {
+        projectId: "p",
+        agentType: "claude",
+        initialPrompt: "say hello",
+      },
     });
     expect(res.ok).toBe(true);
     if (res.ok && res.proposal.action === "create_session") {
@@ -455,7 +469,10 @@ describe("validateCreateSessionParams — initialPrompt field", () => {
 
 describe("validateDispatchIssueParams — fail-closed", () => {
   it("accepts a well-formed dispatch_issue proposal", () => {
-    const res = validateDispatchIssueParams({ repoId: "repo_1", title: "Fix bug" });
+    const res = validateDispatchIssueParams({
+      repoId: "repo_1",
+      title: "Fix bug",
+    });
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.params.repoId).toBe("repo_1");
@@ -465,28 +482,43 @@ describe("validateDispatchIssueParams — fail-closed", () => {
 
   it("rejects a missing repoId", () => {
     expect(validateDispatchIssueParams({ title: "x" }).ok).toBe(false);
-    expect(validateDispatchIssueParams({ repoId: "  ", title: "x" }).ok).toBe(false);
+    expect(validateDispatchIssueParams({ repoId: "  ", title: "x" }).ok).toBe(
+      false
+    );
   });
 
   it("rejects a missing or blank title", () => {
     expect(validateDispatchIssueParams({ repoId: "r" }).ok).toBe(false);
-    expect(validateDispatchIssueParams({ repoId: "r", title: "   " }).ok).toBe(false);
+    expect(validateDispatchIssueParams({ repoId: "r", title: "   " }).ok).toBe(
+      false
+    );
   });
 
   it("length-caps title at 200 chars", () => {
-    const res = validateDispatchIssueParams({ repoId: "r", title: "t".repeat(300) });
+    const res = validateDispatchIssueParams({
+      repoId: "r",
+      title: "t".repeat(300),
+    });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.params.title.length).toBe(200);
   });
 
   it("length-caps body at 10000 chars", () => {
-    const res = validateDispatchIssueParams({ repoId: "r", title: "T", body: "b".repeat(20000) });
+    const res = validateDispatchIssueParams({
+      repoId: "r",
+      title: "T",
+      body: "b".repeat(20000),
+    });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.params.body!.length).toBe(10000);
   });
 
   it("omits body when blank", () => {
-    const res = validateDispatchIssueParams({ repoId: "r", title: "T", body: "  " });
+    const res = validateDispatchIssueParams({
+      repoId: "r",
+      title: "T",
+      body: "  ",
+    });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.params.body).toBeUndefined();
   });
@@ -519,7 +551,10 @@ describe("validateOpenViewParams — fail-closed", () => {
   });
 
   it("flows through validateProposal correctly", () => {
-    const res = validateProposal({ action: "open_view", params: { view: "dispatch" } });
+    const res = validateProposal({
+      action: "open_view",
+      params: { view: "dispatch" },
+    });
     expect(res.ok).toBe(true);
     if (res.ok && res.proposal.action === "open_view") {
       expect(res.proposal.params.view).toBe("dispatch");
@@ -544,11 +579,16 @@ describe("validateListSessionsParams — fail-closed", () => {
 
   it("rejects an invalid status value (fail-closed)", () => {
     expect(validateListSessionsParams({ status: "dispatched" }).ok).toBe(false);
-    expect(validateListSessionsParams({ status: "evil; drop table" }).ok).toBe(false);
+    expect(validateListSessionsParams({ status: "evil; drop table" }).ok).toBe(
+      false
+    );
   });
 
   it("flows through validateProposal correctly", () => {
-    const res = validateProposal({ action: "list_sessions", params: { status: "running" } });
+    const res = validateProposal({
+      action: "list_sessions",
+      params: { status: "running" },
+    });
     expect(res.ok).toBe(true);
     if (res.ok && res.proposal.action === "list_sessions") {
       expect(res.proposal.params.status).toBe("running");
@@ -573,7 +613,12 @@ const VALID_STEP_2 = {
 };
 
 function makePlan(overrides: Record<string, unknown> = {}) {
-  return { kind: "plan", name: "Research and implement", steps: [VALID_STEP, VALID_STEP_2], ...overrides };
+  return {
+    kind: "plan",
+    name: "Research and implement",
+    steps: [VALID_STEP, VALID_STEP_2],
+    ...overrides,
+  };
 }
 
 describe("validatePlan — fail-closed plan allowlist", () => {
@@ -621,7 +666,12 @@ describe("validatePlan — fail-closed plan allowlist", () => {
   it("rejects a step with action 'open_view' (not in the plan step allowlist)", () => {
     const steps = [
       VALID_STEP,
-      { stepId: "step-2", description: "Navigate", action: "open_view", params: { view: "analytics" } },
+      {
+        stepId: "step-2",
+        description: "Navigate",
+        action: "open_view",
+        params: { view: "analytics" },
+      },
     ];
     const res = validatePlan(makePlan({ steps }));
     expect(res.ok).toBe(false);
@@ -631,7 +681,12 @@ describe("validatePlan — fail-closed plan allowlist", () => {
   it("rejects a step with action 'list_sessions' (not in the plan step allowlist)", () => {
     const steps = [
       VALID_STEP,
-      { stepId: "step-2", description: "List", action: "list_sessions", params: {} },
+      {
+        stepId: "step-2",
+        description: "List",
+        action: "list_sessions",
+        params: {},
+      },
     ];
     const res = validatePlan(makePlan({ steps }));
     expect(res.ok).toBe(false);
@@ -641,7 +696,12 @@ describe("validatePlan — fail-closed plan allowlist", () => {
   it("rejects a step with invalid create_session params (bad agentType)", () => {
     const steps = [
       VALID_STEP,
-      { stepId: "step-2", description: "Bad agent", action: "create_session", params: { projectId: "p", agentType: "evil" } },
+      {
+        stepId: "step-2",
+        description: "Bad agent",
+        action: "create_session",
+        params: { projectId: "p", agentType: "evil" },
+      },
     ];
     const res = validatePlan(makePlan({ steps }));
     expect(res.ok).toBe(false);
@@ -651,7 +711,12 @@ describe("validatePlan — fail-closed plan allowlist", () => {
   it("rejects a step with invalid dispatch_issue params (missing title)", () => {
     const steps = [
       VALID_STEP,
-      { stepId: "step-2", description: "Dispatch", action: "dispatch_issue", params: { repoId: "repo_1" } },
+      {
+        stepId: "step-2",
+        description: "Dispatch",
+        action: "dispatch_issue",
+        params: { repoId: "repo_1" },
+      },
     ];
     const res = validatePlan(makePlan({ steps }));
     expect(res.ok).toBe(false);
@@ -660,7 +725,12 @@ describe("validatePlan — fail-closed plan allowlist", () => {
 
   it("rejects a stepId with path-traversal or space characters", () => {
     const steps = [
-      { stepId: "../evil", description: "Bad id", action: "create_session", params: { projectId: "p" } },
+      {
+        stepId: "../evil",
+        description: "Bad id",
+        action: "create_session",
+        params: { projectId: "p" },
+      },
       VALID_STEP_2,
     ];
     const res = validatePlan(makePlan({ steps }));
@@ -670,7 +740,12 @@ describe("validatePlan — fail-closed plan allowlist", () => {
 
   it("rejects a stepId with spaces", () => {
     const steps = [
-      { stepId: "step 1", description: "Bad id", action: "create_session", params: { projectId: "p" } },
+      {
+        stepId: "step 1",
+        description: "Bad id",
+        action: "create_session",
+        params: { projectId: "p" },
+      },
       VALID_STEP_2,
     ];
     const res = validatePlan(makePlan({ steps }));
@@ -689,7 +764,12 @@ describe("validatePlan — fail-closed plan allowlist", () => {
 
   it("rejects description longer than 200 chars (caps it)", () => {
     const steps = [
-      { stepId: "step-1", description: "d".repeat(300), action: "create_session", params: { projectId: "p" } },
+      {
+        stepId: "step-1",
+        description: "d".repeat(300),
+        action: "create_session",
+        params: { projectId: "p" },
+      },
       VALID_STEP_2,
     ];
     const res = validatePlan(makePlan({ steps }));
@@ -717,7 +797,11 @@ describe("validatePlan — fail-closed plan allowlist", () => {
   });
 
   it("rejects a plan with wrong kind", () => {
-    const res = validatePlan({ kind: "proposal", name: "X", steps: [VALID_STEP, VALID_STEP_2] });
+    const res = validatePlan({
+      kind: "proposal",
+      name: "X",
+      steps: [VALID_STEP, VALID_STEP_2],
+    });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toMatch(/kind/i);
   });
@@ -725,7 +809,12 @@ describe("validatePlan — fail-closed plan allowlist", () => {
   it("accepts a mixed create_session + dispatch_issue plan", () => {
     const steps = [
       VALID_STEP,
-      { stepId: "step-2", description: "Create a task", action: "dispatch_issue", params: { repoId: "repo_1", title: "Follow-up" } },
+      {
+        stepId: "step-2",
+        description: "Create a task",
+        action: "dispatch_issue",
+        params: { repoId: "repo_1", title: "Follow-up" },
+      },
     ];
     const res = validatePlan(makePlan({ steps }));
     expect(res.ok).toBe(true);
@@ -737,8 +826,18 @@ describe("validatePlan — fail-closed plan allowlist", () => {
 
   it("rejects a plan with duplicate stepIds (would corrupt client progress map)", () => {
     const steps = [
-      { stepId: "step-1", description: "Research", action: "create_session", params: { projectId: "p", agentType: "claude" } },
-      { stepId: "step-1", description: "Implement", action: "create_session", params: { projectId: "p", agentType: "claude" } },
+      {
+        stepId: "step-1",
+        description: "Research",
+        action: "create_session",
+        params: { projectId: "p", agentType: "claude" },
+      },
+      {
+        stepId: "step-1",
+        description: "Implement",
+        action: "create_session",
+        params: { projectId: "p", agentType: "claude" },
+      },
     ];
     const res = validatePlan(makePlan({ steps }));
     expect(res.ok).toBe(false);

@@ -12,7 +12,11 @@
 
 import { getProject } from "@/lib/projects";
 import { getDb, queries } from "@/lib/db";
-import type { PlanStep, CreateSessionParams, DispatchIssueParams } from "./actions";
+import type {
+  PlanStep,
+  CreateSessionParams,
+  DispatchIssueParams,
+} from "./actions";
 
 export interface ResolvedPlanSteps {
   ok: true;
@@ -57,8 +61,7 @@ export function resolveStepProjects(steps: PlanStep[]): PlanResolution {
     } else if (step.action === "dispatch_issue") {
       const params = step.params as DispatchIssueParams;
       const repo = queries.getDispatchRepo(db).get(params.repoId) as
-        | { id: string; repo_slug: string }
-        | undefined;
+        { id: string; repo_slug: string } | undefined;
       if (!repo) {
         return {
           ok: false,

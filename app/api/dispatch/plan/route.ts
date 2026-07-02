@@ -27,8 +27,7 @@ export async function POST(request: NextRequest) {
       ? Math.max(1, Math.min(20, Math.floor(body.taskCap)))
       : DEFAULT_TASK_CAP;
     const repo = queries.getDispatchRepo(getDb()).get(repoId) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo) {
       return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
     }

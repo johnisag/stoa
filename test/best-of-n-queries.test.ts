@@ -106,14 +106,9 @@ describe("updateBonCandidateDiff", () => {
     queries.createBonRun(db()).run(runId, "task", "main", 2, null);
 
     const cId = randomUUID();
-    queries.createBonCandidate(db()).run(
-      cId,
-      runId,
-      null,
-      "/wt/bon-0",
-      "feature/bon-0",
-      0
-    );
+    queries
+      .createBonCandidate(db())
+      .run(cId, runId, null, "/wt/bon-0", "feature/bon-0", 0);
 
     queries.updateBonCandidateDiff(db()).run("diff --git a/foo...", cId);
 
@@ -176,20 +171,20 @@ describe("cascade delete", () => {
   it("deleting the run row removes all candidate rows", () => {
     const runId = randomUUID();
     queries.createBonRun(db()).run(runId, "task", "main", 2, null);
-    queries.createBonCandidate(db()).run(randomUUID(), runId, null, null, null, 0);
-    queries.createBonCandidate(db()).run(randomUUID(), runId, null, null, null, 1);
+    queries
+      .createBonCandidate(db())
+      .run(randomUUID(), runId, null, null, null, 0);
+    queries
+      .createBonCandidate(db())
+      .run(randomUUID(), runId, null, null, null, 1);
 
     // Verify they exist.
-    expect(
-      queries.getBonCandidatesByRun(db()).all(runId)
-    ).toHaveLength(2);
+    expect(queries.getBonCandidatesByRun(db()).all(runId)).toHaveLength(2);
 
     // Delete the run.
     db().prepare("DELETE FROM best_of_n_runs WHERE id = ?").run(runId);
 
     // Candidates should be gone (ON DELETE CASCADE).
-    expect(
-      queries.getBonCandidatesByRun(db()).all(runId)
-    ).toHaveLength(0);
+    expect(queries.getBonCandidatesByRun(db()).all(runId)).toHaveLength(0);
   });
 });

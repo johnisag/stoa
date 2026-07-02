@@ -5,10 +5,7 @@
 // gh's `reviewDecision`: "" when no review is required/given. We narrow it to the
 // states GitHub actually returns so the badge can tint from it.
 export type ReviewDecision =
-  | "APPROVED"
-  | "CHANGES_REQUESTED"
-  | "REVIEW_REQUIRED"
-  | "";
+  "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "";
 
 // One verdict for a PR's CI checks. Canonical home (pure + dependency-free);
 // lib/dispatch/auto-merge re-exports it so the dispatch fleet shares one definition.

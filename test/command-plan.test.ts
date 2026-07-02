@@ -170,7 +170,7 @@ describe("parseAgentReply — plan kind", () => {
     '{"kind":"plan","name":"Research then implement","steps":[' +
     '{"stepId":"step-1","description":"Research","action":"create_session","params":{"projectId":"proj_a"}},' +
     '{"stepId":"step-2","description":"Implement","action":"create_session","params":{"projectId":"proj_a"}}' +
-    ']}';
+    "]}";
 
   it("parses bare kind:plan JSON", () => {
     const r = parseAgentReply(PLAN_JSON);

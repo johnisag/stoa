@@ -178,7 +178,13 @@ export function WorkflowsView({
         </div>
       </div>
 
-      <div className={tab === "build" ? "flex min-h-0 flex-1 flex-col overflow-hidden px-4 pb-4" : "flex-1 overflow-y-auto px-4 pb-4"}>
+      <div
+        className={
+          tab === "build"
+            ? "flex min-h-0 flex-1 flex-col overflow-hidden px-4 pb-4"
+            : "flex-1 overflow-y-auto px-4 pb-4"
+        }
+      >
         {showHelp ? (
           <WorkflowsHelp onClose={() => setShowHelp(false)} />
         ) : tab === "templates" ? (

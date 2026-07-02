@@ -302,10 +302,7 @@ export function ChatView({
     execute.mutate(
       {
         action: proposal.action as
-          | "create_session"
-          | "dispatch_issue"
-          | "open_view"
-          | "list_sessions",
+          "create_session" | "dispatch_issue" | "open_view" | "list_sessions",
         params: proposal.params,
       },
       {
@@ -326,7 +323,8 @@ export function ChatView({
               content = `Navigating to the **${(res as { view: string }).view}** view.`;
             } else if (ca === "open_best_of_n") {
               const runId = (res as Record<string, unknown>).runId as string;
-              const nAgents = ((res as Record<string, unknown>).n as number) ?? 2;
+              const nAgents =
+                ((res as Record<string, unknown>).n as number) ?? 2;
               onOpenBonRun?.(runId);
               content = `Started a Best-of-${nAgents} run. The comparison view is opening now.`;
             } else {
@@ -426,7 +424,10 @@ export function ChatView({
       );
 
     // Initialize all steps as "waiting" and flip card to executing.
-    setPlanStatus("executing", steps.map((s) => ({ stepId: s.stepId, status: "waiting" as const })));
+    setPlanStatus(
+      "executing",
+      steps.map((s) => ({ stepId: s.stepId, status: "waiting" as const }))
+    );
 
     executePlan.mutate(
       { kind: "plan", name, steps },
@@ -468,7 +469,12 @@ export function ChatView({
                 ? { ...m, status: "confirmed" as const, progress }
                 : m
             ),
-            { role: "assistant", kind: "result", ok: succeeded === total, content },
+            {
+              role: "assistant",
+              kind: "result",
+              ok: succeeded === total,
+              content,
+            },
           ]);
         },
         onError: (err) => {
@@ -480,7 +486,9 @@ export function ChatView({
               kind: "result",
               ok: false,
               content:
-                err instanceof Error ? err.message : "Failed to execute the plan",
+                err instanceof Error
+                  ? err.message
+                  : "Failed to execute the plan",
             },
           ]);
         },

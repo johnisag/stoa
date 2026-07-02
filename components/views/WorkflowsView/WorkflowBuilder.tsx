@@ -192,7 +192,7 @@ function CollapsibleSection({
           )}
         />
       </button>
-      {open && <div className="px-3 pb-3 pt-1">{children}</div>}
+      {open && <div className="px-3 pt-1 pb-3">{children}</div>}
     </div>
   );
 }
@@ -920,14 +920,13 @@ export function WorkflowBuilder({
         icon={Sparkles}
         defaultOpen={false}
       >
-        <div
-          className="flex flex-col gap-2"
-          aria-busy={generate.isPending}
-        >
+        <div className="flex flex-col gap-2" aria-busy={generate.isPending}>
           <Textarea
             value={genSummary}
             onChange={(e) => setGenSummary(e.target.value)}
-            placeholder={'Describe what to build — e.g. “a Stripe billing page with full tests and a review gate”. An agent designs the workflow; you review and edit before anything runs.'}
+            placeholder={
+              "Describe what to build — e.g. “a Stripe billing page with full tests and a review gate”. An agent designs the workflow; you review and edit before anything runs."
+            }
             rows={2}
             disabled={generate.isPending}
             aria-label="Describe what to build"
@@ -1159,7 +1158,9 @@ export function WorkflowBuilder({
                 </DropdownMenuItem>
               ))
             ) : (
-              <DropdownMenuItem disabled>No saved workflows yet</DropdownMenuItem>
+              <DropdownMenuItem disabled>
+                No saved workflows yet
+              </DropdownMenuItem>
             )}
             {currentSaved && currentSaved.history.length > 0 && (
               <>
@@ -1335,9 +1336,8 @@ export function WorkflowBuilder({
           {/* 3b. Canvas */}
           {doc.nodes.length === 0 && doc.notes.length === 0 ? (
             <div className="text-muted-foreground flex min-h-[180px] flex-1 items-center justify-center rounded-md border border-dashed px-3 text-center text-xs">
-              No steps yet — tap{" "}
-              <span className="font-medium">Add step</span> to add your first
-              node.
+              No steps yet — tap <span className="font-medium">Add step</span>{" "}
+              to add your first node.
             </div>
           ) : (
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border">
@@ -1548,11 +1548,7 @@ export function WorkflowBuilder({
                                       ? [...cur, n.step.id]
                                       : cur.filter((d) => d !== n.step.id);
                                     setDoc((d) =>
-                                      setDependsOn(
-                                        d,
-                                        primaryNode.step.id,
-                                        next
-                                      )
+                                      setDependsOn(d, primaryNode.step.id, next)
                                     );
                                   }}
                                 />
@@ -1592,7 +1588,9 @@ export function WorkflowBuilder({
                   <Textarea
                     value={primaryNode.step.exitCriteria ?? ""}
                     spellCheck={false}
-                    placeholder={'Unbreakable rules the step must satisfy, e.g. "must pass tests; open a PR".'}
+                    placeholder={
+                      'Unbreakable rules the step must satisfy, e.g. "must pass tests; open a PR".'
+                    }
                     onChange={(e) =>
                       patchTransient(primaryNode.step.id, {
                         exitCriteria: e.target.value || undefined,
@@ -1712,7 +1710,7 @@ export function WorkflowBuilder({
       <Button
         onClick={handleStart}
         disabled={!canStart}
-        className="flex-shrink-0 w-full sm:w-auto sm:self-start"
+        className="w-full flex-shrink-0 sm:w-auto sm:self-start"
       >
         {start.isPending ? (
           <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />

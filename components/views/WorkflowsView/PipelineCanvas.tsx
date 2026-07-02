@@ -491,8 +491,22 @@ export function PipelineCanvas({
       onPointerMove={onWrapperPointerMove}
       onPointerUp={onWrapperPointerUp}
       onPointerCancel={onWrapperPointerUp}
-      onDragOver={(e) => { if (e.dataTransfer.types.includes("workflow-snippet-id")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
-      onDrop={(e) => { const snippetId = e.dataTransfer.getData("workflow-snippet-id"); if (!snippetId || !onDropSnippet) return; e.preventDefault(); const r = svgRef.current?.getBoundingClientRect(); const el = scrollRef?.current; const x = e.clientX - (r?.left ?? 0) + (el?.scrollLeft ?? 0); const y = e.clientY - (r?.top ?? 0) + (el?.scrollTop ?? 0); onDropSnippet(snippetId, Math.max(0, x - 80), Math.max(0, y - 24)); }}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("workflow-snippet-id")) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDrop={(e) => {
+        const snippetId = e.dataTransfer.getData("workflow-snippet-id");
+        if (!snippetId || !onDropSnippet) return;
+        e.preventDefault();
+        const r = svgRef.current?.getBoundingClientRect();
+        const el = scrollRef?.current;
+        const x = e.clientX - (r?.left ?? 0) + (el?.scrollLeft ?? 0);
+        const y = e.clientY - (r?.top ?? 0) + (el?.scrollTop ?? 0);
+        onDropSnippet(snippetId, Math.max(0, x - 80), Math.max(0, y - 24));
+      }}
     >
       <svg
         ref={svgRef}
@@ -724,15 +738,34 @@ export function PipelineCanvas({
                     <g
                       transform={"translate(" + (NODE_W - 10) + ", -10)"}
                       style={{ cursor: "pointer" }}
-                      onClick={(e) => { e.stopPropagation(); onDeleteItem(n.step.id); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteItem(n.step.id);
+                      }}
                       onPointerDown={(e) => e.stopPropagation()}
                       role="button"
                       aria-label={"Delete " + (n.step.name || n.step.id)}
                     >
                       <title>Delete this step</title>
                       <circle r={8} className="fill-destructive" />
-                      <line x1="-3.5" y1="-3.5" x2="3.5" y2="3.5" stroke="white" strokeWidth={1.5} strokeLinecap="round" />
-                      <line x1="3.5" y1="-3.5" x2="-3.5" y2="3.5" stroke="white" strokeWidth={1.5} strokeLinecap="round" />
+                      <line
+                        x1="-3.5"
+                        y1="-3.5"
+                        x2="3.5"
+                        y2="3.5"
+                        stroke="white"
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                      />
+                      <line
+                        x1="3.5"
+                        y1="-3.5"
+                        x2="-3.5"
+                        y2="3.5"
+                        stroke="white"
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                      />
                     </g>
                   )}
                 </g>

@@ -91,8 +91,7 @@ export async function POST(
     // but doesn't re-insert or re-poke. The seed prompt is sent only on the FIRST
     // enrol (changes===1 also guards against a racing double-POST).
     const existing = queries.getSessionCeremony(db).get(id) as
-      | SessionCeremony
-      | undefined;
+      SessionCeremony | undefined;
     const ceremonyId = existing?.id ?? randomUUID();
     let firstEnrol = false;
     if (!existing) {
@@ -144,8 +143,7 @@ export async function PUT(
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
   const ceremony = queries.getSessionCeremony(db).get(id) as
-    | SessionCeremony
-    | undefined;
+    SessionCeremony | undefined;
   if (!ceremony || ceremony.pr_number == null || !session.worktree_path) {
     return NextResponse.json(
       { error: "No auto-mode PR to merge." },
@@ -199,8 +197,7 @@ export async function GET(
   }
   const ceremony =
     (queries.getSessionCeremony(getDb()).get(id) as
-      | SessionCeremony
-      | undefined) ?? null;
+      SessionCeremony | undefined) ?? null;
   return NextResponse.json({ ceremony });
 }
 

@@ -51,8 +51,7 @@ export function startPipeline(
   }
 
   const conductor = queries.getSession(db).get(conductorSessionId) as
-    | Session
-    | undefined;
+    Session | undefined;
   if (!conductor) {
     throw new PipelineRequestError(
       `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing Stoa session.`

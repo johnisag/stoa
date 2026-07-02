@@ -10,11 +10,7 @@
 // its own view independently (two panes can each show a different run).
 
 export type WorkflowsTab =
-  | "templates"
-  | "build"
-  | "custom"
-  | "examples"
-  | "runs";
+  "templates" | "build" | "custom" | "examples" | "runs";
 
 // NOTE: the transient help overlay (showHelp) is deliberately NOT persisted —
 // restoring a full-screen help panel on every reload is jarring, and help is a

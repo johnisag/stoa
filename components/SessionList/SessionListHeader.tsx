@@ -46,12 +46,23 @@ export function SessionListHeader({
         >
           {(
             [
-              ["left-0",          "z-[3]", "text-amber-600 dark:text-amber-400"  ],
-              ["left-[0.75rem]",  "z-[2]", "text-emerald-600 dark:text-emerald-400"],
-              ["left-[1.5rem]",   "z-[1]", "text-violet-600 dark:text-violet-400" ],
+              ["left-0", "z-[3]", "text-amber-600 dark:text-amber-400"],
+              [
+                "left-[0.75rem]",
+                "z-[2]",
+                "text-emerald-600 dark:text-emerald-400",
+              ],
+              [
+                "left-[1.5rem]",
+                "z-[1]",
+                "text-violet-600 dark:text-violet-400",
+              ],
             ] as const
           ).map(([left, z, color], i) => (
-            <span key={i} className={`bg-sidebar-background absolute ${left} ${z} h-5 w-5`}>
+            <span
+              key={i}
+              className={`bg-sidebar-background absolute ${left} ${z} h-5 w-5`}
+            >
               <Bot className={`h-5 w-5 ${color}`} />
             </span>
           ))}

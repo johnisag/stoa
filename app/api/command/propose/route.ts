@@ -13,7 +13,11 @@ import {
   parseAgentReply,
   type CommandProject,
 } from "@/lib/command/plan";
-import { validateProposal, describeProposal, validatePlan } from "@/lib/command/actions";
+import {
+  validateProposal,
+  describeProposal,
+  validatePlan,
+} from "@/lib/command/actions";
 import { resolveStepProjects } from "@/lib/command/plan-resolve";
 import { auditCommand } from "@/lib/command/audit";
 import { getDb, queries } from "@/lib/db";
@@ -150,7 +154,10 @@ export async function POST(request: NextRequest) {
           text: resolved.reason,
         });
       }
-      auditCommand("command_proposed", { action: "execute_plan", planName: planValidation.name });
+      auditCommand("command_proposed", {
+        action: "execute_plan",
+        planName: planValidation.name,
+      });
       return NextResponse.json({
         kind: "plan",
         name: planValidation.name,
@@ -245,7 +252,10 @@ export async function POST(request: NextRequest) {
 
       const repoRow = repo as { id: string; repo_slug: string };
       const summary = describeProposal(proposal, repoRow.repo_slug);
-      auditCommand("command_proposed", { proposal, repoSlug: repoRow.repo_slug });
+      auditCommand("command_proposed", {
+        proposal,
+        repoSlug: repoRow.repo_slug,
+      });
 
       return NextResponse.json({
         kind: "proposal",
@@ -257,7 +267,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Unreachable — validateProposal is exhaustive over COMMAND_ACTION_IDS.
-    return NextResponse.json({ kind: "answer", text: "I'm not sure how to handle that action." });
+    return NextResponse.json({
+      kind: "answer",
+      text: "I'm not sure how to handle that action.",
+    });
   } catch (error) {
     // Unexpected throw — audit it so the ledger has no blind spot, then 500.
     console.error("Error proposing command:", error);

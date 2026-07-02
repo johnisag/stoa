@@ -8,8 +8,7 @@ const { state } = vi.hoisted(() => ({
     // verifyPass mocks:
     rows: [] as Array<Record<string, unknown>>,
     repo: { verify_gate: 1, verify_command: "npm run verify" } as
-      | Record<string, unknown>
-      | undefined,
+      Record<string, unknown> | undefined,
     headRefOid: "sha-1" as string | null,
     live: [] as string[],
     sessions: {} as Record<string, { tmux_name: string }>,

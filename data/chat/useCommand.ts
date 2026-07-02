@@ -2,7 +2,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ChatProvider } from "@/lib/chat-settings";
 import { sessionKeys } from "@/data/sessions/keys";
 import type { BuilderDoc } from "@/lib/pipeline/builder-model";
-import type { SessionSummary, PlanStep, StepResult } from "@/lib/command/actions";
+import type {
+  SessionSummary,
+  PlanStep,
+  StepResult,
+} from "@/lib/command/actions";
 import type { StepProgress } from "@/components/views/ChatView/PlanCard";
 
 /** One turn in the chat conversation, as replayed to the backend as history. */

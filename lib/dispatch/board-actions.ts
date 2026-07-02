@@ -2,11 +2,7 @@ import type { DispatchStatus } from "./types";
 
 /** Actions the cockpit can take on a dispatch row. */
 export type BoardAction =
-  | "approve"
-  | "cancel"
-  | "dismiss"
-  | "retry"
-  | "reconcile";
+  "approve" | "cancel" | "dismiss" | "retry" | "reconcile";
 
 /**
  * Which board actions are valid for a dispatch in a given status. Pure.
