@@ -37,6 +37,7 @@ import {
   SubagentValidationError,
   SUBAGENT_NAME_MAX_LENGTH,
   SUBAGENT_MAX_TOOLS,
+  SUBAGENT_DESCRIPTION_MAX_LENGTH,
   SUBAGENT_FILE_NAME,
   type SubagentFs,
   type SubagentDef,
@@ -366,6 +367,24 @@ describe("roleToSubagentDef (role → def mapping)", () => {
     expect(researcher).not.toMatch(/roots|in parallel|the sink/i);
     const gate = roleToSubagentDef("review-gate").systemPrompt ?? "";
     expect(gate).not.toMatch(/\bsink\b/i);
+  });
+
+  it("every role builds with a description comfortably under the cap (guards install)", () => {
+    // Regression: descriptions were once sourced from the generator-owned
+    // ROLE_GUIDANCE, and review-gate's sat 1 char under the 256 cap — a routine
+    // guidance edit would make roleToSubagentDef throw, and since
+    // materializeAllRoles loops every role, that would 500 the WHOLE install.
+    // Descriptions are now subagent-owned; lock in real headroom so a future edit
+    // fails CI here, not in production.
+    const HEADROOM = 48; // require a comfortable margin, not just < cap
+    for (const role of WORKFLOW_ROLES) {
+      expect(() => roleToSubagentDef(role)).not.toThrow();
+      const { description } = roleToSubagentDef(role);
+      expect(description.length).toBeGreaterThan(0);
+      expect(description.length).toBeLessThanOrEqual(
+        SUBAGENT_DESCRIPTION_MAX_LENGTH - HEADROOM
+      );
+    }
   });
 
   it("scopes read-only roles without Edit/Write/Bash, write roles with them", () => {
