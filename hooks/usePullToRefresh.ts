@@ -23,6 +23,16 @@ export const PULL_RESISTANCE = 2;
 /** Hard cap on the visible pull distance so the indicator never runs away. */
 export const PULL_MAX_PX = 96;
 
+/**
+ * Upper bound (ms) on how long the indicator stays in "refreshing" before it
+ * collapses regardless of the refetch. The list's refetch is a React Query
+ * invalidate, and this repo's QueryClient uses the default `networkMode:
+ * "online"` — so an OFFLINE pull leaves the refetch PAUSED and its promise
+ * pending until connectivity returns. Without this bound the indicator would
+ * spin forever; with it, it always settles.
+ */
+export const PULL_SETTLE_TIMEOUT_MS = 8000;
+
 export type PullPhase =
   /** Not pulling. */
   | "idle"
@@ -193,26 +203,55 @@ export function usePullToRefresh({
   const activeRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
   onRefreshRef.current = onRefresh;
+  // Guards the refetch to exactly once per entry into "refreshing" (survives a
+  // StrictMode double-invoke of the effect below, which re-runs setup after an
+  // empty cleanup).
+  const refreshInFlightRef = useRef(false);
 
   const dispatch = useCallback((event: PullEvent) => {
-    setState((prev) => {
-      const { state: next, shouldRefresh } = pullReducer(prev, event);
-      if (shouldRefresh) {
-        // Fire the caller's refetch on the arming edge, then settle regardless of
-        // outcome (a failed refresh must still collapse the indicator).
-        Promise.resolve(onRefreshRef.current()).finally(() =>
-          dispatch({ type: "settle" })
-        );
-      }
-      return next;
-    });
+    // The updater stays PURE — the refetch side effect is fired from the effect
+    // below, off the render path, never from inside setState.
+    setState((prev) => pullReducer(prev, event).state);
   }, []);
+
+  // Fire the caller's refetch when the machine ENTERS "refreshing", then settle
+  // regardless of outcome. Deliberately robust: a `.then(() => fn())` turns a
+  // SYNCHRONOUS throw from a sync callback into a rejection, `.catch` swallows a
+  // failed refresh (a network error must still collapse the indicator), and a
+  // timeout collapses it even if the refetch never settles (paused offline).
+  useEffect(() => {
+    if (state.phase !== "refreshing" || refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      refreshInFlightRef.current = false;
+      dispatch({ type: "settle" });
+    };
+    const timer = setTimeout(settle, PULL_SETTLE_TIMEOUT_MS);
+    Promise.resolve()
+      .then(() => onRefreshRef.current())
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timer);
+        settle();
+      });
+  }, [state.phase, dispatch]);
 
   const onTouchStart = useCallback(
     (e: React.TouchEvent) => {
       if (!enabled || e.touches.length === 0) return;
-      const scrollEl = scrollRef?.current ?? (e.currentTarget as HTMLElement);
-      const atTop = scrollEl.scrollTop <= 0;
+      // A caller that PASSES scrollRef reads scrollTop off it — and if it isn't
+      // attached yet we must NOT fall back to e.currentTarget (the ScrollArea
+      // Root never scrolls, so its scrollTop is always 0 and would falsely arm
+      // every gesture). Only a caller that omits scrollRef entirely (handlers
+      // directly on the scroller) uses e.currentTarget.
+      const scrollEl = scrollRef
+        ? scrollRef.current
+        : (e.currentTarget as HTMLElement);
+      const atTop = scrollEl ? scrollEl.scrollTop <= 0 : false;
       startYRef.current = e.touches[0].clientY;
       activeRef.current = atTop;
       dispatch({ type: "start", atTop });

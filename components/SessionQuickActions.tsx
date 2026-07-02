@@ -84,8 +84,10 @@ export function SessionQuickActions({
             )}
             onClick={(e) => {
               e.stopPropagation();
-              // #41: subtle tactile confirmation on the destructive/approve tap
-              // (no-op off mobile — vibrate is unsupported there).
+              // #41: subtle tactile confirmation on the tap (no-op off mobile —
+              // vibrate is unsupported there). In-app cards are Stop-only today
+              // (META has no "approve" entry — approve is a lock-screen-only
+              // affordance), so this is the "kill" pattern in practice.
               triggerHaptic(action === "approve" ? "approve" : "kill");
               setActed(true); // vanish immediately on tap
               respond.mutate(
