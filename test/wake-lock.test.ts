@@ -6,7 +6,8 @@
  * 1. `decideWakeLock` — the full pure decision matrix.
  * 2. `createWakeLockController` — request/release mechanics against an
  *    INJECTED plain-object wake-lock API (feature detection, swallowed
- *    NotAllowedError, the in-flight-flip race, UA auto-release tracking).
+ *    NotAllowedError, the in-flight-flip race, UA auto-release tracking,
+ *    and the hung-request timeout that keeps the queue from wedging).
  * 3. `useWakeLock` — renderHook wiring with a mocked `navigator.wakeLock`
  *    (mount/unmount, active flips, visibilitychange re-acquire, and the
  *    no-API silent no-op).
@@ -20,6 +21,7 @@ import {
   decideWakeLock,
   createWakeLockController,
   useWakeLock,
+  WAKE_LOCK_REQUEST_TIMEOUT_MS,
   type WakeLockApiLike,
   type WakeLockDecision,
   type WakeLockSentinelLike,
@@ -228,6 +230,64 @@ describe("createWakeLockController", () => {
     // A late "release" event from the OLD sentinel must not clobber the new lock.
     sentinels[0].fireRelease();
     expect(c.hasLock()).toBe(true);
+  });
+
+  it("does not wedge the queue when request() never settles (hung UA)", async () => {
+    vi.useFakeTimers();
+    try {
+      let call = 0;
+      const good = makeSentinel();
+      const api: WakeLockApiLike = {
+        request: vi.fn((_type: "screen") => {
+          call += 1;
+          return call === 1
+            ? new Promise<WakeLockSentinelLike>(() => {}) // never settles
+            : Promise.resolve<WakeLockSentinelLike>(good);
+        }),
+      };
+      const c = createWakeLockController(() => api);
+      const first = c.sync(true, true); // stuck behind the dead request
+      await vi.advanceTimersByTimeAsync(WAKE_LOCK_REQUEST_TIMEOUT_MS + 1);
+      await first; // the timeout let the queue move on
+      expect(c.hasLock()).toBe(false);
+      // ...and a later sync still works — the queue is NOT wedged.
+      await c.sync(true, true);
+      expect(api.request).toHaveBeenCalledTimes(2);
+      expect(c.hasLock()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases (never adopts) a sentinel that resolves AFTER the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const late = makeSentinel();
+      let resolveRequest: (s: WakeLockSentinelLike) => void = () => {};
+      const api: WakeLockApiLike = {
+        request: vi.fn(
+          () =>
+            new Promise<WakeLockSentinelLike>((resolve) => {
+              resolveRequest = resolve;
+            })
+        ),
+      };
+      const c = createWakeLockController(() => api);
+      const first = c.sync(true, true);
+      await vi.advanceTimersByTimeAsync(WAKE_LOCK_REQUEST_TIMEOUT_MS + 1);
+      await first; // timed out — no lock
+      expect(c.hasLock()).toBe(false);
+
+      // The orphaned request finally resolves: the sentinel must be released
+      // immediately and never adopted (adoption outside the queue could
+      // interleave with a newer in-flight acquire and leak a lock).
+      resolveRequest(late);
+      await flush();
+      expect(late.release).toHaveBeenCalledTimes(1);
+      expect(c.hasLock()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("tolerates a sentinel without addEventListener (older impls)", async () => {
