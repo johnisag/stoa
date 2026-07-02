@@ -1,6 +1,12 @@
 // Notification utilities for Stoa
 
 import { toneForEvent } from "./notification-sound";
+import {
+  type QuietHours,
+  defaultQuietHours,
+  defaultNotificationPolicy,
+} from "./notification-policy";
+import { savePolicyToIdb } from "./notification-policy-idb";
 
 export type NotificationEvent = "waiting" | "error" | "completed";
 
@@ -13,6 +19,17 @@ export interface NotificationSettings {
     error: boolean;
     completed: boolean;
   };
+  /**
+   * #52 closed-tab (Web Push) quiet hours. Applied per-device in the service
+   * worker (mirrored to IndexedDB on save) — during the window, closed-tab
+   * pushes are suppressed. Default OFF.
+   */
+  quietHours: QuietHours;
+  /**
+   * #52 per-session mute: session ids whose closed-tab pushes are suppressed.
+   * Also applied per-device in the SW via the IndexedDB mirror.
+   */
+  mutedSessionIds: string[];
 }
 
 export const defaultSettings: NotificationSettings = {
@@ -26,6 +43,8 @@ export const defaultSettings: NotificationSettings = {
     // so "finished" pings get noisy. Toggle on per taste in the Bell menu.
     completed: false,
   },
+  quietHours: defaultQuietHours,
+  mutedSessionIds: defaultNotificationPolicy.mutedSessionIds,
 };
 
 const SETTINGS_KEY = "stoaNotificationSettings";
@@ -35,7 +54,19 @@ export function loadSettings(): NotificationSettings {
   try {
     const stored = localStorage.getItem(SETTINGS_KEY);
     if (stored) {
-      return { ...defaultSettings, ...JSON.parse(stored) };
+      const parsed = JSON.parse(stored) as Partial<NotificationSettings>;
+      // Merge nested objects too — a stored blob from before #52 has no
+      // quietHours/mutedSessionIds, and a shallow spread would leave `events`
+      // fine but drop the new defaults; be explicit for the nested fields.
+      return {
+        ...defaultSettings,
+        ...parsed,
+        events: { ...defaultSettings.events, ...parsed.events },
+        quietHours: { ...defaultQuietHours, ...parsed.quietHours },
+        mutedSessionIds: Array.isArray(parsed.mutedSessionIds)
+          ? parsed.mutedSessionIds.filter((x) => typeof x === "string")
+          : [],
+      };
     }
   } catch {
     // Ignore parse errors
@@ -46,6 +77,13 @@ export function loadSettings(): NotificationSettings {
 export function saveSettings(settings: NotificationSettings): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  // Mirror the display-gate policy (quiet hours + mutes) into IndexedDB so the
+  // service worker — which can't read localStorage — can apply it on each push.
+  // Best-effort; savePolicyToIdb swallows a blocked/absent IndexedDB.
+  void savePolicyToIdb({
+    quietHours: settings.quietHours,
+    mutedSessionIds: settings.mutedSessionIds,
+  });
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {

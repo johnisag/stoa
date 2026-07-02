@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Volume2, VolumeX, AlertCircle, Send } from "lucide-react";
+import { Bell, Volume2, VolumeX, AlertCircle, Send, Moon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import {
@@ -14,6 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useWebPush } from "@/hooks/useWebPush";
 import type { NotificationSettings as NotificationSettingsType } from "@/lib/notifications";
+import { formatHhMm, parseHhMm } from "@/lib/notification-policy";
 
 interface WaitingSession {
   id: string;
@@ -148,6 +149,76 @@ export function NotificationSettings({
           </DropdownMenuItem>
         );
       })}
+
+      {/* #52 Quiet hours — during the window, closed-tab (Web Push) pings are
+          suppressed on this device. Applied in the service worker; default off. */}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        onSelect={(e) => {
+          e.preventDefault();
+          onUpdateSettings({
+            quietHours: {
+              ...settings.quietHours,
+              enabled: !settings.quietHours.enabled,
+            },
+          });
+        }}
+        className="flex items-center justify-between"
+      >
+        <span className="flex items-center gap-2">
+          <Moon className="h-3 w-3" />
+          Quiet hours
+        </span>
+        <span
+          className={cn(
+            "relative h-4 w-8 rounded-full transition-colors",
+            settings.quietHours.enabled ? "bg-primary" : "bg-muted"
+          )}
+        >
+          <span
+            className={cn(
+              "bg-background absolute top-0.5 h-3 w-3 rounded-full transition-transform",
+              settings.quietHours.enabled ? "translate-x-4" : "translate-x-0.5"
+            )}
+          />
+        </span>
+      </DropdownMenuItem>
+      {settings.quietHours.enabled && (
+        <div
+          className="text-muted-foreground flex items-center justify-between gap-2 px-2 py-1.5 text-xs"
+          // Keep the time pickers from closing the menu / toggling on click.
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span>From</span>
+          <input
+            type="time"
+            aria-label="Quiet hours start"
+            value={formatHhMm(settings.quietHours.startMin)}
+            onChange={(e) => {
+              const min = parseHhMm(e.target.value);
+              if (min !== null)
+                onUpdateSettings({
+                  quietHours: { ...settings.quietHours, startMin: min },
+                });
+            }}
+            className="border-input bg-background rounded border px-1 py-0.5"
+          />
+          <span>to</span>
+          <input
+            type="time"
+            aria-label="Quiet hours end"
+            value={formatHhMm(settings.quietHours.endMin)}
+            onChange={(e) => {
+              const min = parseHhMm(e.target.value);
+              if (min !== null)
+                onUpdateSettings({
+                  quietHours: { ...settings.quietHours, endMin: min },
+                });
+            }}
+            className="border-input bg-background rounded border px-1 py-0.5"
+          />
+        </div>
+      )}
 
       {/* Browser notifications - only show if not granted */}
       {!permissionGranted && (

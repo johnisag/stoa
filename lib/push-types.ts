@@ -13,6 +13,13 @@ export interface PushPayload {
   url?: string;
   /** Session this push is about — routes notification actions back to it. */
   sessionId?: string;
+  /**
+   * The transition this push reports (#52). Rides the wire so the service worker
+   * can apply the per-device display policy (silent-vs-loud + renotify) without
+   * re-deriving it: "waiting"/"error" are needs-you (loud), "done" is a routine
+   * completion (silent banner). Absent/unknown ⇒ the SW treats it as loud.
+   */
+  kind?: "waiting" | "error" | "done";
   /** Lock-screen action buttons (approve/reject/stop); see lib/notification-actions. */
   actions?: Array<{ action: string; title: string }>;
   /**

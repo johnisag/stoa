@@ -6,6 +6,8 @@ import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
 import { Serwist } from "serwist";
 import { shouldSuppressPush } from "@/lib/push-visibility";
 import type { PushPayload } from "@/lib/push-types";
+import { decideNotify, minutesOfDay } from "@/lib/notification-policy";
+import { readPolicyFromIdb } from "@/lib/notification-policy-idb";
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -50,9 +52,28 @@ self.addEventListener("push", (event) => {
       // A diagnostic test push always shows (even with a tab open on this
       // device) — its whole purpose is to verify rendering on demand.
       if (!payload.test && shouldSuppressPush(windows)) return;
+      // #52 per-device DISPLAY policy: quiet hours + per-session mute gate WHETHER
+      // it shows; the kind decides silent-vs-loud + renotify. The client mirrors
+      // the policy into IndexedDB (the SW can't read localStorage); a read failure
+      // falls back to the default (loud) policy — never silently swallows a push.
+      const policy = await readPolicyFromIdb();
+      const decision = decideNotify({
+        kind: payload.kind,
+        sessionId: payload.sessionId,
+        nowMin: minutesOfDay(new Date()),
+        policy,
+        isTest: payload.test,
+      });
+      if (!decision.show) return;
       await self.registration.showNotification(payload.title || "Stoa", {
         body: payload.body || "",
+        // #52 grouping: a stable per-session tag makes the OS REPLACE this
+        // session's older banner; renotify re-alerts only for needs-you kinds.
         tag: payload.tag,
+        // `renotify` is only valid WITH a tag (the platform throws otherwise), so
+        // guard on payload.tag even though every current sender provides one.
+        renotify: decision.renotify && !!payload.tag,
+        silent: decision.silent,
         icon: "/icon.svg",
         actions: payload.actions ?? [],
         // sessionId rides along so notificationclick can route the action back.

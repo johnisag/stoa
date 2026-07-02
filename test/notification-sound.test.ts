@@ -18,6 +18,7 @@ describe("shouldBeep", () => {
 
   it("beeps only when enabled AND sound AND the per-event toggle are all on", () => {
     const on: NotificationSettings = {
+      ...defaultSettings,
       enabled: true,
       browserNotifications: true,
       sound: true,
@@ -37,6 +38,7 @@ describe("shouldBeep", () => {
 
   it("a disabled per-event toggle mutes only that event", () => {
     const settings: NotificationSettings = {
+      ...defaultSettings,
       enabled: true,
       browserNotifications: true,
       sound: true,

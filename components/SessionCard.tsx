@@ -28,6 +28,8 @@ import {
   ListPlus,
   Zap,
   TriangleAlert,
+  Bell,
+  BellOff,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -59,6 +61,7 @@ import { PromptQueueModal } from "./PromptQueueModal";
 import { SessionSummaryModal } from "./SessionSummaryModal";
 import { AutoModeDialog } from "./AutoModeDialog";
 import { cardActionsForStatus } from "@/lib/notification-actions";
+import { useSessionMute } from "@/hooks/useSessionMute";
 import type { Session, Group } from "@/lib/db";
 import type { ProjectWithDevServers } from "@/lib/projects";
 
@@ -220,6 +223,10 @@ function SessionCardComponent({
   const [showAuto, setShowAuto] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const justStartedEditingRef = useRef(false);
+  // #52 per-session mute: a muted session sends no closed-tab push (the SW reads
+  // the mute list from IndexedDB). Self-contained (no prop threading) — the mute
+  // list is a per-device client concern.
+  const { muted, toggle: toggleMute } = useSessionMute(session.id);
 
   const handleMenuOpenChange = (open: boolean) => {
     setMenuOpen(open);
@@ -354,6 +361,15 @@ function SessionCardComponent({
             Rename
           </MenuItem>
         )}
+        {/* #52 per-session mute — silence this session's closed-tab pushes. */}
+        <MenuItem onClick={toggleMute}>
+          {muted ? (
+            <Bell className="mr-2 h-3 w-3" />
+          ) : (
+            <BellOff className="mr-2 h-3 w-3" />
+          )}
+          {muted ? "Unmute notifications" : "Mute notifications"}
+        </MenuItem>
         {/* Fork is available for every agent (not just Claude): Claude forks
             natively (a branched conversation); other providers fork by seeding a
             fresh session with the parent's recent scrollback. The plain shell has
@@ -594,6 +610,14 @@ function SessionCardComponent({
           unprompted, and fork inherits it, so flag it in the list too. Icon-only
           here; auto_approve is a SQLite 0/1, so coerce. */}
       {Boolean(session.auto_approve) && <AutoApproveBadge label={false} />}
+
+      {/* #52 muted indicator — this session's closed-tab pushes are silenced. */}
+      {muted && (
+        <BellOff
+          className="text-muted-foreground/70 h-3 w-3 flex-shrink-0"
+          aria-label="Notifications muted"
+        />
+      )}
 
       {/* Fork indicator */}
       {session.parent_session_id && (
