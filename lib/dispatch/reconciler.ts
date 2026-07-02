@@ -23,7 +23,8 @@ import {
 } from "../rate-limit-window";
 import { readRateLimitWindow } from "../rate-limit-window-source";
 import { sqliteTimeToMs } from "../sqlite-time";
-import { listEligibleIssues, getPRForBranchAnyState } from "./issues";
+import { getPRForBranchAnyState } from "./issues";
+import { resolveIssueSource } from "./sources";
 import { dispatchOne } from "./dispatcher";
 import { autoMergePass, getPrReadiness } from "./auto-merge";
 import { ciFixPass } from "./ci-fix";
@@ -237,7 +238,10 @@ export async function reconcileTick(): Promise<void> {
     const repos = queries.getEnabledDispatchRepos(db).all() as DispatchRepo[];
     for (const repo of repos) {
       // 1. Ingest eligible open issues as `pending` candidates (idempotent).
-      for (const issue of await listEligibleIssues(repo)) {
+      //    The source picker resolves to GitHub (default) or Linear per the
+      //    repo's slug prefix (#34) — the ingest loop is source-agnostic.
+      const issueSource = resolveIssueSource(repo);
+      for (const issue of await issueSource.listEligible(repo)) {
         if (queries.getDispatchByRepoIssue(db).get(repo.id, issue.number)) {
           continue; // already a candidate / dispatched / done — never re-add
         }
