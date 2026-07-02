@@ -40,6 +40,7 @@ import {
   actionsForKind,
   canApproveFromPrompt,
 } from "./lib/notification-actions";
+import { notificationTag } from "./lib/notification-policy";
 import { sanitizeNotificationText } from "./lib/notification-text";
 import { captureSnapshot } from "./lib/snapshots";
 import {
@@ -498,8 +499,15 @@ app.prepare().then(() => {
     return sendPushToAll({
       title: "Stoa",
       body: `${name} ${verb}`,
-      tag: `${ev.id}-${ev.kind}`,
+      // #52 grouping: a STABLE per-session tag so a session's newer notification
+      // REPLACES its older one instead of stacking a pile. The SW adds `renotify`
+      // only for the needs-you kinds (waiting/error), so a routine "done" quietly
+      // swaps the banner.
+      tag: notificationTag(ev.id),
       url: "/",
+      // #52: the transition kind rides the wire so the SW applies the display
+      // policy (silent "done" vs loud needs-you) + quiet-hours/mute gate.
+      kind: ev.kind,
       // Lock-screen action buttons → /api/sessions/[id]/respond. A waiting session at a safe
       // press-Enter-to-continue prompt also gets one-tap Approve (#9), re-verified server-side.
       sessionId: ev.id,
@@ -893,8 +901,11 @@ app.prepare().then(() => {
           void sendPushToAll({
             title: "Stoa",
             body: buildLoopPushBody(name, next),
-            tag: `${s.id}-loop`,
+            // #52: stable per-session tag (grouping) + needs-you kind so the SW
+            // renotifies loudly and it isn't silenced as a routine completion.
+            tag: notificationTag(s.id),
             url: "/",
+            kind: "error",
             sessionId: s.id,
             actions: actionsForKind("error"),
           }).catch((err) => console.error("error-loop push failed:", err));
@@ -939,8 +950,11 @@ app.prepare().then(() => {
           void sendPushToAll({
             title: "Stoa",
             body: buildStuckPushBody(name, next),
-            tag: `${s.id}-stuck`,
+            // #52: stable per-session tag (grouping) + needs-you kind so the SW
+            // renotifies loudly and it isn't silenced as a routine completion.
+            tag: notificationTag(s.id),
             url: "/",
+            kind: "error",
             sessionId: s.id,
             actions: actionsForKind("error"),
           }).catch((err) => console.error("watchdog push failed:", err));
@@ -1087,6 +1101,10 @@ app.prepare().then(() => {
             body,
             tag: `budget-${b.id}-${b.level}`,
             url: "/",
+            // #52: carry the session so a muted session's budget push is suppressed
+            // too; needs-you kind so the SW shows it loud (subject to quiet hours).
+            sessionId: b.id,
+            kind: "error",
           }).catch((err) => console.error("budget push failed:", err));
         }
         // Kill breached sessions CONCURRENTLY — a slow daemon kill must not
@@ -1158,6 +1176,8 @@ app.prepare().then(() => {
             body: `${name} is at 80% of its $${a.budgetUsd} budget (now $${a.costUsd.toFixed(2)})`,
             tag: `budget-${a.id}-80`,
             url: "/",
+            sessionId: a.id, // #52 mute/quiet gate
+            kind: "error",
           }).catch((err) => console.error("budget push failed:", err));
         }
         for (const a of decision.alert100) {
@@ -1171,6 +1191,8 @@ app.prepare().then(() => {
             body: `${name} hit its $${a.budgetUsd} budget (now $${a.costUsd.toFixed(2)})${parkedNote}`,
             tag: `budget-${a.id}-100`,
             url: "/",
+            sessionId: a.id, // #52 mute/quiet gate
+            kind: "error",
           }).catch((err) => console.error("budget push failed:", err));
         }
         applyBudgetDecision(decision);
