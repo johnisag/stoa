@@ -20,10 +20,19 @@ export const SECRET_FILE_PATTERNS: ReadonlyArray<{
 }> = [
   // dotenv files: `.env` plus `.env.local`, `.env.production`, ...
   { id: "dotenv", matches: (n) => n === ".env" || n.startsWith(".env.") },
-  // PEM-encoded keys/certs
-  { id: "pem", matches: (n) => n.endsWith(".pem") },
-  // Default-named SSH private keys (their `.pub` halves are public — no match)
-  { id: "ssh-key", matches: (n) => n === "id_rsa" || n === "id_ed25519" },
+  // PEM-encoded keys/certs, plus the generic `.key` private-key extension
+  // (TLS keys, service keys). `.pub` never matches — it's the public half.
+  { id: "pem", matches: (n) => n.endsWith(".pem") || n.endsWith(".key") },
+  // Default-named SSH private keys, all four algorithms (their `.pub` halves
+  // are public — no match).
+  {
+    id: "ssh-key",
+    matches: (n) =>
+      n === "id_rsa" ||
+      n === "id_ed25519" ||
+      n === "id_ecdsa" ||
+      n === "id_dsa",
+  },
   // gcloud / service-account style credentials
   { id: "credentials", matches: (n) => n === "credentials.json" },
   // npm auth config (may hold an authToken — name match only, never read)

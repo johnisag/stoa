@@ -16,13 +16,21 @@ import {
   parseJsonBody,
   getAllowedPathRoots,
   resolveSandboxedPathOrHome,
+  requireLocalhost,
 } from "@/lib/api-security";
 
 /**
  * POST /api/git/check
- * Check if a path is a git repository and return branch info
+ * Check if a path is a git repository and return branch info.
+ *
+ * LOCALHOST-GATED (matches /api/secret-scan, its sibling in the New Session
+ * dir-pick flow): probing the home tree for git repos / worktrees / sibling
+ * repo names is filesystem reconnaissance that must not be reachable from a
+ * tunneled/shared instance; the check only runs for the local operator.
  */
 export async function POST(request: NextRequest) {
+  const auth = requireLocalhost(request);
+  if (!auth.ok) return auth.response;
   const parsed = await parseJsonBody<{ path?: string }>(request);
   if (!parsed.ok) return parsed.response;
 
