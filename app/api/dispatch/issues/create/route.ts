@@ -107,6 +107,18 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    // An immediate dispatch (any source) also hits the gh-only worker, so reject
+    // it here — BEFORE any row is written — rather than inserting a task and then
+    // 400ing (fail-closed, no orphan pending row). Linear repos are intake-only.
+    if (disposition === "now" && !dispatchSupported(repo)) {
+      return NextResponse.json(
+        {
+          error:
+            "Dispatch isn't supported for this issue source yet — Linear repos are intake/browse-only. Use a GitHub repo.",
+        },
+        { status: 400 }
+      );
+    }
 
     // 1+2. Record a candidate. issue_created_at = now so the backlog shows
     // "raised just now". A "scheduled" disposition parks it as 'scheduled' until
@@ -180,17 +192,9 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Disposition. "now" spawns a worker immediately (bypasses the caps, like
-    // a manual approve); "backlog" leaves it pending for the normal flow.
+    // a manual approve); "backlog" leaves it pending for the normal flow. A
+    // non-github "now" was already rejected up front (before the insert).
     if (disposition === "now") {
-      if (!dispatchSupported(repo)) {
-        return NextResponse.json(
-          {
-            error:
-              "Dispatch isn't supported for this issue source yet — Linear repos are intake/browse-only. Use a GitHub repo.",
-          },
-          { status: 400 }
-        );
-      }
       await dispatchOne(repo, row);
     }
 

@@ -621,18 +621,21 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     `linear:TEAM` → Linear — so NO schema/migration was needed;
     `resolveIssueSource` wires kind→impl. **SCOPE (per review): Linear repos are
     INTAKE/BROWSE-ONLY** — the dispatch→PR loop downstream (`gh issue view`,
-    PR-linking) is still GitHub-hardcoded, so `dispatchSupported()` gates
-    auto-dispatch (reconciler) AND every manual dispatch route to github; a
-    Linear slug's issues are ingested + browsable but never handed to the
-    gh-only worker. A `jira:` slug is rejected at add-repo (400) rather than
-    silently falling back to gh; the UI renders a non-github slug as plain text
-    (no broken `github.com/linear:…` link). GitHub Dispatch flows are
-    byte-identical. 29 issue-source/linear tests (+63 assertions). _Seam:_
-    `lib/dispatch/issue-source.ts`, `github-source.ts`, `linear.ts`,
-    `sources.ts`, `reconciler.ts`, the 3 dispatch routes + add-repo route, the
-    DispatchView slug renderers, `.env.example`. _Deferred:_ Jira; the Linear
-    dispatch→PR loop (source-aware `buildIssuePrompt` + PR-linking); Linear
-    free-text browse search; a DispatchHelp Linear section.
+    PR-linking) is still GitHub-hardcoded, so `dispatchSupported()` gates EVERY
+    gh-touching path to github: auto-dispatch (reconciler), all 3 manual dispatch
+    routes, issue CREATE (before `gh issue create`), and the PLANNER (plan-spawn
+    - approve routes + the PlanConsole picker). A Linear slug's issues are
+      ingested + browsable (search/Dispatch controls disabled) but never handed to
+      the gh-only worker. A `jira:` slug is rejected at add-repo (400) rather than
+      silently falling back to gh; the UI renders a non-github slug as plain text
+      (no broken `github.com/linear:…` link). GitHub Dispatch flows are
+      byte-identical. 31 issue-source/route tests (create + plan gh-never-spawned
+      regressions). _Seam:_ `lib/dispatch/issue-source.ts`, `github-source.ts`,
+      `linear.ts`, `sources.ts`, `reconciler.ts`, the create/dispatch/plan/add-repo
+      routes, the DispatchView renderers + PlanConsole/OpenIssuesBrowser,
+      `.env.example`. _Deferred:_ Jira; the Linear dispatch→PR loop (source-aware
+      `buildIssuePrompt` + PR-linking); Linear free-text browse search; a
+      DispatchHelp Linear section.
 35. **Reusable scoped subagent library** — `orchestration` · M. Promote workflow
     roles into first-class subagent defs (tools allowlist + per-role model),
     materialized into each provider's native subagent dir. _Seam:_

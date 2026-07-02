@@ -22,6 +22,7 @@ import {
   type PlanTask,
 } from "@/data/dispatch/queries";
 import { claimsConflict } from "@/lib/dispatch/claims";
+import { issueSourceKind } from "@/lib/dispatch/issue-source";
 
 /** Editable task row in the proposed partition (claims as a comma/space string). */
 interface DraftTask {
@@ -63,7 +64,13 @@ function draftId(prefix: string): string {
  * → real issues + claimed dispatch rows. Overlapping tasks serialize automatically.
  */
 export function PlanConsole({ open }: { open: boolean }) {
-  const { data: repos = [] } = useDispatchReposQuery(open);
+  const { data: allRepos = [] } = useDispatchReposQuery(open);
+  // #34: the planner files GitHub issues, so only offer github-backed repos —
+  // a Linear repo is intake/browse-only and the plan route would reject it.
+  const repos = useMemo(
+    () => allRepos.filter((r) => issueSourceKind(r) === "github"),
+    [allRepos]
+  );
   const [repoId, setRepoId] = useState("");
   const [spec, setSpec] = useState("");
   const [taskCap, setTaskCap] = useState("8");
