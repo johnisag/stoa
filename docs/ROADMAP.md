@@ -672,9 +672,11 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     load step) now calls the core once. Equivalence + exact-merged-value +
     divergent-dedupe + delegation-shape tests added; no existing assertion
     weakened. Behavior byte-identical (this feeds the budget-kill loop).
-43. **StoaGuide in-app docs drift fix** — `docs` · S. Add Guide entries for
-    Ask/Command Stoa, the Quick Switcher, multi-repo sessions, Best-of-N. _Why:_ all
-    shipped + in README but absent from the in-app Guide. _Seam:_
+43. ✅ **StoaGuide in-app docs drift fix** — `docs` · S. **SHIPPED.** Four new
+    Guide cards — Quick Switcher, Multi-repo workspace, Best of N, Ask Stoa —
+    each fact-checked against the shipped implementation, plus the two README
+    bullets that were missing (Quick Switcher, Best of N). Purely
+    presentational (no logic, no tests needed). _Seam:_
     `components/StoaGuide.tsx`, `README.md`.
 44. **Checkpoint / time-travel / fork-from-any-point** — `feature` · L. A persisted
     checkpoint timeline (worktree state + transcript point) with rewind + "fork from
@@ -789,6 +791,11 @@ Condensed record (full detail in git history). All of the below is **done**.
   "needs me" badge so a badge "3" can't open a board reading "1" (#218).
 - **SegmentedTabs `radiogroup` variant** — an optional role variant for the
   panel-less AllocationConsole mode toggle (#221).
+- **Multi-repo delete safety** — the session-delete dialog should warn when a
+  workspace's worktrees hold uncommitted/unpushed work, and `removeWorkspace`
+  failures (best-effort, background via `runInBackground`) should surface
+  instead of only logging — orphaned worktrees are invisible today (#43
+  red-team).
 
 ### Bigger bets (full features)
 
