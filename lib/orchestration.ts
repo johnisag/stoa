@@ -20,6 +20,7 @@ import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
 import { getSessionBackend } from "./session-backend";
 import { expandHome } from "./platform";
+import { emitGenAiEvent } from "./telemetry/otel";
 
 const execFileAsync = promisify(execFile);
 
@@ -197,6 +198,11 @@ export async function spawnWorker(
     autoApprove: true,
   });
 
+  // GenAI "run" span boundary — a worker (one agent run) starts here. Timings
+  // are captured now and emitted at the terminal branch below. No-op unless
+  // STOA_OTEL_ENDPOINT is set; best-effort (never throws into the spawn).
+  const runStartMs = Date.now();
+
   try {
     await backend.create({
       name: tmuxSessionName,
@@ -276,9 +282,37 @@ export async function spawnWorker(
 
     // Update worker status to running
     queries.updateWorkerStatus(db).run("running", sessionId);
+
+    // Emit the GenAI "run" span for this worker (best-effort, no-op unless
+    // configured — see emitGenAiEvent). Do not await into the spawn's critical
+    // path or let it throw.
+    void emitGenAiEvent({
+      operation: "run",
+      provider: provider.id,
+      model,
+      startMs: runStartMs,
+      endMs: Date.now(),
+      statusCode: 1, // OK
+      extra: {
+        "stoa.session.id": sessionId,
+        "stoa.conductor.id": conductorSessionId,
+        "gen_ai.agent.name": provider.id,
+      },
+    });
   } catch (error) {
     console.error("Failed to start worker session:", error);
     queries.updateWorkerStatus(db).run("failed", sessionId);
+
+    void emitGenAiEvent({
+      operation: "run",
+      provider: provider.id,
+      model,
+      startMs: runStartMs,
+      endMs: Date.now(),
+      statusCode: 2, // ERROR
+      statusMessage: error instanceof Error ? error.message : "spawn failed",
+      extra: { "stoa.session.id": sessionId },
+    });
   }
 
   return queries.getSession(db).get(sessionId) as Session;
