@@ -27,8 +27,8 @@
     ".prettierrc": "91a7d7e8c41f0fead73e66589dfc16d2b4a8784c4fd1ad134cf8a9510debe317",
     "scripts/claude-statusline-hook.js": "ceaa102289a1c91894dac45b1829cd56adaeae182e2ff7e4f06b428cfdb165f9",
     "scripts/guard-surfaces.mjs": "eb339a1b5d2aae688c94658e39ffab6d8b441c9d7ed09fdfba89353b7e8c77c7",
-    "scripts/install.ps1": "95b67316e2546cb9d56d742d457176dd4d6ed98fbedfca4bc577738bd74a74ef",
-    "scripts/install.sh": "40faad388f4c3640e49e4ed49e97c0f248ed18f72e7e43c7068f10fac1e34d09",
+    "scripts/install.ps1": "65027443a6a2327d78ae0a487185fbada8963d06cf8442d062ab3168cee4d290",
+    "scripts/install.sh": "f3466b35273d5266ffcaab962971107e964aaa8428e7e851223c62a1db814f5a",
     "scripts/lib/ai-clis.sh": "209457010f89b2e7893e5ed6f039cdafaa1110c36070efcc2226a4c07c345d96",
     "scripts/lib/commands.sh": "46bc5ae0cb41db3af2ef99874e9cf0953b8bba6adadc1b1d6ce964e40e44fc2c",
     "scripts/lib/common.sh": "f2fd49e24bbc99347f61e7ebc1636e0fe5495dc8e77021e0bac9ee211af6be08",
@@ -39,6 +39,6 @@
     "scripts/setup.js": "0c36a6039d175ec1ce87b8819171d58907d8e5b8c95b5db66e2b8463dc18a33d",
     "scripts/setup.sh": "bcf4d5278276b6bf8f90dbacaadc1e30b8954d13b84d06948d08e6880c05495b",
     "scripts/stoa": "4d3a59d282d745607517e128c148a9c8f0ac19fe248fccd81ed8235da71b76db",
-    "scripts/stoa.js": "cac39e1cebbd72e0195817cfb04136c83e91ad182c47e5fa64d094426c463d2c"
+    "scripts/stoa.js": "25aba4e4482f5e366680053805f0464b2dd7d7b18f6a44f2862aef2b2409b08b"
   }
 }

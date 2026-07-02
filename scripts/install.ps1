@@ -10,14 +10,30 @@
     Designed to be run via:
         irm https://raw.githubusercontent.com/johnisag/stoa/main/scripts/install.ps1 | iex
 
+    CHANNEL (#56): default "main" keeps today's behavior — clone/track the main
+    branch's HEAD. The OPT-IN "release" channel pins the checkout to the latest
+    verified, immutable release tag (safer for production). Select it with the
+    -Channel parameter or the STOA_CHANNEL environment variable (the parameter
+    wins). When piping the script (irm ... | iex) params can't be passed, so set
+    the env var first:
+        $env:STOA_CHANNEL = "release"; irm .../install.ps1 | iex
+    Behavior is identical to the POSIX installer (install.sh).
+
     SECURITY NOTE: This installer fetches code from the internet and executes it.
     For production deployments, pin the remote script to an immutable release tag
     or SHA and verify checksums before execution. See SECURITY.md for details.
+
+.PARAMETER Channel
+    Update channel: "main" (default) or "release".
 
 .NOTES
     PowerShell 5.1 compatible: no `&&`/`||` chaining; uses `if ($?) {}` instead.
     Does NOT install tmux (removed) or ripgrep (bundled via @vscode/ripgrep).
 #>
+
+param(
+    [string]$Channel = ""
+)
 
 # Stop on the first unhandled error so a failed step doesn't cascade silently.
 $ErrorActionPreference = "Stop"
@@ -25,6 +41,21 @@ $ErrorActionPreference = "Stop"
 $RepoUrl    = "https://github.com/johnisag/stoa.git"
 $AgentHome  = Join-Path $env:USERPROFILE ".stoa"
 $InstallDir = Join-Path $AgentHome "repo"
+
+# Channel selection (#56): -Channel param > STOA_CHANNEL env > default "main".
+# Default is a no-op (clone/pull already leaves us on main); "release" is opt-in.
+if ([string]::IsNullOrWhiteSpace($Channel)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:STOA_CHANNEL)) {
+        $Channel = $env:STOA_CHANNEL
+    } else {
+        $Channel = "main"
+    }
+}
+$Channel = $Channel.Trim().ToLowerInvariant()
+if ($Channel -ne "main" -and $Channel -ne "release") {
+    Write-Host "==> Unknown channel `"$Channel`". Use: main or release." -ForegroundColor Red
+    exit 1
+}
 
 function Write-Info    { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Ok      { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Green }
@@ -93,6 +124,32 @@ if (Test-Path $InstallDir) {
     }
     & git clone "$RepoUrl" "$InstallDir"
     if (-not $?) { Write-Err "git clone failed."; exit 1 }
+}
+
+# ---------------------------------------------------------------------------
+# Release channel (#56): pin the checkout to the latest verified release tag.
+# Default "main" is a no-op here (the clone/pull above already left us on main).
+# ---------------------------------------------------------------------------
+if ($Channel -eq "release") {
+    Push-Location $InstallDir
+    Write-Info "Resolving the latest release tag (release channel)..."
+    & git fetch --tags --quiet
+    if (-not $?) { Pop-Location; Write-Err "git fetch --tags failed."; exit 1 }
+    # Newest semver-ish vMAJOR.MINOR.PATCH tag via git's own version sort; ignore
+    # anything that isn't a clean release tag. Select-Object -First 1 is the native
+    # `head -n 1` equivalent (no external tools).
+    $latestTag = (& git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
+        Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($latestTag)) {
+        Pop-Location
+        Write-Err "No verified release tag found. Re-run without -Channel release (or with -Channel main) to track main."
+        exit 1
+    }
+    $latestTag = $latestTag.Trim()
+    Write-Info "Checking out release tag $latestTag"
+    & git checkout --force "tags/$latestTag"
+    if (-not $?) { Pop-Location; Write-Err "git checkout $latestTag failed."; exit 1 }
+    Pop-Location
 }
 
 # ---------------------------------------------------------------------------
