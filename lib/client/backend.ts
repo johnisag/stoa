@@ -8,13 +8,7 @@
  * structured spawn params the pty attach protocol needs from a Session.
  */
 
-import {
-  getProvider,
-  buildAgentArgs,
-  parseMcpLaunchArgs,
-} from "@/lib/providers";
-import { resolveModelForAgent } from "@/lib/model-catalog";
-import { resolveNativeForkParentId } from "@/lib/fork";
+import { buildAgentArgsForSession } from "@/lib/session-launch";
 import type { Session } from "@/lib/db";
 
 let cached: "pty" | "tmux" | null = null;
@@ -64,30 +58,11 @@ export function buildSpawnForSession(
     allSessions?: Session[];
   }
 ): SessionSpawn {
-  const provider = getProvider(session.agent_type || "claude");
   const cwd = session.working_directory || "~";
-  if (provider.id === "shell") {
-    return { binary: "", args: [], cwd };
-  }
-  const parentSessionId =
-    opts?.parentSessionId !== undefined
-      ? opts.parentSessionId
-      : opts?.allSessions
-        ? resolveNativeForkParentId(session, opts.allSessions)
-        : null;
-  const { binary, args } = buildAgentArgs(session.agent_type || "claude", {
-    sessionId: session.claude_session_id,
-    parentSessionId,
-    autoApprove: session.auto_approve,
-    // Resolve so a legacy row holding a foreign/non-catalog model can't reach
-    // `--model <bogus>` on a fresh respawn (every other spawn site resolves too).
-    model: resolveModelForAgent(session.agent_type || "claude", session.model),
-    // Replay the conductor's persisted MCP wiring (e.g. Codex's
-    // `-c mcp_servers.stoa.*`) — the pty server treats spawn as create-if-missing,
-    // so without this a Codex conductor respawned on re-attach (after a server
-    // restart) silently loses its stoa MCP server. Mirrors the server spawn path.
-    extraArgs: parseMcpLaunchArgs(session.mcp_launch_args),
-    initialPrompt: opts?.initialPrompt,
-  });
+  // Route through the single chokepoint (lib/session-launch): the shell
+  // short-circuit, the injection-defense model clamp, the MCP-arg parse, and the
+  // native-fork parent resolution all live there so no launch path can drift or
+  // skip the clamp. A shell session yields an empty argv.
+  const { binary, args } = buildAgentArgsForSession(session, opts);
   return { binary, args, cwd };
 }
