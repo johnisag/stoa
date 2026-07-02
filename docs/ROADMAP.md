@@ -634,9 +634,18 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     JSON degrades to empty; storage failures swallowed. QuickSwitcher records
     on select (click + Enter + Output mode), renders a pin toggle per row
     (visible on hover/highlight/pinned). 21-test matrix.
-39. **Screen Wake Lock while watching a live run** — `mobile` · S. Acquire
-    `wakeLock` when a terminal/Live Wall pane is foregrounded with an active agent.
-    _Seam:_ new `hooks/useWakeLock.ts`, `components/Terminal/index.tsx`, Live Wall.
+39. ✅ **Screen Wake Lock while watching a live run** — `mobile` · S.
+    **SHIPPED.** `hooks/useWakeLock.ts`: pure `decideWakeLock({active, visible,
+hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
+    (serialized request/release queue that never interleaves or wedges,
+    latest-wins desired state, a sentinel `release` listener so a UA auto-
+    release on tab-hide/battery-saver re-acquires on the next sync, every
+    error swallowed) driving a thin `useWakeLock(active)` hook (visibilitychange
+    re-acquire, SSR-guarded, feature-detected — absent API = silent no-op).
+    Wired one call each: Terminal (`connectionState === "connected"`) + Live
+    Wall (while mounted). 25-test matrix (8-combo decision + controller
+    transitions + hook wiring). _Deferred:_ per-status gating (hold only while
+    "running"), isMobile gating (harmless on desktop).
 40. ✅ **Copy command+output as Markdown** — `feature` · S. **SHIPPED.** Pure
     `lib/markdown-block.ts` `toMarkdownBlock(text, lang?)`: strips complete
     ANSI sequences (OSC/CSI/short escapes — regexes built via
