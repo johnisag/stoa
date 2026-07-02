@@ -26,7 +26,11 @@ import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
 import { ScrollToBottomButton } from "./ScrollToBottomButton";
 import { TerminalToolbar } from "./TerminalToolbar";
-import { useTerminalConnection, useTerminalSearch } from "./hooks";
+import {
+  useTerminalConnection,
+  useTerminalGestures,
+  useTerminalSearch,
+} from "./hooks";
 import type { TerminalScrollState } from "./hooks";
 import type { AttachPayload } from "./hooks/useTerminalConnection.types";
 import { useViewport } from "@/hooks/useViewport";
@@ -149,6 +153,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       paste,
       getScrollState,
       restoreScrollState,
+      triggerResize,
       reconnect,
       sessionEnded,
       attachError,
@@ -177,6 +182,18 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       findNext,
       findPrevious,
     } = useTerminalSearch(searchAddonRef, xtermRef);
+
+    // #29 mobile gestures: long-press-drag moves the cursor via arrow keys,
+    // double-tap sends Tab, pinch adjusts the font size. Disabled in select
+    // mode (its overlay owns touches) and on desktop; plain touch scrolling
+    // still flows through touch-scroll.ts untouched.
+    useTerminalGestures({
+      terminalRef,
+      xtermRef,
+      enabled: isMobile && !selectMode,
+      sendInput,
+      triggerResize,
+    });
 
     // Handle image selection - paste file path into terminal
     const handleImageSelect = useCallback(
