@@ -1,12 +1,12 @@
 /**
  * Centralized STOA_AUTO_* feature flags + a guarded-interval helper (#55).
  *
- * server.ts arms ~5 unattended background timers (status ticker, budget
- * enforcement, budget-park, dispatch reconciler, scheduler, cost sampler,
- * auto-compact). Each one used to re-derive its env-flag read AND hand-roll the
- * same two pieces of scaffolding: a re-entrancy busy-guard (skip a tick whose
- * predecessor's slow I/O is still running) and `.unref()` (so the timer never
- * keeps the process alive on its own). This module factors both out:
+ * server.ts arms six guarded background timers (budget enforcement, budget-park,
+ * dispatch reconciler, scheduler, cost sampler, auto-compact) plus the inline
+ * status ticker. Each guarded one used to re-derive its env-flag read AND
+ * hand-roll the same two pieces of scaffolding: a re-entrancy busy-guard (skip a
+ * tick whose predecessor's slow I/O is still running) and `.unref()` (so the
+ * timer never keeps the process alive on its own). This module factors both out:
  *
  *  - `getAutoFeatures()` — ONE typed snapshot of the parsed STOA_AUTO_* booleans
  *    (and the few numeric knobs the startup log references), read through the
@@ -85,14 +85,15 @@ export function getAutoFeatures(): AutoFeatures {
     costSample: costSampleEnabled(),
     compact: autoCompactEnabled(),
     compactMemory: compactMemoryEnabled(),
-    snapshots: snapshotsEnabled(),
+    snapshots: perTurnSnapshotsEnabled(),
   };
 }
 
 /** STOA_SNAPSHOTS=1 — opt-in per-turn working-tree snapshots (refs/stoa/snap/*).
- *  Off by default. A tiny helper so getAutoFeatures reads it the same way as the
- *  others (server.ts inlines the `=== "1"` today). */
-export function snapshotsEnabled(): boolean {
+ *  Off by default. Named `perTurn…` to NOT collide with env-snapshot.ts's
+ *  `snapshotsEnabled()` (node_modules snapshots, STOA_ENV_SNAPSHOTS, default ON)
+ *  — a same-named export with the opposite default would be a footgun. */
+export function perTurnSnapshotsEnabled(): boolean {
   return process.env.STOA_SNAPSHOTS === "1";
 }
 
@@ -118,9 +119,9 @@ export function anyTickEnabled(f: AutoFeatures = getAutoFeatures()): boolean {
 /**
  * A compact, human-readable summary of the enabled features for a startup /
  * diagnostics line — e.g. "auto-resume, auto-answer, watchdog". Returns "none"
- * when everything is off. `compactMemory` and `pushApprove` are only listed when
- * their parent (compact / notifications) makes them meaningful, but here we list
- * every ON flag so the banner is a faithful mirror of the posture.
+ * when everything is off. Lists every ON flag so the summary is a faithful mirror
+ * of the posture (compactMemory / pushApprove included even though each is inert
+ * without its parent feature).
  */
 export function describeEnabled(f: AutoFeatures = getAutoFeatures()): string {
   const on: string[] = [];
