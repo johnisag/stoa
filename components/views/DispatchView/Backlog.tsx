@@ -389,7 +389,9 @@ function PendingRow({ d, repo }: { d: IssueDispatch; repo?: DispatchRepo }) {
           ) : (
             <>
               <a
-                href={d.issue_url ?? (repo ? repoUrl(repo.repo_slug) : "#")}
+                href={
+                  d.issue_url ?? (repo ? repoUrl(repo.repo_slug) : null) ?? "#"
+                }
                 target="_blank"
                 rel="noopener noreferrer"
                 className="truncate text-sm font-medium hover:underline"

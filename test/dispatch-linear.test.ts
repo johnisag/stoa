@@ -208,7 +208,6 @@ describe("LinearIssueSource — full source over a fake transport", () => {
     const { transport, lastBody } = fakeTransport(WELL_FORMED);
     const src = new LinearIssueSource(transport);
     const out = await src.listEligible(repo({ label_filter: "ready" }));
-    expect(src.kind).toBe("linear");
     expect(out.map((i) => i.number)).toEqual([42]);
     const body = lastBody();
     // team key = the slug minus the linear: prefix.

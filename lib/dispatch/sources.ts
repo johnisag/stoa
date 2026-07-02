@@ -19,6 +19,26 @@ import { LinearIssueSource } from "./linear";
 // shared instance is fine and keeps the default path allocation-free.
 const githubSource = new GitHubIssueSource();
 
+// A deferred/unimplemented backend (Jira): ingests NOTHING rather than falling
+// back to gh (which would run `gh issue list --repo jira:PROJ` and error every
+// tick). Repo creation already rejects a `jira:` slug, so this is only a
+// belt-and-suspenders for a hand-inserted row.
+let warnedJira = false;
+const emptyIssueSource: IssueSource = {
+  async listEligible() {
+    if (!warnedJira) {
+      warnedJira = true;
+      console.warn(
+        "dispatch: Jira intake is not implemented — ingesting nothing"
+      );
+    }
+    return [];
+  },
+  async listOpen() {
+    return [];
+  },
+};
+
 /**
  * Pick the IssueSource for a repo. GitHub is the default (unprefixed slug), so
  * every pre-#34 repo resolves to the untouched gh path. A `linear:`-prefixed
@@ -37,12 +57,9 @@ export function resolveIssueSource(
     case "linear":
       return overrides?.linear ?? new LinearIssueSource();
     case "jira":
-      // Jira intake is deferred (see caveats). Fall back to GitHub so a mis-
-      // prefixed slug degrades to the default rather than a silent no-op.
-      console.warn(
-        `dispatch: Jira intake is not implemented; repo "${repo.repo_slug}" falls back to GitHub`
-      );
-      return githubSource;
+      // Deferred: ingest nothing (NOT a gh fallback — that would run gh against
+      // a `jira:` slug and error every tick). Add-repo rejects `jira:` up front.
+      return emptyIssueSource;
     case "github":
     default:
       return githubSource;

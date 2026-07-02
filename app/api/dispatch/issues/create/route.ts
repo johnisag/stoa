@@ -4,6 +4,7 @@ import { getDb, queries } from "@/lib/db";
 import { createIssue } from "@/lib/dispatch/create";
 import { dispatchOne } from "@/lib/dispatch/dispatcher";
 import { normalizeRecurrence } from "@/lib/dispatch/recurrence";
+import { dispatchSupported } from "@/lib/dispatch/issue-source";
 import type { DispatchRepo, IssueDispatch } from "@/lib/dispatch/types";
 import {
   parseJsonBody,
@@ -167,6 +168,15 @@ export async function POST(request: NextRequest) {
     // 3. Disposition. "now" spawns a worker immediately (bypasses the caps, like
     // a manual approve); "backlog" leaves it pending for the normal flow.
     if (disposition === "now") {
+      if (!dispatchSupported(repo)) {
+        return NextResponse.json(
+          {
+            error:
+              "Dispatch isn't supported for this issue source yet — Linear repos are intake/browse-only. Use a GitHub repo.",
+          },
+          { status: 400 }
+        );
+      }
       await dispatchOne(repo, row);
     }
 

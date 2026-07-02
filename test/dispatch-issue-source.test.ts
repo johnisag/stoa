@@ -38,6 +38,7 @@ vi.mock("child_process", () => ({
 import {
   issueSourceKind,
   stripSourcePrefix,
+  dispatchSupported,
 } from "@/lib/dispatch/issue-source";
 import { resolveIssueSource } from "@/lib/dispatch/sources";
 import { GitHubIssueSource } from "@/lib/dispatch/github-source";
@@ -112,22 +113,33 @@ describe("stripSourcePrefix", () => {
   });
 });
 
+describe("dispatchSupported — dispatch is GitHub-only until the PR loop is source-aware", () => {
+  it("is true only for a github (unprefixed) repo", () => {
+    expect(dispatchSupported(repo())).toBe(true);
+    expect(dispatchSupported(repo({ repo_slug: "linear:ENG" }))).toBe(false);
+    expect(dispatchSupported(repo({ repo_slug: "jira:PROJ" }))).toBe(false);
+  });
+});
+
 describe("resolveIssueSource — the factory", () => {
   it("returns a GitHub source for an unprefixed slug (default, byte-identical path)", () => {
-    expect(resolveIssueSource(repo()).kind).toBe("github");
+    expect(resolveIssueSource(repo())).toBeInstanceOf(GitHubIssueSource);
   });
 
   it("returns a Linear source for a linear: slug", () => {
-    expect(resolveIssueSource(repo({ repo_slug: "linear:ENG" })).kind).toBe(
-      "linear"
-    );
+    expect(
+      resolveIssueSource(repo({ repo_slug: "linear:ENG" }))
+    ).toBeInstanceOf(LinearIssueSource);
   });
 
-  it("falls back to GitHub for a (deferred) jira: slug", () => {
+  it("a (deferred) jira: slug ingests NOTHING — never falls back to gh", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(resolveIssueSource(repo({ repo_slug: "jira:PROJ" })).kind).toBe(
-      "github"
-    );
+    const src = resolveIssueSource(repo({ repo_slug: "jira:PROJ" }));
+    // Not the GitHub source (which would run `gh issue list --repo jira:PROJ`).
+    expect(src).not.toBeInstanceOf(GitHubIssueSource);
+    await expect(
+      src.listEligible(repo({ repo_slug: "jira:PROJ" }))
+    ).resolves.toEqual([]);
     warn.mockRestore();
   });
 

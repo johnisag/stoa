@@ -28,7 +28,9 @@ export type IssueSourceKind = "github" | "linear" | "jira";
 export interface IssueBrowseQuery {
   /** Narrow to a single label; omit/empty = all open issues. */
   label?: string | null;
-  /** Backend-native free-text search (gh `--search`, Linear filter, …). */
+  /** Free-text search — gh `--search` only. The Linear source IGNORES this for
+   *  now (no free-text mapping shipped); the browse UI disables the box for a
+   *  non-github source so it's not a silent no-op. */
   search?: string | null;
   /** Page size; each source clamps to its own max. */
   limit?: number;
@@ -41,8 +43,6 @@ export interface IssueBrowseQuery {
  * a hung/failed intake must be "nothing to dispatch this tick", not a crash.
  */
 export interface IssueSource {
-  /** Which backend this is (for logging / UI). */
-  readonly kind: IssueSourceKind;
   /**
    * Reconciler ingest: the repo's eligible open issues, bound to its standing
    * `label_filter`. Returns [] on any failure.
@@ -94,4 +94,18 @@ export function stripSourcePrefix(slug: string): string {
     if (lower.startsWith(prefix)) return slug.slice(prefix.length);
   }
   return slug;
+}
+
+/**
+ * Whether Dispatch's DISPATCH→PR loop supports a repo's source. #34 shipped
+ * issue INTAKE (list/browse) for Linear, but the dispatch path downstream
+ * (`buildIssuePrompt` runs `gh issue view`, PR-linking assumes GitHub) is
+ * GitHub-hardcoded — so a non-github repo is intake/browse-ONLY until that path
+ * is made source-aware. Enforced in the reconciler's auto loop AND the manual
+ * dispatch routes so a Linear issue can never be handed to the gh-only worker.
+ */
+export function dispatchSupported(
+  repo: Pick<DispatchRepo, "repo_slug">
+): boolean {
+  return issueSourceKind(repo) === "github";
 }

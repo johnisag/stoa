@@ -25,6 +25,7 @@ import { readRateLimitWindow } from "../rate-limit-window-source";
 import { sqliteTimeToMs } from "../sqlite-time";
 import { getPRForBranchAnyState } from "./issues";
 import { resolveIssueSource } from "./sources";
+import { dispatchSupported } from "./issue-source";
 import { dispatchOne } from "./dispatcher";
 import { autoMergePass, getPrReadiness } from "./auto-merge";
 import { ciFixPass } from "./ci-fix";
@@ -256,6 +257,12 @@ export async function reconcileTick(): Promise<void> {
             issue.createdAt
           );
       }
+
+      // #34: a non-github repo is intake-ONLY — its issues are ingested above
+      // (and browsable) but never auto-dispatched, because the dispatch→PR loop
+      // downstream is GitHub-hardcoded (gh issue view / PR-linking). Skip the
+      // whole dispatch path for it until that path is made source-aware.
+      if (!dispatchSupported(repo)) continue;
 
       // 2. Headroom (daily cap ∧ concurrency cap).
       const dailyDone = (

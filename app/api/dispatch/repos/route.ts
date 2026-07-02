@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { getDb, queries } from "@/lib/db";
 import { isValidAgentType } from "@/lib/providers";
 import { parseVerifySteps } from "@/lib/dispatch/verify";
+import { issueSourceKind } from "@/lib/dispatch/issue-source";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 
 /** Trim a verify command to null/string and validate it at SAVE time (same pure
@@ -41,6 +42,19 @@ export async function POST(request: NextRequest) {
     if (!repoPath || !repoSlug) {
       return NextResponse.json(
         { error: "repoPath and repoSlug are required" },
+        { status: 400 }
+      );
+    }
+    // #34: reject a `jira:`-prefixed slug up front — Jira intake isn't
+    // implemented, so accepting it would create a tracked-but-dead repo. GitHub
+    // (owner/name) and `linear:TEAM` are supported; an unrecognized prefix is
+    // treated as a GitHub slug (its own gh error surfaces if it's bogus).
+    if (issueSourceKind({ repo_slug: repoSlug }) === "jira") {
+      return NextResponse.json(
+        {
+          error:
+            "Jira intake isn't implemented yet. Use owner/name for GitHub, or linear:TEAM for Linear.",
+        },
         { status: 400 }
       );
     }

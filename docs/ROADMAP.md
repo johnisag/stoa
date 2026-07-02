@@ -619,11 +619,20 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     as a `{eq}` value never as query text, and every failure degrades to `[]`.
     Source is picked by repo slug — plain `owner/name` → GitHub (default),
     `linear:TEAM` → Linear — so NO schema/migration was needed;
-    `resolveIssueSource` wires kind→impl (Jira reserved, falls back to GitHub +
-    warns). GitHub Dispatch flows are byte-identical. 63 tests. _Seam:_
+    `resolveIssueSource` wires kind→impl. **SCOPE (per review): Linear repos are
+    INTAKE/BROWSE-ONLY** — the dispatch→PR loop downstream (`gh issue view`,
+    PR-linking) is still GitHub-hardcoded, so `dispatchSupported()` gates
+    auto-dispatch (reconciler) AND every manual dispatch route to github; a
+    Linear slug's issues are ingested + browsable but never handed to the
+    gh-only worker. A `jira:` slug is rejected at add-repo (400) rather than
+    silently falling back to gh; the UI renders a non-github slug as plain text
+    (no broken `github.com/linear:…` link). GitHub Dispatch flows are
+    byte-identical. 29 issue-source/linear tests (+63 assertions). _Seam:_
     `lib/dispatch/issue-source.ts`, `github-source.ts`, `linear.ts`,
-    `sources.ts`, `reconciler.ts`, `.env.example`. _Deferred:_ Jira (different
-    auth + REST/JQL shape — a drop-in `JiraIssueSource` later).
+    `sources.ts`, `reconciler.ts`, the 3 dispatch routes + add-repo route, the
+    DispatchView slug renderers, `.env.example`. _Deferred:_ Jira; the Linear
+    dispatch→PR loop (source-aware `buildIssuePrompt` + PR-linking); Linear
+    free-text browse search; a DispatchHelp Linear section.
 35. **Reusable scoped subagent library** — `orchestration` · M. Promote workflow
     roles into first-class subagent defs (tools allowlist + per-role model),
     materialized into each provider's native subagent dir. _Seam:_

@@ -144,15 +144,20 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
 
         {/* slug + path */}
         <div className="min-w-0 flex-1">
-          <a
-            href={repoUrl(repo.repo_slug)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 font-medium hover:underline"
-          >
-            {repo.repo_slug}
-            <ExternalLink className="h-3 w-3 opacity-60" />
-          </a>
+          {repoUrl(repo.repo_slug) ? (
+            <a
+              href={repoUrl(repo.repo_slug)!}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 font-medium hover:underline"
+            >
+              {repo.repo_slug}
+              <ExternalLink className="h-3 w-3 opacity-60" />
+            </a>
+          ) : (
+            // A non-github slug (linear:TEAM) has no external repo page.
+            <span className="font-medium">{repo.repo_slug}</span>
+          )}
           <div
             className="text-muted-foreground truncate text-xs"
             title={repo.repo_path}
@@ -705,7 +710,7 @@ function AddRepoForm() {
           onChange={(e) => set("repoPath", e.target.value)}
         />
         <Input
-          placeholder="owner/name (for gh)"
+          placeholder="owner/name (GitHub) — or linear:TEAM"
           value={form.repoSlug}
           onChange={(e) => set("repoSlug", e.target.value)}
         />

@@ -95,7 +95,6 @@ export function createLinearTransport(
 }
 
 interface RawLinearIssue {
-  identifier?: unknown;
   number?: unknown;
   title?: unknown;
   url?: unknown;
@@ -161,7 +160,6 @@ const ISSUES_QUERY = `
 query DispatchIssues($filter: IssueFilter, $first: Int!) {
   issues(filter: $filter, first: $first, orderBy: createdAt) {
     nodes {
-      identifier
       number
       title
       url
@@ -235,7 +233,6 @@ export async function fetchLinearIssues(
  * can drive the full source with a fake — no network, no env.
  */
 export class LinearIssueSource implements IssueSource {
-  readonly kind = "linear" as const;
   private readonly transport: LinearTransport;
 
   constructor(transport?: LinearTransport) {

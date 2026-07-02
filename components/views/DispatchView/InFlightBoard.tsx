@@ -134,7 +134,7 @@ const Card = memo(function Card({
       </div>
 
       <a
-        href={d.issue_url ?? (repo ? repoUrl(repo.repo_slug) : "#")}
+        href={d.issue_url ?? (repo ? repoUrl(repo.repo_slug) : null) ?? "#"}
         target="_blank"
         rel="noopener noreferrer"
         className="line-clamp-2 font-medium hover:underline"
@@ -144,9 +144,9 @@ const Card = memo(function Card({
       </a>
 
       <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-        {repo && (
+        {repo && repoUrl(repo.repo_slug) && (
           <a
-            href={repoUrl(repo.repo_slug)}
+            href={repoUrl(repo.repo_slug)!}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 hover:underline"
