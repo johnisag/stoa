@@ -34,7 +34,8 @@ import {
   materializeSubagent,
   roleToSubagentDef,
   materializeRoleSubagent,
-  defaultModelForRole,
+  materializeAllRoles,
+  MATERIALIZABLE_ROLES,
   SubagentValidationError,
   SUBAGENT_NAME_MAX_LENGTH,
   SUBAGENT_MAX_TOOLS,
@@ -45,11 +46,14 @@ import {
 import { getProviderDefinition } from "@/lib/providers/registry";
 import { WORKFLOW_ROLES } from "@/lib/command/workflow-roles";
 
-/** A fake fs seam that records every mkdir/write instead of touching disk. */
-function fakeFs() {
+/** A fake fs seam that records every mkdir/write instead of touching disk.
+ * `existsSync` reflects what has been written so the clobber guard is testable;
+ * `seed` pre-populates a path to simulate a hand-authored file already on disk. */
+function fakeFs(seed: Record<string, string> = {}) {
   const dirs: string[] = [];
-  const files: Record<string, string> = {};
+  const files: Record<string, string> = { ...seed };
   const io: SubagentFs = {
+    existsSync: (file) => file in files,
     mkdirSync: (dir) => {
       dirs.push(dir);
     },
@@ -303,36 +307,56 @@ describe("supportedSubagentProviders / agentsDirForProvider", () => {
 describe("materializeSubagent (injected fs seam — no disk)", () => {
   it("creates the per-subagent dir and writes AGENT.md content", () => {
     const { io, dirs, files } = fakeFs();
-    const file = materializeSubagent(
+    const res = materializeSubagent(
       "claude",
       {
         name: "researcher",
         description: "investigates",
         tools: ["Read", "Grep"],
       },
-      io
+      { io }
     );
     const expectedDir = path.join(claudeAgentsDir(), "researcher");
     const expectedFile = path.join(expectedDir, SUBAGENT_FILE_NAME);
-    expect(file).toBe(expectedFile);
+    expect(res.path).toBe(expectedFile);
+    expect(res.written).toBe(true);
     expect(dirs).toEqual([expectedDir]);
     expect(files[expectedFile]).toMatch(/^tools: Read, Grep$/m);
+  });
+
+  it("with overwrite:false, an existing AGENT.md is left untouched", () => {
+    const expectedFile = path.join(
+      claudeAgentsDir(),
+      "researcher",
+      SUBAGENT_FILE_NAME
+    );
+    const { io, dirs, files } = fakeFs({ [expectedFile]: "HAND AUTHORED" });
+    const res = materializeSubagent(
+      "claude",
+      { name: "researcher", tools: ["Read"] },
+      { io, overwrite: false }
+    );
+    expect(res.path).toBe(expectedFile);
+    expect(res.written).toBe(false);
+    // Untouched: no mkdir, and the original content is preserved.
+    expect(dirs).toEqual([]);
+    expect(files[expectedFile]).toBe("HAND AUTHORED");
   });
 
   it("rejects an unknown provider and a provider with no subagent dir", () => {
     const { io } = fakeFs();
     expect(() =>
-      materializeSubagent("shell", { name: "x", tools: [] }, io)
+      materializeSubagent("shell", { name: "x", tools: [] }, { io })
     ).toThrow(/no native subagent/);
     expect(() =>
-      materializeSubagent("nope", { name: "x", tools: [] }, io)
+      materializeSubagent("nope", { name: "x", tools: [] }, { io })
     ).toThrow(/unknown provider/);
   });
 
   it("a traversal name never writes outside the agents dir", () => {
     const { io, files } = fakeFs();
     expect(() =>
-      materializeSubagent("claude", { name: "../pwned", tools: [] }, io)
+      materializeSubagent("claude", { name: "../pwned", tools: [] }, { io })
     ).toThrow(SubagentValidationError);
     expect(Object.keys(files)).toEqual([]);
   });
@@ -386,45 +410,65 @@ describe("roleToSubagentDef (role → def mapping)", () => {
   });
 });
 
-describe("defaultModelForRole / materializeRoleSubagent", () => {
-  it("resolves a role's agent catalog default", () => {
-    // researcher → claude → catalog default "sonnet"; tester → codex → "gpt-5.5".
-    expect(defaultModelForRole("researcher")).toBe("sonnet");
-    expect(defaultModelForRole("tester")).toBe("gpt-5.5");
-  });
-
-  it("materializes a role subagent through the injected fs (role-default model)", () => {
+describe("materializeRoleSubagent", () => {
+  it("materializes a role subagent through the injected fs (no model → session default)", () => {
     const { io, dirs, files } = fakeFs();
-    const file = materializeRoleSubagent(
-      "claude",
-      "researcher",
-      { model: "role-default" },
-      io
-    );
+    const res = materializeRoleSubagent("claude", "researcher", { io });
     const expectedDir = path.join(claudeAgentsDir(), "researcher");
     expect(dirs).toEqual([expectedDir]);
-    expect(file).toBe(path.join(expectedDir, SUBAGENT_FILE_NAME));
-    // role-default pinned the claude catalog default.
-    expect(files[file]).toMatch(/^model: sonnet$/m);
-    expect(files[file]).toMatch(/^name: researcher$/m);
+    expect(res.path).toBe(path.join(expectedDir, SUBAGENT_FILE_NAME));
+    expect(res.written).toBe(true);
+    // No model requested → no `model:` key (the subagent uses the session model).
+    expect(files[res.path]).not.toMatch(/^model:/m);
+    expect(files[res.path]).toMatch(/^name: researcher$/m);
   });
 
-  it("omits the model when none requested", () => {
+  it("pins an explicit model override into the frontmatter", () => {
     const { io, files } = fakeFs();
-    const file = materializeRoleSubagent("claude", "architect", {}, io);
-    expect(files[file]).not.toMatch(/^model:/m);
+    const res = materializeRoleSubagent("claude", "architect", {
+      model: "opus",
+      io,
+    });
+    expect(files[res.path]).toMatch(/^model: opus$/m);
+  });
+});
+
+describe("materializeAllRoles (bulk install, non-destructive)", () => {
+  it("writes every materializable role and reports them", () => {
+    const { io, files } = fakeFs();
+    const { written, skipped } = materializeAllRoles("claude", { io });
+    expect(written.sort()).toEqual([...MATERIALIZABLE_ROLES].sort());
+    expect(skipped).toEqual([]);
+    // One AGENT.md per role landed on the fake disk.
+    expect(Object.keys(files)).toHaveLength(MATERIALIZABLE_ROLES.length);
+    for (const role of MATERIALIZABLE_ROLES) {
+      const file = path.join(claudeAgentsDir(), role, SUBAGENT_FILE_NAME);
+      expect(files[file]).toMatch(new RegExp(`^name: ${role}$`, "m"));
+    }
+  });
+
+  it("leaves a pre-existing (hand-authored) role file untouched and reports it skipped", () => {
+    const kept = path.join(claudeAgentsDir(), "researcher", SUBAGENT_FILE_NAME);
+    const { io, files } = fakeFs({ [kept]: "HAND AUTHORED" });
+    const { written, skipped } = materializeAllRoles("claude", { io });
+    expect(skipped).toEqual(["researcher"]);
+    expect(written).not.toContain("researcher");
+    expect(written).toHaveLength(MATERIALIZABLE_ROLES.length - 1);
+    // The user's file is preserved byte-for-byte.
+    expect(files[kept]).toBe("HAND AUTHORED");
   });
 });
 
 describe("real-fs write (temp home, no agent binary)", () => {
   it("materializes a role subagent to ~/.claude/agents/<role>/AGENT.md", () => {
-    const file = materializeRoleSubagent("claude", "integrator");
+    const res = materializeRoleSubagent("claude", "integrator");
     const expected = path.join(
       claudeAgentsDir(),
       "integrator",
       SUBAGENT_FILE_NAME
     );
-    expect(file).toBe(expected);
+    expect(res.path).toBe(expected);
+    expect(res.written).toBe(true);
     expect(fs.existsSync(expected)).toBe(true);
     const content = fs.readFileSync(expected, "utf-8");
     expect(content).toMatch(/^name: integrator$/m);
