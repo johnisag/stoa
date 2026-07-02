@@ -10,6 +10,7 @@ import {
 } from "@/lib/notification-actions";
 import type { SessionStatus } from "@/lib/status-detector";
 import { useRespondToSession } from "@/data/sessions/queries";
+import { triggerHaptic } from "@/hooks/useHaptics";
 
 // In-app cards stay Stop-only (you're already in the app — swap to the session and type);
 // one-tap Approve is a lock-screen-only affordance (#9). Partial so the type doesn't force
@@ -83,6 +84,9 @@ export function SessionQuickActions({
             )}
             onClick={(e) => {
               e.stopPropagation();
+              // #41: subtle tactile confirmation on the destructive/approve tap
+              // (no-op off mobile — vibrate is unsupported there).
+              triggerHaptic(action === "approve" ? "approve" : "kill");
               setActed(true); // vanish immediately on tap
               respond.mutate(
                 { sessionId, action },
