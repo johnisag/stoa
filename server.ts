@@ -92,6 +92,19 @@ import {
   COMPACT_MAX_PER_DAY,
 } from "./lib/auto-compact";
 import {
+  compactMemoryEnabled,
+  customCompactPrompt,
+  buildCompactCommand,
+  buildCompactMemoryMarkdown,
+  buildReinjectMessage,
+  nextReinjectAction,
+  COMPACT_MEMORY_FILE,
+} from "./lib/compact-memory";
+import { extractTranscriptEntries } from "./lib/summarize";
+import { readClaudeTranscriptRaw } from "./lib/claude-transcript";
+import { mkdir, writeFile } from "fs/promises";
+import { join as joinNativePath, dirname as nativeDirname } from "path";
+import {
   channelDeliverEnabled,
   isChannelDeliveryTurn,
   buildChannelDeliveryText,
@@ -423,10 +436,30 @@ app.prepare().then(() => {
   const lastCompactAt = new Map<string, number>();
   // Per-session UTC-day compaction count, so a stuck-high session can't /compact forever.
   const compactDay = new Map<string, { day: string; count: number }>();
+  // #25 external memory: sessions whose pre-compact state was flushed to
+  // .stoa/compact-memory.md and are awaiting the one-shot post-compact
+  // pointer (value = when the flush happened; nextReinjectAction decides).
+  const compactReinject = new Map<string, number>();
   let compactBusy = false;
   if (AUTO_COMPACT_ENABLED) {
     console.log(
       `> Auto-compact on (STOA_AUTO_COMPACT=1): a Claude session whose context window is >= ${Math.round(COMPACT_THRESHOLD * 100)}% full at an idle boundary (no open prompt) is sent /compact (${Math.round(COMPACT_COOLDOWN_MS / 60000)}m cooldown${COMPACT_MAX_PER_DAY > 0 ? `, ${COMPACT_MAX_PER_DAY}/day cap` : ""}), so a long/overnight run reclaims headroom before the painful auto-compaction. Claude-only.`
+    );
+    if (compactMemoryEnabled()) {
+      console.log(
+        `> Compact external memory on (STOA_COMPACT_MEMORY=1): the recent conversation tail is flushed to ${COMPACT_MEMORY_FILE} before each /compact, and a pointer is injected at the next idle boundary after compaction lands.`
+      );
+    }
+    const startupPrompt = customCompactPrompt();
+    if (startupPrompt) {
+      console.log(
+        `> Compact custom prompt on (STOA_AUTO_COMPACT_PROMPT): "${startupPrompt}"`
+      );
+    }
+  } else if (compactMemoryEnabled() || customCompactPrompt()) {
+    // The whole tick is gated on the trigger — these knobs are inert alone.
+    console.warn(
+      "> STOA_COMPACT_MEMORY / STOA_AUTO_COMPACT_PROMPT are set but STOA_AUTO_COMPACT is not — auto-compact (and the memory flush) will not run."
     );
   }
   const shouldPush = (ev: PushEvent): boolean => {
@@ -1239,6 +1272,52 @@ app.prepare().then(() => {
             cost.contextTokens,
             contextWindowFor(cost.model ?? s.model)
           ).pct;
+          // #25: a session awaiting its post-compact pointer is handled first
+          // and never starts another compaction this tick. The pre-check runs
+          // with an OPTIMISTIC boundary (isIdle:true / hasPrompt:false) so the
+          // costly capture is skipped whenever time or the context-drop
+          // completion signal alone would reject; when it passes, the capture
+          // runs and the second decision corrects those optimistic values.
+          const pendingSince = compactReinject.get(s.id);
+          if (pendingSince != null) {
+            const pre = nextReinjectAction({
+              pendingSinceMs: pendingSince,
+              nowMs,
+              isIdle: true,
+              hasPrompt: false,
+              contextPct: pct,
+              threshold: COMPACT_THRESHOLD,
+            });
+            if (pre === "expire") {
+              compactReinject.delete(s.id);
+            } else if (pre === "inject" && !isBudgetParked(s.id)) {
+              const detail = await statusDetector
+                .getStatusDetail(key)
+                .catch(() => null);
+              if (
+                detail &&
+                nextReinjectAction({
+                  pendingSinceMs: pendingSince,
+                  nowMs,
+                  isIdle: detail.status === "idle",
+                  hasPrompt: detail.prompt != null,
+                  contextPct: pct,
+                  threshold: COMPACT_THRESHOLD,
+                }) === "inject"
+              ) {
+                compactReinject.delete(s.id);
+                console.log(
+                  `auto-compact: ${s.name} compaction landed → inject ${COMPACT_MEMORY_FILE} pointer`
+                );
+                await backend
+                  .pasteText(key, buildReinjectMessage(), { enter: true })
+                  .catch((err) =>
+                    console.error("auto-compact re-inject failed:", err)
+                  );
+              }
+            }
+            continue;
+          }
           // Cheap pre-checks before paying for a screen capture + classify.
           if (pct < COMPACT_THRESHOLD) continue;
           const last = lastCompactAt.get(s.id) ?? null;
@@ -1267,11 +1346,50 @@ app.prepare().then(() => {
           if (action !== "compact") continue;
           lastCompactAt.set(s.id, nowMs);
           compactDay.set(s.id, { day: today, count: usedToday + 1 });
+          // #25: flush the recent conversation tail to disk BEFORE compaction
+          // destroys the detail. Deterministic (no LLM call); a flush failure
+          // is logged and never blocks the compaction itself. The reinject is
+          // armed only when the file actually landed.
+          if (compactMemoryEnabled() && s.working_directory) {
+            try {
+              const raw = s.claude_session_id
+                ? await readClaudeTranscriptRaw(
+                    s.working_directory,
+                    s.claude_session_id
+                  )
+                : null;
+              if (raw != null) {
+                const memoryPath = joinNativePath(
+                  s.working_directory,
+                  COMPACT_MEMORY_FILE
+                );
+                await mkdir(nativeDirname(memoryPath), { recursive: true });
+                await writeFile(
+                  memoryPath,
+                  buildCompactMemoryMarkdown({
+                    sessionName: s.name,
+                    model: cost.model ?? s.model,
+                    contextPct: pct,
+                    nowIso: new Date(nowMs).toISOString(),
+                    entries: extractTranscriptEntries(raw),
+                  }),
+                  "utf8"
+                );
+                compactReinject.set(s.id, nowMs);
+              }
+            } catch (err) {
+              console.error(
+                "auto-compact: memory flush failed (compacting anyway):",
+                err
+              );
+            }
+          }
+          const compactCommand = buildCompactCommand(customCompactPrompt());
           console.log(
-            `auto-compact: ${s.name} context ~${Math.round(pct * 100)}% at idle → /compact (${usedToday + 1}/${COMPACT_MAX_PER_DAY || "∞"} today)`
+            `auto-compact: ${s.name} context ~${Math.round(pct * 100)}% at idle → ${compactCommand === "/compact" ? "/compact" : "/compact (custom prompt)"} (${usedToday + 1}/${COMPACT_MAX_PER_DAY || "∞"} today)`
           );
           await backend
-            .pasteText(key, "/compact", { enter: true })
+            .pasteText(key, compactCommand, { enter: true })
             .catch((err) => console.error("auto-compact send failed:", err));
         }
         // Prune the per-session trackers for sessions that no longer exist.
@@ -1280,6 +1398,8 @@ app.prepare().then(() => {
           if (!liveIds.has(id)) lastCompactAt.delete(id);
         for (const id of [...compactDay.keys()])
           if (!liveIds.has(id)) compactDay.delete(id);
+        for (const id of [...compactReinject.keys()])
+          if (!liveIds.has(id)) compactReinject.delete(id);
       } catch (err) {
         console.error("auto-compact tick failed:", err);
       } finally {

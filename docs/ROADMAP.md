@@ -495,15 +495,30 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     server-side), fetched only while a mention is open. Discoverable via the
     placeholder ("@ mentions a file"). 19-case pure matrix in
     `test/mention-files.test.ts`.
-25. **Compaction control + external-memory injection** — `orchestration` · M.
-    🟡 _Proactive TRIGGER shipped (#329):_ opt-in auto-/compact (STOA_AUTO_COMPACT) sends
-    `/compact` to a near-full Claude session at the canonical idle-AND-no-prompt boundary
-    (cooldown + per-session daily cap), so a long run reclaims headroom before the painful
-    native auto-compaction — amux's headline self-healing move + the watchdog's deferred
-    "low-context auto-/compact". _Remaining:_ a custom compaction prompt, the PreCompact
-    flush of NOTES/TODO into the worktree, and the PostCompact re-inject (the
-    external-memory half). _Seam:_ `lib/auto-compact.ts` (done), `lib/context-window.ts`,
-    `lib/snapshots.ts`, `lib/notes.ts`, `lib/summarize.ts`.
+25. ✅ **Compaction control + external-memory injection** — `orchestration` · M.
+    **SHIPPED** (trigger #329; external-memory half here). Three opt-in pieces
+    around the auto-/compact trigger (`lib/compact-memory.ts`, pure +
+    unit-tested; wiring in the server tick):
+    1. **Custom compaction prompt** — `STOA_AUTO_COMPACT_PROMPT` is sanitized
+       to one line (control bytes stripped, 400-char cap) and appended to
+       `/compact` to steer what the summary preserves; empty keeps the bare
+       command byte-identical.
+    2. **PreCompact flush** (`STOA_COMPACT_MEMORY=1`; requires
+       `STOA_AUTO_COMPACT=1` — the whole tick is gated on the trigger, and
+       startup warns when set alone) — just before /compact,
+       the recent conversation tail (deterministic `extractTranscriptEntries`,
+       tail-biased 24k cap, sanitized) is written to `.stoa/compact-memory.md`
+       in the session cwd, so the detail compaction drops survives on disk.
+       A flush failure logs and never blocks the compaction.
+    3. **PostCompact re-inject** — one-shot pointer pasted at the next
+       idle-AND-no-prompt boundary AFTER the live context occupancy fell back
+       under the threshold (the transcript itself is the completion signal),
+       with a 2-min settle delay and 30-min expiry; budget-parked sessions are
+       skipped (#21). A session pending its pointer never starts another
+       compaction in the same tick.
+       v2 ideas: agent-driven flush (ask the model to write its own TODO state)
+       and NOTES-table integration. _Seam:_ `lib/compact-memory.ts`,
+       `lib/auto-compact.ts` (#329), `server.ts` tick, `lib/summarize.ts` helpers.
 26. **LLM-as-judge rubric review gate** — `orchestration` · M. A binary rubric judge
     (tests added? no secret left? matches AGENTS.md? no injection shape?) alongside
     typecheck/test/build; block/downgrade auto-merge on failure. _Why:_ the
