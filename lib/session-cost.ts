@@ -36,73 +36,80 @@ export interface SessionCost {
  * callers treat other agents as unsupported.
  */
 
-/** Sum token usage across a JSONL transcript. Pure → unit-testable. */
-export function parseClaudeUsage(jsonl: string): TokenUsage {
-  const total: TokenUsage = { ...ZERO_USAGE };
-  const seen = new Set<string>(); // dedupe replayed/retried turns by message id
+type ClaudeUsage = { tokens: TokenUsage; contextTokens: number };
+
+/**
+ * Single-pass core (#42): ONE walk over the transcript produces BOTH the
+ * cumulative usage total and the live context-window occupancy — the JSONL was
+ * previously walked twice per read, and this sits under every cost consumer's
+ * tick. The walk preserves each former parser's exact semantics, including
+ * their SEPARATE message-id dedupe sets: the context pass skips sidechain
+ * turns BEFORE recording ids, so a later main-thread turn reusing a sidechain
+ * turn's id still becomes the context reading while staying deduped from the
+ * cumulative total. Pure → unit-testable.
+ */
+export function parseClaudeTranscriptUsage(jsonl: string): ClaudeUsage {
+  const tokens: TokenUsage = { ...ZERO_USAGE };
+  let contextTokens = 0;
+  // Dedupe replayed/retried turns by message id (a killed→resumed write can
+  // re-append a turn) — one set per accumulator, matching the former two walks.
+  const seenTotal = new Set<string>();
+  const seenContext = new Set<string>();
   for (const line of jsonl.split("\n")) {
     const t = line.trim();
     if (!t) continue;
+    let entry;
     try {
-      const entry = JSON.parse(t);
-      // Only assistant turns carry the authoritative per-turn usage; gating on
-      // type avoids double-counting a summary/result line that echoes a total.
-      if (entry?.type !== "assistant") continue;
-      const usage = entry.message?.usage;
-      if (!usage) continue;
-      const id = entry.message?.id;
-      if (id) {
-        if (seen.has(id)) continue; // a killed→resumed write can re-append a turn
-        seen.add(id);
-      }
-      total.input += usage.input_tokens || 0;
-      total.output += usage.output_tokens || 0;
-      total.cacheWrite += usage.cache_creation_input_tokens || 0;
-      total.cacheRead += usage.cache_read_input_tokens || 0;
+      entry = JSON.parse(t);
     } catch {
-      // skip a malformed line
+      continue; // skip a malformed line
+    }
+    // Only assistant turns carry the authoritative per-turn usage; gating on
+    // type avoids double-counting a summary/result line that echoes a total.
+    if (entry?.type !== "assistant") continue;
+    const usage = entry.message?.usage;
+    if (!usage) continue;
+    const id = entry.message?.id;
+    // Cumulative total: every assistant turn counts, sidechain included.
+    if (!id || !seenTotal.has(id)) {
+      if (id) seenTotal.add(id);
+      tokens.input += usage.input_tokens || 0;
+      tokens.output += usage.output_tokens || 0;
+      tokens.cacheWrite += usage.cache_creation_input_tokens || 0;
+      tokens.cacheRead += usage.cache_read_input_tokens || 0;
+    }
+    // Context occupancy: keep the LATEST turn's number (transcripts are
+    // append-only), skipping Task sub-agent (sidechain) turns — their fresh,
+    // small context isn't the main thread's occupancy, and right after a
+    // sub-agent run the LAST assistant entry is the sub-agent's — which would
+    // make the meter drop and mask near-exhaustion (the one thing it exists to
+    // surface).
+    if (!entry.isSidechain && (!id || !seenContext.has(id))) {
+      if (id) seenContext.add(id);
+      contextTokens =
+        (usage.input_tokens || 0) +
+        (usage.cache_read_input_tokens || 0) +
+        (usage.cache_creation_input_tokens || 0);
     }
   }
-  return total;
+  return { tokens, contextTokens };
+}
+
+/** Sum token usage across a JSONL transcript. Pure → unit-testable. Thin
+ *  wrapper over the single-pass core (#42). */
+export function parseClaudeUsage(jsonl: string): TokenUsage {
+  return parseClaudeTranscriptUsage(jsonl).tokens;
 }
 
 /**
  * Live context-window occupancy = the input the model saw on its LAST turn
  * (input + cache read + cache write), not the running output total. That last
  * assistant turn's input bucket is the whole conversation re-sent, so it's the
- * best proxy for "how full is the window right now". Walks forward and keeps the
- * latest turn's number (transcripts are append-only). Pure → unit-testable.
+ * best proxy for "how full is the window right now". Thin wrapper over the
+ * single-pass core (#42). Pure → unit-testable.
  */
 export function parseClaudeContextTokens(jsonl: string): number {
-  let latest = 0;
-  const seen = new Set<string>(); // dedupe replayed/retried turns by message id
-  for (const line of jsonl.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    try {
-      const entry = JSON.parse(t);
-      if (entry?.type !== "assistant") continue;
-      // Skip Task sub-agent (sidechain) turns: their fresh, small context isn't
-      // the main thread's occupancy, and right after a sub-agent run the LAST
-      // assistant entry is the sub-agent's — which would make the meter drop and
-      // mask near-exhaustion (the one thing it exists to surface).
-      if (entry?.isSidechain) continue;
-      const usage = entry.message?.usage;
-      if (!usage) continue;
-      const id = entry.message?.id;
-      if (id) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-      }
-      latest =
-        (usage.input_tokens || 0) +
-        (usage.cache_read_input_tokens || 0) +
-        (usage.cache_creation_input_tokens || 0);
-    } catch {
-      // skip a malformed line
-    }
-  }
-  return latest;
+  return parseClaudeTranscriptUsage(jsonl).contextTokens;
 }
 
 /**
@@ -147,8 +154,6 @@ export function netForkUsage(
   };
 }
 
-type ClaudeUsage = { tokens: TokenUsage; contextTokens: number };
-
 /**
  * Stat-gated cache of parsed transcript usage (#18), shared across EVERY cost
  * consumer — the cost route, the budget tick (30s), the cost sampler (60s), the
@@ -159,18 +164,15 @@ type ClaudeUsage = { tokens: TokenUsage; contextTokens: number };
  */
 const claudeUsageCache = createStatGatedCache<ClaudeUsage>({ max: 512 });
 
-/** Uncached read + dual-parse of a Claude transcript (the cache's load step and
- *  the kill-switch fallback). Null when the transcript can't be read. */
+/** Uncached read + single-pass parse of a Claude transcript (the cache's load
+ *  step and the kill-switch fallback). Null when the transcript can't be read. */
 async function loadClaudeUsage(
   cwd: string,
   claudeSessionId: string
 ): Promise<ClaudeUsage | null> {
   const raw = await readClaudeTranscriptRaw(cwd, claudeSessionId);
   if (raw == null) return null;
-  return {
-    tokens: parseClaudeUsage(raw),
-    contextTokens: parseClaudeContextTokens(raw),
-  };
+  return parseClaudeTranscriptUsage(raw);
 }
 
 /**
