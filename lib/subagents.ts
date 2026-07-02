@@ -31,7 +31,6 @@ import path from "path";
 import { homeDir } from "./platform";
 import {
   getProviderDefinition,
-  getAllProviderDefinitions,
   isValidProviderId,
   type ProviderId,
 } from "./providers/registry";
@@ -284,16 +283,6 @@ export function buildSubagentFileContent(def: SubagentDef): string {
   return body ? `${frontmatter}\n\n${body}\n` : `${frontmatter}\n`;
 }
 
-/** The providers that have a native subagent convention wired. */
-export function supportedSubagentProviders(): {
-  id: ProviderId;
-  name: string;
-}[] {
-  return getAllProviderDefinitions()
-    .filter((p) => !!p.agentsDir)
-    .map((p) => ({ id: p.id, name: p.name }));
-}
-
 /** The absolute agents directory for a provider, or null if it has none. Built
  * from homeDir() so it's correct on Windows/macOS/Linux. */
 export function agentsDirForProvider(providerId: ProviderId): string | null {
@@ -333,18 +322,6 @@ export function subagentDir(dir: string, name: string): string {
 /** The absolute AGENT.md path for a subagent under a provider's agents dir. */
 export function subagentFilePath(dir: string, name: string): string {
   return path.join(subagentDir(dir, name), SUBAGENT_FILE_NAME);
-}
-
-/** Where a materialized subagent WILL land, for a provider — absolute AGENT.md
- * path (or throws if the provider has no subagent dir / name is invalid). Useful
- * to report what was written without doing the write. */
-export function subagentPathForProvider(
-  providerId: unknown,
-  rawName: unknown
-): string {
-  const { dir } = requireAgentsDir(providerId);
-  const name = normalizeSubagentName(rawName);
-  return subagentFilePath(dir, name);
 }
 
 /**
@@ -406,6 +383,31 @@ const ROLE_TOOLS: Record<WorkflowRole, readonly string[]> = {
 };
 
 /**
+ * The system-prompt PERSONA for each role, addressed to that agent. Distinct from
+ * ROLE_GUIDANCE, which is fleet-shaping advice for the workflow GENERATOR ("~3
+ * roots, run in parallel", "the sink") — that topology prose reads as noise inside
+ * a standalone subagent's instructions. These are the instructions the materialized
+ * AGENT.md actually needs: what this one agent does. The read-only roles restate
+ * their no-write scope so the persona matches the tools allowlist.
+ */
+const ROLE_PERSONA: Record<WorkflowRole, string> = {
+  researcher:
+    "You investigate the problem space — the codebase, docs, and prior art — and report concrete, cited findings. You read and search; you do not modify code.",
+  architect:
+    "You design the solution from the research: the overall architecture and the component/module breakdown, with the trade-offs made explicit. You read and search; you do not modify code.",
+  "software-engineer":
+    "You implement the code to match the agreed design, in surgical, well-tested changes that match the surrounding style.",
+  "ui-ux":
+    "You design and implement the UI/UX — accessible, responsive, and consistent with the existing design system.",
+  tester:
+    "You develop the test suite (unit + integration), covering the happy path, edge cases, and failure modes, and you make it pass.",
+  integrator:
+    "You integrate every slice into one coherent, working whole, resolving conflicts and verifying the build and tests are green.",
+  "review-gate":
+    "You are the final reviewer: you judge the whole change on correctness/security, conventions/cross-platform, and simplicity/UX, and sign off only if all three pass. You read and search; you do not modify code.",
+};
+
+/**
  * Derive a provider-agnostic SubagentDef from a workflow role. The role's
  * canonical guidance (ROLE_GUIDANCE) becomes the description AND the persona
  * system prompt; the tools allowlist comes from ROLE_TOOLS. `model` is left
@@ -422,13 +424,12 @@ export function roleToSubagentDef(
     // programmer error, but fail closed rather than emit a malformed def.
     throw new SubagentValidationError(`unknown role: ${String(role)}`);
   }
-  const guidance = ROLE_GUIDANCE[role];
   return validateSubagentDef({
     name: role,
-    description: guidance,
+    description: ROLE_GUIDANCE[role],
     tools: [...ROLE_TOOLS[role]],
     model: opts.model,
-    systemPrompt: `You are the "${role}" role in a Stoa workflow.\n\n${guidance}`,
+    systemPrompt: `You are the "${role}" role in a Stoa workflow.\n\n${ROLE_PERSONA[role]}`,
   });
 }
 
@@ -458,21 +459,28 @@ export const MATERIALIZABLE_ROLES = Object.keys(ROLE_TOOLS) as WorkflowRole[];
 /**
  * Bulk-install ALL workflow roles as subagents for a provider. Existing
  * hand-authored files are LEFT ALONE (overwrite=false) — this is a one-click
- * "install the role library" action, not a stomp. Returns which roles were
- * written vs skipped (already present). The `io` seam keeps it testable.
+ * "install the role library" action, not a stomp. The provider is validated ONCE
+ * up front (a bad id throws before any write). Returns which roles were written
+ * vs skipped (already present) plus the destination `dir`, so a caller can tell
+ * the user exactly where the files landed. The `io` seam keeps it testable.
+ *
+ * Not atomic: if a write throws partway (EACCES/ENOSPC/…), earlier roles remain
+ * on disk. Content is deterministic and overwrite=false, so re-running safely
+ * installs the rest — the route surfaces that on failure.
  */
 export function materializeAllRoles(
   providerId: unknown,
   opts: { io?: SubagentFs } = {}
-): { written: WorkflowRole[]; skipped: WorkflowRole[] } {
+): { written: WorkflowRole[]; skipped: WorkflowRole[]; dir: string } {
+  const { id, dir } = requireAgentsDir(providerId);
   const written: WorkflowRole[] = [];
   const skipped: WorkflowRole[] = [];
   for (const role of MATERIALIZABLE_ROLES) {
-    const r = materializeRoleSubagent(providerId, role, {
+    const r = materializeRoleSubagent(id, role, {
       overwrite: false,
       io: opts.io,
     });
     (r.written ? written : skipped).push(role);
   }
-  return { written, skipped };
+  return { written, skipped, dir };
 }

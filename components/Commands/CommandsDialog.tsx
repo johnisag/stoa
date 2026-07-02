@@ -102,29 +102,57 @@ export function CommandsDialog({
   const [installingRoles, setInstallingRoles] = useState(false);
   const installRoles = async () => {
     setInstallingRoles(true);
+    // A hung server must not pin the button in "Installing…" forever.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
     try {
       const res = await fetch("/api/subagents", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider }),
+        signal: ctrl.signal,
       });
-      const data = (await res.json()) as {
+      // Parse defensively: an infra-level failure (proxy 502, framework HTML 500)
+      // returns non-JSON, and res.json() would otherwise throw a cryptic
+      // SyntaxError instead of a useful message.
+      let data: {
         written?: string[];
         skipped?: string[];
+        dir?: string;
         error?: string;
-      };
-      if (!res.ok) throw new Error(data.error || "Failed to install subagents");
+      } = {};
+      try {
+        data = await res.json();
+      } catch {
+        /* leave data empty; the status check below produces the message */
+      }
+      if (!res.ok)
+        throw new Error(
+          data.error || `Failed to install subagents (${res.status})`
+        );
       const w = data.written?.length ?? 0;
       const s = data.skipped?.length ?? 0;
-      toast.success(
-        `Installed ${w} workflow role${w === 1 ? "" : "s"} as ${providerName} subagents` +
-          (s ? ` (${s} already existed, left untouched)` : "")
-      );
+      if (w === 0) {
+        toast.success(
+          `All ${s} ${providerName} workflow-role subagents are already installed — nothing to do.`
+        );
+      } else {
+        const where = data.dir ? ` in ${data.dir}` : "";
+        toast.success(
+          `Installed ${w} workflow role${w === 1 ? "" : "s"} as ${providerName} subagents${where}` +
+            (s ? ` (${s} already existed, left untouched)` : "")
+        );
+      }
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : "Failed to install subagents"
-      );
+      const msg =
+        e instanceof DOMException && e.name === "AbortError"
+          ? "Timed out installing subagents"
+          : e instanceof Error
+            ? e.message
+            : "Failed to install subagents";
+      toast.error(msg);
     } finally {
+      clearTimeout(timer);
       setInstallingRoles(false);
     }
   };
@@ -269,7 +297,9 @@ export function CommandsDialog({
             <div className="border-border flex items-center justify-between gap-2 border-t pt-3">
               <span className="text-muted-foreground text-xs">
                 Install Stoa&apos;s workflow roles as reusable {providerName}{" "}
-                subagents (each scoped to a tools allowlist).
+                subagents (each scoped to a tools allowlist), written to the
+                agent&apos;s native subagents directory. Existing files are left
+                untouched.
               </span>
               <Button
                 size="sm"
