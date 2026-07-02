@@ -34,6 +34,7 @@ import {
 import type { TerminalScrollState } from "./hooks";
 import type { AttachPayload } from "./hooks/useTerminalConnection.types";
 import { useViewport } from "@/hooks/useViewport";
+import { useWakeLock } from "@/hooks/useWakeLock";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { uploadFileToTemp, partitionUploads } from "@/lib/file-upload";
 import {
@@ -194,6 +195,11 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       sendInput,
       triggerResize,
     });
+
+    // #39 keep the screen awake while watching a live run — mobile screens
+    // otherwise dim mid-agent. Feature-detected inside the hook (no Wake Lock
+    // API = silent no-op); it releases on tab-hide and re-acquires on return.
+    useWakeLock(connectionState === "connected");
 
     // Handle image selection - paste file path into terminal
     const handleImageSelect = useCallback(

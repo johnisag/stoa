@@ -17,6 +17,7 @@ import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { MiniTerminal } from "@/components/MiniTerminal";
 import { useBackendType } from "@/hooks/useBackendType";
+import { useWakeLock } from "@/hooks/useWakeLock";
 import {
   liveWallSessions,
   liveWallColumns,
@@ -49,6 +50,10 @@ export function LiveWallView({
   // a transient failure (null only while loading), so the grid never gets wedged
   // showing the tmux notice on a blip.
   const backend = useBackendType();
+
+  // #39 watching the wall = watching live runs; keep the screen awake while
+  // it's mounted. The hook itself yields to tab-hide and to a missing API.
+  useWakeLock(true);
 
   // Trim to the cell cap (each cell opens an observer WebSocket). Surfaced as a
   // "+N more" note so it's never a silent truncation.
