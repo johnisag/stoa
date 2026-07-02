@@ -146,8 +146,7 @@ export function consumeInbox(sessionId: string): ChannelMessageRow[] {
 export function nextUnreadMessage(sessionId: string): ChannelMessageRow | null {
   return (
     (queries.nextChannelInbox(db).get(sessionId) as
-      | ChannelMessageRow
-      | undefined) ?? null
+      ChannelMessageRow | undefined) ?? null
   );
 }
 

@@ -73,8 +73,7 @@ export async function POST(request: NextRequest) {
       agentType: agentType as AgentType | undefined,
       defaultModel,
       devServers: devServers as
-        | import("@/lib/projects").CreateDevServerOptions[]
-        | undefined,
+        import("@/lib/projects").CreateDevServerOptions[] | undefined,
     });
 
     return NextResponse.json({ project }, { status: 201 });

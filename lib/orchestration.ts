@@ -142,8 +142,7 @@ export async function spawnWorker(
   // session (e.g. an agent passing its own provider session id) would otherwise
   // surface as a raw "SqliteError: FOREIGN KEY constraint failed".
   const conductor = queries.getSession(db).get(conductorSessionId) as
-    | Session
-    | undefined;
+    Session | undefined;
   if (!conductor) {
     throw new Error(
       `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing Stoa session.`

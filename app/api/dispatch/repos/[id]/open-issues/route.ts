@@ -24,8 +24,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const { id } = await params;
     const db = getDb();
     const repo = queries.getDispatchRepo(db).get(id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo) {
       return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
     }
@@ -64,8 +63,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const { id } = await params;
     const db = getDb();
     const repo = queries.getDispatchRepo(db).get(id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo) {
       return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
     }
@@ -91,15 +89,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Idempotent: reuse the existing row if this issue is already tracked, so a
     // double-tap (or a reconciler ingest that just ran) never inserts a dupe.
     let row = queries.getDispatchByRepoIssue(db).get(repo.id, number) as
-      | IssueDispatch
-      | undefined;
+      IssueDispatch | undefined;
     if (!row) {
       queries
         .upsertDispatchCandidate(db)
         .run(randomUUID(), repo.id, number, title, url, createdAt);
       row = queries.getDispatchByRepoIssue(db).get(repo.id, number) as
-        | IssueDispatch
-        | undefined;
+        IssueDispatch | undefined;
     }
     if (!row) {
       return NextResponse.json(

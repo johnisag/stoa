@@ -52,7 +52,10 @@ describe("validateBestOfNParams — per-field rules", () => {
   });
 
   it("rejects n as a string (type-level enforcement)", () => {
-    const res = validateBestOfNParams({ ...VALID_BASE, n: "3" as unknown as number });
+    const res = validateBestOfNParams({
+      ...VALID_BASE,
+      n: "3" as unknown as number,
+    });
     expect(res.ok).toBe(false);
   });
 
@@ -97,7 +100,10 @@ describe("validateBestOfNParams — per-field rules", () => {
   });
 
   it("rejects empty conductorSessionId", () => {
-    const res = validateBestOfNParams({ ...VALID_BASE, conductorSessionId: "" });
+    const res = validateBestOfNParams({
+      ...VALID_BASE,
+      conductorSessionId: "",
+    });
     expect(res.ok).toBe(false);
   });
 });

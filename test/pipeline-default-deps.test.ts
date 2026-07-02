@@ -11,11 +11,9 @@ const state = vi.hoisted(() => ({
   sessionExists: true,
 }));
 const spawnWorkerMock = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<{ id: string; worktree_path?: string | null }> => ({
-      id: "worker-1",
-    })
-  )
+  vi.fn(async (): Promise<{ id: string; worktree_path?: string | null }> => ({
+    id: "worker-1",
+  }))
 );
 const getStatusMock = vi.hoisted(() => vi.fn(async () => state.status));
 const killWorkerMock = vi.hoisted(() =>

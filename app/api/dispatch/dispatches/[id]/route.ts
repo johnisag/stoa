@@ -34,8 +34,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const { id } = await params;
     const db = getDb();
     const dispatch = queries.getDispatch(db).get(id) as
-      | IssueDispatch
-      | undefined;
+      IssueDispatch | undefined;
     if (!dispatch) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
@@ -85,8 +84,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // approve + retry both spawn a worker now; retry first wipes the failed
     // row's worker/PR/review state so dispatchOne gets a clean 'pending' row.
     const repo = queries.getDispatchRepo(db).get(dispatch.repo_id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo) {
       return NextResponse.json(
         { error: "Tracked repo is gone" },

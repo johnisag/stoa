@@ -8,11 +8,7 @@ import { proxy } from "valtio";
  * then clears the request so it doesn't re-fire.
  */
 export type PaneCommand =
-  | "toggle-git"
-  | "toggle-files"
-  | "toggle-shell"
-  | "next-tab"
-  | "prev-tab";
+  "toggle-git" | "toggle-files" | "toggle-shell" | "next-tab" | "prev-tab";
 
 export interface PaneCommandRequest {
   command: PaneCommand;

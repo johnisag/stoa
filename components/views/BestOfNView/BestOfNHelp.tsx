@@ -36,21 +36,17 @@ export function BestOfNHelp({ onClose }: { onClose: () => void }) {
           <span className="text-foreground font-medium">
             2. Compare the diffs.
           </span>{" "}
-          Once all agents finish, this view shows each candidate&apos;s git
-          diff — files changed, lines added, lines removed. Switch between
-          candidates with the tabs. Read the diffs to see which approach you
-          prefer.
+          Once all agents finish, this view shows each candidate&apos;s git diff
+          — files changed, lines added, lines removed. Switch between candidates
+          with the tabs. Read the diffs to see which approach you prefer.
         </li>
         <li>
-          <span className="text-foreground font-medium">
-            3. Pick a winner.
-          </span>{" "}
+          <span className="text-foreground font-medium">3. Pick a winner.</span>{" "}
           Tap{" "}
           <span className="text-foreground font-medium">Pick this winner</span>{" "}
-          on the candidate you want to keep. The other agents&apos; sessions
-          and worktrees are cleaned up automatically. The winning session
-          stays open so you can commit, push, or continue iterating in its
-          terminal.
+          on the candidate you want to keep. The other agents&apos; sessions and
+          worktrees are cleaned up automatically. The winning session stays open
+          so you can commit, push, or continue iterating in its terminal.
         </li>
         <li>
           <span className="text-foreground font-medium">
@@ -62,11 +58,11 @@ export function BestOfNHelp({ onClose }: { onClose: () => void }) {
       </ol>
 
       <p className="text-muted-foreground text-xs leading-relaxed">
-        Best of N is best used for self-contained tasks where the quality of
-        the output is hard to predict in advance — bug fixes, refactors, or
-        new features where multiple valid approaches exist. Diffs are captured
-        once the agents finish; if an agent&apos;s diff is empty it may still
-        be working or may have produced no file changes.
+        Best of N is best used for self-contained tasks where the quality of the
+        output is hard to predict in advance — bug fixes, refactors, or new
+        features where multiple valid approaches exist. Diffs are captured once
+        the agents finish; if an agent&apos;s diff is empty it may still be
+        working or may have produced no file changes.
       </p>
     </div>
   );

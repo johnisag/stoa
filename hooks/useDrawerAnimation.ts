@@ -6,10 +6,7 @@ import { useState, useEffect, useRef } from "react";
  * The caller should keep the drawer mounted while isClosing is true and
  * apply the inverse of the enter transform classes.
  */
-export function useDrawerAnimation(
-  open: boolean,
-  exitDurationMs = 200
-) {
+export function useDrawerAnimation(open: boolean, exitDurationMs = 200) {
   const [isAnimatingIn, setIsAnimatingIn] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const hasAnimated = useRef(false);

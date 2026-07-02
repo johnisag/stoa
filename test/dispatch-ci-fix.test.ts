@@ -6,8 +6,7 @@ const { state } = vi.hoisted(() => ({
   state: {
     rows: [] as Array<Record<string, unknown>>,
     repo: { ci_autofix: 1, repo_slug: "o/r" } as
-      | Record<string, unknown>
-      | undefined,
+      Record<string, unknown> | undefined,
     checks: "failing" as string,
     live: [] as string[],
     sessions: {} as Record<string, { tmux_name: string }>,

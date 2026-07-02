@@ -125,7 +125,9 @@ export function usePickWinner() {
     retry: 0,
     mutationFn: async (
       input: PickWinnerInput
-    ): Promise<{ ok: boolean; winnerSessionId: string | null } & BonRunWithCandidates> => {
+    ): Promise<
+      { ok: boolean; winnerSessionId: string | null } & BonRunWithCandidates
+    > => {
       const res = await fetch(`/api/best-of-n/${input.runId}/pick`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

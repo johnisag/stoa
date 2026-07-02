@@ -38,8 +38,7 @@ vi.mock("@/lib/projects", async (importOriginal) => {
     getProject: (id: string) => {
       const db = state.db as InstanceType<typeof Database>;
       const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       if (!row) return undefined;
       return {
         id: row.id as string,
@@ -378,7 +377,9 @@ describe("executePlan", () => {
     if (!result.ok) return;
     for (const stepResult of result.results) {
       if (stepResult.sessionId) {
-        const row = queries.getSession(db()).get(stepResult.sessionId) as Session;
+        const row = queries
+          .getSession(db())
+          .get(stepResult.sessionId) as Session;
         expect(row.auto_approve).toBe(0);
       }
     }

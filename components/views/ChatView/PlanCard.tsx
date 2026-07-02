@@ -35,7 +35,9 @@ function StepIcon({ status }: { status: StepProgress["status"] }) {
     );
   }
   // waiting
-  return <Circle className="text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-50" />;
+  return (
+    <Circle className="text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-50" />
+  );
 }
 
 /**
@@ -55,8 +57,7 @@ export function PlanCard({
   onCancel,
   confirmDisabled,
 }: PlanCardProps) {
-  const isPendingOrExecuting =
-    status === "pending" || status === "executing";
+  const isPendingOrExecuting = status === "pending" || status === "executing";
 
   return (
     <div className="border-border bg-muted/30 max-w-[90%] space-y-3 rounded-2xl rounded-bl-sm border px-4 py-3">

@@ -88,8 +88,7 @@ export async function POST(request: NextRequest) {
 
     const db = getDb();
     const repo = queries.getDispatchRepo(db).get(repoId) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo) {
       return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
     }

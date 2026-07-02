@@ -52,8 +52,7 @@ export const OFFLINE_QUEUE_MAX_ATTEMPTS = 5;
 
 /** The outcome of one replay attempt: an HTTP response, or a thrown fetch. */
 export type ReplayOutcome =
-  | { ok: boolean; status: number }
-  | { networkError: true };
+  { ok: boolean; status: number } | { networkError: true };
 
 export type ReplayDecision = "success" | "drop" | "retry";
 

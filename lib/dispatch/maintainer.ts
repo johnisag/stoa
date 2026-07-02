@@ -299,8 +299,7 @@ export async function readSurveyRun(
   try {
     const names = new Set(await getSessionBackend().list());
     const sess = queries.getSession(getDb()).get(run.sessionId) as
-      | Session
-      | undefined;
+      Session | undefined;
     alive = !!sess && names.has(sess.tmux_name);
   } catch {
     return { status: "running" }; // can't enumerate → never risk a false reap
@@ -324,8 +323,7 @@ export async function cleanupSurveyRun(surveyId: string): Promise<void> {
   try {
     if (run.sessionId) {
       const s = queries.getSession(getDb()).get(run.sessionId) as
-        | Session
-        | undefined;
+        Session | undefined;
       if (s) await getSessionBackend().kill(s.tmux_name);
     }
   } catch {

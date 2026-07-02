@@ -50,6 +50,9 @@ export async function POST(
       error instanceof Error ? error.message : "Failed to pick winner";
     const isNotFound =
       msg.includes("not found") || msg.includes("not found in run");
-    return NextResponse.json({ error: msg }, { status: isNotFound ? 404 : 400 });
+    return NextResponse.json(
+      { error: msg },
+      { status: isNotFound ? 404 : 400 }
+    );
   }
 }

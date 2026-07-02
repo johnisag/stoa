@@ -125,8 +125,7 @@ export class ClaudeProcessManager {
 
     // Handle session continuity: explicit options take precedence, then DB value.
     const dbSession = queries.getSession(db).get(sessionId) as
-      | Session
-      | undefined;
+      Session | undefined;
     const resumeId = options.claudeSessionId ?? dbSession?.claude_session_id;
     if (resumeId && options.resume !== false) {
       args.push("--resume", resumeId);

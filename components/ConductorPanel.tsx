@@ -274,7 +274,9 @@ export function ConductorPanel({
             onClick={refresh}
             disabled={refreshing}
           >
-            <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
+            <RefreshCw
+              className={cn("h-4 w-4", refreshing && "animate-spin")}
+            />
           </Button>
         </div>
         {/* One-line primer so the panel is self-explanatory without a help doc */}

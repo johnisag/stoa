@@ -10,11 +10,7 @@
  */
 
 export type SeeChangesStatus =
-  | "idle"
-  | "running"
-  | "waiting"
-  | "error"
-  | "dead";
+  "idle" | "running" | "waiting" | "error" | "dead";
 
 /**
  * True only on the "turn just completed" transition: an active turn

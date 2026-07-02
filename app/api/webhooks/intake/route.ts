@@ -129,8 +129,7 @@ export async function POST(request: NextRequest) {
   repo =
     (queries.getDispatchRepo(db).get(task.repo) as DispatchRepo | undefined) ??
     (queries.getDispatchRepoBySlug(db).get(task.repo) as
-      | DispatchRepo
-      | undefined);
+      DispatchRepo | undefined);
 
   if (!repo) {
     return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
