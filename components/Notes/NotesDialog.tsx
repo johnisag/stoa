@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -17,9 +19,15 @@ import {
   useCreateNote,
   useUpdateNote,
   useDeleteNote,
+  noteKeys,
   type Note,
 } from "@/data/notes";
 import { useViewport } from "@/hooks/useViewport";
+import { createUndoableRunner, UNDO_DELAY_MS } from "@/lib/undoable-action";
+
+// #37: module-scoped so a pending delete survives re-renders/unmounts. The real
+// DELETE only fires when the undo window elapses.
+const undoableNoteDelete = createUndoableRunner({ delayMs: UNDO_DELAY_MS });
 
 interface NotesDialogProps {
   open: boolean;
@@ -33,6 +41,7 @@ interface NotesDialogProps {
  */
 export function NotesDialog({ open, onOpenChange }: NotesDialogProps) {
   const { isMobile } = useViewport();
+  const queryClient = useQueryClient();
   const { data: notes = [], isLoading } = useNotes(open);
   const createNote = useCreateNote();
   const updateNote = useUpdateNote();
@@ -88,12 +97,36 @@ export function NotesDialog({ open, onOpenChange }: NotesDialogProps) {
   const togglePin = async (n: Note) =>
     updateNote.mutateAsync({ id: n.id, pinned: !n.pinned });
 
-  const remove = async (n: Note) => {
-    await deleteNote.mutateAsync(n.id);
+  const remove = (n: Note) => {
+    // #37: hide the note now, hold the real DELETE for the undo window. Undo
+    // cancels the pending delete and refetches (the server never saw it).
+    undoableNoteDelete.schedule(
+      `note:${n.id}`,
+      () => {
+        deleteNote.mutateAsync(n.id).catch(() => {
+          toast.error("Failed to delete note");
+          queryClient.invalidateQueries({ queryKey: noteKeys.list() });
+        });
+      },
+      () =>
+        queryClient.setQueryData<Note[]>(noteKeys.list(), (old) =>
+          old?.filter((note) => note.id !== n.id)
+        )
+    );
     if (selectedId === n.id) {
       setEditing(false);
       setSelectedId(null);
     }
+    toast(`Deleted "${n.title || "(untitled)"}"`, {
+      duration: UNDO_DELAY_MS,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          undoableNoteDelete.cancel(`note:${n.id}`);
+          queryClient.invalidateQueries({ queryKey: noteKeys.list() });
+        },
+      },
+    });
   };
 
   return (
