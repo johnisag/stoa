@@ -24,11 +24,16 @@
  * The span BUILDERS are pure (timestamps injected, never `Date.now()` inside)
  * so they are unit-testable without a clock or a network.
  */
-import { PROVIDER_MAP, type ProviderId } from "../providers/registry";
+import { randomBytes } from "crypto";
 
-/** The GenAI operation a span describes (OTel `gen_ai.operation.name`). */
-export type GenAiOperation =
-  "run" | "turn" | "tool" | "chat" | "invoke_agent" | "execute_tool";
+/**
+ * The GenAI operation a span describes (OTel `gen_ai.operation.name`). Only the
+ * operations actually emitted today: "run" (a worker run) and "tool" (an MCP
+ * tool call); "turn" is wired in the builder for the deferred per-turn hook.
+ * Re-widen when the deferred per-model/agent hooks land — keep this matched to
+ * shipped behavior rather than advertising vocabulary the slice doesn't emit.
+ */
+export type GenAiOperation = "run" | "turn" | "tool";
 
 /** A single OTLP key/value attribute (string|int|bool|double variants). */
 export interface OtlpAttribute {
@@ -102,11 +107,6 @@ export function genAiSystemForProvider(provider: string): string {
   }
 }
 
-/** True when a provider id is a known Stoa provider (kept for callers). */
-export function isKnownProvider(id: string): id is ProviderId {
-  return PROVIDER_MAP.has(id as ProviderId);
-}
-
 /** Build a string-valued OTLP attribute. */
 function strAttr(key: string, value: string): OtlpAttribute {
   return { key, value: { stringValue: value } };
@@ -114,7 +114,14 @@ function strAttr(key: string, value: string): OtlpAttribute {
 
 /** Build an int-valued OTLP attribute (OTLP encodes ints as decimal strings). */
 function intAttr(key: string, value: number): OtlpAttribute {
-  return { key, value: { intValue: String(Math.trunc(value)) } };
+  const n = Math.trunc(value);
+  // A magnitude beyond 2^53 stringifies to scientific notation (e.g. "1e+21"),
+  // which OTLP rejects for an intValue — fall back to a stringValue. Unreachable
+  // for the current callers (token counts, ms timings) but keeps arbitrary
+  // `extra` numerics schema-valid.
+  return Number.isSafeInteger(n)
+    ? { key, value: { intValue: String(n) } }
+    : { key, value: { stringValue: String(value) } };
 }
 
 /**
@@ -224,11 +231,39 @@ export function buildOtlpPayload(
  * cached at import) so a test can toggle the env var, and so the module has zero
  * side effects at import time.
  */
+let warnedBadEndpoint = false;
+
 export function otelEndpoint(): string | null {
   const raw = process.env.STOA_OTEL_ENDPOINT;
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
-  return trimmed ? trimmed : null;
+  if (!trimmed) return null;
+  // Validate once per emit: a malformed value or a non-http(s) scheme (file://,
+  // a bare host, a metadata-service target) must FAIL CLOSED to "telemetry off"
+  // rather than flow into fetch(). Not remote-attacker-controlled (env only),
+  // but fail-open on misconfiguration is worse than a clear off + one warning.
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    if (!warnedBadEndpoint) {
+      warnedBadEndpoint = true;
+      console.warn(
+        `[otel] STOA_OTEL_ENDPOINT is not a valid URL — telemetry disabled: ${trimmed}`
+      );
+    }
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    if (!warnedBadEndpoint) {
+      warnedBadEndpoint = true;
+      console.warn(
+        `[otel] STOA_OTEL_ENDPOINT must be http(s) — telemetry disabled: ${trimmed}`
+      );
+    }
+    return null;
+  }
+  return trimmed;
 }
 
 /** True when export is configured. The single guard every emit path checks. */
@@ -242,8 +277,19 @@ export function otelEnabled(): boolean {
  * (ending in `/v1/traces`), which is used as-is.
  */
 export function tracesUrl(endpoint: string): string {
-  const base = endpoint.replace(/\/+$/, "");
-  return base.endsWith("/v1/traces") ? base : `${base}/v1/traces`;
+  try {
+    // Parse so a query/fragment (some collectors take auth as `?token=`) isn't
+    // mangled by a naive suffix check — decide on the PATH only.
+    const u = new URL(endpoint);
+    const path = u.pathname.replace(/\/+$/, "");
+    if (!path.endsWith("/v1/traces")) u.pathname = `${path}/v1/traces`;
+    return u.toString();
+  } catch {
+    // Endpoint reaches here already validated by otelEndpoint(); the fallback
+    // just keeps the exported helper total for a direct caller with a base host.
+    const base = endpoint.replace(/\/+$/, "");
+    return base.endsWith("/v1/traces") ? base : `${base}/v1/traces`;
+  }
 }
 
 /** Optional OTLP headers from STOA_OTEL_HEADERS ("k1=v1,k2=v2"). Never throws. */
@@ -273,17 +319,34 @@ export type OtlpTransport = (
   headers: Record<string, string>
 ) => Promise<void>;
 
-/** The default transport: a fire-and-forget `fetch` POST. */
+/** Hard per-request deadline: undici's `fetch` has no default total timeout, so
+ *  a routable-but-silent collector would pin a socket forever. */
+const OTLP_TIMEOUT_MS = 5000;
+/** Cap concurrent in-flight emits so a stalled collector can't accumulate
+ *  unbounded pending POSTs (and sockets) under the high span volume this
+ *  feature targets. A dropped span is acceptable — telemetry is best-effort. */
+const MAX_INFLIGHT_EMITS = 64;
+let inFlightEmits = 0;
+
+/** The default transport: a fire-and-forget `fetch` POST, bounded by a timeout
+ *  and an in-flight ceiling. */
 const fetchTransport: OtlpTransport = async (url, body, headers) => {
   // `fetch` is global on Node 18+ (the repo's runtime). Guard anyway so a
   // stripped runtime degrades to a silent no-op rather than a ReferenceError.
   const f = (globalThis as { fetch?: typeof fetch }).fetch;
   if (typeof f !== "function") return;
-  await f(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body,
-  });
+  if (inFlightEmits >= MAX_INFLIGHT_EMITS) return; // shed load, drop the span
+  inFlightEmits++;
+  try {
+    await f(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body,
+      signal: AbortSignal.timeout(OTLP_TIMEOUT_MS),
+    });
+  } finally {
+    inFlightEmits--;
+  }
 };
 
 let transport: OtlpTransport = fetchTransport;
@@ -308,19 +371,20 @@ export function newSpanId(): string {
 }
 
 function randomHex(bytes: number): string {
-  let out = "";
-  for (let i = 0; i < bytes; i++) {
-    out += Math.floor(Math.random() * 256)
-      .toString(16)
-      .padStart(2, "0");
-  }
-  return out;
+  // CSPRNG (matches the repo's env-snapshot convention): the 64-bit span-id
+  // space raises birthday-collision odds under high span volume, and Math.random
+  // isn't uniformly guaranteed — a collision would merge spans in the backend.
+  return randomBytes(bytes).toString("hex");
 }
 
 /** Convert a Unix-millisecond timestamp to the OTLP nanosecond string. */
 export function msToUnixNano(ms: number): string {
-  // Avoid float precision loss for large values: do the *1e6 in integer space.
-  return `${Math.trunc(ms)}000000`;
+  // OTLP requires a decimal uint64 string. Clamp a non-finite / negative input
+  // to 0 so an external caller with a bad timestamp can't emit "NaN000000" /
+  // "-5000000", which a strict collector rejects. Integer-space *1e6 avoids
+  // float precision loss for large values.
+  const safe = Number.isFinite(ms) && ms > 0 ? Math.trunc(ms) : 0;
+  return `${safe}000000`;
 }
 
 /**
@@ -341,10 +405,21 @@ export async function emitSpan(input: GenAiSpanInput): Promise<void> {
     const body = JSON.stringify(payload);
     const url = tracesUrl(endpoint);
     await transport(url, body, otelHeaders());
-  } catch {
-    // Swallow — telemetry is best-effort and must not throw into the run.
+  } catch (err) {
+    // Swallow — telemetry is best-effort and must not throw into the run — but
+    // log ONCE so a misconfigured endpoint (down collector, wrong host, 404) is
+    // diagnosable rather than indistinguishable from "telemetry off".
+    if (!warnedEmitFail) {
+      warnedEmitFail = true;
+      console.debug(
+        `[otel] span emit failed (further failures silenced): ${
+          (err as Error)?.message ?? err
+        }`
+      );
+    }
   }
 }
+let warnedEmitFail = false;
 
 /**
  * Convenience emit for a GenAI event using millisecond timings and a Stoa

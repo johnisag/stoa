@@ -260,6 +260,40 @@ describe("endpoint-unset no-op (default OFF)", () => {
       restore();
     }
   });
+
+  it("FAILS CLOSED (off) on a malformed or non-http endpoint", async () => {
+    // A bad value must disable telemetry, never flow into fetch (fail-open).
+    for (const bad of [
+      "not-a-url",
+      "file:///etc/passwd",
+      "ftp://host/x",
+      " /etc",
+    ]) {
+      process.env.STOA_OTEL_ENDPOINT = bad;
+      expect(otelEndpoint()).toBeNull();
+      expect(otelEnabled()).toBe(false);
+    }
+    // A valid http(s) endpoint is accepted.
+    process.env.STOA_OTEL_ENDPOINT = "https://collector.example:4318";
+    expect(otelEnabled()).toBe(true);
+  });
+});
+
+describe("hardening helpers (#45 review)", () => {
+  it("msToUnixNano clamps a non-finite / negative timestamp to 0", () => {
+    expect(msToUnixNano(Number.NaN)).toBe("0000000");
+    expect(msToUnixNano(Number.POSITIVE_INFINITY)).toBe("0000000");
+    expect(msToUnixNano(-5)).toBe("0000000");
+    // A normal timestamp is unaffected.
+    expect(msToUnixNano(1700)).toBe("1700000000");
+  });
+
+  it("tracesUrl preserves a query string instead of mangling it", () => {
+    expect(tracesUrl("http://c:4318")).toBe("http://c:4318/v1/traces");
+    expect(tracesUrl("http://c/v1/traces?token=abc")).toBe(
+      "http://c/v1/traces?token=abc"
+    );
+  });
 });
 
 describe("emit via mocked transport (configured)", () => {
