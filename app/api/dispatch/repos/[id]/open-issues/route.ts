@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getDb, queries } from "@/lib/db";
-import { listOpenIssues } from "@/lib/dispatch/issues";
+import { resolveIssueSource } from "@/lib/dispatch/sources";
 import {
   annotateTriageIssues,
   canDispatchExisting,
@@ -14,10 +14,12 @@ type RouteParams = { params: Promise<{ id: string }> };
 /**
  * GET /api/dispatch/repos/[id]/open-issues?search=
  *
- * Browse a tracked repo's OPEN GitHub issues on demand (ignores the standing
+ * Browse a tracked repo's OPEN issues on demand (ignores the standing
  * label_filter so the whole backlog is triageable), each annotated with its
- * current dispatch status. The phone-side "triage your backlog" read. Label
- * narrowing is expressed through gh `search` (e.g. "label:bug").
+ * current dispatch status. The phone-side "triage your backlog" read. The
+ * backend (GitHub / Linear) is chosen by the repo's slug via resolveIssueSource
+ * (#34); for GitHub, label narrowing is expressed through gh `search`
+ * (e.g. "label:bug").
  */
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
@@ -30,7 +32,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const { searchParams } = new URL(request.url);
-    const issues = await listOpenIssues(repo, {
+    // Source picker (#34): GitHub by default, Linear for a `linear:`-prefixed
+    // slug. The browse contract (whole open backlog, caller-narrowed) is the
+    // same across backends.
+    const issues = await resolveIssueSource(repo).listOpen(repo, {
       search: searchParams.get("search"),
     });
     const existing = queries
