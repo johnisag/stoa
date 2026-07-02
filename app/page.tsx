@@ -38,15 +38,15 @@ import type { Session } from "@/lib/db";
 import type { TerminalHandle } from "@/components/Terminal";
 import {
   getProvider,
-  buildAgentArgs,
   shellQuoteArg,
   escapeForDoubleQuotes,
   buildTmuxFlags,
-  parseMcpLaunchArgs,
 } from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
-import { resolveModelForAgent } from "@/lib/model-catalog";
-import { resolveNativeForkParentId } from "@/lib/fork";
+import {
+  resolveSessionLaunchOptions,
+  buildAgentArgsForSession,
+} from "@/lib/session-launch";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
@@ -387,38 +387,25 @@ function HomeContent() {
       // with .mcp.json files that aren't in their .gitignore.
       // See: /api/sessions/[id]/mcp-config, lib/mcp-config.ts
 
-      // Parent session id for a NATIVE fork (Claude's --resume <id>
-      // --fork-session). Only a native, not-yet-started fork resolves one; a
-      // non-native fork (Codex/Hermes/Kilo/Kimi) launches FRESH and is seeded with
-      // the parent's scrollback instead (see the /fork route). Shared with the
-      // re-attach path (buildSpawnForSession) so they can't drift.
-      const parentSessionId = resolveNativeForkParentId(session, sessions);
-
       // Check for pending initial prompt
       const initialPrompt = getPendingPrompt(session.id);
       if (initialPrompt) {
         clearPendingPrompt(session.id);
       }
 
-      // Conductor MCP wiring persisted on the session (e.g. Codex's
-      // `-c mcp_servers.stoa.*`), replayed verbatim on every spawn. NULL for
-      // non-conductors and file-configured providers (Claude's .mcp.json). Parsed
-      // via the shared helper so this and buildSpawnForSession can't drift.
-      const extraArgs = parseMcpLaunchArgs(session.mcp_launch_args);
-
-      const buildFlagsOptions = {
-        sessionId: session.claude_session_id,
-        parentSessionId,
-        autoApprove: session.auto_approve,
-        // Resolve so a legacy row holding a foreign/non-catalog model can't reach
-        // `--model <bogus>` on a fresh respawn (every other spawn site resolves).
-        model: resolveModelForAgent(
-          session.agent_type || "claude",
-          session.model
-        ),
+      // SINGLE chokepoint (lib/session-launch): resolve the launch options from the
+      // Session once — the shell short-circuit, the NON-BYPASSABLE model clamp, the
+      // conductor MCP-arg parse, and the native-fork parent resolution all live
+      // there, so this tmux/pty path and buildSpawnForSession's re-attach path can't
+      // drift or skip a step. The shell short-circuit already returned above, so a
+      // non-shell session always resolves here.
+      const resolved = resolveSessionLaunchOptions(session, {
         initialPrompt: initialPrompt || undefined,
-        extraArgs,
-      };
+        allSessions: sessions,
+      });
+      // Defensive: only a shell session yields null, and that path returned above.
+      const buildFlagsOptions = resolved?.options ?? {};
+      const extraArgs = buildFlagsOptions.extraArgs ?? [];
 
       // tmux execs a shell command, so shell-quote the conductor tokens here
       // (buildFlags itself doesn't emit extraArgs); the pty path gets them as
@@ -440,11 +427,12 @@ function HomeContent() {
       const command =
         backend === "tmux" ? await getInitScriptCommand(agentCmd) : agentCmd;
 
-      // Structured argv for the native pty backend (no shell quoting).
-      const { binary, args } = buildAgentArgs(
-        session.agent_type || "claude",
-        buildFlagsOptions
-      );
+      // Structured argv for the native pty backend (no shell quoting) — from the
+      // SAME resolved options, so the tmux and pty argv can't diverge.
+      const { binary, args } = buildAgentArgsForSession(session, {
+        initialPrompt: initialPrompt || undefined,
+        allSessions: sessions,
+      });
 
       return {
         sessionName,
