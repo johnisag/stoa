@@ -110,6 +110,16 @@ describe("togglePin / getPins", () => {
     expect(getPins(s)).toEqual(["b"]);
   });
 
+  it("caps pins by dropping the OLDEST when pinning past the cap", () => {
+    const s = mockStorage();
+    togglePin(s, "a", 3);
+    togglePin(s, "b", 3);
+    togglePin(s, "c", 3);
+    expect(togglePin(s, "d", 3)).toEqual(["b", "c", "d"]); // "a" evicted
+    // Unpinning is never blocked by the cap.
+    expect(togglePin(s, "c", 3)).toEqual(["b", "d"]);
+  });
+
   it("keeps pins and recents in independent keys", () => {
     const s = mockStorage();
     recordRecent(s, "r1");

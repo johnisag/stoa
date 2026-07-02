@@ -10,6 +10,10 @@
 
 /** Most recent ids kept — old entries fall off the end. */
 export const RECENTS_CAP = 20;
+/** Pinned ids kept — pinning past the cap drops the OLDEST pin, so years of
+ * session churn can't grow the key unbounded (stale ids of deleted sessions
+ * are ignored by ranking but would otherwise accumulate forever). */
+export const PINS_CAP = 20;
 
 /** The slice of the DOM Storage interface we use (localStorage at runtime). */
 export interface PaletteStorage {
@@ -76,11 +80,18 @@ export function getPins(storage: PaletteStorage): string[] {
 
 /**
  * Pin `id` if unpinned, unpin it if pinned; persist and return the new list
- * (same return-the-list contract as recordRecent).
+ * (same return-the-list contract as recordRecent). Capped: pinning past
+ * PINS_CAP drops the oldest pin.
  */
-export function togglePin(storage: PaletteStorage, id: string): string[] {
+export function togglePin(
+  storage: PaletteStorage,
+  id: string,
+  cap: number = PINS_CAP
+): string[] {
   const prev = getPins(storage);
-  const next = prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id];
+  const next = prev.includes(id)
+    ? prev.filter((p) => p !== id)
+    : [...prev, id].slice(-cap);
   writeIdList(storage, PINS_KEY, next);
   return next;
 }
