@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { GitBranch, Loader2, FolderOpen } from "lucide-react";
+import { GitBranch, Loader2, FolderOpen, AlertTriangle } from "lucide-react";
 import type { GitInfo } from "./NewSessionDialog.types";
 
 interface WorkingDirectoryInputProps {
@@ -18,6 +19,35 @@ export function WorkingDirectoryInput({
   checkingGit,
   onBrowse,
 }: WorkingDirectoryInputProps) {
+  // Secrets guard (#36): debounced shallow name-scan of the picked directory.
+  // Advisory only — any error / 403 simply clears the warning, never blocks.
+  const [secretFindings, setSecretFindings] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!value || value === "~") {
+      setSecretFindings([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/secret-scan?path=${encodeURIComponent(value)}`,
+          { signal: controller.signal }
+        );
+        const data = res.ok ? await res.json() : null;
+        if (controller.signal.aborted) return;
+        setSecretFindings(Array.isArray(data?.findings) ? data.findings : []);
+      } catch {
+        if (!controller.signal.aborted) setSecretFindings([]);
+      }
+    }, 500);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [value]);
+
   return (
     <div className="space-y-2">
       <label className="text-sm font-medium">Working Directory</label>
@@ -48,6 +78,15 @@ export function WorkingDirectoryInput({
         <p className="text-muted-foreground flex items-center gap-1 text-xs">
           <GitBranch className="h-3 w-3" />
           Git repo on {gitInfo.currentBranch}
+        </p>
+      )}
+      {secretFindings.length > 0 && (
+        <p className="flex items-start gap-1 text-xs text-amber-600 dark:text-amber-400">
+          <AlertTriangle className="mt-0.5 h-3 w-3 flex-shrink-0" />
+          <span>
+            Contains {secretFindings.join(", ")} — agents launched here can read
+            these files.
+          </span>
         </p>
       )}
     </div>
