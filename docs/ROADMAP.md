@@ -669,9 +669,19 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     _Follow-up noted:_ the desktop select-mode header could gain the same
     action.
     ```
-41. **Pull-to-refresh + tap haptics** — `mobile` · S. Pull-to-refresh on the session
-    list + feature-detected `vibrate` on send/approve/kill/copy. _Seam:_ new
-    `hooks/useHaptics.ts`, `components/SessionList/*`.
+41. ✅ **Pull-to-refresh + tap haptics** — `mobile` · S. **SHIPPED.** New
+    `hooks/useHaptics.ts` (pure `hapticPattern(kind)` + SSR-safe
+    feature-detected `navigator.vibrate` wrapper that swallows throwing
+    engines) wired at the mobile send/approve/kill/copy call sites
+    (`MessageInput`, `TerminalToolbar` Enter+copy, `SessionQuickActions`) —
+    each a no-op on desktop where vibrate is unsupported. Pull-to-refresh
+    (`hooks/usePullToRefresh.ts`) is a pure `pullReducer` that arms only when
+    the drag STARTS at `scrollTop 0`, applies elastic resistance, fires once
+    on the arm→release edge, and reuses the list's existing refresh; it is
+    cooperative (never `preventDefault`s, so it doesn't fight touch-scroll)
+    and gated `isMobile`, reading the Radix viewport via a new optional
+    `viewportRef`. 26 pure tests. _Seam:_ `hooks/useHaptics.ts`,
+    `hooks/usePullToRefresh.ts`, `components/SessionList/*`.
 42. ✅ **Single-pass transcript parse** — `perf` · S. **SHIPPED.** New
     `parseClaudeTranscriptUsage(jsonl)` walks the JSONL ONCE returning
     `{tokens, contextTokens}`; `parseClaudeUsage`/`parseClaudeContextTokens`
