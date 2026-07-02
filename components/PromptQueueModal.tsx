@@ -23,6 +23,7 @@ import {
 } from "@/hooks/useSessionQueue";
 import { isSendable, normalizeForSend } from "@/lib/prompt-compose";
 import { getHistory, recordPrompt, searchHistory } from "@/lib/prompt-history";
+import { useFileMentions } from "@/components/FileMentions";
 
 /**
  * Queue follow-up prompts to a session while it works (`mode="queue"`, the
@@ -42,6 +43,7 @@ export function PromptQueueModal({
   mode = "queue",
   onSend,
   onClose,
+  workingDirectory,
 }: {
   sessionId: string;
   name: string;
@@ -50,6 +52,8 @@ export function PromptQueueModal({
   /** Required in compose mode — receives the normalized prompt on submit. */
   onSend?: (text: string) => void;
   onClose: () => void;
+  /** Session cwd for @-mention file autocomplete (#24); omitted disables it. */
+  workingDirectory?: string;
 }) {
   const compose = mode === "compose";
   // The queue list only matters when queueing; skip the poll in compose mode.
@@ -59,6 +63,17 @@ export function PromptQueueModal({
   const clear = useClearQueue(sessionId);
   const [text, setText] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // @-mention file autocomplete (#24) — one instance serves whichever textarea
+  // the current mode renders (both bind taRef). The compose body clips
+  // overflow, so its dropdown anchors inside the wrapper's top edge.
+  const mentions = useFileMentions({
+    text,
+    setText,
+    taRef,
+    workingDirectory,
+    placement: compose ? "inside-top" : "above",
+  });
 
   // Recent prompts sent to THIS session (localStorage-backed, newest-first), and
   // whether the history picker is open. Loaded after mount — localStorage doesn't
@@ -191,14 +206,16 @@ export function PromptQueueModal({
         // this region shrink (the overlay tracks the visual viewport above the
         // keyboard) so the pinned Send footer always stays on-screen; the
         // textarea scrolls internally rather than pushing the footer down.
-        <div className="min-h-0 flex-1 overflow-hidden p-3">
+        <div className="relative min-h-0 flex-1 overflow-hidden p-3">
           <textarea
             ref={taRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Write a prompt to send now… (multi-line OK)"
+            onKeyDown={mentions.onKeyDown}
+            placeholder="Write a prompt to send now… (multi-line OK, @ mentions a file)"
             className="border-input bg-background focus-visible:ring-ring/60 h-full w-full resize-none overflow-auto rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2"
           />
+          {mentions.dropdown}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto p-3">
@@ -312,7 +329,7 @@ export function PromptQueueModal({
             Send to agent
           </Button>
         ) : (
-          <div className="flex items-end gap-2">
+          <div className="relative flex items-end gap-2">
             <textarea
               ref={taRef}
               value={text}
@@ -320,10 +337,12 @@ export function PromptQueueModal({
                 setText(e.target.value);
                 grow();
               }}
+              onKeyDown={mentions.onKeyDown}
               rows={1}
-              placeholder="Queue a prompt… (multi-line OK)"
+              placeholder="Queue a prompt… (multi-line OK, @ mentions a file)"
               className="border-input bg-background focus-visible:ring-ring/60 max-h-32 min-h-[44px] flex-1 resize-none rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2"
             />
+            {mentions.dropdown}
             <Button
               onClick={add}
               disabled={enqueue.isPending || !isSendable(text)}

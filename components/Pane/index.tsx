@@ -937,6 +937,7 @@ export const Pane = memo(function Pane({
         <PromptQueueModal
           sessionId={session.id}
           name={session.name}
+          workingDirectory={session.working_directory}
           mode="compose"
           onSend={(text) => {
             terminalRef?.paste(text);

@@ -480,9 +480,21 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     reference into the agent prompt (same path as the 📎 picker). Relative
     paths resolve against the session cwd client-side; the files/content route
     still sandbox-validates server-side. Guide card added.
-24. **@-mention file autocomplete in the send bar** — `feature` · M. On `@`, an
-    inline fuzzy file dropdown from the working dir (reuse the recursive fuzzy +
-    `fuzzyScore`). _Seam:_ `components/Terminal/index.tsx`, `components/MessageInput.tsx`.
+24. ✅ **@-mention file autocomplete in the send bar** — `feature` · M.
+    **SHIPPED.** Typing `@` in the Compose/Queue send bar (PromptQueueModal —
+    the LIVE send surface; `MessageInput.tsx` is a legacy path not mounted by
+    the pane) opens an inline dropdown over the session cwd's file tree: pure
+    detection/rank/replace in `lib/mention-files.ts` (mid-word `@` like emails
+    and `foo@1.2` never triggers; name matches weighted 2× over path matches
+    via the shared `fuzzyScore`; picks insert the RELATIVE forward-slashed
+    path, quoted when it has spaces), React glue in
+    `components/FileMentions.tsx` (useFileMentions hook + dropdown; ↑/↓ /
+    Enter / Tab / Escape, Escape scoped so it closes the dropdown not the
+    modal, mousedown-pick so blur can't eat the click). The file index is the
+    picker's bounded `useRecursiveFilesQuery` (depth 4, sandbox-validated
+    server-side), fetched only while a mention is open. Discoverable via the
+    placeholder ("@ mentions a file"). 19-case pure matrix in
+    `test/mention-files.test.ts`.
 25. **Compaction control + external-memory injection** — `orchestration` · M.
     🟡 _Proactive TRIGGER shipped (#329):_ opt-in auto-/compact (STOA_AUTO_COMPACT) sends
     `/compact` to a near-full Claude session at the canonical idle-AND-no-prompt boundary
