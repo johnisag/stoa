@@ -22,9 +22,8 @@ export interface CanvasSelection {
    * - shift/add toggles membership, otherwise it's a single-select replace.
    */
   handleSelectNode: (id: string | null, opts?: SelectNodeOptions) => void;
-  /** Replace the selection with exactly `ids`, focusing `primary` (or the first). */
-  selectOnly: (ids: string[], primary?: string | null) => void;
-  /** Low-level setters, for the rare handler that needs raw control. */
+  /** Low-level setters, used by the doc-mutation handlers that re-select after
+   *  an add/duplicate/delete/rename. */
   setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   setPrimaryId: React.Dispatch<React.SetStateAction<string | null>>;
 }
@@ -35,9 +34,9 @@ export interface CanvasSelection {
  * Extracted from WorkflowBuilder with NO behavior change — `handleSelectNode`
  * and `clearSelection` are the former inline handlers verbatim (recreated each
  * render, reading the live `selectedIds` closure). Doc mutations that also
- * change the selection (add/duplicate/delete) live in the builder and drive
- * selection through `selectOnly` / the raw setters, keeping the selection store
- * free of any BuilderDoc knowledge.
+ * change the selection (add/duplicate/delete/rename) live in useWorkflowDoc and
+ * drive selection through the raw `setSelectedIds`/`setPrimaryId` setters,
+ * keeping this selection store free of any BuilderDoc knowledge.
  */
 export function useCanvasSelection(): CanvasSelection {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -70,17 +69,11 @@ export function useCanvasSelection(): CanvasSelection {
     }
   }
 
-  function selectOnly(ids: string[], primary?: string | null) {
-    setSelectedIds(new Set(ids));
-    setPrimaryId(primary !== undefined ? primary : (ids[0] ?? null));
-  }
-
   return {
     selectedIds,
     primaryId,
     clearSelection,
     handleSelectNode,
-    selectOnly,
     setSelectedIds,
     setPrimaryId,
   };

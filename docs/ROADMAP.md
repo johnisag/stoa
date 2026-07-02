@@ -818,7 +818,7 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     regex-parity lock read from the real scripts); scripts re-pinned. _Seam:_
     `scripts/stoa.js`, `scripts/install.sh`, `scripts/install.ps1`.
 57. ✅ **Extract `WorkflowBuilder` into hooks + sibling components** —
-    `tech-debt` · L. **SHIPPED.** The ~1800-line component is decomposed to ~600:
+    `tech-debt` · L. **SHIPPED.** The ~1800-line component is decomposed to ~850:
     three hooks — `useWorkflowDoc` (doc state + selection-coupled mutations,
     composing the existing `useBuilderHistory` undo/redo reducer),
     `useCanvasSelection` (node/edge selection), `useWorkflowPersistence`
