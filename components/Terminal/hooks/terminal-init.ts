@@ -6,6 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { getTerminalThemeForApp } from "../constants";
 import { loadRenderer } from "./terminal-renderer";
+import { extractFileLineLinks } from "@/lib/terminal-links";
 
 export interface TerminalInstance {
   term: XTerm;
@@ -14,10 +15,19 @@ export interface TerminalInstance {
   cleanup: () => void;
 }
 
+/** Clicked file:line link (#23): the path as written, the 1-based line, and
+ *  the exact matched text (for mobile prompt insertion). */
+export type FileLinkHandler = (
+  path: string,
+  line: number,
+  matchedText: string
+) => void;
+
 export function createTerminal(
   container: HTMLElement,
   isMobile: boolean,
-  theme: string
+  theme: string,
+  onFileLink?: FileLinkHandler
 ): TerminalInstance {
   const fontSize = isMobile ? 11 : 14;
   const terminalTheme = getTerminalThemeForApp(theme || "dark");
@@ -54,6 +64,28 @@ export function createTerminal(
   term.open(container);
   // GPU renderer (WebGL, with canvas/DOM fallback) — must load after open().
   loadRenderer(term);
+
+  // #23 file:line jump-to-error links. A custom provider over the PURE
+  // extractor (lib/terminal-links.ts) — WebLinksAddon above only handles URLs.
+  // Runs per rendered buffer row on hover; xterm's y is 1-based, and link
+  // ranges are 1-based inclusive columns.
+  let fileLinkDisposable: { dispose(): void } | undefined;
+  if (onFileLink) {
+    fileLinkDisposable = term.registerLinkProvider({
+      provideLinks(y, callback) {
+        const bufferLine = term.buffer.active.getLine(y - 1);
+        if (!bufferLine) return callback(undefined);
+        const text = bufferLine.translateToString(true);
+        const links = extractFileLineLinks(text).map((l) => ({
+          range: { start: { x: l.start + 1, y }, end: { x: l.end, y } },
+          text: text.slice(l.start, l.end),
+          activate: () =>
+            onFileLink(l.path, l.line, text.slice(l.start, l.end)),
+        }));
+        callback(links.length > 0 ? links : undefined);
+      },
+    });
+  }
 
   // On mobile, the soft keyboard auto-capitalizes/corrects/spellchecks the
   // hidden xterm input by default, silently corrupting shell commands
@@ -130,6 +162,7 @@ export function createTerminal(
 
   const cleanup = () => {
     document.removeEventListener("keydown", handleKeyDown, true);
+    fileLinkDisposable?.dispose();
   };
 
   return { term, fitAddon, searchAddon, cleanup };

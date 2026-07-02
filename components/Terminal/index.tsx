@@ -37,6 +37,8 @@ import {
   formatTerminalTextForAgent,
 } from "@/lib/path-display";
 import { FilePicker } from "@/components/FilePicker";
+import { fileOpenActions } from "@/stores/fileOpen";
+import { resolveLinkTarget } from "@/lib/terminal-links";
 
 export type { TerminalScrollState };
 
@@ -107,6 +109,30 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       return currentTheme || "dark";
     }, [currentTheme, resolvedTheme]);
 
+    // #23 file:line links: the provider is registered at terminal creation, so
+    // the handler reads everything through refs (latest isMobile / cwd / the
+    // hook's own sendInput, which only exists after the hook call below).
+    const isMobileRef = useRef(isMobile);
+    isMobileRef.current = isMobile;
+    const filePickerPathRef = useRef(filePickerInitialPath);
+    filePickerPathRef.current = filePickerInitialPath;
+    const sendInputRef = useRef<(data: string) => void>(() => {});
+    const handleFileLink = useCallback(
+      (path: string, line: number, matchedText: string) => {
+        if (isMobileRef.current) {
+          // No comfortable editor pane on mobile — insert the reference into
+          // the agent prompt instead (same path the 📎 picker takes).
+          sendInputRef.current(formatPathsForAgent(matchedText));
+          return;
+        }
+        fileOpenActions.requestOpen(
+          resolveLinkTarget(path, filePickerPathRef.current ?? ""),
+          line
+        );
+      },
+      []
+    );
+
     const {
       connectionState,
       isAttaching,
@@ -138,7 +164,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       isMobile,
       theme: terminalTheme,
       selectMode,
+      onFileLink: handleFileLink,
     });
+    sendInputRef.current = sendInput;
 
     const {
       searchVisible,
@@ -222,7 +250,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           // Collect image blobs from all clipboard items
           const imageFiles: File[] = [];
           for (const item of items) {
-            for (const type of ["image/png", "image/jpeg", "image/gif", "image/webp"]) {
+            for (const type of [
+              "image/png",
+              "image/jpeg",
+              "image/gif",
+              "image/webp",
+            ]) {
               if (item.types.includes(type)) {
                 const blob = await item.getType(type);
                 const ext = type.split("/")[1];

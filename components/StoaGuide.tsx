@@ -33,6 +33,7 @@ import {
   Split,
   LineChart,
   WifiOff,
+  MousePointerClick,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -140,6 +141,12 @@ const COCKPIT: Item[] = [
     title: "Fork conversation",
     blurb:
       "Branch any agent's session into a new one. Claude forks natively (the full branched conversation); every other agent forks by seeding a fresh session with the parent's recent scrollback.",
+  },
+  {
+    icon: MousePointerClick,
+    title: "Jump to error",
+    blurb:
+      "file:line references in terminal output (lib/foo.ts:12, bar.tsx(3,7)) are clickable — opening the file at that line in the Files view. On mobile a tap inserts the reference into the agent's prompt instead.",
   },
   {
     icon: TerminalSquare,

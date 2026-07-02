@@ -9,12 +9,22 @@ export interface OpenFile {
   language: string;
 }
 
+/** #23 jump-to-line request: applied by FileEditor when its file is active.
+ *  `token` makes repeated jumps to the SAME line re-fire (effect key). */
+export interface JumpToLine {
+  path: string;
+  line: number;
+  token: number;
+}
+
 export interface UseFileEditorReturn {
   openFiles: OpenFile[];
   activeFilePath: string | null;
   loading: boolean;
   saving: boolean;
-  openFile: (path: string) => Promise<void>;
+  /** #23: the pending jump-to-line for `jump.path`, or null. */
+  jump: JumpToLine | null;
+  openFile: (path: string, line?: number) => Promise<void>;
   closeFile: (path: string) => void;
   setActiveFile: (path: string) => void;
   updateContent: (path: string, content: string) => void;
@@ -31,6 +41,10 @@ export function useFileEditor(): UseFileEditorReturn {
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [jump, setJump] = useState<JumpToLine | null>(null);
+  // Monotonic token so every jump — even two clicks on the SAME line in the
+  // same millisecond — re-fires the FileEditor effect.
+  const jumpSeqRef = useRef(0);
   // Guards against superseded openFile requests: if the user clicks file A then
   // file B, whichever fetch resolves last must not clobber state.
   const openGenerationRef = useRef(0);
@@ -60,11 +74,14 @@ export function useFileEditor(): UseFileEditorReturn {
   );
 
   const openFile = useCallback(
-    async (path: string) => {
+    async (path: string, line?: number) => {
       // Check if file is already open
       const existing = openFiles.find((f) => f.path === path);
       if (existing) {
         setActiveFilePath(path);
+        if (line != null && line >= 1) {
+          setJump({ path, line, token: ++jumpSeqRef.current });
+        }
         return;
       }
 
@@ -95,6 +112,11 @@ export function useFileEditor(): UseFileEditorReturn {
 
         setOpenFiles((prev) => [...prev, newFile]);
         setActiveFilePath(data.path);
+        // Keyed to the SERVER's canonical path (data.path) — that's what the
+        // open-files list and activeFilePath hold.
+        if (line != null && line >= 1) {
+          setJump({ path: data.path, line, token: ++jumpSeqRef.current });
+        }
       } catch (error) {
         console.error("Failed to open file:", error);
       } finally {
@@ -185,6 +207,7 @@ export function useFileEditor(): UseFileEditorReturn {
   const reset = useCallback(() => {
     setOpenFiles([]);
     setActiveFilePath(null);
+    setJump(null);
     openGenerationRef.current = 0;
   }, []);
 
@@ -193,6 +216,7 @@ export function useFileEditor(): UseFileEditorReturn {
     activeFilePath,
     loading,
     saving,
+    jump,
     openFile,
     closeFile,
     setActiveFile: setActiveFilePath,

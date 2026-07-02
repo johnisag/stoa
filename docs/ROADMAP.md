@@ -466,10 +466,20 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     GET /api/sessions/cost against a real in-memory DB — 200 on empty fleet /
     mixed fleet / garbage transcripts, budget-level mapping, and a catastrophic
     DB failure returning a clean 500 JSON error (never an unhandled crash).
-23. **Clickable `file:line` jump-to-error in terminal** — `feature` · M. An xterm
-    link provider over a pure extractor; click opens the file at the line (or inserts
-    the path on mobile). _Seam:_ `components/Terminal/hooks/terminal-init.ts`, new
-    `lib/terminal-links.ts`, `components/FileExplorer/FileEditor.tsx`.
+23. ✅ **Clickable `file:line` jump-to-error in terminal** — `feature` · M.
+    **SHIPPED.** A custom xterm link provider (registered in `terminal-init.ts`,
+    disposed on cleanup) over a PURE extractor (`lib/terminal-links.ts`, client-
+    safe): colon form `path.ext:12[:col]` and paren form `path.ext(12[,5])`,
+    Windows drive / POSIX / `./`+`.\` relative paths, conservative by design
+    (extension required; URLs, timestamps, versions, mid-token latches all
+    rejected — 28-case matrix in `test/terminal-links.test.ts`). Desktop click
+    → `fileOpenActions.requestOpen(resolved, line)` → the Files view opens the
+    file AND scrolls/selects the line (CodeMirror `scrollIntoView` via a new
+    `jumpToLine` prop — this also closed the pre-existing Pane TODO, so Quick
+    Switcher code search now lands on its line too). Mobile tap inserts the
+    reference into the agent prompt (same path as the 📎 picker). Relative
+    paths resolve against the session cwd client-side; the files/content route
+    still sandbox-validates server-side. Guide card added.
 24. **@-mention file autocomplete in the send bar** — `feature` · M. On `@`, an
     inline fuzzy file dropdown from the working dir (reuse the recursive fuzzy +
     `fuzzyScore`). _Seam:_ `components/Terminal/index.tsx`, `components/MessageInput.tsx`.

@@ -41,6 +41,7 @@ export function useTerminalConnection({
   isMobile = false,
   theme = "dark",
   selectMode = false,
+  onFileLink,
 }: UseTerminalConnectionProps): UseTerminalConnectionReturn {
   const [connected, setConnected] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -96,6 +97,10 @@ export function useTerminalConnection({
   const initialScrollStateRef = useRef(initialScrollState);
   const selectModeRef = useRef(selectMode);
   selectModeRef.current = selectMode;
+  // #23: the link provider is registered once at terminal creation; route its
+  // activations through a ref so they always reach the LATEST handler.
+  const onFileLinkRef = useRef(onFileLink);
+  onFileLinkRef.current = onFileLink;
 
   // Simple callbacks
   const scrollToBottom = useCallback(
@@ -394,7 +399,11 @@ export function useTerminalConnection({
       const { term, fitAddon, searchAddon, cleanup } = createTerminal(
         terminalRef.current,
         isMobile,
-        theme
+        theme,
+        onFileLink
+          ? (path, line, matchedText) =>
+              onFileLinkRef.current?.(path, line, matchedText)
+          : undefined
       );
       xtermRef.current = term;
       fitAddonRef.current = fitAddon;

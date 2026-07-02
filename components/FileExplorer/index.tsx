@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { baseName } from "@/lib/path-display";
 import type { FileNode } from "@/lib/file-utils";
-import type { OpenFile } from "@/hooks/useFileEditor";
+import type { OpenFile, JumpToLine } from "@/hooks/useFileEditor";
 
 interface FileExplorerProps {
   workingDirectory: string;
@@ -51,6 +51,7 @@ export function FileExplorer({
     activeFilePath,
     loading: fileLoading,
     saving,
+    jump,
     openFile,
     closeFile,
     setActiveFile,
@@ -151,6 +152,7 @@ export function FileExplorer({
         onCloseTab={handleCloseFile}
         onSave={handleSave}
         onBack={() => setActiveFile(null as unknown as string)}
+        jump={jump}
         isDirty={isDirty}
         updateContent={updateContent}
         pendingClose={pendingClose}
@@ -178,6 +180,7 @@ export function FileExplorer({
       onSelectTab={setActiveFile}
       onCloseTab={handleCloseFile}
       onSave={handleSave}
+      jump={jump}
       isDirty={isDirty}
       updateContent={updateContent}
       pendingClose={pendingClose}
@@ -204,6 +207,8 @@ interface DesktopFileExplorerProps {
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
   onSave: () => void;
+  /** #23 pending jump-to-line (terminal links / code search). */
+  jump: JumpToLine | null;
   isDirty: (path: string) => boolean;
   updateContent: (path: string, content: string) => void;
   pendingClose: string | null;
@@ -227,6 +232,7 @@ function DesktopFileExplorer({
   onSelectTab,
   onCloseTab,
   onSave,
+  jump,
   isDirty,
   updateContent,
   pendingClose,
@@ -330,6 +336,7 @@ function DesktopFileExplorer({
               isBinary={activeFile.isBinary}
               onChange={(content) => updateContent(activeFile.path, content)}
               onSave={onSave}
+              jumpToLine={jump && jump.path === activeFile.path ? jump : null}
             />
           ) : (
             <div className="text-muted-foreground flex h-full flex-col items-center justify-center">
@@ -373,6 +380,7 @@ function MobileFileExplorer({
   onCloseTab,
   onSave,
   onBack,
+  jump,
   isDirty,
   updateContent,
   pendingClose,
@@ -427,6 +435,7 @@ function MobileFileExplorer({
               isBinary={activeFile.isBinary}
               onChange={(content) => updateContent(activeFile.path, content)}
               onSave={onSave}
+              jumpToLine={jump && jump.path === activeFile.path ? jump : null}
             />
           )}
         </div>

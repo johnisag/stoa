@@ -271,11 +271,10 @@ export const Pane = memo(function Pane({
     if (fileOpenRequest && isFocused && session) {
       // Switch to files view
       setViewMode("files");
-      // Open the file
-      fileEditor.openFile(fileOpenRequest.path);
+      // Open the file at the requested line (#23 — terminal links, code search)
+      fileEditor.openFile(fileOpenRequest.path, fileOpenRequest.line);
       // Clear the request
       fileOpenActions.clearRequest();
-      // TODO: Scroll to line (requires FileEditor enhancement)
     }
   }, [fileOpenRequest, isFocused, session, fileEditor]);
 

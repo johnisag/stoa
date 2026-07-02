@@ -30,6 +30,9 @@ export interface UseTerminalConnectionProps {
   isMobile?: boolean;
   theme?: string;
   selectMode?: boolean;
+  /** #23 file:line link clicked (path as written, 1-based line, matched text).
+   *  Omitted = no file-link provider is registered. */
+  onFileLink?: (path: string, line: number, matchedText: string) => void;
 }
 
 export interface UseTerminalConnectionReturn {
