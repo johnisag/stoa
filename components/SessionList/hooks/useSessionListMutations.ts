@@ -122,7 +122,11 @@ export function useSessionListMutations({
       // so the pane doesn't render a ghost during the grace window (an Undo
       // simply restores the row; re-selecting it re-attaches).
       if (sessionId === activeSessionId) {
-        const next = cached?.sessions.find((s) => s.id !== sessionId);
+        // Workers (conductor_session_id) aren't root-level rows — selecting
+        // one would leave the list visually selection-less.
+        const next = cached?.sessions.find(
+          (s) => s.id !== sessionId && !s.conductor_session_id
+        );
         if (next) onSelectSession(next.id);
       }
       toast(name ? `Deleted "${name}"` : "Session deleted", {
