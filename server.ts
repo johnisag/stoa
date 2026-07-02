@@ -137,6 +137,7 @@ import {
   type BudgetLevel,
 } from "./lib/budget";
 import { backendKeyForSession } from "./lib/providers/registry";
+import { makeGuardedInterval } from "./lib/auto-features";
 import { homeDir, defaultInteractiveShell } from "./lib/platform";
 import { getDb, queries, type Session } from "./lib/db";
 import { REMOTE_ADDR_HEADER } from "./lib/api-security";
@@ -425,9 +426,9 @@ app.prepare().then(() => {
   // tick keeps it accruing for unattended/overnight runs. Read-only w.r.t. the
   // fleet (computes cost + writes the session_costs table — never touches a
   // session), so it's safe to leave on; it's opt-in only to keep default DB
-  // writes unchanged. `costSampleBusy` guards the slow transcript reads.
+  // writes unchanged. The guarded interval below guards the slow transcript reads;
+  // `lastCostSampleMs` drives the interval-independent cadence gate.
   const COST_SAMPLE_ENABLED = costSampleEnabled();
-  let costSampleBusy = false;
   let lastCostSampleMs: number | null = null;
   if (COST_SAMPLE_ENABLED) {
     console.log(
@@ -437,7 +438,8 @@ app.prepare().then(() => {
   // Auto-/compact (opt-in via STOA_AUTO_COMPACT=1). Unlike the read-only cost sampler and
   // the escalate-only watchdog/error-loop, this WRITES /compact to a session — so it's off
   // by default and fires ONLY at an idle boundary (the pure nextCompactAction decides).
-  // `lastCompactAt` tracks the per-session cooldown; `compactBusy` guards the slow reads.
+  // `lastCompactAt` tracks the per-session cooldown; the guarded interval below
+  // guards the slow reads.
   const AUTO_COMPACT_ENABLED = autoCompactEnabled();
   const lastCompactAt = new Map<string, number>();
   // Per-session UTC-day compaction count, so a stuck-high session can't /compact forever.
@@ -446,7 +448,6 @@ app.prepare().then(() => {
   // .stoa/compact-memory.md and are awaiting the one-shot post-compact
   // pointer (value = when the flush happened; nextReinjectAction decides).
   const compactReinject = new Map<string, number>();
-  let compactBusy = false;
   if (AUTO_COMPACT_ENABLED) {
     console.log(
       `> Auto-compact on (STOA_AUTO_COMPACT=1): a Claude session whose context window is >= ${Math.round(COMPACT_THRESHOLD * 100)}% full at an idle boundary (no open prompt) is sent /compact (${Math.round(COMPACT_COOLDOWN_MS / 60000)}m cooldown${COMPACT_MAX_PER_DAY > 0 ? `, ${COMPACT_MAX_PER_DAY}/day cap` : ""}), so a long/overnight run reclaims headroom before the painful auto-compaction. Claude-only.`
@@ -1068,11 +1069,14 @@ app.prepare().then(() => {
       );
     }
     let lastBudgetLevels = new Map<string, BudgetLevel>();
-    let budgetTickBusy = false;
-    setInterval(async () => {
-      if (budgetTickBusy) return; // transcript reads can run slow
-      budgetTickBusy = true;
-      try {
+    // Always-armed while a cap is configured: keep the event loop open (no unref)
+    // as the original inline setInterval did. The busy-guard (transcript reads can
+    // run slow) now lives in makeGuardedInterval.
+    makeGuardedInterval({
+      intervalMs: 30000,
+      unref: false,
+      onError: (err) => console.error("budget tick failed:", err),
+      tick: async () => {
         const sessions = queries.getAllSessions(getDb()).all() as Session[];
         const costs = await computeSessionCosts(sessions);
         const lite = Object.entries(costs).map(([id, c]) => ({
@@ -1095,7 +1099,7 @@ app.prepare().then(() => {
               ? `${name} hit the $${budgetCfg.hardUsd} cap - stopping it`
               : `${name} crossed $${budgetCfg.softUsd} (now $${b.costUsd.toFixed(2)})`;
           // Fire-and-forget: never await push I/O inside the tick, or a slow/hung
-          // endpoint would hold budgetTickBusy and delay the kill below.
+          // endpoint would hold the tick's busy-guard and delay the kill below.
           void sendPushToAll({
             title: "Stoa budget",
             body,
@@ -1124,12 +1128,8 @@ app.prepare().then(() => {
           })
         );
         lastBudgetLevels = nextLevels;
-      } catch (err) {
-        console.error("budget tick failed:", err);
-      } finally {
-        budgetTickBusy = false;
-      }
-    }, 30000);
+      },
+    });
   }
 
   // ── #21 per-session budgets (always armed; near-free when none configured) ──
@@ -1139,11 +1139,18 @@ app.prepare().then(() => {
   // (fail-closed), but nothing is killed and the user can still type. Distinct
   // from the global STOA_BUDGET_* enforcement above (that kill is final).
   {
-    let budgetParkBusy = false;
-    const runBudgetParkTick = async () => {
-      if (budgetParkBusy) return;
-      budgetParkBusy = true;
-      try {
+    // Always armed (near-free when no session has a budget). The busy-guard +
+    // .unref() + the run-once-at-startup are all handled by makeGuardedInterval;
+    // the tick body is unchanged (an early `return` on the empty case still
+    // resets the guard via the helper's finally).
+    makeGuardedInterval({
+      intervalMs: 30000,
+      // Run once at startup: the park/stage state is in-memory, so a restart
+      // would otherwise leave a capped session unparked (and its badge blank)
+      // for a full 30s window before the first tick re-parks it.
+      runAtStartup: true,
+      onError: (err) => console.error("session budget tick failed:", err),
+      tick: async () => {
         const sessions = queries.getAllSessions(getDb()).all() as Session[];
         pruneBudgetState(new Set(sessions.map((s) => s.id)));
         const budgeted = sessions.filter(
@@ -1196,18 +1203,8 @@ app.prepare().then(() => {
           }).catch((err) => console.error("budget push failed:", err));
         }
         applyBudgetDecision(decision);
-      } catch (err) {
-        console.error("session budget tick failed:", err);
-      } finally {
-        budgetParkBusy = false;
-      }
-    };
-    const parkTimer = setInterval(runBudgetParkTick, 30000);
-    parkTimer.unref?.();
-    // Run once at startup: the park/stage state is in-memory, so a restart
-    // would otherwise leave a capped session unparked (and its badge blank)
-    // for a full 30s window before the first tick re-parks it.
-    void runBudgetParkTick();
+      },
+    });
   }
 
   // ── dispatch reconciler (GitHub issue → agent fleet) ──
@@ -1215,11 +1212,15 @@ app.prepare().then(() => {
   // does real work for ENABLED repos (auto-dispatch) or in-flight rows (PR
   // polling). reconcileTick has its own busy guard. 60s cadence tolerates the
   // blocking gh calls (issue list + pr list) it makes.
-  const dispatchTimer = setInterval(() => {
-    void reconcileTick();
-  }, 60000);
-  // Don't let the reconciler timer keep the process alive on its own.
-  dispatchTimer.unref?.();
+  // Fire-and-forget (reconcileTick owns its own busy guard): the tick returns
+  // synchronously so makeGuardedInterval's guard never latches — behavior-
+  // identical to the old `void reconcileTick()`, just with the shared .unref().
+  makeGuardedInterval({
+    intervalMs: 60000,
+    tick: () => {
+      void reconcileTick();
+    },
+  });
 
   // ── scheduler (fire a prompt into a session on a cadence) ──
   // Always armed but cheap when idle: one indexed "due schedules" query that
@@ -1231,37 +1232,42 @@ app.prepare().then(() => {
   // SAME safe path a typed-ahead prompt uses, so the scheduler adds no new
   // injection surface. Fully synchronous (DB + in-memory queue), so a sync tick
   // can't re-enter; the try/catch keeps one bad row from killing the interval.
-  const schedulerTimer = setInterval(() => {
-    const now = Date.now();
-    let due;
-    try {
-      due = dueSchedules(now);
-    } catch (err) {
-      console.error("scheduler tick: due query failed:", err);
-      return;
-    }
-    for (const row of due) {
-      // Per-row try/catch: one bad row (e.g. a transient DB write error) must not
-      // abort the rest, and a failed fire leaves the row "due" to retry next tick.
+  // Fully synchronous (DB + in-memory queue), so the busy-guard never latches;
+  // the tick keeps its own top-level + per-row try/catch (one bad row must not
+  // abort the rest), so no onError is needed here.
+  makeGuardedInterval({
+    intervalMs: 30000,
+    tick: () => {
+      const now = Date.now();
+      let due;
       try {
-        // Coalesce a still-pending duplicate: don't pile a recurring schedule's
-        // prompt onto a session that hasn't drained the last one yet.
-        const outcome = fireSchedule(row, now, enqueuePrompt, (id, p) =>
-          listQueue(id).includes(p)
-        );
-        console.log(
-          outcome === "session-gone"
-            ? `scheduler: target session ${row.session_id} gone — disabled schedule ${row.id}`
-            : outcome === "skipped-queued"
-              ? `scheduler: prompt already queued for session ${row.session_id} — skipped duplicate (schedule ${row.id})`
-              : `scheduler: enqueued scheduled prompt for session ${row.session_id} (schedule ${row.id})`
-        );
+        due = dueSchedules(now);
       } catch (err) {
-        console.error(`scheduler: schedule ${row.id} failed:`, err);
+        console.error("scheduler tick: due query failed:", err);
+        return;
       }
-    }
-  }, 30000);
-  schedulerTimer.unref?.();
+      for (const row of due) {
+        // Per-row try/catch: one bad row (e.g. a transient DB write error) must
+        // not abort the rest, and a failed fire leaves the row "due" to retry.
+        try {
+          // Coalesce a still-pending duplicate: don't pile a recurring schedule's
+          // prompt onto a session that hasn't drained the last one yet.
+          const outcome = fireSchedule(row, now, enqueuePrompt, (id, p) =>
+            listQueue(id).includes(p)
+          );
+          console.log(
+            outcome === "session-gone"
+              ? `scheduler: target session ${row.session_id} gone — disabled schedule ${row.id}`
+              : outcome === "skipped-queued"
+                ? `scheduler: prompt already queued for session ${row.session_id} — skipped duplicate (schedule ${row.id})`
+                : `scheduler: enqueued scheduled prompt for session ${row.session_id} (schedule ${row.id})`
+          );
+        } catch (err) {
+          console.error(`scheduler: schedule ${row.id} failed:`, err);
+        }
+      }
+    },
+  });
 
   // ── cost sampler (opt-in: persist the spend history unattended) ──
   // Off unless STOA_AUTO_COST_SAMPLE=1. Computes per-session cost (bounded
@@ -1270,29 +1276,27 @@ app.prepare().then(() => {
   // busy guard skips a tick whose predecessor's reads are still running; the
   // shouldSampleCost gate makes the cadence interval-driven (not the raw timer
   // period) so it survives a future timer-period change.
-  if (COST_SAMPLE_ENABLED) {
-    const costSampleTimer = setInterval(async () => {
-      if (costSampleBusy) return;
+  // The busy-guard + .unref() now live in makeGuardedInterval (enabled by the
+  // flag → armed only when COST_SAMPLE_ENABLED). The cadence gate still lives in
+  // the tick: shouldSampleCost early-returns synchronously (before any await) so
+  // the guard never latches on a cadence-skip — behavior-identical.
+  makeGuardedInterval({
+    intervalMs: 60000,
+    enabled: COST_SAMPLE_ENABLED,
+    onError: (err) => console.error("cost sampler tick failed:", err),
+    tick: async () => {
       const now = Date.now();
       if (!shouldSampleCost(now, lastCostSampleMs)) return;
-      costSampleBusy = true;
       // Advance the cadence clock up front so a PERSISTENT failure backs off to the
       // sample interval instead of retrying (and re-reading transcripts) every 60s.
       lastCostSampleMs = now;
-      try {
-        const sessions = queries.getAllSessions(getDb()).all() as Session[];
-        const costs = await computeSessionCosts(sessions);
-        const written = persistCostSamples(getDb(), sessions, costs, now);
-        if (written > 0)
-          console.log(`cost sampler: persisted ${written} sample(s)`);
-      } catch (err) {
-        console.error("cost sampler tick failed:", err);
-      } finally {
-        costSampleBusy = false;
-      }
-    }, 60000);
-    costSampleTimer.unref?.();
-  }
+      const sessions = queries.getAllSessions(getDb()).all() as Session[];
+      const costs = await computeSessionCosts(sessions);
+      const written = persistCostSamples(getDb(), sessions, costs, now);
+      if (written > 0)
+        console.log(`cost sampler: persisted ${written} sample(s)`);
+    },
+  });
 
   // ── auto-/compact (opt-in: reclaim context before the wall) ──
   // Off unless STOA_AUTO_COMPACT=1. Every 60s, compute each session's context occupancy
@@ -1301,167 +1305,165 @@ app.prepare().then(() => {
   // a clean idle boundary, send /compact via the backend. Fail-closed: a backend/list/cost
   // failure skips the tick; a per-session capture error skips that session. All backend ops
   // key on backendKeyForSession(s) (the tmux_name / pty key), not the display name.
-  if (AUTO_COMPACT_ENABLED) {
-    const compactTimer = setInterval(async () => {
-      if (compactBusy) return;
-      compactBusy = true;
+  // The busy-guard + .unref() now live in makeGuardedInterval (armed only when
+  // AUTO_COMPACT_ENABLED). The tick body is otherwise unchanged — its inner
+  // early-returns (list failure, per-session skips) still work under the helper's
+  // finally, and the outer try/catch collapses into makeGuardedInterval's onError.
+  makeGuardedInterval({
+    intervalMs: 60000,
+    enabled: AUTO_COMPACT_ENABLED,
+    onError: (err) => console.error("auto-compact tick failed:", err),
+    tick: async () => {
+      const nowMs = Date.now();
+      const sessions = queries.getAllSessions(getDb()).all() as Session[];
+      const backend = getSessionBackend();
+      let liveNames: Set<string>;
       try {
-        const nowMs = Date.now();
-        const sessions = queries.getAllSessions(getDb()).all() as Session[];
-        const backend = getSessionBackend();
-        let liveNames: Set<string>;
-        try {
-          liveNames = new Set(await backend.list());
-        } catch {
-          return; // can't enumerate live sessions → skip this tick
-        }
-        const costs = await computeSessionCosts(sessions);
-        for (const s of sessions) {
-          if (s.agent_type !== "claude") continue; // /compact is a Claude command
-          const key = backendKeyForSession(s);
-          if (!liveNames.has(key)) continue;
-          const cost = costs[s.id];
-          if (!cost) continue;
-          const pct = tokenMeter(
-            cost.contextTokens,
-            contextWindowFor(cost.model ?? s.model)
-          ).pct;
-          // #25: a session awaiting its post-compact pointer is handled first
-          // and never starts another compaction this tick. The pre-check runs
-          // with an OPTIMISTIC boundary (isIdle:true / hasPrompt:false) so the
-          // costly capture is skipped whenever time or the context-drop
-          // completion signal alone would reject; when it passes, the capture
-          // runs and the second decision corrects those optimistic values.
-          const pendingSince = compactReinject.get(s.id);
-          if (pendingSince != null) {
-            const pre = nextReinjectAction({
-              pendingSinceMs: pendingSince,
-              nowMs,
-              isIdle: true,
-              hasPrompt: false,
-              contextPct: pct,
-              threshold: COMPACT_THRESHOLD,
-            });
-            if (pre === "expire") {
-              compactReinject.delete(s.id);
-            } else if (pre === "inject" && !isBudgetParked(s.id)) {
-              const detail = await statusDetector
-                .getStatusDetail(key)
-                .catch(() => null);
-              if (
-                detail &&
-                nextReinjectAction({
-                  pendingSinceMs: pendingSince,
-                  nowMs,
-                  isIdle: detail.status === "idle",
-                  hasPrompt: detail.prompt != null,
-                  contextPct: pct,
-                  threshold: COMPACT_THRESHOLD,
-                }) === "inject"
-              ) {
-                compactReinject.delete(s.id);
-                console.log(
-                  `auto-compact: ${s.name} compaction landed → inject ${COMPACT_MEMORY_FILE} pointer`
-                );
-                await backend
-                  .pasteText(key, buildReinjectMessage(), { enter: true })
-                  .catch((err) =>
-                    console.error("auto-compact re-inject failed:", err)
-                  );
-              }
-            }
-            continue;
-          }
-          // Cheap pre-checks before paying for a screen capture + classify.
-          if (pct < COMPACT_THRESHOLD) continue;
-          const last = lastCompactAt.get(s.id) ?? null;
-          if (last != null && nowMs - last < COMPACT_COOLDOWN_MS) continue;
-          // Only NOW capture + classify this candidate (bounded to over-threshold
-          // sessions). getStatusDetail (not getStatus) also yields the detected prompt, so
-          // we honor the canonical idle-AND-no-prompt unattended-write gate.
-          const detail = await statusDetector
-            .getStatusDetail(key)
-            .catch(() => null);
-          if (!detail) continue; // capture failed → leave this session for the next tick
-          const today = utcDay(nowMs);
-          const dayRec = compactDay.get(s.id);
-          const usedToday = dayRec && dayRec.day === today ? dayRec.count : 0;
-          const action = nextCompactAction({
+        liveNames = new Set(await backend.list());
+      } catch {
+        return; // can't enumerate live sessions → skip this tick
+      }
+      const costs = await computeSessionCosts(sessions);
+      for (const s of sessions) {
+        if (s.agent_type !== "claude") continue; // /compact is a Claude command
+        const key = backendKeyForSession(s);
+        if (!liveNames.has(key)) continue;
+        const cost = costs[s.id];
+        if (!cost) continue;
+        const pct = tokenMeter(
+          cost.contextTokens,
+          contextWindowFor(cost.model ?? s.model)
+        ).pct;
+        // #25: a session awaiting its post-compact pointer is handled first
+        // and never starts another compaction this tick. The pre-check runs
+        // with an OPTIMISTIC boundary (isIdle:true / hasPrompt:false) so the
+        // costly capture is skipped whenever time or the context-drop
+        // completion signal alone would reject; when it passes, the capture
+        // runs and the second decision corrects those optimistic values.
+        const pendingSince = compactReinject.get(s.id);
+        if (pendingSince != null) {
+          const pre = nextReinjectAction({
+            pendingSinceMs: pendingSince,
+            nowMs,
+            isIdle: true,
+            hasPrompt: false,
             contextPct: pct,
             threshold: COMPACT_THRESHOLD,
-            isIdle: detail.status === "idle",
-            hasPrompt: detail.prompt != null,
-            compactionsUsedToday: usedToday,
-            maxPerDay: COMPACT_MAX_PER_DAY,
-            lastCompactMs: last,
-            cooldownMs: COMPACT_COOLDOWN_MS,
-            nowMs,
           });
-          if (action !== "compact") continue;
-          lastCompactAt.set(s.id, nowMs);
-          compactDay.set(s.id, { day: today, count: usedToday + 1 });
-          // #25: flush the recent conversation tail to disk BEFORE compaction
-          // destroys the detail. Deterministic (no LLM call); a flush failure
-          // is logged and never blocks the compaction itself. The reinject is
-          // armed only when the file actually landed.
-          if (compactMemoryEnabled() && s.working_directory) {
-            try {
-              const raw = s.claude_session_id
-                ? await readClaudeTranscriptRaw(
-                    s.working_directory,
-                    s.claude_session_id
-                  )
-                : null;
-              if (raw != null) {
-                const memoryPath = joinNativePath(
-                  s.working_directory,
-                  COMPACT_MEMORY_FILE
-                );
-                await mkdir(nativeDirname(memoryPath), { recursive: true });
-                await writeFile(
-                  memoryPath,
-                  buildCompactMemoryMarkdown({
-                    sessionName: s.name,
-                    model: cost.model ?? s.model,
-                    contextPct: pct,
-                    nowIso: new Date(nowMs).toISOString(),
-                    entries: extractTranscriptEntries(raw),
-                  }),
-                  "utf8"
-                );
-                compactReinject.set(s.id, nowMs);
-              }
-            } catch (err) {
-              console.error(
-                "auto-compact: memory flush failed (compacting anyway):",
-                err
+          if (pre === "expire") {
+            compactReinject.delete(s.id);
+          } else if (pre === "inject" && !isBudgetParked(s.id)) {
+            const detail = await statusDetector
+              .getStatusDetail(key)
+              .catch(() => null);
+            if (
+              detail &&
+              nextReinjectAction({
+                pendingSinceMs: pendingSince,
+                nowMs,
+                isIdle: detail.status === "idle",
+                hasPrompt: detail.prompt != null,
+                contextPct: pct,
+                threshold: COMPACT_THRESHOLD,
+              }) === "inject"
+            ) {
+              compactReinject.delete(s.id);
+              console.log(
+                `auto-compact: ${s.name} compaction landed → inject ${COMPACT_MEMORY_FILE} pointer`
               );
+              await backend
+                .pasteText(key, buildReinjectMessage(), { enter: true })
+                .catch((err) =>
+                  console.error("auto-compact re-inject failed:", err)
+                );
             }
           }
-          const compactCommand = buildCompactCommand(customCompactPrompt());
-          console.log(
-            `auto-compact: ${s.name} context ~${Math.round(pct * 100)}% at idle → ${compactCommand === "/compact" ? "/compact" : "/compact (custom prompt)"} (${usedToday + 1}/${COMPACT_MAX_PER_DAY || "∞"} today)`
-          );
-          await backend
-            .pasteText(key, compactCommand, { enter: true })
-            .catch((err) => console.error("auto-compact send failed:", err));
+          continue;
         }
-        // Prune the per-session trackers for sessions that no longer exist.
-        const liveIds = new Set(sessions.map((s) => s.id));
-        for (const id of [...lastCompactAt.keys()])
-          if (!liveIds.has(id)) lastCompactAt.delete(id);
-        for (const id of [...compactDay.keys()])
-          if (!liveIds.has(id)) compactDay.delete(id);
-        for (const id of [...compactReinject.keys()])
-          if (!liveIds.has(id)) compactReinject.delete(id);
-      } catch (err) {
-        console.error("auto-compact tick failed:", err);
-      } finally {
-        compactBusy = false;
+        // Cheap pre-checks before paying for a screen capture + classify.
+        if (pct < COMPACT_THRESHOLD) continue;
+        const last = lastCompactAt.get(s.id) ?? null;
+        if (last != null && nowMs - last < COMPACT_COOLDOWN_MS) continue;
+        // Only NOW capture + classify this candidate (bounded to over-threshold
+        // sessions). getStatusDetail (not getStatus) also yields the detected prompt, so
+        // we honor the canonical idle-AND-no-prompt unattended-write gate.
+        const detail = await statusDetector
+          .getStatusDetail(key)
+          .catch(() => null);
+        if (!detail) continue; // capture failed → leave this session for the next tick
+        const today = utcDay(nowMs);
+        const dayRec = compactDay.get(s.id);
+        const usedToday = dayRec && dayRec.day === today ? dayRec.count : 0;
+        const action = nextCompactAction({
+          contextPct: pct,
+          threshold: COMPACT_THRESHOLD,
+          isIdle: detail.status === "idle",
+          hasPrompt: detail.prompt != null,
+          compactionsUsedToday: usedToday,
+          maxPerDay: COMPACT_MAX_PER_DAY,
+          lastCompactMs: last,
+          cooldownMs: COMPACT_COOLDOWN_MS,
+          nowMs,
+        });
+        if (action !== "compact") continue;
+        lastCompactAt.set(s.id, nowMs);
+        compactDay.set(s.id, { day: today, count: usedToday + 1 });
+        // #25: flush the recent conversation tail to disk BEFORE compaction
+        // destroys the detail. Deterministic (no LLM call); a flush failure
+        // is logged and never blocks the compaction itself. The reinject is
+        // armed only when the file actually landed.
+        if (compactMemoryEnabled() && s.working_directory) {
+          try {
+            const raw = s.claude_session_id
+              ? await readClaudeTranscriptRaw(
+                  s.working_directory,
+                  s.claude_session_id
+                )
+              : null;
+            if (raw != null) {
+              const memoryPath = joinNativePath(
+                s.working_directory,
+                COMPACT_MEMORY_FILE
+              );
+              await mkdir(nativeDirname(memoryPath), { recursive: true });
+              await writeFile(
+                memoryPath,
+                buildCompactMemoryMarkdown({
+                  sessionName: s.name,
+                  model: cost.model ?? s.model,
+                  contextPct: pct,
+                  nowIso: new Date(nowMs).toISOString(),
+                  entries: extractTranscriptEntries(raw),
+                }),
+                "utf8"
+              );
+              compactReinject.set(s.id, nowMs);
+            }
+          } catch (err) {
+            console.error(
+              "auto-compact: memory flush failed (compacting anyway):",
+              err
+            );
+          }
+        }
+        const compactCommand = buildCompactCommand(customCompactPrompt());
+        console.log(
+          `auto-compact: ${s.name} context ~${Math.round(pct * 100)}% at idle → ${compactCommand === "/compact" ? "/compact" : "/compact (custom prompt)"} (${usedToday + 1}/${COMPACT_MAX_PER_DAY || "∞"} today)`
+        );
+        await backend
+          .pasteText(key, compactCommand, { enter: true })
+          .catch((err) => console.error("auto-compact send failed:", err));
       }
-    }, 60000);
-    compactTimer.unref?.();
-  }
+      // Prune the per-session trackers for sessions that no longer exist.
+      const liveIds = new Set(sessions.map((s) => s.id));
+      for (const id of [...lastCompactAt.keys()])
+        if (!liveIds.has(id)) lastCompactAt.delete(id);
+      for (const id of [...compactDay.keys()])
+        if (!liveIds.has(id)) compactDay.delete(id);
+      for (const id of [...compactReinject.keys()])
+        if (!liveIds.has(id)) compactReinject.delete(id);
+    },
+  });
 
   // ── tmux mode (legacy): one shell pty per socket, killed on disconnect ──
   function handleTmuxConnection(ws: WebSocket) {
