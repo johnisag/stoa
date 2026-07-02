@@ -27,6 +27,7 @@ import {
   Gauge,
   TerminalSquare,
   History,
+  Pin,
 } from "lucide-react";
 import { statusGlyph } from "@/components/status-glyph";
 import type { Session } from "@/lib/db";
@@ -38,6 +39,14 @@ import {
   filterCommands,
   type QuickCommand,
 } from "@/lib/quick-switcher-commands";
+import {
+  getPins,
+  getRecents,
+  rankWithRecents,
+  recordRecent,
+  togglePin,
+  type PaletteStorage,
+} from "@/lib/palette-recents";
 import { useViewport } from "@/hooks/useViewport";
 
 // react-syntax-highlighter is heavy; load the code-search results lazily so it
@@ -75,6 +84,16 @@ const OutputSearchResults = dynamic(
 );
 
 type SwitcherMode = "sessions" | "code" | "output";
+
+// localStorage access itself can throw (privacy mode / sandboxed iframe);
+// treat it as absent so the palette still works, just without memory.
+function paletteStorage(): PaletteStorage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 // SQLite's datetime("now") yields a naive UTC string ("YYYY-MM-DD HH:MM:SS")
 // with no zone. `new Date()` would parse the space-separated, offset-less form
@@ -151,6 +170,10 @@ export function QuickSwitcher({
   const [mode, setMode] = useState<SwitcherMode>("sessions");
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // Palette memory (lib/palette-recents): pinned ids always sort first on an
+  // empty query, then most-recently-used. Loaded from localStorage on open.
+  const [recents, setRecents] = useState<string[]>([]);
+  const [pins, setPins] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Check if ripgrep is available
@@ -280,10 +303,13 @@ export function QuickSwitcher({
   );
 
   // Fuzzy-match + rank sessions by the query (name, path, agent, branch, group).
-  const filteredSessions = useMemo(
-    () => searchSessions(sessions, query),
-    [sessions, query]
-  );
+  // Recents/pins only reorder the DEFAULT (empty-query) list — pinned first,
+  // then MRU, then the rest; with an active query the fuzzy ranking stays king
+  // (rankWithRecents is skipped so a deliberate search is never hijacked).
+  const filteredSessions = useMemo(() => {
+    const matches = searchSessions(sessions, query);
+    return query.trim() ? matches : rankWithRecents(matches, recents, pins);
+  }, [sessions, query, recents, pins]);
 
   // Sessions render first, then commands; keyboard nav / Enter index into this
   // single ordered list so ↑↓ flows across both groups seamlessly.
@@ -295,6 +321,12 @@ export function QuickSwitcher({
       setMode("sessions");
       setQuery("");
       setSelectedIndex(0);
+      // Refresh palette memory each open (another tab may have updated it).
+      const storage = paletteStorage();
+      if (storage) {
+        setRecents(getRecents(storage));
+        setPins(getPins(storage));
+      }
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [open]);
@@ -318,15 +350,31 @@ export function QuickSwitcher({
     setSelectedIndex((i) => Math.min(i, Math.max(0, totalResults - 1)));
   }, [totalResults]);
 
+  // Select a session and remember it: recordRecent floats it to the top of the
+  // empty-query list next time the palette opens (MRU, pinned still first).
+  const selectSession = useCallback(
+    (id: string) => {
+      const storage = paletteStorage();
+      if (storage) setRecents(recordRecent(storage, id));
+      onSelectSession(id);
+      onOpenChange(false);
+    },
+    [onSelectSession, onOpenChange]
+  );
+
+  // Pin/unpin a session row — pinned sessions always sort first on an empty
+  // query, across palette opens.
+  const handleTogglePin = useCallback((id: string) => {
+    const storage = paletteStorage();
+    if (storage) setPins(togglePin(storage, id));
+  }, []);
+
   // Fire the result at `selectedIndex` (sessions render first, then commands)
   // and close the palette.
   const activateSelected = useCallback(() => {
     if (selectedIndex < filteredSessions.length) {
       const session = filteredSessions[selectedIndex];
-      if (session) {
-        onSelectSession(session.id);
-        onOpenChange(false);
-      }
+      if (session) selectSession(session.id);
       return;
     }
     const command = filteredCommands[selectedIndex - filteredSessions.length];
@@ -338,7 +386,7 @@ export function QuickSwitcher({
     selectedIndex,
     filteredCommands,
     filteredSessions,
-    onSelectSession,
+    selectSession,
     onOpenChange,
   ]);
 
@@ -509,6 +557,7 @@ export function QuickSwitcher({
                     )}
                     {filteredSessions.map((session, index) => {
                       const isCurrent = session.id === currentSessionId;
+                      const isPinned = pins.includes(session.id);
                       const st = sessionStatuses?.[session.id];
                       const preview =
                         (st?.status === "running" ||
@@ -519,12 +568,9 @@ export function QuickSwitcher({
                       return (
                         <button
                           key={session.id}
-                          onClick={() => {
-                            onSelectSession(session.id);
-                            onOpenChange(false);
-                          }}
+                          onClick={() => selectSession(session.id)}
                           className={cn(
-                            "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
+                            "group flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
                             index === selectedIndex
                               ? "bg-accent"
                               : "hover:bg-accent/50",
@@ -587,6 +633,37 @@ export function QuickSwitcher({
                             <Clock className="h-3 w-3" />
                             <span>{formatTime(session.updated_at)}</span>
                           </div>
+
+                          {/* Pin toggle — a span (not a nested <button>) so the
+                              row stays valid HTML; stopPropagation keeps a pin
+                              tap from also selecting the session. Hidden until
+                              hover/highlight unless pinned. */}
+                          <span
+                            title={
+                              isPinned ? "Unpin session" : "Pin to top of ⌘K"
+                            }
+                            aria-label={
+                              isPinned ? "Unpin session" : "Pin session"
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTogglePin(session.id);
+                            }}
+                            className={cn(
+                              "hover:text-foreground flex-shrink-0 rounded p-1 transition-opacity",
+                              isPinned
+                                ? "text-primary"
+                                : "text-muted-foreground opacity-0 group-hover:opacity-100",
+                              index === selectedIndex && "opacity-100"
+                            )}
+                          >
+                            <Pin
+                              className={cn(
+                                "h-3.5 w-3.5",
+                                isPinned && "fill-current"
+                              )}
+                            />
+                          </span>
                         </button>
                       );
                     })}
@@ -638,10 +715,7 @@ export function QuickSwitcher({
           ) : (
             <OutputSearchResults
               query={query}
-              onSelectSession={(id) => {
-                onSelectSession(id);
-                onOpenChange(false);
-              }}
+              onSelectSession={selectSession}
             />
           )}
         </div>
