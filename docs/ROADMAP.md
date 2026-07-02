@@ -545,10 +545,20 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     (Seatbelt/bubblewrap/restricted-worktree+proxy). _Why:_ workers run with full
     host access today — the biggest blast radius for unattended fleets. _Seam:_ new
     `lib/sandbox/`, `lib/providers/registry.ts`, `lib/orchestration.ts`.
-28. **Embedded live app preview with click-to-comment** — `feature` · L. An iframe
-    over the worktree dev-server URL with a device selector + element-picker that
-    turns a note into a structured message to the worker. _Seam:_ new PreviewPanel,
-    `lib/dev-servers.ts`, `lib/diff-comment.ts`.
+28. ✅ **Embedded live app preview with click-to-comment** — `feature` · L.
+    **SHIPPED.** A `PreviewPanel` iframe over the worktree dev-server URL with a
+    device selector and an element PICKER that turns a click into a STRUCTURED
+    locator (tag + nearest id/data-testid + text snippet + short DOM path — never
+    a screenshot) and then a structured comment routed to the worker. The picker's
+    logic is split into a pure, client-safe half: `lib/preview-picker.ts`
+    (`canInjectPicker` same-origin fail-closed test, `buildPickerScript` injected
+    into the same-origin dev-server document, `parsePickerMessage` which validates
+    every field of the untrusted `postMessage` envelope before trusting it) and
+    `lib/diff-comment.ts` (`PreviewLocator` + the locator→comment formatting).
+    Cross-origin previews degrade to a manual note (a parent page can't script a
+    cross-origin frame). Unit-tested (origin gating, script build, message
+    validation, comment formatting). _Seam:_ `components/PreviewPanel/`,
+    `lib/preview-picker.ts`, `lib/diff-comment.ts`, `components/SessionCard.tsx`.
 29. ✅ **Terminal gestures (cursor-drag, double-tap, pinch)** — `mobile` · L.
     **SHIPPED.** A pure gesture state machine
     (`components/Terminal/hooks/useTerminalGestures.ts`: detectGesture /
