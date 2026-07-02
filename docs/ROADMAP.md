@@ -627,9 +627,19 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
 39. **Screen Wake Lock while watching a live run** — `mobile` · S. Acquire
     `wakeLock` when a terminal/Live Wall pane is foregrounded with an active agent.
     _Seam:_ new `hooks/useWakeLock.ts`, `components/Terminal/index.tsx`, Live Wall.
-40. **Copy command+output as Markdown** — `feature` · S. A "Copy as Markdown" action
-    that strips ANSI and fences the captured text — ready for an issue/Notes/channel.
-    _Seam:_ `components/Terminal/TerminalToolbar.tsx`, new `lib/markdown-block.ts`.
+40. ✅ **Copy command+output as Markdown** — `feature` · S. **SHIPPED.** Pure
+    `lib/markdown-block.ts` `toMarkdownBlock(text, lang?)`: strips complete
+    ANSI sequences (OSC/CSI/short escapes — regexes built via
+    `String.fromCharCode`, no literal control bytes) then reuses
+    `formatTerminalTextForAgent` for the C0/DEL strip; CRLF normalization;
+    picks a fence LONGER than any backtick run in the body (a body containing
+    ```can't close the block early); sanitized lang token; "" for
+    empty/control-only input. A "Copy as Markdown" button rides next to the
+    select-mode Copy in the mobile toolbar, reading the same DOM selection.
+    12-test matrix (fence escalation, hostile ANSI/C0, CRLF, lang tag).
+    _Follow-up noted:_ the desktop select-mode header could gain the same
+    action.
+    ```
 41. **Pull-to-refresh + tap haptics** — `mobile` · S. Pull-to-refresh on the session
     list + feature-detected `vibrate` on send/approve/kill/copy. _Seam:_ new
     `hooks/useHaptics.ts`, `components/SessionList/*`.
