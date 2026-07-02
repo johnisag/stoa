@@ -26,7 +26,17 @@ vi.mock("@/lib/dispatch/create", () => ({
   createIssue: createIssueSpy,
 }));
 
+// The planner spawner — must never fire for a Linear repo (gh-only feature).
+const spawnPlannerSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/dispatch/planner", () => ({
+  spawnPlanner: spawnPlannerSpy,
+  DEFAULT_TASK_CAP: 8,
+  getPlanRun: vi.fn(),
+  cleanupPlanRun: vi.fn(),
+}));
+
 import { POST } from "@/app/api/dispatch/issues/create/route";
+import { POST as PLAN_POST } from "@/app/api/dispatch/plan/route";
 import { queries } from "@/lib/db";
 
 function req(body: unknown): NextRequest {
@@ -82,5 +92,16 @@ describe("POST /api/dispatch/issues/create — source gating (#34)", () => {
     expect(res.status).toBe(400);
     // The gh-spawning path must not have run.
     expect(createIssueSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/dispatch/plan — planner is GitHub-only (#34)", () => {
+  it("400s a planner run for a Linear repo and NEVER spawns a planner worker", async () => {
+    spawnPlannerSpy.mockClear();
+    const res = await PLAN_POST(
+      req({ repoId: "repo-linear", spec: "decompose the auth refactor" })
+    );
+    expect(res.status).toBe(400);
+    expect(spawnPlannerSpy).not.toHaveBeenCalled();
   });
 });

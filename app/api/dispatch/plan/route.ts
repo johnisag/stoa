@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries } from "@/lib/db";
 import { spawnPlanner, DEFAULT_TASK_CAP } from "@/lib/dispatch/planner";
+import { dispatchSupported } from "@/lib/dispatch/issue-source";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 import { DISPATCH_SPEC_MAX_LENGTH } from "@/lib/api-security";
 
@@ -30,6 +31,19 @@ export async function POST(request: NextRequest) {
       DispatchRepo | undefined;
     if (!repo) {
       return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
+    }
+    // #34: the planner decomposes a spec into GitHub ISSUES (approve → `gh issue
+    // create`). That's gh-only, so refuse to even START a planner run for a
+    // Linear/other repo — otherwise it burns a worktree worker and then 500s at
+    // approve. Linear repos are intake/browse-only.
+    if (!dispatchSupported(repo)) {
+      return NextResponse.json(
+        {
+          error:
+            "The planner files GitHub issues, which isn't supported for this repo — Linear repos are intake/browse-only. Use a GitHub repo.",
+        },
+        { status: 400 }
+      );
     }
     const planId = await spawnPlanner(repo, spec, taskCap);
     return NextResponse.json({ planId }, { status: 201 });

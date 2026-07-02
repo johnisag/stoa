@@ -4,6 +4,7 @@ import { getDb, queries } from "@/lib/db";
 import { getPlanRun, cleanupPlanRun } from "@/lib/dispatch/planner";
 import { createIssue } from "@/lib/dispatch/create";
 import { serializeClaims, normalizeClaim } from "@/lib/dispatch/claims";
+import { dispatchSupported } from "@/lib/dispatch/issue-source";
 import type { DispatchRepo, PlanTask } from "@/lib/dispatch/types";
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -29,6 +30,18 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       DispatchRepo | undefined;
     if (!repo) {
       return NextResponse.json({ error: "Unknown repo" }, { status: 404 });
+    }
+    // #34 belt-and-suspenders: approving files each task as a `gh issue create`.
+    // The plan-spawn route already refuses a non-github repo, but gate here too
+    // so createIssue can never run against a `linear:` slug.
+    if (!dispatchSupported(repo)) {
+      return NextResponse.json(
+        {
+          error:
+            "Filing issues isn't supported for this repo — Linear repos are intake/browse-only. Use a GitHub repo.",
+        },
+        { status: 400 }
+      );
     }
     const autoMerge = !!body?.autoMerge;
 
