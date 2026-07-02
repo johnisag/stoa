@@ -56,6 +56,13 @@ export interface InboxItem {
   verifyOutput: string | null;
   /** Whether the verify harness gates this item (armed dispatch repo). */
   verifyGate: boolean;
+  /** #26 rubric judge verdict: pass | fail | error | running | null. null when
+   * the repo didn't arm the judge (or for ceremonies). */
+  judgeStatus: string | null;
+  /** Bounded judge detail (normalized checks/reasons JSON, or the error). */
+  judgeOutput: string | null;
+  /** Whether the rubric judge gates this item (armed dispatch repo). */
+  judgeGate: boolean;
   fixRounds: number;
   autoMerge: boolean;
   updatedAt: string;
@@ -75,8 +82,7 @@ export function listInboxItems(): InboxItem[] {
   ).filter((d) => d.status === "pr_open" || d.status === "failed");
   for (const d of dispatches) {
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     items.push({
       type: "dispatch",
       id: d.id,
@@ -100,6 +106,9 @@ export function listInboxItems(): InboxItem[] {
       // Armed == gate on AND a command set (matches verifyPass / autoMergePass), so
       // a gate-on-but-no-command repo doesn't hide the Merge button forever.
       verifyGate: repo?.verify_gate === 1 && !!repo?.verify_command,
+      judgeStatus: d.judge_status,
+      judgeOutput: d.judge_output,
+      judgeGate: repo?.judge_gate === 1,
       fixRounds: d.fix_rounds,
       autoMerge: d.auto_merge === 1,
       updatedAt: d.updated_at,
@@ -112,8 +121,7 @@ export function listInboxItems(): InboxItem[] {
     .all() as SessionCeremony[];
   for (const c of ceremonies) {
     const session = queries.getSession(db).get(c.session_id) as
-      | Session
-      | undefined;
+      Session | undefined;
     if (!session) continue;
     items.push({
       type: "ceremony",
@@ -134,6 +142,10 @@ export function listInboxItems(): InboxItem[] {
       verifyStatus: null,
       verifyOutput: null,
       verifyGate: false,
+      // The rubric judge is dispatch-only too (a per-repo gate).
+      judgeStatus: null,
+      judgeOutput: null,
+      judgeGate: false,
       fixRounds: c.fix_rounds,
       autoMerge: c.auto_merge === 1,
       updatedAt: c.updated_at,

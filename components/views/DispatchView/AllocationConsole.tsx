@@ -291,6 +291,23 @@ function RepoRow({ repo }: { repo: DispatchRepo }) {
           verify
         </label>
 
+        {/* #26 rubric judge (opt-in): a binary LLM judge over each PR diff */}
+        <label
+          className="text-muted-foreground flex items-center gap-1 text-xs"
+          title="Run a binary LLM rubric judge over each PR's diff (tests added? no secrets? matches AGENTS.md conventions? no injection shapes?) and gate auto-merge on a pass — the safeguard that makes cheap worker models safe. Verdicts are pinned to the PR head; a fail/error waits visibly in the Verdict Inbox. Costs one Claude call per PR push."
+        >
+          <Switch
+            checked={repo.judge_gate === 1}
+            onCheckedChange={(v) => patch({ judgeGate: v })}
+            aria-label={
+              repo.judge_gate === 1
+                ? "Disable rubric judge"
+                : "Enable rubric judge"
+            }
+          />
+          judge
+        </label>
+
         {/* Autonomous maintainer (opt-in): a survey agent proposes its own backlog
             on a cadence. Proposals are FENCED out of auto-dispatch — they land in
             the Backlog and wait for your one-tap Approve, even on an auto repo. */}

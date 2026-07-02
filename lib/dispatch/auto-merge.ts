@@ -54,6 +54,11 @@ export function nextAutoMergeAction(input: {
   /** Stoa's local verify verdict for the CURRENT head (null when not armed, not
    * yet run, or the cached verdict is for an older SHA — the caller SHA-pins it). */
   verifyStatus: string | null;
+  /** #26 rubric judge armed for this repo. */
+  judgeGate: boolean;
+  /** The judge's verdict for the CURRENT head (SHA-pinned by the caller, like
+   * verifyStatus — a stale/absent verdict reads null and waits). */
+  judgeStatus: string | null;
 }): AutoMergeAction {
   if (
     !input.autoMerge ||
@@ -80,7 +85,11 @@ export function nextAutoMergeAction(input: {
   // when the verify pass records 'pass'. A misconfig yields 'error' → it sits
   // visibly in the inbox with the output tail, never a silent merge.
   if (input.verifyGate && input.verifyStatus !== "pass") return "wait";
-  return "merge"; // approved, mergeable, checks green/none, verified (if armed)
+  // Judge gate armed → require the rubric judge's PASS for THIS head. Same
+  // additive contract as the verify gate: it can only add a wait; a 'fail' or
+  // 'error' sits visibly in the inbox, never a silent merge.
+  if (input.judgeGate && input.judgeStatus !== "pass") return "wait";
+  return "merge"; // approved, mergeable, checks green/none, verified + judged (if armed)
 }
 
 export interface PrReadiness {
@@ -163,8 +172,7 @@ export async function autoMergePass(): Promise<void> {
   for (const d of rows) {
     if (d.pr_number == null || !d.worktree_path) continue;
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo) continue;
 
     // gh PR reads/merges run against the repo (--repo) from the STABLE main
@@ -198,6 +206,12 @@ export async function autoMergePass(): Promise<void> {
         readiness.headRefOid && d.verify_sha === readiness.headRefOid
           ? d.verify_status
           : null,
+      judgeGate: repo.judge_gate === 1,
+      // Same SHA-pin contract as verifyStatus.
+      judgeStatus:
+        readiness.headRefOid && d.judge_sha === readiness.headRefOid
+          ? d.judge_status
+          : null,
     });
     if (action !== "merge") continue;
 
@@ -211,9 +225,11 @@ export async function autoMergePass(): Promise<void> {
         // gate passed. Pin to whichever head the gates VALIDATED: the reviewed head
         // (review gate), else the verified head (verify gate — equals the current
         // head here, since verifyStatus is null unless verify_sha === headRefOid),
-        // else the head we just read mergeable/checks on. A verify-only repo had
-        // review_sha === null and so was merging UNPINNED — the bug this closes.
-        matchHeadCommit: d.review_sha ?? d.verify_sha ?? readiness.headRefOid,
+        // else the judged head (#26, same equality contract), else the head we
+        // just read mergeable/checks on. A verify-only repo had review_sha ===
+        // null and so was merging UNPINNED — the bug this closes.
+        matchHeadCommit:
+          d.review_sha ?? d.verify_sha ?? d.judge_sha ?? readiness.headRefOid,
       });
       queries.updateDispatchStatus(db).run("merged", d.id);
       console.log(

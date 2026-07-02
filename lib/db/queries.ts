@@ -666,6 +666,13 @@ export const queries = {
       `UPDATE dispatch_repos SET default_model = ?, updated_at = datetime('now') WHERE id = ?`
     ),
 
+  // #26 rubric judge: arm/disarm the per-repo gate (focused update, #20 pattern).
+  updateDispatchRepoJudgeGate: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE dispatch_repos SET judge_gate = ?, updated_at = datetime('now') WHERE id = ?`
+    ),
+
   deleteDispatchRepo: (db: Database.Database) =>
     getStmt(db, `DELETE FROM dispatch_repos WHERE id = ?`),
 
@@ -785,6 +792,29 @@ export const queries = {
     getStmt(
       db,
       `UPDATE issue_dispatches SET verify_status = NULL, verify_output = NULL, verify_sha = NULL, updated_at = datetime('now') WHERE repo_id = ? AND status = 'pr_open'`
+    ),
+
+  // #26 rubric judge: a judge run is STARTING for this head — record running +
+  // pin the SHA up-front (mirrors setVerifyRunning: the once-guard holds across
+  // a restart), clearing any prior verdict detail.
+  setJudgeRunning: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET judge_status = 'running', judge_sha = ?, judge_output = NULL, updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // #26 rubric judge: a run FINISHED — the verdict, bounded detail, and the pin.
+  setJudgeResult: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET judge_status = ?, judge_output = ?, judge_sha = ?, judge_ran_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+    ),
+
+  // #26 rubric judge: the head moved off the judged SHA — clear the stale verdict.
+  clearJudge: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE issue_dispatches SET judge_status = NULL, judge_output = NULL, judge_sha = NULL, updated_at = datetime('now') WHERE id = ?`
     ),
 
   // Fix loop: a fixer finished — clear reviewer + decision + SHA + fixer so the

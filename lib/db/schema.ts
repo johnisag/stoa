@@ -175,6 +175,9 @@ export function createSchema(db: Database.Database): void {
       merge_train INTEGER NOT NULL DEFAULT 0,
       verify_gate INTEGER NOT NULL DEFAULT 0,
       verify_command TEXT,
+      -- #26 LLM-as-judge rubric gate (migration 50): opt-in binary rubric judge
+      -- over each PR diff, gating auto-merge alongside review/verify.
+      judge_gate INTEGER NOT NULL DEFAULT 0,
       -- #20 cost-aware routing (migration 48): pin this repo's dispatch workers
       -- to an economical catalog model (e.g. haiku). NULL = agent default.
       default_model TEXT,
@@ -226,6 +229,11 @@ export function createSchema(db: Database.Database): void {
       verify_output TEXT,
       verify_sha TEXT,
       verify_ran_at TEXT,
+      -- #26 (migration 50): the rubric judge's SHA-pinned verdict trio.
+      judge_status TEXT,
+      judge_output TEXT,
+      judge_sha TEXT,
+      judge_ran_at TEXT,
       file_claims TEXT,
       -- Intake source: 'github' (a real issue, issue_number > 0) or 'local' (a
       -- freeform task typed into Stoa, issue_number 0 + task_body). The reconciler

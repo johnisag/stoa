@@ -41,7 +41,12 @@ export async function POST(
     // worktree is only a fallback when the repo row is gone (a reclaimed worktree
     // cwd otherwise makes gh's spawn throw a misleading ENOENT).
     const repo = queries.getDispatchRepo(db).get(d.repo_id) as
-      | { repo_path: string; repo_slug: string; review_gate: number }
+      | {
+          repo_path: string;
+          repo_slug: string;
+          review_gate: number;
+          judge_gate: number;
+        }
       | undefined;
     const cwd = expandHome(repo?.repo_path || d.worktree_path || "");
     if (!cwd) {
@@ -63,12 +68,28 @@ export async function POST(
         { status: 409 }
       );
     }
+    // #26: a judge-gated repo requires the rubric judge's PASS before ANY merge —
+    // the manual button must not bypass what auto-merge enforces. A stale verdict
+    // is already cleared by judgePass when the head moves, and the SHA pin below
+    // makes gh refuse a merge onto an unjudged head.
+    if (repo?.judge_gate === 1 && d.judge_status !== "pass") {
+      return NextResponse.json(
+        {
+          error:
+            "This repo is judge-gated but the rubric judge hasn't passed this PR — wait for (or fix) the judge verdict, then merge.",
+        },
+        { status: 409 }
+      );
+    }
     await mergePR({
       cwd,
       prNumber: d.pr_number,
       repoSlug: repo?.repo_slug,
-      // SHA-pin: refuse the merge if the PR head moved after the panel verdict.
-      matchHeadCommit: d.review_sha,
+      // SHA-pin: refuse the merge if the PR head moved after the gate verdicts —
+      // pin to whichever gate validated a head (auto-merge's chain minus its
+      // headRefOid tail: this route reads no readiness, and an ungated repo
+      // legitimately merges unpinned — a deliberate manual action).
+      matchHeadCommit: d.review_sha ?? d.verify_sha ?? d.judge_sha,
     });
     queries.updateDispatchStatus(db).run("merged", id);
     return NextResponse.json({

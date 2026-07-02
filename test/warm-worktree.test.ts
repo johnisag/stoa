@@ -93,6 +93,7 @@ function makeRepo(overrides: Record<string, unknown> = {}) {
     merge_train: 0,
     verify_gate: 0,
     verify_command: null,
+    judge_gate: 0,
     maintainer_survey_enabled: 0,
     maintainer_survey_goal: null,
     maintainer_survey_cadence: null,

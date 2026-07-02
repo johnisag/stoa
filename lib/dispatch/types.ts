@@ -40,6 +40,9 @@ export interface DispatchRepo {
   /** The command to run for verification (typecheck/test/build); steps chained with
    * `&&` (Stoa's own delimiter — never a shell). null = nothing armed. */
   verify_command: string | null;
+  /** 0/1 — opt-in LLM-as-judge rubric gate (#26): a binary rubric judge over
+   * each PR diff, gating auto-merge alongside review/verify. */
+  judge_gate: number;
   /** #20 cost-aware routing (migration 48): pin this repo's dispatch workers to
    * an economical catalog model (e.g. haiku). null = the agent's default. */
   default_model?: string | null;
@@ -116,6 +119,14 @@ export interface IssueDispatch {
   verify_sha: string | null;
   /** When verification last ran (datetime('now')). */
   verify_ran_at: string | null;
+  /** #26 rubric judge verdict: null | running | pass | fail | error. */
+  judge_status: string | null;
+  /** Bounded verdict detail: normalized checks/reasons JSON, or the error. */
+  judge_output: string | null;
+  /** The PR head SHA this judge_status is for (stale-verdict guard + pin). */
+  judge_sha: string | null;
+  /** When the judge last ran (datetime('now')). */
+  judge_ran_at: string | null;
   /** Conflict-aware decomposition: JSON array of repo-relative path prefixes this
    * task exclusively owns. null/absent = no claims (co-scheduling unaffected). */
   file_claims: string | null;

@@ -182,6 +182,8 @@ describe("nextAutoMergeAction", () => {
     checks: "passing" as const,
     verifyGate: false,
     verifyStatus: null as string | null,
+    judgeGate: false,
+    judgeStatus: null as string | null,
   };
 
   it("merges when ready (mergeable + checks pass, not gated)", () => {
@@ -247,6 +249,35 @@ describe("nextAutoMergeAction", () => {
     expect(nextAutoMergeAction({ ...gated, reviewSha: "abc123" })).toBe(
       "merge"
     );
+  });
+
+  it("requires the rubric judge's PASS when the repo is judge-gated (#26)", () => {
+    const j = { ...ready, judgeGate: true };
+    expect(nextAutoMergeAction({ ...j, judgeStatus: "pass" })).toBe("merge");
+    for (const s of [null, "running", "fail", "error"]) {
+      expect(nextAutoMergeAction({ ...j, judgeStatus: s })).toBe("wait");
+    }
+    // Inert when the repo didn't arm the judge (zero behavior change).
+    expect(nextAutoMergeAction({ ...ready, judgeStatus: "fail" })).toBe(
+      "merge"
+    );
+  });
+
+  it("judge and verify gates are ADDITIVE — both must pass when both armed", () => {
+    const both = { ...ready, verifyGate: true, judgeGate: true };
+    expect(
+      nextAutoMergeAction({
+        ...both,
+        verifyStatus: "pass",
+        judgeStatus: "pass",
+      })
+    ).toBe("merge");
+    expect(
+      nextAutoMergeAction({ ...both, verifyStatus: "pass", judgeStatus: null })
+    ).toBe("wait");
+    expect(
+      nextAutoMergeAction({ ...both, verifyStatus: null, judgeStatus: "pass" })
+    ).toBe("wait");
   });
 });
 
