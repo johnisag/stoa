@@ -12,8 +12,10 @@ macOS, and Linux** — preserving that is a hard requirement, not a nice-to-have
 - Package manager: `npm`. Dev: `npm run dev` (port 3011). Build: `npm run build`.
 - **Before every commit, all three must be green:** `npx tsc --noEmit`, `npm test`,
   `npm run build`. The pre-commit hook runs prettier + typecheck.
-- CI runs the test matrix on **ubuntu + macos + windows** (`.github/workflows/test.yml`).
-  A change isn't done until that matrix is green.
+- CI runs the test matrix on **ubuntu + macos + windows** (`.github/workflows/test.yml`)
+  plus a `prettier-check` job (`npx prettier --check .`) — the pre-commit hook only
+  formats STAGED files, so a prettier version bump must land together with its
+  repo-wide `--write` pass. A change isn't done until that matrix is green.
 - **4-agent review before merge — UNBREAKABLE, no exceptions.** Every change (any
   size — feature, fix, refactor, or docs) gets a local review of the PR diff by
   FOUR independent agents, each on a distinct dimension:

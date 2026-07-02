@@ -86,7 +86,18 @@ const DEFAULTS = {
   // and are otherwise the structured scan's SOLE gate - byte-pinning a COMMITTED
   // one makes that scan defense-in-depth (a forged-but-allowlisted server can't
   // land without a code-owned re-pin). A gitignored/local one stays an advisory.
-  surfaceFiles: [".cursorrules", ".windsurfrules", ".mcp.json", ".claude.json"],
+  // .prettierrc/.prettierignore: prettier's "plugins" array loads whatever
+  // module it names, and the byte-pinned pre-commit hook runs prettier - so a
+  // merged config edit pointing plugins at a committed file would execute code
+  // on the next local commit. Pin the config the pinned hook's tool loads.
+  surfaceFiles: [
+    ".cursorrules",
+    ".windsurfrules",
+    ".mcp.json",
+    ".claude.json",
+    ".prettierrc",
+    ".prettierignore",
+  ],
   // Source extensions scanned for obfuscation in the repo-wide payload sweep.
   scriptExts: [
     ".js",
