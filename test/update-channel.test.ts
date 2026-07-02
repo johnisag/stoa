@@ -154,10 +154,52 @@ describe("update channel: parseReleaseTag", () => {
   it("rejects non-release tags (so a hostile ref can't be selected)", () => {
     expect(parseReleaseTag("nightly")).toBeNull();
     expect(parseReleaseTag("v1.2")).toBeNull(); // not full MAJOR.MINOR.PATCH
+    expect(parseReleaseTag("v1.2.0.5")).toBeNull(); // 4th segment — not MAJOR.MINOR.PATCH
     expect(parseReleaseTag("release-1.2.3")).toBeNull();
     expect(parseReleaseTag("v1.2.3; rm -rf /")).toBeNull(); // injection-shaped
     expect(parseReleaseTag("")).toBeNull();
   });
+
+  it("rejects a version component too large to compare precisely (>2^53)", () => {
+    // Would overflow to a float where two distinct versions compare equal,
+    // making the highest-tag pick order-dependent — dropped instead.
+    expect(parseReleaseTag("v99999999999999999999.0.0")).toBeNull();
+    // A large-but-safe component still parses.
+    expect(parseReleaseTag("v999999999.0.0")).toMatchObject({
+      major: 999999999,
+    });
+  });
+});
+
+// The two piped installers (scripts/install.sh, scripts/install.ps1) select the
+// release tag with a git-native `git tag --sort=-v:refname` filtered by an
+// embedded regex — they CANNOT import this JS at bootstrap time. This test locks
+// that regex's semantics to parseReleaseTag's "stable release" definition so the
+// install-time and update-time selectors can never drift (a prerelease or a
+// 4-segment tag must be excluded by BOTH). If parseReleaseTag's shape changes,
+// update the regex string in BOTH installers to match and this fixture.
+describe("installer/updater release-tag parity (#56)", () => {
+  // MUST stay byte-identical to the pattern in install.sh (grep -E) and
+  // install.ps1 (-match). Anchored MAJOR.MINOR.PATCH, no prerelease, no 4th seg.
+  const INSTALLER_STABLE_RE = /^v\d+\.\d+\.\d+$/;
+  const isStableForUpdater = (tag: string) => {
+    const p = parseReleaseTag(tag);
+    return p !== null && p.prerelease === null;
+  };
+  const CASES = [
+    "v1.10.0",
+    "v2.0.0",
+    "v2.0.0-rc.1",
+    "v1.3.0-beta.1",
+    "v1.2.0.5",
+    "nightly",
+    "v1.2",
+  ];
+  for (const tag of CASES) {
+    it(`installer regex and updater agree on ${tag}`, () => {
+      expect(INSTALLER_STABLE_RE.test(tag)).toBe(isStableForUpdater(tag));
+    });
+  }
 });
 
 describe("update channel: compareReleaseTags (semver ordering)", () => {

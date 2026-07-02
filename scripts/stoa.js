@@ -473,8 +473,25 @@ function cmdRestart() {
 }
 
 /** status: report running state and URL. */
+/**
+ * A human label for what the install is pinned to (#56): a detached release-tag
+ * checkout reads as the pinned tag + how to get back; otherwise the tracked
+ * branch. Returns null for a non-git (npm-global) install. Best-effort — any git
+ * failure yields null rather than throwing in a status readout.
+ */
+function currentRefLabel() {
+  if (!isGitInstall()) return null;
+  const tag = gitCapture(["describe", "--tags", "--exact-match"]);
+  if (tag && parseReleaseTag(tag)) {
+    return `${tag} (release channel — pinned; \`stoa update --channel main\` to track main)`;
+  }
+  const branch = gitCapture(["symbolic-ref", "--short", "-q", "HEAD"]);
+  return branch ? `${branch} (tracking)` : null;
+}
+
 function cmdStatus() {
   const pid = getRunningPid();
+  const ref = currentRefLabel();
   console.log("");
   if (pid) {
     console.log(`  Status:  Running (PID: ${pid})`);
@@ -482,9 +499,11 @@ function cmdStatus() {
     console.log(`  Local:   ${URL}`);
     console.log(`  Logs:    ${LOG_FILE}`);
     console.log(`  Install: ${REPO_DIR}`);
+    if (ref) console.log(`  Version: ${ref}`);
   } else {
     console.log("  Status:  Stopped");
     console.log(`  Install: ${REPO_DIR}`);
+    if (ref) console.log(`  Version: ${ref}`);
     console.log("");
     console.log("  Run 'stoa start' to start the server");
   }
@@ -675,11 +694,18 @@ function parseReleaseTag(tag) {
     String(tag || "").trim()
   );
   if (!m) return null;
+  const major = parseInt(m[1], 10);
+  const minor = parseInt(m[2], 10);
+  const patch = parseInt(m[3], 10);
+  // Reject an absurd (>2^53) component: it would overflow to a float where two
+  // distinct versions compare equal, making selectLatestReleaseTag's pick
+  // order-dependent. Real release tags are tiny; this only drops nonsense refs.
+  if (![major, minor, patch].every(Number.isSafeInteger)) return null;
   return {
     tag: String(tag).trim(),
-    major: parseInt(m[1], 10),
-    minor: parseInt(m[2], 10),
-    patch: parseInt(m[3], 10),
+    major,
+    minor,
+    patch,
     prerelease: m[4] || null,
   };
 }
@@ -851,6 +877,24 @@ function cmdUpdate(argv = []) {
       );
     }
     info(`Latest release tag: ${tag}`);
+    // Downgrade guard: if HEAD is already pinned to a release tag NEWER than the
+    // one we resolved (a higher tag was deleted / re-pointed upstream), say so
+    // LOUD before the force checkout — silently downgrading a production install
+    // is exactly what the guarded channel must never do quietly. (On a normal
+    // main install HEAD isn't at a tag, so `describe --exact-match` returns null
+    // and no warning fires.)
+    const currentTag = gitCapture(["describe", "--tags", "--exact-match"]);
+    const curParsed = currentTag ? parseReleaseTag(currentTag) : null;
+    const nextParsed = parseReleaseTag(tag);
+    if (
+      curParsed &&
+      nextParsed &&
+      compareReleaseTags(nextParsed, curParsed) < 0
+    ) {
+      warn(
+        `Latest release tag ${tag} is OLDER than your current ${currentTag} — this is a DOWNGRADE (a newer tag may have been removed upstream). Proceeding because you opted into the release channel.`
+      );
+    }
     // Check out the immutable tag (detached HEAD). The prior fetch --tags brought
     // the tag object local, so this needs no network.
     step(`git checkout ${tag}`, "git", ["checkout", "--force", `tags/${tag}`]);
