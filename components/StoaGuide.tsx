@@ -35,6 +35,10 @@ import {
   WifiOff,
   MousePointerClick,
   Hand,
+  Command,
+  FolderGit2,
+  Layers,
+  Wand2,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -72,6 +76,12 @@ const COCKPIT: Item[] = [
       "Queue a prompt to a session even with no signal — it's stashed on-device and replayed the moment you reconnect, de-duplicated on replay so a flaky reconnect doesn't double-send. Phones drop connections; your send doesn't get lost.",
   },
   {
+    icon: Command,
+    title: "Quick Switcher",
+    blurb:
+      "One keystroke to anywhere (Cmd/Ctrl+K): fuzzy-jump to any session (each shown with its live status), run a command — new session, open any view — or flip to the Code and Output search tabs.",
+  },
+  {
     icon: Search,
     title: "Code search",
     blurb: "Fast, syntax-highlighted codebase search (Cmd/Ctrl+K).",
@@ -96,6 +106,12 @@ const COCKPIT: Item[] = [
     icon: GitFork,
     title: "Git worktrees",
     blurb: "Isolated branches with automatic setup per session.",
+  },
+  {
+    icon: FolderGit2,
+    title: "Multi-repo workspace",
+    blurb:
+      "Point a new session at a folder of repos (not itself a repo) and pick the ones to work on — each gets its own worktree as a subfolder of one workspace the agent runs in, all on the same feature branch (one branch/PR per repo). Deleting the session tears every worktree down.",
   },
   {
     icon: TriangleAlert,
@@ -144,6 +160,12 @@ const COCKPIT: Item[] = [
       "Branch any agent's session into a new one. Claude forks natively (the full branched conversation); every other agent forks by seeding a fresh session with the parent's recent scrollback.",
   },
   {
+    icon: Layers,
+    title: "Best of N",
+    blurb:
+      "Fan one task out to 2–3 Claude agents in parallel, each in its own worktree; when they finish, compare each candidate's diff and pick the winner — the losing sessions and worktrees are cleaned up automatically. Launched from Ask Stoa.",
+  },
+  {
     icon: Hand,
     title: "Touch gestures",
     blurb:
@@ -160,6 +182,12 @@ const COCKPIT: Item[] = [
     title: "Commands",
     blurb:
       "Author a slash command in the UI — Stoa writes it to the agent's native command dir (~/.claude/commands/) so it becomes a real /name its terminal autocompletes. Claude today; more providers as their conventions are wired.",
+  },
+  {
+    icon: Wand2,
+    title: "Ask Stoa",
+    blurb:
+      "A chat pane grounded in your fleet's live state — ask what the fleet did today, which sessions are stuck on you, what your sessions cost. It can also act (start a session, create a dispatch task, launch a Best-of-N run, open a view): every action is proposed as a card and nothing runs until you Confirm.",
   },
   {
     icon: LayoutGrid,
