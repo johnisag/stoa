@@ -68,26 +68,30 @@ export function SnippetChipBar({
           onClose={() => setFillIn(null)}
         />
       )}
-      <div
-        className="bg-background/95 border-border scrollbar-none flex items-center gap-1.5 overflow-x-auto border-t px-2 py-1.5 backdrop-blur"
-        onTouchEnd={(e) => e.stopPropagation()}
-      >
-        {snippets.map((snippet) => (
-          <button
-            key={snippet.id}
-            type="button"
-            title={snippet.content}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleTap(snippet);
-            }}
-            className="bg-secondary text-secondary-foreground active:bg-primary active:text-primary-foreground max-w-[10rem] flex-shrink-0 truncate rounded-full px-3 py-1.5 text-xs font-medium"
-          >
-            {snippet.name}
-          </button>
-        ))}
-      </div>
+      {/* If the list empties while a fill-in is alive (a delete on another
+          surface), only the dialog survives — no empty bordered strip. */}
+      {snippets.length > 0 && (
+        <div
+          className="bg-background/95 border-border scrollbar-none flex items-center gap-1.5 overflow-x-auto border-t px-2 py-1.5 backdrop-blur"
+          onTouchEnd={(e) => e.stopPropagation()}
+        >
+          {snippets.map((snippet) => (
+            <button
+              key={snippet.id}
+              type="button"
+              title={snippet.content}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleTap(snippet);
+              }}
+              className="bg-secondary text-secondary-foreground active:bg-primary active:text-primary-foreground max-w-[10rem] flex-shrink-0 truncate rounded-full px-3 py-1.5 text-xs font-medium"
+            >
+              {snippet.name}
+            </button>
+          ))}
+        </div>
+      )}
     </>
   );
 }

@@ -42,12 +42,12 @@ export function SnippetFillInDialog({
   };
 
   // Escape closes (parity with the other modals). preventDefault so no
-  // browser default stacks on top of the close. Window keydown listeners fire
-  // in REGISTRATION order, so when the snippets modal is the parent it sees
-  // the event too — it skips its own close while this dialog is open (its
-  // `fillIn` guard). When the chip bar is the parent there is no other Escape
-  // handler at all, and xterm never sees the key either way: it reads from
-  // its own textarea, and focus is inside this dialog.
+  // browser default stacks on top of the close. When the snippets modal is
+  // the parent, its own Escape listener is UNREGISTERED while this dialog is
+  // open (its effect early-returns on `fillIn`), so only this handler runs;
+  // when the chip bar is the parent there is no other Escape handler at all.
+  // xterm never sees the key either way: it reads from its own textarea, and
+  // focus is inside this dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
