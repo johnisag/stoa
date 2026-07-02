@@ -762,10 +762,21 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     One typed `getAutoFeatures()` + `anyTickEnabled()`/`describeEnabled()`, and a
     `makeGuardedInterval()` so the 4–5 timers stop re-deriving the busy-guard/unref
     scaffolding. _Seam:_ `server.ts`, new `lib/auto-features.ts`, the auto-* libs.
-56. **Pin install/update to a verified release tag** — `adoption` · M. Clone a
-    documented release tag (+ optional checksum) instead of HEAD of `main`, with a
-    `--channel main` escape hatch. _Seam:_ `scripts/install.sh`/`.ps1`,
-    `scripts/stoa.js` `cmdUpdate`. _(Deferred trust boundary — ship opt-in/guarded.)_
+56. ✅ **Pin install/update to a verified release tag** — `adoption` · M.
+    **SHIPPED (opt-in/guarded).** A `release` update channel that pins the
+    checkout to the latest verified, immutable release TAG instead of `main`'s
+    HEAD. The DEFAULT stays `main` (byte-identical git commands, today's
+    behavior) — `release` is never the default, so this is a pure trust-boundary
+    opt-in. `stoa update` resolves the channel `--channel <main|release>` >
+    `STOA_UPDATE_CHANNEL` env > default `main`; on `release` it lists remote
+    tags via `git ls-remote --tags` (execFile, no shell pipes), picks the
+    highest semver via pure tested helpers (rejecting injection-shaped refs),
+    and checks it out detached; unknown channel / no-tag / unreachable remote
+    all fail LOUD rather than silently tracking main. `install.sh`/`install.ps1`
+    take a matching `--channel`/`-Channel`/`STOA_CHANNEL`, default unchanged,
+    symmetric across platforms. Checksum/signature verify deferred (tags ride
+    git's authenticated transport). 22 pure tests; scripts re-pinned. _Seam:_
+    `scripts/stoa.js`, `scripts/install.sh`, `scripts/install.ps1`.
 57. **Extract `WorkflowBuilder` into hooks + sibling components** — `tech-debt` · L.
     Decompose the 1800-line/27-hook component into `useWorkflowDoc`/`useCanvasSelection`/
     `useWorkflowPersistence` + sibling toolbar/inspector/canvas. No behavior change.
