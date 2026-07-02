@@ -857,10 +857,19 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     churn); type the prepared-statement wrappers to drop `as Row[]` casts. _Why:_ a
     constant merge-conflict magnet; untyped casts feed the budget kill loop. _Seam:_
     `lib/db/queries.ts`, `lib/db/index.ts`.
-55. **Centralize `STOA_AUTO_*` flags + guarded-interval helper** — `tech-debt` · M.
-    One typed `getAutoFeatures()` + `anyTickEnabled()`/`describeEnabled()`, and a
-    `makeGuardedInterval()` so the 4–5 timers stop re-deriving the busy-guard/unref
-    scaffolding. _Seam:_ `server.ts`, new `lib/auto-features.ts`, the auto-* libs.
+55. ✅ **Centralize `STOA_AUTO_*` flags + guarded-interval helper** — `tech-debt` ·
+    M. **SHIPPED (pure refactor).** New `lib/auto-features.ts`: one typed
+    `getAutoFeatures()` snapshot of the parsed `STOA_AUTO_*` booleans (delegating
+    to each feature's own `*Enabled()` helper so it can't drift), plus
+    `anyTickEnabled()`, `describeEnabled()` (a human startup-log summary), and
+    `makeGuardedInterval({ intervalMs, enabled, tick, unref, runAtStartup })`
+    wrapping `setInterval` with the re-entrancy busy-guard + `.unref()` the six
+    `server.ts` timers hand-rolled. The timers (budget enforcement, budget-park,
+    dispatch reconciler, scheduler, cost sampler, auto-compact) move onto the
+    helper with IDENTICAL cadences/guards/enable conditions (always-armed
+    budget-enforcement keeps `unref:false`; budget-park keeps its immediate
+    `runAtStartup`; the status ticker stays inline). No auto-feature semantics
+    change. Unit-tested. _Seam:_ `server.ts`, new `lib/auto-features.ts`.
 56. ✅ **Pin install/update to a verified release tag** — `adoption` · M.
     **SHIPPED (opt-in/guarded).** A `release` update channel that pins the
     checkout to the latest verified, immutable release TAG instead of `main`'s
