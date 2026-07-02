@@ -29,6 +29,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { SPAWNABLE_AGENTS, handleToolCall } from "./orchestration-tools";
+import { emitGenAiEvent } from "../lib/telemetry/otel";
 
 const server = new Server(
   {
@@ -454,7 +455,40 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // an agent-supplied `conductorId` is only used when there's no baked id (some
 // agents pass their own provider session id, which would break the worker FK).
 
-server.setRequestHandler(CallToolRequestSchema, handleToolCall);
+// Wrap the tool handler with a GenAI "tool" span at the natural tool boundary.
+// No-op unless STOA_OTEL_ENDPOINT is set, and best-effort — the span emit can
+// never change the tool's result or throw (emitGenAiEvent swallows its errors).
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const startMs = Date.now();
+  const toolName = request.params.name;
+  try {
+    const result = await handleToolCall(request);
+    void emitGenAiEvent({
+      operation: "tool",
+      // The conductor MCP surface runs under Claude Code (anthropic); the tool
+      // itself is provider-agnostic, so system is the harness, tool is the name.
+      provider: "claude",
+      startMs,
+      endMs: Date.now(),
+      toolName,
+      statusCode: 1, // OK
+      extra: { "stoa.mcp.tool": toolName },
+    });
+    return result;
+  } catch (error) {
+    void emitGenAiEvent({
+      operation: "tool",
+      provider: "claude",
+      startMs,
+      endMs: Date.now(),
+      toolName,
+      statusCode: 2, // ERROR
+      statusMessage: error instanceof Error ? error.message : "tool failed",
+      extra: { "stoa.mcp.tool": toolName },
+    });
+    throw error;
+  }
+});
 
 // Start the server
 async function main() {
