@@ -30,6 +30,7 @@ import {
   TriangleAlert,
   Bell,
   BellOff,
+  Monitor,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -56,6 +57,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { AutoApproveBadge } from "./AutoApproveBadge";
 import { SessionQuickActions } from "./SessionQuickActions";
 import { SessionDiffModal } from "./SessionDiffModal";
+import { PreviewPanel } from "./PreviewPanel";
+import { previewUrlFromPorts } from "@/lib/preview-picker";
 import { SnapshotTimeline } from "./SnapshotTimeline";
 import { PromptQueueModal } from "./PromptQueueModal";
 import { SessionSummaryModal } from "./SessionSummaryModal";
@@ -217,6 +220,7 @@ function SessionCardComponent({
   const [editName, setEditName] = useState(session.name);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
+  const [showLivePreview, setShowLivePreview] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
@@ -227,6 +231,15 @@ function SessionCardComponent({
   // the mute list from IndexedDB). Self-contained (no prop threading) — the mute
   // list is a per-device client concern.
   const { muted, toggle: toggleMute } = useSessionMute(session.id);
+
+  // #28 live preview: derive a candidate dev-server URL from the session's
+  // project's FIRST configured port. Null (no configured port) hides the Preview
+  // affordance rather than opening a dead frame.
+  const previewUrl = previewUrlFromPorts(
+    projects
+      .find((p) => p.id === session.project_id)
+      ?.devServers.map((d) => d.port) ?? []
+  );
 
   const handleMenuOpenChange = (open: boolean) => {
     setMenuOpen(open);
@@ -404,6 +417,12 @@ function SessionCardComponent({
           <GitCompare className="mr-2 h-3 w-3" />
           Review changes
         </MenuItem>
+        {previewUrl && (
+          <MenuItem onClick={() => setShowLivePreview(true)}>
+            <Monitor className="mr-2 h-3 w-3" />
+            Live preview
+          </MenuItem>
+        )}
         <MenuItem onClick={() => setShowHistory(true)}>
           <History className="mr-2 h-3 w-3" />
           Turn history
@@ -816,6 +835,14 @@ function SessionCardComponent({
           sessionId={session.id}
           name={session.name}
           onClose={() => setShowDiff(false)}
+        />
+      )}
+      {showLivePreview && previewUrl && (
+        <PreviewPanel
+          sessionId={session.id}
+          name={session.name}
+          previewUrl={previewUrl}
+          onClose={() => setShowLivePreview(false)}
         />
       )}
       {showHistory && (
