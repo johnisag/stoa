@@ -92,7 +92,7 @@ export function OpenIssuesBrowser({ repo }: { repo: DispatchRepo }) {
                 className="hover:bg-muted/40 flex items-center gap-2 rounded px-2 py-1"
               >
                 <a
-                  href={i.url || repoUrl(repo.repo_slug)}
+                  href={i.url || repoUrl(repo.repo_slug) || "#"}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-muted-foreground shrink-0 font-mono text-xs hover:underline"

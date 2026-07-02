@@ -13,8 +13,6 @@ import type { IssueBrowseQuery, IssueSource } from "./issue-source";
 import { listEligibleIssues, listOpenIssues } from "./issues";
 
 export class GitHubIssueSource implements IssueSource {
-  readonly kind = "github" as const;
-
   listEligible(repo: DispatchRepo): Promise<EligibleIssue[]> {
     return listEligibleIssues(repo);
   }

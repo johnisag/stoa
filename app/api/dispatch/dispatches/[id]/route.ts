@@ -6,6 +6,7 @@ import {
   type BoardAction,
 } from "@/lib/dispatch/board-actions";
 import { reconcileOneStale } from "@/lib/dispatch/stale";
+import { dispatchSupported } from "@/lib/dispatch/issue-source";
 import type { DispatchRepo, IssueDispatch } from "@/lib/dispatch/types";
 import { parseJsonBody, requireLocalhost } from "@/lib/api-security";
 
@@ -91,6 +92,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         {
           status: 409,
         }
+      );
+    }
+    if (!dispatchSupported(repo)) {
+      return NextResponse.json(
+        {
+          error:
+            "Dispatch isn't supported for this issue source yet — Linear repos are intake/browse-only. Use a GitHub repo.",
+        },
+        { status: 400 }
       );
     }
     if (action === "retry") {

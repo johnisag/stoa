@@ -56,4 +56,11 @@ export const STATUS_META: Record<
   cancelled: { label: "Cancelled", badge: "bg-muted text-muted-foreground" },
 };
 
-export const repoUrl = (slug: string) => `https://github.com/${slug}`;
+/**
+ * A clickable URL for a repo slug, or `null` when there isn't a sensible one.
+ * #34: only a GitHub `owner/name` slug maps to a github.com URL — a `linear:`/
+ * other-source slug returned a broken `github.com/linear:TEAM` 404, so those
+ * render as plain text (callers coalesce a null href to no link).
+ */
+export const repoUrl = (slug: string): string | null =>
+  slug.includes(":") ? null : `https://github.com/${slug}`;

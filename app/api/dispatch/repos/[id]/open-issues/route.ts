@@ -7,6 +7,7 @@ import {
   canDispatchExisting,
 } from "@/lib/dispatch/triage";
 import { dispatchOne } from "@/lib/dispatch/dispatcher";
+import { dispatchSupported } from "@/lib/dispatch/issue-source";
 import type { DispatchRepo, IssueDispatch } from "@/lib/dispatch/types";
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -109,6 +110,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
+    if (!dispatchSupported(repo)) {
+      return NextResponse.json(
+        {
+          error:
+            "Dispatch isn't supported for this issue source yet — Linear repos are intake/browse-only. Use a GitHub repo.",
+        },
+        { status: 400 }
+      );
+    }
     // Spawn only a still-fresh candidate; never re-dispatch an issue already
     // working / in PR / merged (the board owns retrying a failed one).
     if (canDispatchExisting(row.status)) {
