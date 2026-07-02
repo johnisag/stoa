@@ -806,6 +806,7 @@ function SessionCardComponent({
         <PromptQueueModal
           sessionId={session.id}
           name={session.name}
+          workingDirectory={session.working_directory}
           onClose={() => setShowQueue(false)}
         />
       )}
