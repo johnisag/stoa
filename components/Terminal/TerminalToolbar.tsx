@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toMarkdownBlock } from "@/lib/markdown-block";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import { triggerHaptic } from "@/hooks/useHaptics";
 import { SnippetsModal } from "./SnippetsModal";
 import { SnippetChipBar } from "./SnippetChipBar";
 
@@ -168,6 +169,7 @@ export function TerminalToolbar({
   // Handle copy with visual feedback
   const handleCopy = useCallback(() => {
     if (onCopy?.()) {
+      triggerHaptic("copy"); // #41: light tick on a landed copy (mobile toolbar)
       setCopyFeedback(true);
       setTimeout(() => setCopyFeedback(false), 1000);
     }
@@ -189,6 +191,7 @@ export function TerminalToolbar({
     navigator.clipboard
       .writeText(markdown)
       .then(() => {
+        triggerHaptic("copy"); // #41: light tick only once the write LANDED
         setMarkdownFeedback(true);
         setTimeout(() => setMarkdownFeedback(false), 1000);
       })
@@ -425,6 +428,7 @@ export function TerminalToolbar({
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();
+            triggerHaptic("send"); // #41: crisp tick when submitting to the terminal
             onKeyPress(shiftActive ? "\n" : "\r");
             setShiftActive(false);
           }}

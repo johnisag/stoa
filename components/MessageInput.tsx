@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "./ui/button";
 import { Send, Square } from "lucide-react";
+import { triggerHaptic } from "@/hooks/useHaptics";
 
 interface MessageInputProps {
   onSend: (message: string) => void;
@@ -32,6 +33,7 @@ export function MessageInput({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (text.trim() && !disabled) {
+      triggerHaptic("send"); // #41: crisp tick on send (no-op off mobile)
       onSend(text.trim());
       setText("");
     }

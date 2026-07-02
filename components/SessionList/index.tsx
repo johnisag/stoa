@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { ServerLogsModal } from "@/components/DevServers";
 import {
   ProjectsSection,
@@ -16,7 +16,16 @@ import { useSessionListMutations } from "./hooks/useSessionListMutations";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { ProjectSectionSkeleton } from "@/components/ui/skeleton";
-import { Plus, FolderPlus, Loader2, AlertCircle } from "lucide-react";
+import {
+  Plus,
+  FolderPlus,
+  Loader2,
+  AlertCircle,
+  RefreshCw,
+} from "lucide-react";
+import { useViewport } from "@/hooks/useViewport";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { cn } from "@/lib/utils";
 import type { Session } from "@/lib/db";
 import type { ProjectWithRepositories } from "@/lib/projects";
 import { baseName } from "@/lib/path-display";
@@ -85,6 +94,17 @@ export function SessionList({
   const mutations = useSessionListMutations({
     onSelectSession: onSelect,
     activeSessionId,
+  });
+
+  // #41: pull-to-refresh (mobile only). Reuses the list's existing refresh
+  // (invalidate of the sessions query) and reads scrollTop off the ScrollArea's
+  // real scroll viewport so it only arms at the very top and never fights scroll.
+  const { isMobile } = useViewport();
+  const scrollViewportRef = useRef<HTMLDivElement | null>(null);
+  const pull = usePullToRefresh({
+    enabled: isMobile,
+    onRefresh: mutations.handleRefresh,
+    scrollRef: scrollViewportRef,
   });
 
   // Project creation mutation for folder picker
@@ -188,7 +208,37 @@ export function SessionList({
       )}
 
       {/* Session list */}
-      <ScrollArea className="w-full flex-1">
+      <ScrollArea
+        className="relative w-full flex-1"
+        viewportRef={scrollViewportRef}
+        onTouchStart={pull.bind.onTouchStart}
+        onTouchMove={pull.bind.onTouchMove}
+        onTouchEnd={pull.bind.onTouchEnd}
+        onTouchCancel={pull.bind.onTouchEnd}
+      >
+        {/* #41: pull-to-refresh indicator (mobile). Overlays the top of the
+            list; height tracks the live pull distance so it feels attached to
+            the finger, and the icon spins while the refresh is in flight. */}
+        {isMobile && pull.distance > 0 && (
+          <div
+            className="text-muted-foreground pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-center overflow-hidden"
+            style={{ height: pull.distance }}
+            aria-hidden="true"
+          >
+            <RefreshCw
+              className={cn(
+                "h-4 w-4 transition-opacity",
+                pull.isRefreshing && "animate-spin",
+                pull.isArmed ? "opacity-100" : "opacity-60"
+              )}
+              style={
+                pull.isRefreshing
+                  ? undefined
+                  : { transform: `rotate(${pull.distance * 3}deg)` }
+              }
+            />
+          </div>
+        )}
         <div className="max-w-full space-y-0.5 px-1.5 py-1">
           {/* Loading state */}
           {isInitialLoading && <ProjectSectionSkeleton count={2} />}
