@@ -363,11 +363,32 @@ export function QuickSwitcher({
   );
 
   // Pin/unpin a session row — pinned sessions always sort first on an empty
-  // query, across palette opens.
-  const handleTogglePin = useCallback((id: string) => {
-    const storage = paletteStorage();
-    if (storage) setPins(togglePin(storage, id));
-  }, []);
+  // query, across palette opens. Pinning REORDERS the list under the keyboard
+  // highlight, so the highlight follows the previously highlighted SESSION
+  // (by id, recomputed against the new order) — a stale index would make the
+  // next Enter fire on the wrong session.
+  const handleTogglePin = useCallback(
+    (id: string) => {
+      const storage = paletteStorage();
+      if (!storage) return;
+      const highlightedId =
+        selectedIndex < filteredSessions.length
+          ? filteredSessions[selectedIndex]?.id
+          : null;
+      const nextPins = togglePin(storage, id);
+      setPins(nextPins);
+      if (highlightedId && !query.trim()) {
+        const reordered = rankWithRecents(
+          searchSessions(sessions, query),
+          recents,
+          nextPins
+        );
+        const nextIndex = reordered.findIndex((s) => s.id === highlightedId);
+        if (nextIndex >= 0) setSelectedIndex(nextIndex);
+      }
+    },
+    [selectedIndex, filteredSessions, query, sessions, recents]
+  );
 
   // Fire the result at `selectedIndex` (sessions render first, then commands)
   // and close the palette.
@@ -642,6 +663,9 @@ export function QuickSwitcher({
                             title={
                               isPinned ? "Unpin session" : "Pin to top of ⌘K"
                             }
+                            role="button"
+                            tabIndex={0}
+                            aria-pressed={isPinned}
                             aria-label={
                               isPinned ? "Unpin session" : "Pin session"
                             }
@@ -649,11 +673,21 @@ export function QuickSwitcher({
                               e.stopPropagation();
                               handleTogglePin(session.id);
                             }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleTogglePin(session.id);
+                              }
+                            }}
                             className={cn(
                               "hover:text-foreground flex-shrink-0 rounded p-1 transition-opacity",
+                              // Touch has no hover: keep unpinned pins faintly
+                              // visible below sm so the affordance is
+                              // discoverable on phones.
                               isPinned
                                 ? "text-primary"
-                                : "text-muted-foreground opacity-0 group-hover:opacity-100",
+                                : "text-muted-foreground opacity-40 sm:opacity-0 sm:group-hover:opacity-100",
                               index === selectedIndex && "opacity-100"
                             )}
                           >
