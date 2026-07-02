@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { toMarkdownBlock } from "@/lib/markdown-block";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { SnippetsModal } from "./SnippetsModal";
+import { SnippetChipBar } from "./SnippetChipBar";
 
 // ANSI escape sequences
 const SPECIAL_KEYS = {
@@ -209,6 +210,10 @@ export function TerminalToolbar({
         onClose={() => setShowSnippetsModal(false)}
         onInsert={sendText}
       />
+      {/* #33: one-tap snippet chips, above the key row. This toolbar only
+          mounts on mobile (isMobile in the parent Terminal), so the chips are
+          desktop-hidden for free; the bar hides itself when no snippets. */}
+      <SnippetChipBar onInsert={sendText} />
       <div
         className="bg-background/95 border-border scrollbar-none flex items-center gap-1 overflow-x-auto border-t px-2 py-1.5 backdrop-blur"
         onTouchEnd={(e) => e.stopPropagation()}

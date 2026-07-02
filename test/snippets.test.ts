@@ -6,6 +6,9 @@ import {
   saveSnippets,
   addSnippet,
   removeSnippet,
+  extractPlaceholders,
+  substitutePlaceholders,
+  buildPlaceholderValues,
   type SnippetStorage,
   type Snippet,
 } from "@/lib/snippets";
@@ -110,5 +113,125 @@ describe("saveSnippets", () => {
 describe("storage key", () => {
   it("is the same shared key the mobile toolbar used (do not fork)", () => {
     expect(SNIPPETS_STORAGE_KEY).toBe("terminal-snippets");
+  });
+});
+
+// --- Template variables (#33) ----------------------------------------------
+
+describe("extractPlaceholders", () => {
+  it("returns [] for an empty body and a body with no tokens", () => {
+    expect(extractPlaceholders("")).toEqual([]);
+    expect(extractPlaceholders("git status")).toEqual([]);
+  });
+
+  it("extracts a single token", () => {
+    expect(extractPlaceholders('git commit -m "{{msg}}"')).toEqual(["msg"]);
+  });
+
+  it("is distinct and ordered by first appearance", () => {
+    expect(
+      extractPlaceholders("run {{cmd}} on {{host}} then {{cmd}} again")
+    ).toEqual(["cmd", "host"]);
+  });
+
+  it("handles adjacent tokens", () => {
+    expect(extractPlaceholders("{{a}}{{b}}")).toEqual(["a", "b"]);
+  });
+
+  it("accepts letters, digits, underscore and hyphen in names", () => {
+    expect(extractPlaceholders("{{my-var_2}} {{X}} {{0}}")).toEqual([
+      "my-var_2",
+      "X",
+      "0",
+    ]);
+  });
+
+  it("ignores malformed braces", () => {
+    expect(extractPlaceholders("{a}")).toEqual([]);
+    expect(extractPlaceholders("{{}}")).toEqual([]);
+    expect(extractPlaceholders("{{a b}}")).toEqual([]);
+    expect(extractPlaceholders("{{ a }}")).toEqual([]);
+    expect(extractPlaceholders("{{a")).toEqual([]);
+    expect(extractPlaceholders("a}}")).toEqual([]);
+    expect(extractPlaceholders("{ {a} }")).toEqual([]);
+  });
+
+  it("finds the well-formed token inside extra braces", () => {
+    // "{{{a}}}" contains a valid {{a}} — the stray braces pass through.
+    expect(extractPlaceholders("{{{a}}}")).toEqual(["a"]);
+    expect(extractPlaceholders("{{a{{b}}c}}")).toEqual(["b"]);
+  });
+});
+
+describe("substitutePlaceholders", () => {
+  it("substitutes every provided value (all occurrences)", () => {
+    expect(
+      substitutePlaceholders("cp {{src}} {{dst}} && ls {{dst}}", {
+        src: "a.txt",
+        dst: "b/",
+      })
+    ).toBe("cp a.txt b/ && ls b/");
+  });
+
+  it("keeps missing tokens verbatim — never drops text", () => {
+    expect(substitutePlaceholders("{{a}} {{b}}", { a: "x" })).toBe("x {{b}}");
+    expect(substitutePlaceholders("{{a}} {{b}}", {})).toBe("{{a}} {{b}}");
+  });
+
+  it("returns a token-free body unchanged", () => {
+    expect(substitutePlaceholders("git status", { a: "x" })).toBe("git status");
+  });
+
+  it("substitutes an explicit empty-string value (that is not 'missing')", () => {
+    expect(substitutePlaceholders("x{{a}}y", { a: "" })).toBe("xy");
+  });
+
+  it("does NOT re-substitute when a VALUE contains a token", () => {
+    expect(substitutePlaceholders("{{a}} {{b}}", { a: "{{b}}", b: "B" })).toBe(
+      "{{b}} B"
+    );
+  });
+
+  it("treats $-sequences in values as inert text", () => {
+    expect(substitutePlaceholders("{{a}}", { a: "$& $' $` $1" })).toBe(
+      "$& $' $` $1"
+    );
+  });
+
+  it("leaves malformed braces untouched while substituting the valid ones", () => {
+    expect(substitutePlaceholders("{{a} {{b}}", { a: "X", b: "Y" })).toBe(
+      "{{a} Y"
+    );
+  });
+
+  it("only honors OWN properties — inherited keys keep their token", () => {
+    expect(substitutePlaceholders("{{toString}} {{constructor}}", {})).toBe(
+      "{{toString}} {{constructor}}"
+    );
+  });
+});
+
+describe("buildPlaceholderValues", () => {
+  it("pairs inputs with placeholders by position", () => {
+    expect(buildPlaceholderValues(["a", "b"], ["1", "2"])).toEqual({
+      a: "1",
+      b: "2",
+    });
+  });
+
+  it("omits blank and absent inputs so their tokens stay verbatim", () => {
+    const values = buildPlaceholderValues(["a", "b", "c"], ["x", ""]);
+    expect(values).toEqual({ a: "x" });
+    expect(substitutePlaceholders("{{a}} {{b}} {{c}}", values)).toBe(
+      "x {{b}} {{c}}"
+    );
+  });
+
+  it("stores exotic names like __proto__ as plain data properties", () => {
+    const values = buildPlaceholderValues(["__proto__"], ["evil"]);
+    expect(values["__proto__"]).toBe("evil");
+    expect(substitutePlaceholders("{{__proto__}}", values)).toBe("evil");
+    // And nothing polluted the real prototype.
+    expect(({} as Record<string, unknown>)["evil"]).toBeUndefined();
   });
 });

@@ -19,6 +19,73 @@ export interface SnippetStorage {
 // One shared key across all surfaces — do not fork this or the surfaces diverge.
 export const SNIPPETS_STORAGE_KEY = "terminal-snippets";
 
+// Window event dispatched (by the snippets UI) whenever the visible snippet
+// list changes, so passive surfaces (the mobile chip bar) can re-read without
+// prop-drilling through unrelated parents. Same-tab only by design — the
+// cross-tab `storage` event is not a substitute (it never fires in-tab).
+export const SNIPPETS_CHANGED_EVENT = "stoa:snippets-changed";
+
+// --- Template variables (roadmap #33) -------------------------------------
+// A snippet body may contain {{name}} tokens where name is letters, digits,
+// "_" or "-". Anything else between braces ({{}}, {{a b}}, unbalanced braces)
+// is NOT a token and passes through untouched. Shared const is safe: matchAll
+// clones the regex and replace() resets lastIndex for /g patterns.
+const PLACEHOLDER_RE = /\{\{([A-Za-z0-9_-]+)\}\}/g;
+
+/**
+ * Distinct placeholder names in a snippet body, in order of first appearance.
+ * Returns [] for a body with no (well-formed) tokens.
+ */
+export function extractPlaceholders(body: string): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const match of body.matchAll(PLACEHOLDER_RE)) {
+    const name = match[1];
+    if (!seen.has(name)) {
+      seen.add(name);
+      ordered.push(name);
+    }
+  }
+  return ordered;
+}
+
+/**
+ * Replace each {{name}} token with values[name]. A missing name keeps its
+ * token VERBATIM — text is never silently dropped. Single left-to-right pass:
+ * a substituted VALUE containing "{{x}}" is not rescanned (no double
+ * substitution), and "$" sequences in values are inert (function replacer).
+ * Only own properties of `values` count, so inherited keys like
+ * "{{constructor}}" can't leak prototype members into the output.
+ */
+export function substitutePlaceholders(
+  body: string,
+  values: Record<string, string>
+): string {
+  return body.replace(PLACEHOLDER_RE, (token, name: string) =>
+    Object.prototype.hasOwnProperty.call(values, name) ? values[name] : token
+  );
+}
+
+/**
+ * Build the substitution map from the fill-in dialog's inputs: `inputs[i]` is
+ * what the user typed for `placeholders[i]`. A BLANK (or absent) input is
+ * treated as "not provided" so its token stays verbatim in the inserted text
+ * rather than vanishing. Pure — the dialog stays a thin shell over this.
+ */
+export function buildPlaceholderValues(
+  placeholders: string[],
+  inputs: string[]
+): Record<string, string> {
+  // Null prototype so an exotic placeholder name ("__proto__") stores as a
+  // plain data property instead of hitting Object.prototype's setter.
+  const values: Record<string, string> = Object.create(null);
+  placeholders.forEach((name, i) => {
+    const input = inputs[i];
+    if (input !== undefined && input !== "") values[name] = input;
+  });
+  return values;
+}
+
 export const DEFAULT_SNIPPETS: Snippet[] = [
   // Git shortcuts
   { id: "default-1", name: "Git status", content: "git status" },
