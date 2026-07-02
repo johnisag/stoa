@@ -586,10 +586,21 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     not per-pair predicates. _Why:_ the 460-line mega-loop with 9 cross-coupled maps
     is the highest-risk, least-testable module (already a source of composition bugs).
     _Seam:_ `server.ts`, `lib/tick-guards.ts`, new `lib/status-tick.ts`.
-32. **Single `buildAgentArgsForSession` chokepoint** — `tech-debt` · M. One builder
-    doing the shell short-circuit + model clamp + MCP-arg parse + arg build, routed
-    by every Session-shaped caller so the injection-defense clamp is non-bypassable.
-    _Seam:_ `lib/providers.ts`, `lib/client/backend.ts`, `app/page.tsx`, `lib/fork.ts`.
+32. ✅ **Single `buildAgentArgsForSession` chokepoint** — `tech-debt` · M.
+    **SHIPPED.** New `lib/session-launch.ts` is the ONE place a Session becomes
+    launch options: `resolveSessionLaunchOptions(session, opts)` does the shell
+    short-circuit, the `resolveModelForAgent` STATIC-CATALOG model clamp (the
+    injection defense — an untrusted/free-text model is dropped to the safe
+    default, NOT `isSupportedModelForAgent`), the MCP-arg parse, and native-fork
+    parent resolution; `buildAgentArgsForSession` feeds those clamped options to
+    `buildAgentArgs`. The two independent Session-shaped builders — the pty
+    re-attach (`lib/client/backend.ts`) and first-launch (`app/page.tsx`, which
+    now feeds the SAME clamped options to both the tmux `buildFlags` and the pty
+    path so they can't diverge) — route through it, so the clamp is
+    non-bypassable. Pure refactor, argv byte-identical. 17 tests prove the clamp
+    fires on every caller path (an injection-shaped model never reaches
+    `--model`) + argv equivalence. _Seam:_ `lib/session-launch.ts`,
+    `lib/client/backend.ts`, `app/page.tsx`.
 
 ### Tier 2 — Medium impact (ranks 33–49)
 
