@@ -730,16 +730,17 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     (`STOA_AUTO_CHANNEL_DELIVER=1`) picked the oldest unread with a
     NON-consuming SELECT, PASTED it, then marked delivered — so two concurrent
     delivery attempts off one snapshot both pasted (double-deliver, reproduced
-    first). Fix: `claimDelivery(id)` — a single atomic `UPDATE … WHERE
-still-pending` using `changes===1` as the claim; only the winner pastes, and
-    a failed paste calls `resetDelivery(id)` to un-claim so the next tick
-    re-delivers (at-least-once preserved without reopening the race). Orphan
-    cleanup: schema has NO FK on `channel_messages`/`schedules.session_id` (a
-    test PROVES this), so session delete now explicitly removes both (session +
-    each worker). The per-session tick probe is replaced by one `SELECT DISTINCT
-to_session_id … WHERE read_at IS NULL` intersected with the live snapshot.
-    15 tests (regression fails pre-fix). _Seam:_ `server.ts`, `lib/channels.ts`,
-    `lib/db/queries.ts`, `app/api/sessions/[id]/route.ts`, `lib/scheduler.ts`.
+    first). Fix: `claimDelivery(id)` — one atomic claiming UPDATE guarded on the
+    row still being pending, using `changes===1` as the claim; only the winner
+    pastes, and a failed paste calls `resetDelivery(id)` to un-claim so the next
+    tick re-delivers (at-least-once preserved without reopening the race).
+    Orphan cleanup: schema has NO FK on `channel_messages` /
+    `schedules.session_id` (a test PROVES this), so session delete now
+    explicitly removes both (session + each worker). The per-session tick probe
+    is replaced by one `SELECT DISTINCT` over the recipients with unread
+    messages, intersected with the live snapshot. 15 tests (regression fails
+    pre-fix). _Seam:_ `server.ts`, `lib/channels.ts`, `lib/db/queries.ts`,
+    `app/api/sessions/[id]/route.ts`, `lib/scheduler.ts`.
 51. ✅ 🐛 **Resolve rate-limit vs error classification** — `bug` · M.
     **SHIPPED (verify-then-fix).** Reproduced end-to-end first: a screen with
     BOTH error wording ("API Error: 429 … rate_limit_error") AND a reset time

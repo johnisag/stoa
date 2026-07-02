@@ -5,8 +5,8 @@
  * NON-consuming SELECT (nextUnreadMessage), PASTED it, and only THEN stamped it
  * delivered. Two concurrent delivery attempts that peek the SAME pending message
  * off one snapshot — before either marks — both saw it as unread and both pasted
- * it into the recipient's terminal (a double-deliver). The after-the-fact
- * markDelivered is atomic, but by then both had already pasted.
+ * it into the recipient's terminal (a double-deliver). The after-the-fact stamp
+ * is atomic, but by then both had already pasted.
  *
  * The fix: `claimDelivery(id)` atomically stamps the row (delivered_at/read_at)
  * WHERE it is still pending and returns `changes === 1` — only the ONE winner
