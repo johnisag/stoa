@@ -34,11 +34,7 @@ import {
   isValidProviderId,
   type ProviderId,
 } from "./providers/registry";
-import {
-  ROLE_GUIDANCE,
-  isWorkflowRole,
-  type WorkflowRole,
-} from "./command/workflow-roles";
+import { isWorkflowRole, type WorkflowRole } from "./command/workflow-roles";
 
 /** Max subagent name length (a directory stem). */
 export const SUBAGENT_NAME_MAX_LENGTH = 64;
@@ -383,10 +379,37 @@ const ROLE_TOOLS: Record<WorkflowRole, readonly string[]> = {
 };
 
 /**
- * The system-prompt PERSONA for each role, addressed to that agent. Distinct from
- * ROLE_GUIDANCE, which is fleet-shaping advice for the workflow GENERATOR ("~3
- * roots, run in parallel", "the sink") — that topology prose reads as noise inside
- * a standalone subagent's instructions. These are the instructions the materialized
+ * A short, subagent-facing DESCRIPTION per role (the frontmatter `description:`
+ * scalar Claude shows in its subagent picker). Deliberately NOT sourced from
+ * workflow-roles' ROLE_GUIDANCE: that string is generator-facing fleet advice,
+ * is edited for an unrelated concern, and one entry already sits ~1 char under
+ * the 256 description cap — reusing it would let a routine guidance edit throw
+ * from roleToSubagentDef and 500 the whole "install all roles" action. Owning
+ * these here keeps the subagent contract independent (a test asserts each stays
+ * comfortably under the cap). Each is a single terse line, well within 256 chars.
+ */
+const ROLE_SUBAGENT_DESCRIPTION: Record<WorkflowRole, string> = {
+  researcher:
+    "Investigates the codebase, docs, and prior art and reports cited findings. Read-only.",
+  architect:
+    "Designs the architecture and the component/module breakdown from the research, with the trade-offs made explicit. Read-only.",
+  "software-engineer":
+    "Implements the code to match the agreed design in surgical, well-tested changes.",
+  "ui-ux":
+    "Designs and implements accessible, responsive UI/UX consistent with the existing design system.",
+  tester:
+    "Builds the unit + integration test suite, covering the happy path, edge cases, and failure modes.",
+  integrator:
+    "Integrates every slice into one coherent, working whole and verifies the build and tests are green.",
+  "review-gate":
+    "Final review + sign-off on correctness/security, conventions/cross-platform, and simplicity/UX. Read-only.",
+};
+
+/**
+ * The system-prompt PERSONA for each role, addressed to that agent. Like the
+ * description above, deliberately NOT the generator's ROLE_GUIDANCE topology prose
+ * ("~3 roots, run in parallel", "the sink") — that reads as noise inside a
+ * standalone subagent's instructions. These are the instructions the materialized
  * AGENT.md actually needs: what this one agent does. The read-only roles restate
  * their no-write scope so the persona matches the tools allowlist.
  */
@@ -408,12 +431,12 @@ const ROLE_PERSONA: Record<WorkflowRole, string> = {
 };
 
 /**
- * Derive a provider-agnostic SubagentDef from a workflow role. The role's
- * canonical guidance (ROLE_GUIDANCE) becomes the description AND the persona
- * system prompt; the tools allowlist comes from ROLE_TOOLS. `model` is left
- * UNSET by default (the subagent then uses the session's model) unless an
- * explicit `model` override is passed — when it is, it's validated. This is a
- * pure mapping and does not change any workflow-role behavior.
+ * Derive a provider-agnostic SubagentDef from a workflow role: a subagent-owned
+ * description + persona (ROLE_SUBAGENT_DESCRIPTION / ROLE_PERSONA, both kept
+ * independent of the generator's ROLE_GUIDANCE) and the tools allowlist from
+ * ROLE_TOOLS. `model` is left UNSET by default (the subagent then uses the
+ * session's model) unless an explicit `model` override is passed — when it is,
+ * it's validated. Pure; changes no workflow-role behavior.
  */
 export function roleToSubagentDef(
   role: WorkflowRole,
@@ -426,7 +449,7 @@ export function roleToSubagentDef(
   }
   return validateSubagentDef({
     name: role,
-    description: ROLE_GUIDANCE[role],
+    description: ROLE_SUBAGENT_DESCRIPTION[role],
     tools: [...ROLE_TOOLS[role]],
     model: opts.model,
     systemPrompt: `You are the "${role}" role in a Stoa workflow.\n\n${ROLE_PERSONA[role]}`,

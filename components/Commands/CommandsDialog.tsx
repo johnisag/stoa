@@ -123,8 +123,12 @@ export function CommandsDialog({
       } = {};
       try {
         data = await res.json();
-      } catch {
-        /* leave data empty; the status check below produces the message */
+      } catch (parseErr) {
+        // If the read was aborted mid-body (timeout after a 2xx), re-throw so the
+        // outer catch reports the timeout — otherwise we'd fall through to a false
+        // "nothing to do" success on an incomplete response.
+        if (ctrl.signal.aborted) throw parseErr;
+        /* else non-JSON error page: the status check below produces the message */
       }
       if (!res.ok)
         throw new Error(
@@ -293,7 +297,12 @@ export function CommandsDialog({
               </div>
             </div>
 
-            {/* #35: install the workflow ROLES as reusable scoped subagents. */}
+            {/* #35: install the workflow ROLES as reusable scoped subagents.
+                The provider list comes from useSkillProviders (commandsDir);
+                the install route needs a native subagents dir (agentsDir). Today
+                Claude is the only provider with either, so they coincide. If a
+                future provider ever has commandsDir WITHOUT agentsDir, the click
+                fails closed with the route's 400 toast — no bad write. */}
             <div className="border-border flex items-center justify-between gap-2 border-t pt-3">
               <span className="text-muted-foreground text-xs">
                 Install Stoa&apos;s workflow roles as reusable {providerName}{" "}
@@ -305,7 +314,7 @@ export function CommandsDialog({
                 size="sm"
                 variant="secondary"
                 onClick={installRoles}
-                disabled={installingRoles}
+                disabled={installingRoles || !provider}
               >
                 <Bot className="mr-1 h-3.5 w-3.5" />
                 {installingRoles ? "Installing…" : "Install roles"}
