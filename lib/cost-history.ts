@@ -11,7 +11,7 @@
  *
  * Split: PURE functions (mapping/aggregation/sample-gating — exhaustively unit
  * tested with no DB) + THIN DB wrappers over the prepared statements in
- * lib/db/queries.ts. Persistence is best-effort and never on a hot path: it runs
+ * lib/db/queries/. Persistence is best-effort and never on a hot path: it runs
  * when costs are already computed (the cost badge GET, or the opt-in
  * STOA_AUTO_COST_SAMPLE background tick).
  */

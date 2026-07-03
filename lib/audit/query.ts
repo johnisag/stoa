@@ -3,7 +3,7 @@
  *
  * Parses the read filters (event types, time window, pagination) off a URL's
  * search params and builds PARAMETERIZED SQL over `session_events`. No DB, no I/O
- * → unit-tested. The route layer runs the built SQL (lib/db/queries.ts
+ * → unit-tested. The route layer runs the built SQL (lib/db/queries/
  * readAuditEvents/countAuditEvents); the client filter UI reuses AUDIT_EVENT_TYPES.
  *
  * SAFETY: every user value rides as a bound `?` placeholder (never string-

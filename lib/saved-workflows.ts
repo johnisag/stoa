@@ -2,7 +2,7 @@
  * Saved workflows — service layer for the visual builder's persistence. Stores a
  * BuilderDoc (spec + canvas positions) as JSON, keyed by a generated id, so a
  * workflow becomes a named, reloadable artifact. Thin shell over the prepared
- * statements in lib/db/queries.ts; id/timestamps + JSON (de)serialization live here
+ * statements in lib/db/queries/; id/timestamps + JSON (de)serialization live here
  * (the DB layer stays pure SQL), mirroring lib/projects.ts.
  */
 

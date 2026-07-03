@@ -11,7 +11,7 @@
  * lands in a reader's context as DATA (an agent fetches a note on demand) — it is
  * never auto-injected into a terminal, so there's no keystroke-injection surface.
  *
- * Thin shell over the prepared statements in lib/db/queries.ts; id/validation +
+ * Thin shell over the prepared statements in lib/db/queries/; id/validation +
  * length caps live here (the DB layer stays pure SQL), mirroring
  * lib/saved-workflows.ts.
  */

@@ -17,7 +17,7 @@
  * for a done-pattern" follow-up + non-send actions (spawn / run a workflow) are
  * deliberate follow-ups; v1 is the cadence + the send-prompt action.
  *
- * Thin shell over the prepared statements in lib/db/queries.ts; id/validation +
+ * Thin shell over the prepared statements in lib/db/queries/; id/validation +
  * caps live here (the DB layer stays pure SQL), mirroring lib/notes.ts.
  */
 
