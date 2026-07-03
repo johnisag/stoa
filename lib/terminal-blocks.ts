@@ -81,7 +81,12 @@ export type TerminalBlockKind = "shell" | "agent" | "start";
 // named — groups because the tsconfig target (ES2017) predates named groups.
 const SHELL_PROMPT_COL0_RE = /^[$%]\s(.*)$/u;
 const SHELL_PROMPT_GLYPH_RE = /(?:^|\s)[❯➜]\s(.*)$/u;
-const SHELL_PROMPT_GLUED_RE = /(?:^|\s)[^\s]*[@~\\][^\s]*[$#%>]\s(.*)$/u;
+// The `(?!<)` guard rejects an angle-bracket token as the prompt prefix, so an
+// `<user@host.tld>` email (git author lines, `Co-Authored-By:` / `Signed-off-by:`
+// trailers, package.json author fields — ubiquitous in agent output) can't be read
+// as an `@`-marked, `>`-sigil'd glued prompt. A real prompt's `>`-token is a drive
+// path (`C:\proj>`), never `<addr>`.
+const SHELL_PROMPT_GLUED_RE = /(?:^|\s)(?!<)[^\s]*[@~\\][^\s]*[$#%>]\s(.*)$/u;
 const SHELL_PROMPT_BRACKET_RE = /^\[[^\]]*@[^\]]*\]\s*[$#%]\s(.*)$/u;
 
 /** Match a shell prompt line, returning the typed command (may be ""), or null. */
@@ -123,6 +128,10 @@ function isBareEmptyPrompt(line: string): boolean {
   // The last whitespace-delimited token, e.g. "user@host:~$" or "❯".
   const lastSpace = trimmed.lastIndexOf(" ");
   const token = lastSpace === -1 ? trimmed : trimmed.slice(lastSpace + 1);
+  // An angle-bracket token is never a prompt — it's an <user@host> email tail
+  // (git author / Co-Authored-By lines) whose `@` + trailing `>` would otherwise
+  // read as a glued prompt. A real prompt token (C:\proj>) never starts with `<`.
+  if (token.startsWith("<")) return false;
   // (a) A lone dedicated prompt glyph is a prompt even after a space ("~ ❯").
   if (token === sigil) return DEDICATED_PROMPT_GLYPHS.has(sigil);
   // (b) Any sigil GLUED onto a prompt-prefix marker in the same token.
