@@ -845,12 +845,17 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     normal-auth so a `stoa share` admin can reply while the observer gate blocks
     read-only tokens), the `request_operator_input` tool that POSTs then polls
     (bounded well under the TTL), and a schema-driven form surfaced at the top of
-    the Verdict Inbox (`ElicitationRequests`). Decline/cancel/timeout render as
-    NON-error tool text (a routine refusal isn't a tool failure). _Deferred (v2):_
-    SAMPLING (server tool requests an LLM completion via the host's model/budget)
-    — needs a new operator model setting + an enforced request-count/spend cap +
-    the model-catalog clamp, so it doesn't ride the first PR as an unbounded
-    cost/DoS surface; plus the SDK-native agent-hosted elicitation/sampling paths.
+    the Verdict Inbox (`ElicitationRequests`) — a pending request also bumps the
+    ambient nav attention badge (`useAttentionCount`) so it's discoverable without
+    the Inbox tab open. Decline/cancel/timeout render as NON-error tool text (a
+    routine refusal isn't a tool failure). The store is bounded (settled entries
+    reaped past a retention window + a global pending cap). _Deferred (v2):_ a
+    PUSH notification on a new request (the nav badge covers same-app
+    discoverability for now); SAMPLING (server tool requests an LLM completion via
+    the host's model/budget) — needs a new operator model setting + an enforced
+    request-count/spend cap + the model-catalog clamp, so it doesn't ride the
+    first PR as an unbounded cost/DoS surface; plus the SDK-native agent-hosted
+    elicitation/sampling paths.
     _Seam:_ `mcp/orchestration-server.ts`, `mcp/orchestration-tools.ts`,
     `lib/mcp/`, `app/api/mcp/elicit/`, `components/views/VerdictInboxView/`.
 49. **Per-device named revocable tokens** — `security` · L. Evolve the single shared

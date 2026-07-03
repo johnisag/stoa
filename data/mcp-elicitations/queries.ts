@@ -15,19 +15,23 @@ export interface PendingElicitation {
   createdAt: number;
 }
 
-const KEY = ["mcp-elicitations"];
+export const ELICITATIONS_KEY = ["mcp-elicitations"];
+
+/** Shared fetcher so the inbox view and the ambient nav-badge count share ONE
+ * cache entry (the count and the open queue can't disagree). */
+export async function fetchElicitations(): Promise<PendingElicitation[]> {
+  const res = await fetch("/api/mcp/elicit");
+  if (!res.ok) throw new Error(`elicitations ${res.status}`);
+  const data = await res.json();
+  return data.elicitations ?? [];
+}
 
 /** Poll the operator's queue of pending agent input-requests. */
 export function useElicitations(enabled: boolean) {
   return useQuery({
-    queryKey: KEY,
+    queryKey: ELICITATIONS_KEY,
     enabled,
-    queryFn: async (): Promise<PendingElicitation[]> => {
-      const res = await fetch("/api/mcp/elicit");
-      if (!res.ok) throw new Error(`elicitations ${res.status}`);
-      const data = await res.json();
-      return data.elicitations ?? [];
-    },
+    queryFn: fetchElicitations,
     refetchInterval: 4000,
     staleTime: 2000,
     refetchOnWindowFocus: false,
@@ -55,6 +59,7 @@ export function useAnswerElicitation() {
         throw new Error(d.error || `answer ${res.status}`);
       }
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: KEY }),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: ELICITATIONS_KEY }),
   });
 }

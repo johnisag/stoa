@@ -5,6 +5,11 @@ import type { InboxItem } from "@/lib/verdict-inbox";
 import { countNeedsMe } from "@/lib/verdict-inbox-selectors";
 import { fetchInbox } from "./queries";
 import { inboxKeys } from "./keys";
+import {
+  fetchElicitations,
+  ELICITATIONS_KEY,
+  type PendingElicitation,
+} from "@/data/mcp-elicitations/queries";
 
 /**
  * Always-on "needs me" count for the nav badges (Verdict Inbox + Fleet Board).
@@ -35,5 +40,18 @@ export function useAttentionCount(enabled = true): number {
     // that returns an unchanged count doesn't re-render every badge consumer.
     select: (items: InboxItem[]) => countNeedsMe(items),
   });
-  return data;
+
+  // A pending MCP elicitation (#48) is an agent BLOCKED on the operator — it must
+  // bump the same ambient badge so it's discoverable without the Inbox tab open.
+  // Shares the elicitations cache entry (ELICITATIONS_KEY) with the inbox card.
+  const { data: elicitations = 0 } = useQuery({
+    queryKey: ELICITATIONS_KEY,
+    queryFn: fetchElicitations,
+    enabled,
+    staleTime: 30000,
+    refetchInterval: 30000,
+    select: (items: PendingElicitation[]) => items.length,
+  });
+
+  return data + elicitations;
 }

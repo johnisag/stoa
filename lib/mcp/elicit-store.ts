@@ -33,25 +33,46 @@ export interface PendingElicit {
   status: ElicitStatus;
   answer?: ElicitAnswer;
   createdAt: number;
+  /** When the entry became answered/expired — drives reaping. */
+  settledAt?: number;
 }
 
 // A pending request that no operator answers is swept after this long, so a
 // slow/absent human can't hold an agent's tool call — or a stale inbox card —
 // forever. The MCP tool's own poll timeout should be ≤ this.
 export const ELICIT_TTL_MS = 10 * 60 * 1000;
+// How long a SETTLED (answered/expired) entry is retained before it is deleted,
+// so the Map stays bounded. The tool polls every ~2s and reads a terminal status
+// almost immediately, so a short grace is ample; after this the entry is reaped.
+export const ELICIT_RETAIN_MS = 60 * 1000;
 // Cap concurrent pending requests per conductor so a runaway agent can't flood
 // the operator's inbox (a DoS bound).
 export const MAX_PENDING_PER_CONDUCTOR = 5;
+// Global cap on total pending across ALL conductors — the per-conductor cap
+// alone is bypassable by varying conductorId, so this bounds the whole store.
+export const MAX_PENDING_TOTAL = 50;
 
 const store = new Map<string, PendingElicit>();
 
-/** Flip any pending entry older than the TTL to `expired`. Returns how many. */
+/**
+ * Expire overdue pending entries and REAP settled ones so the store stays
+ * bounded (a settled entry is useless once the tool has polled it). Returns how
+ * many pending entries newly expired.
+ */
 export function sweepExpired(now: number = Date.now()): number {
   let n = 0;
-  for (const e of store.values()) {
-    if (e.status === "pending" && now - e.createdAt >= ELICIT_TTL_MS) {
-      e.status = "expired";
-      n++;
+  for (const [id, e] of store) {
+    if (e.status === "pending") {
+      if (now - e.createdAt >= ELICIT_TTL_MS) {
+        e.status = "expired";
+        e.settledAt = now;
+        n++;
+      }
+    } else if (
+      e.settledAt !== undefined &&
+      now - e.settledAt >= ELICIT_RETAIN_MS
+    ) {
+      store.delete(id);
     }
   }
   return n;
@@ -62,7 +83,8 @@ export type CreateResult =
 
 /**
  * Register a new pending elicitation for a conductor. Fails closed if the
- * conductor already has MAX_PENDING_PER_CONDUCTOR unanswered requests.
+ * conductor is at its per-conductor cap OR the store is at its GLOBAL pending cap
+ * (so varying conductorId can't create unlimited pending entries).
  */
 export function createElicit(
   conductorId: string,
@@ -70,13 +92,23 @@ export function createElicit(
   now: number = Date.now()
 ): CreateResult {
   sweepExpired(now);
-  const pendingForConductor = [...store.values()].filter(
-    (e) => e.conductorId === conductorId && e.status === "pending"
-  ).length;
+  let pendingForConductor = 0;
+  let pendingTotal = 0;
+  for (const e of store.values()) {
+    if (e.status !== "pending") continue;
+    pendingTotal++;
+    if (e.conductorId === conductorId) pendingForConductor++;
+  }
   if (pendingForConductor >= MAX_PENDING_PER_CONDUCTOR) {
     return {
       ok: false,
       error: `too many pending operator-input requests (max ${MAX_PENDING_PER_CONDUCTOR})`,
+    };
+  }
+  if (pendingTotal >= MAX_PENDING_TOTAL) {
+    return {
+      ok: false,
+      error: "too many pending operator-input requests (system busy)",
     };
   }
   const id = randomUUID();
@@ -118,6 +150,7 @@ export function answerElicit(
   if (e.status !== "pending") return { ok: false, reason: e.status };
   e.status = "answered";
   e.answer = answer;
+  e.settledAt = now;
   return { ok: true };
 }
 
@@ -132,4 +165,9 @@ export function listPending(now: number = Date.now()): PendingElicit[] {
 /** Test-only: clear all state so suites don't leak into each other. */
 export function _resetElicitStore(): void {
   store.clear();
+}
+
+/** Test-only: the raw entry count (to assert the Map stays bounded). */
+export function _elicitStoreSize(): number {
+  return store.size;
 }
