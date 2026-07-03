@@ -32,7 +32,11 @@ describe("paneCommandStore", () => {
     expect(paneCommandStore.request?.command).toBe("jump-next-block");
   });
 
-  it("gives repeated sends of the same command distinct ids (key-repeat re-fires)", () => {
+  it("mints a distinct id on each discrete send of the same command", () => {
+    // Each DISCRETE keypress re-issues the command with a fresh id so the pane's
+    // effect re-runs (same action, new request). Note OS auto-repeat is separately
+    // suppressed upstream by resolveShortcut (e.repeat → null), so a held key does
+    // NOT page — this guards the discrete-re-send path only.
     paneCommandActions.send("jump-next-block");
     const first = paneCommandStore.request?.id;
     paneCommandActions.send("jump-next-block");

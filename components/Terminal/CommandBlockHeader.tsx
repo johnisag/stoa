@@ -40,9 +40,13 @@ export function CommandBlockHeader({
         ? ChevronRight
         : TerminalIcon;
   return (
+    // An in-flow strip (a flex sibling ABOVE the terminal, like the search bar),
+    // NOT an absolute overlay: it reserves its own height so a jumped-to prompt
+    // line lands just below it instead of hidden underneath. The container's
+    // ResizeObserver refits xterm to the slightly shorter height.
     <div
       className={cn(
-        "border-border/60 bg-background/85 text-muted-foreground pointer-events-none absolute inset-x-0 top-0 z-20",
+        "border-border/60 bg-background/85 text-muted-foreground pointer-events-none z-20 shrink-0",
         "flex items-center gap-1.5 border-b px-3 py-1 text-xs backdrop-blur-sm"
       )}
       aria-hidden="true"
