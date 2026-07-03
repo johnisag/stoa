@@ -108,7 +108,20 @@ export function formatPreviewComment(input: {
   const loc = input.locator;
   const safeNote = collapseNoteNewlines(input.note).replace(CONTROL_BYTES, "");
   const lines: string[] = [];
-  lines.push(`[Stoa] UI note on ${describeLocator(loc)}:`);
+  // A page-scoped note (no picked element — tag is the "element" fallback and no
+  // handle survived) says "this page", not a placeholder "<element>". This is the
+  // shipped manual-note path; a real element locator uses describeLocator.
+  const isPageNote =
+    loc.tag === "element" &&
+    !loc.id &&
+    !loc.testId &&
+    !loc.text &&
+    !loc.domPath;
+  lines.push(
+    isPageNote
+      ? `[Stoa] UI note on this page:`
+      : `[Stoa] UI note on ${describeLocator(loc)}:`
+  );
   if (loc.url) lines.push(`page: ${loc.url}`);
   if (loc.domPath) lines.push(`path: ${loc.domPath}`);
   if (loc.text && !loc.testId && !loc.id) {
