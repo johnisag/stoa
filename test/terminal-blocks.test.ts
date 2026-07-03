@@ -159,6 +159,49 @@ describe("classifyBoundaryLine", () => {
     }
   });
 
+  it("does NOT treat an <user@host> email token as a prompt (git author lines, trailers)", () => {
+    // git log/show/blame + commit trailers are ubiquitous in agent output. The
+    // `@` marker + trailing `>` of `<addr@host>` must NOT read as a glued prompt.
+    for (const line of [
+      "Author: Ada Lovelace <ada@example.com>",
+      "Signed-off-by: Bob <bob@team.dev>",
+      "Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>", // our own trailer
+      "Reviewed-by: Ann <ann@x.io> and merged by Carol", // email + trailing words
+      "  1234567 (Ada <ada@x.io>  2 weeks ago) fix", // git blame line
+      '  "author": "Me <me@site.dev>",', // package.json author field
+    ]) {
+      expect(classifyBoundaryLine(line), line).toBeNull();
+    }
+  });
+
+  it("keeps a `git log` buffer as ONE block (no bogus per-author boundaries)", () => {
+    const gitlog = [
+      "commit 9f3a1c2 (HEAD -> main)",
+      "Author: Ada Lovelace <ada@example.com>",
+      "Date:   Mon Jun 1 12:00:00 2026 +0000",
+      "",
+      "    feat: add the thing",
+      "",
+      "    Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>",
+      "",
+      "commit 1a2b3c4",
+      "Author: Bob Smith <bob@team.dev>",
+      "Date:   Sun May 31 09:00:00 2026 +0000",
+      "",
+      "    fix: the other thing",
+    ];
+    const blocks = parseTerminalBlocks(gitlog);
+    // No prompt anywhere → the whole buffer is a single "Output" block.
+    expect(blocks).toEqual<TerminalBlock[]>([
+      {
+        startLine: 0,
+        endLine: gitlog.length - 1,
+        label: "Output",
+        kind: "start",
+      },
+    ]);
+  });
+
   it("recognizes the Fedora/RHEL/Arch bracket prompt [user@host cwd]$", () => {
     expect(classifyBoundaryLine("[john@fedora stoa]$ npm test")).toEqual({
       kind: "shell",
@@ -177,6 +220,7 @@ describe("classifyBoundaryLine", () => {
       "johns-mac:stoa john$ npm test", // classic macOS `host:cwd user$`
       "bash-5.1$ ls", // marker-less default PS1
       "myhost% ls", // bare `host%`
+      "pi@raspberrypi:~ $ sudo reboot", // Raspberry Pi OS `~ $` (space before $)
     ]) {
       expect(classifyBoundaryLine(knownMiss), knownMiss).toBeNull();
     }
