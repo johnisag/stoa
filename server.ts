@@ -1,4 +1,5 @@
-import "./lib/load-env"; // FIRST: load a cwd .env so `npm run dev` honours it
+import "./lib/als-global"; // FIRST: set globalThis.AsyncLocalStorage before Next loads (E504 guard)
+import "./lib/load-env"; // load a cwd .env so `npm run dev` honours it
 import { createServer } from "http";
 import { parse } from "url";
 import next from "next";
