@@ -39,19 +39,31 @@ export function isValidImageName(image: unknown): image is string {
   return typeof image === "string" && IMAGE_RE.test(image);
 }
 
+/**
+ * Quote a `--mount` CSV field so a `,` (or `"`) in a bind path can't shift a
+ * field. Docker parses the `--mount` value with Go's encoding/csv, so an
+ * unquoted comma in `src=/a,b` would split into a spurious field (e.g. inject a
+ * `readonly` or a truncated src). RFC-4180 quoting (wrap in `"`, double embedded
+ * `"`) makes the whole `key=value` field opaque. Reachable via a host dir named
+ * with a comma (getRepoName = path.basename, not slugified).
+ */
+function csvField(field: string): string {
+  return /[",]/.test(field) ? `"${field.replace(/"/g, '""')}"` : field;
+}
+
 export function buildDockerRunArgs(opts: DockerRunOptions): string[] {
   // -i -t are LOAD-BEARING: status detection reads the rendered VT screen (in-place
   // spinner ANSI), which only streams when the container allocates a real tty.
   const args = ["run", "--rm", "-i", "-t", "--init"];
   args.push("--label", `stoa.session=${opts.sessionKey ?? "1"}`);
   for (const m of opts.mounts) {
-    // `--mount` (comma-keyed) NOT `-v` (colon-split): a host path may legally
+    // `--mount` (comma-CSV) NOT `-v` (colon-split): a host path may legally
     // contain a ':' (POSIX) or a Windows drive colon, which `-v host:ctr` would
-    // misparse into a spurious mount option (e.g. :ro / :z). With `--mount` the
-    // src/dst are explicit keys, so an embedded colon can't shift a field.
+    // misparse. The src/dst fields are CSV-QUOTED so a ':' OR a ',' in the path
+    // can't shift a field (a bare comma would inject a spurious `readonly`/src).
     const parts = [`type=bind`, `src=${m.hostPath}`, `dst=${m.containerPath}`];
     if (m.readonly) parts.push("readonly");
-    args.push("--mount", parts.join(","));
+    args.push("--mount", parts.map(csvField).join(","));
   }
   args.push("-w", opts.workdir);
   for (const [k, v] of Object.entries(opts.env)) {
