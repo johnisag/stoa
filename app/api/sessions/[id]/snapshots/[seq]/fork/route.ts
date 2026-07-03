@@ -192,8 +192,19 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         { status: 201 }
       );
     } catch (err) {
-      // Roll back the orphaned worktree + its feature branch, then rethrow to
-      // the outer handler (which returns 500). Never let cleanup mask the cause.
+      // Roll back BOTH sides of the half-built fork, then rethrow to the outer
+      // handler (which returns 500) — never let cleanup mask the cause. The
+      // session row may already be committed (better-sqlite3 autocommits), so
+      // reclaim it first (FK CASCADE drops the fork-origin checkpoint + copied
+      // messages), then remove the orphaned worktree + its feature branch. This
+      // fully mirrors the create-worktree-then-session cleanup in lib/dispatch.
+      try {
+        if (queries.getSession(db).get(newId)) {
+          queries.deleteSession(db).run(newId);
+        }
+      } catch {
+        // Best-effort — a failed reclaim must not mask the original error.
+      }
       await deleteWorktree(prep.worktreePath, prep.projectPath, true).catch(
         () => {}
       );
