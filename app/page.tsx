@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { Eye } from "lucide-react";
 import { toast } from "sonner";
 
 // Debug log buffer - persists even if console is closed
@@ -243,6 +244,21 @@ function HomeContent() {
   const [showNotes, setShowNotes] = useState(false);
   const [showCommands, setShowCommands] = useState(false);
   const [showSharing, setShowSharing] = useState(false);
+  // #46/#49 the caller's auth scope. The server enforces every boundary; this only
+  // lets the UI tell a read-only spectator WHY a control would refuse (a banner).
+  const [scope, setScope] = useState<"admin" | "observer">("admin");
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/whoami")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (alive && d?.scope === "observer") setScope("observer");
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   // Session whose diff to show via the "See changes" jump (fired when a turn
   // completes). null = the diff modal is closed.
   const [seeChangesSessionId, setSeeChangesSessionId] = useState<string | null>(
@@ -972,6 +988,15 @@ function HomeContent() {
       <NotesDialog open={showNotes} onOpenChange={setShowNotes} />
       <CommandsDialog open={showCommands} onOpenChange={setShowCommands} />
       <SharingDialog open={showSharing} onOpenChange={setShowSharing} />
+      {/* #46/#49 read-only spectator banner: an observer link can watch the Live
+          Wall but every mutating action is refused server-side, so tell them why. */}
+      {scope === "observer" && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex items-center justify-center gap-2 bg-amber-500/90 px-3 py-1 text-center text-xs font-medium text-amber-950 shadow-sm">
+          <Eye className="h-3.5 w-3.5" />
+          Read-only spectator — you can watch this fleet, but controls are
+          disabled.
+        </div>
+      )}
       {/* Dispatch + Verdict Inbox are now first-class pane TABs (see addViewTab),
           not dialogs — opened from the nav / cross-links via onOpenDispatch /
           onOpenVerdictInbox. */}
