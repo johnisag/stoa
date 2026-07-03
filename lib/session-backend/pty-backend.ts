@@ -20,6 +20,7 @@ import {
   LocalTransport,
   HostTransport,
 } from "./pty/transport";
+import { wrapWithContainer } from "./pty/container-transport";
 
 export class PtyBackend implements SessionBackend {
   constructor(private readonly transport: PtyTransport) {}
@@ -132,7 +133,18 @@ export class PtyBackend implements SessionBackend {
   }
 }
 
-/** Build the right PtyBackend for the current mode. */
-export function createPtyBackend(useHost: boolean): PtyBackend {
-  return new PtyBackend(useHost ? new HostTransport() : new LocalTransport());
+/** Build the right PtyBackend for the current mode. When `container` is set (and
+ *  not on the Tier-2 host path, which PR1 doesn't wrap), each session runs inside
+ *  `docker run` via the ContainerTransport decorator; wrapWithContainer is
+ *  fail-open (returns the delegate unchanged if docker/image are absent). */
+export function createPtyBackend(
+  useHost: boolean,
+  container = false
+): PtyBackend {
+  const delegate: PtyTransport = useHost
+    ? new HostTransport()
+    : new LocalTransport();
+  return new PtyBackend(
+    container && !useHost ? wrapWithContainer(delegate) : delegate
+  );
 }

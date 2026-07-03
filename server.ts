@@ -7,6 +7,8 @@ import * as pty from "node-pty";
 import {
   getBackendType,
   usePtyHost,
+  useContainer,
+  wrapWithContainer,
   resetSessionBackend,
   getSessionBackend,
 } from "./lib/session-backend";
@@ -333,9 +335,14 @@ app.prepare().then(() => {
       handleTmuxConnection(ws);
       return;
     }
-    const transport: PtyTransport = usePtyHost()
+    const useHost = usePtyHost();
+    let transport: PtyTransport = useHost
       ? new HostTransport()
       : new LocalTransport();
+    // #47: wrap the Tier-1 transport in the container decorator when opt-in — the
+    // SAME decision getSessionBackend makes, so the live terminal and the board
+    // agree on one transport (no split brain). Fail-open when docker is absent.
+    if (!useHost && useContainer()) transport = wrapWithContainer(transport);
     handlePtyTerminal(ws, transport);
   });
 
