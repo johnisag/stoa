@@ -847,10 +847,32 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     that can stream the Live Wall WS but is rejected by every mutating op. _Why:_
     today the only token is the master = full control. _Seam:_ `lib/auth.ts`, new
     share-token table, LiveWall observer WS.
-47. **Container/sandbox isolation transport** — `orchestration` · XL. A
-    `ContainerTransport` implementing `PtyTransport` (not a new backend): run the
-    agent in Docker/dev-container; "pairing" applies the diff back to the host.
-    _Seam:_ new ContainerTransport, `lib/session-diff.ts`, `lib/multi-repo-stage.ts`.
+47. ⏳ **Container/sandbox isolation transport** — `orchestration` · XL. **TRANSPORT
+    SEAM SHIPPED (opt-in Docker on the Tier-1 pty backend); diff-out pairing +
+    networking/uid-gid polish = follow-ups.** A `ContainerTransport` implementing
+    `PtyTransport` as a DECORATOR (a third impl beside Local/Host — NOT a new
+    backend): it composes a delegate and rewrites ONLY the two spawn-bearing
+    methods (spawn + attachStream) into a `docker run --rm -i -t --init <mounts>
+<image> <agent>`, forwarding the other 9 verbatim — so `capture`/status
+    detection/resize/write keep working through the container pty unchanged. New
+    pure `lib/container/` (`buildDockerRunArgs` — discrete-token argv, nothing
+    injects; `computeContainerMounts` reusing the sandbox rw set mapped to fixed
+    POSIX paths; `detectContainerRuntime` via `resolveBinary` that FAILS OPEN to a
+    plain pty; `isValidImageName`). Lifetime rides `docker run --rm` + a tty, so
+    the existing kill reaps the container with NO extra teardown; the rw
+    bind-mounted worktree means the agent's edits land on the host (host-side
+    `getSessionDiff` works — no diff-apply-back needed in PR1). Opt-in via
+    `STOA_CONTAINER=1` + `STOA_CONTAINER_IMAGE`, wired at BOTH selection sites
+    (`createPtyBackend` + server.ts terminal-WS) so there's no split brain.
+    _Deferred (follow-ups):_ the diff-OUT/copy-in "pairing" (`lib/session-diff.ts`
+    - `lib/multi-repo-stage.ts` + a `git apply --3way` helper — none exists today);
+      container networking so an in-container worker's MCP reaches the host; in-container
+      git for LINKED worktrees on Windows/macOS Desktop; `--user` uid:gid ownership on
+      native Linux; wrapping the Tier-2 daemon; container-aware Agent Monitor
+      (`pid()` returns the docker-client pid); a `container_id` column + orphan reaper;
+      env scrubbing + net-off. _Seam:_ new `lib/container/`,
+      `lib/session-backend/pty/container-transport.ts`, `lib/session-backend/index.ts`,
+      `lib/session-backend/pty-backend.ts`, `server.ts`.
 48. ⏳ **MCP elicitation + sampling (2025-11 spec)** — `orchestration` · L. **ELICITATION
     SHIPPED; sampling deferred to a v2 follow-up.** A new MCP tool
     `request_operator_input` lets an orchestration agent ask the human OPERATOR a

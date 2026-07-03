@@ -14,6 +14,12 @@ import type { SessionBackend } from "./types";
 import { TmuxBackend } from "./tmux-backend";
 import { createPtyBackend } from "./pty-backend";
 import { withAudit } from "../audit/ledger";
+import { detectContainerRuntime } from "../container/detect";
+import { isValidImageName } from "../container/docker-args";
+
+// Re-export the container wrap factory so the terminal-WS handler (server.ts)
+// selects the SAME transport shape as getSessionBackend (no split brain).
+export { wrapWithContainer } from "./pty/container-transport";
 
 export type { SessionBackend, SessionActivity } from "./types";
 
@@ -47,12 +53,30 @@ export function usePtyHost(): boolean {
   return true;
 }
 
+/**
+ * #47 container isolation transport — run each agent inside `docker run` via the
+ * ContainerTransport decorator. OPT-IN + FAIL-OPEN: off unless STOA_CONTAINER is
+ * truthy AND a valid STOA_CONTAINER_IMAGE is set AND docker is present; a missing
+ * runtime degrades to the plain pty (the wrap factory returns the delegate). PR1
+ * wraps the Tier-1 LocalTransport only (docker-on-daemon is a follow-up), so it
+ * requires the pty backend (and Tier 1 — set STOA_PTY_HOST=0 on Windows).
+ */
+export function useContainer(): boolean {
+  if (getBackendType() !== "pty" || usePtyHost()) return false;
+  const flag = process.env.STOA_CONTAINER?.toLowerCase();
+  if (!(flag === "1" || flag === "true" || flag === "on")) return false;
+  return (
+    isValidImageName(process.env.STOA_CONTAINER_IMAGE) &&
+    detectContainerRuntime() !== null
+  );
+}
+
 export function getSessionBackend(): SessionBackend {
   if (!backend) {
     const base =
       getBackendType() === "tmux"
         ? new TmuxBackend()
-        : createPtyBackend(usePtyHost());
+        : createPtyBackend(usePtyHost(), useContainer());
     // Wrap with the audit/event ledger (default on) so every lifecycle + input
     // op is recorded at this single seam, across tmux and both pty tiers.
     backend = withAudit(base);
