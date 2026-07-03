@@ -16,7 +16,7 @@
  * class only resolves the dynamic bits (git-common dir, config dirs) and delegates.
  */
 
-import { join } from "path";
+import { join, isAbsolute } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { expandHome, homeDir } from "../../platform";
@@ -30,7 +30,6 @@ import {
 } from "../../container/mounts";
 import {
   buildDockerRunArgs,
-  containerNameFor,
   isValidImageName,
 } from "../../container/docker-args";
 import { detectContainerRuntime } from "../../container/detect";
@@ -103,13 +102,18 @@ export class ContainerTransport implements PtyTransport {
    * on the host (getSessionDiff runs host-side, unchanged).
    */
   private async rewrite(key: string, spec: SpawnSpec): Promise<SpawnSpec> {
-    const worktree = expandHome(spec.cwd) || homeDir();
+    // A bind source must be ABSOLUTE — expandHome leaves a relative cwd (e.g. ".")
+    // unchanged, so fall back to home rather than emitting a relative -v/--mount src.
+    const expanded = expandHome(spec.cwd);
+    const home = homeDir();
+    const worktree = expanded && isAbsolute(expanded) ? expanded : home;
     const gitCommonDir = await resolveGitCommonDir(worktree);
     const mounts = computeContainerMounts({
       worktree,
       gitCommonDir,
       agentConfigDirs: knownAgentConfigDirs(),
-      stoaHome: join(homeDir(), ".stoa"),
+      stoaHome: join(home, ".stoa"),
+      homeDir: home,
     });
     const args = buildDockerRunArgs({
       image: this.image,
@@ -119,7 +123,7 @@ export class ContainerTransport implements PtyTransport {
       // follow-up (as in the sandbox tier).
       env: spec.env ?? {},
       allowNet: true, // net-off is a follow-up (opt-in) — default keeps model/MCP reachable
-      name: containerNameFor(key),
+      sessionKey: key,
       agentBinary: spec.binary,
       agentArgs: spec.args,
     });

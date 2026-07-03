@@ -21,8 +21,10 @@ export interface DockerRunOptions {
   env: Record<string, string>;
   /** false → `--network none` (cut egress). */
   allowNet: boolean;
-  /** Deterministic `--name` so a future reaper can GC an orphan. */
-  name?: string;
+  /** Session key — stamped as a `--label` so a future reaper can GC orphans by
+   *  filter, WITHOUT a deterministic `--name` (which would collide on a
+   *  same-session respawn after an abnormal crash left the container). */
+  sessionKey?: string;
   /** The agent binary + args to run inside the image. */
   agentBinary: string;
   agentArgs: string[];
@@ -37,26 +39,19 @@ export function isValidImageName(image: unknown): image is string {
   return typeof image === "string" && IMAGE_RE.test(image);
 }
 
-/** A docker-safe `--name` derived from a session key (docker allows
- *  [a-zA-Z0-9][a-zA-Z0-9_.-]*). */
-export function containerNameFor(key: string): string {
-  const safe = key
-    .replace(/[^a-zA-Z0-9_.-]/g, "-")
-    .replace(/^[^a-zA-Z0-9]+/, "");
-  return `stoa-${safe || "session"}`.slice(0, 128);
-}
-
 export function buildDockerRunArgs(opts: DockerRunOptions): string[] {
   // -i -t are LOAD-BEARING: status detection reads the rendered VT screen (in-place
   // spinner ANSI), which only streams when the container allocates a real tty.
   const args = ["run", "--rm", "-i", "-t", "--init"];
-  if (opts.name) args.push("--name", opts.name);
-  args.push("--label", "stoa.session=1");
+  args.push("--label", `stoa.session=${opts.sessionKey ?? "1"}`);
   for (const m of opts.mounts) {
-    const ro = m.readonly ? ":ro" : "";
-    // ONE token — docker parses the host:container[:ro] form (incl. a Windows
-    // drive-letter colon on Docker Desktop). We never split it ourselves.
-    args.push("-v", `${m.hostPath}:${m.containerPath}${ro}`);
+    // `--mount` (comma-keyed) NOT `-v` (colon-split): a host path may legally
+    // contain a ':' (POSIX) or a Windows drive colon, which `-v host:ctr` would
+    // misparse into a spurious mount option (e.g. :ro / :z). With `--mount` the
+    // src/dst are explicit keys, so an embedded colon can't shift a field.
+    const parts = [`type=bind`, `src=${m.hostPath}`, `dst=${m.containerPath}`];
+    if (m.readonly) parts.push("readonly");
+    args.push("--mount", parts.join(","));
   }
   args.push("-w", opts.workdir);
   for (const [k, v] of Object.entries(opts.env)) {

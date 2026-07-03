@@ -13,7 +13,6 @@ import type { SpawnSpec } from "@/lib/session-backend/pty/registry";
 import {
   buildDockerRunArgs,
   isValidImageName,
-  containerNameFor,
 } from "@/lib/container/docker-args";
 import {
   computeContainerMounts,
@@ -55,21 +54,16 @@ describe("isValidImageName", () => {
   });
 });
 
-describe("containerNameFor", () => {
-  it("derives a docker-safe name from a session key", () => {
-    expect(containerNameFor("claude-abc123")).toBe("stoa-claude-abc123");
-    // Illegal chars → dashes; leading non-alnum stripped.
-    expect(containerNameFor("a/b c:d")).toBe("stoa-a-b-c-d");
-  });
-});
-
 describe("computeContainerMounts", () => {
-  it("maps worktree→/workspace, config dirs→/root/<base>, ~/.stoa→/root/.stoa", () => {
+  it("maps worktree→/workspace, home-relative config/state dirs under /root", () => {
     const m = computeContainerMounts({
       worktree: "/home/u/wt",
       gitCommonDir: "/home/u/repo/.git",
-      agentConfigDirs: ["/home/u/.claude", "/home/u/.codex"],
+      // A DIRECT home child AND a NESTED one (Kilo) — both must land where the
+      // in-container agent reads them.
+      agentConfigDirs: ["/home/u/.claude", "/home/u/.config/kilo"],
       stoaHome: "/home/u/.stoa",
+      homeDir: "/home/u",
     });
     expect(m).toEqual([
       { hostPath: "/home/u/wt", containerPath: CONTAINER_WORKDIR },
@@ -78,7 +72,11 @@ describe("computeContainerMounts", () => {
         hostPath: "/home/u/.claude",
         containerPath: `${CONTAINER_HOME}/.claude`,
       },
-      { hostPath: "/home/u/.codex", containerPath: `${CONTAINER_HOME}/.codex` },
+      // NESTED dir preserves its home-relative path (regression: not /root/kilo).
+      {
+        hostPath: "/home/u/.config/kilo",
+        containerPath: `${CONTAINER_HOME}/.config/kilo`,
+      },
       { hostPath: "/home/u/.stoa", containerPath: `${CONTAINER_HOME}/.stoa` },
     ]);
   });
@@ -87,16 +85,22 @@ describe("computeContainerMounts", () => {
     const m = computeContainerMounts({
       worktree: "C:\\Users\\u\\wt",
       gitCommonDir: "C:\\Users\\u\\repo\\.git",
+      agentConfigDirs: ["C:\\Users\\u\\.config\\kilo"],
       stoaHome: "C:\\Users\\u\\.stoa",
+      homeDir: "C:\\Users\\u",
     });
     expect(m.some((x) => x.hostPath === "C:\\Users\\u\\repo\\.git")).toBe(
       false
     );
-    // Worktree + stoa still mount (host path verbatim, container path POSIX).
+    // Worktree host path verbatim; container path POSIX. Windows nested config
+    // dir still re-roots home-relative (backslashes normalized).
     expect(m[0]).toEqual({
       hostPath: "C:\\Users\\u\\wt",
       containerPath: CONTAINER_WORKDIR,
     });
+    expect(
+      m.find((x) => x.hostPath === "C:\\Users\\u\\.config\\kilo")?.containerPath
+    ).toBe(`${CONTAINER_HOME}/.config/kilo`);
     expect(m[m.length - 1].containerPath).toBe(`${CONTAINER_HOME}/.stoa`);
   });
 });
@@ -115,26 +119,24 @@ describe("buildDockerRunArgs", () => {
     workdir: "/workspace",
     env: { CONDUCTOR_SESSION_ID: "s1" },
     allowNet: true,
-    name: "stoa-x",
+    sessionKey: "claude-x",
     agentBinary: "claude",
     agentArgs: ["--dangerously-skip-permissions", "-p", "do it"],
   };
 
-  it("emits the exact ephemeral-tty run argv (image before the agent command)", () => {
+  it("emits the exact ephemeral-tty run argv (field-safe --mount; image before the agent command)", () => {
     expect(buildDockerRunArgs(base)).toEqual([
       "run",
       "--rm",
       "-i",
       "-t",
       "--init",
-      "--name",
-      "stoa-x",
       "--label",
-      "stoa.session=1",
-      "-v",
-      "/home/u/wt:/workspace",
-      "-v",
-      "/home/u/.stoa:/root/.stoa:ro",
+      "stoa.session=claude-x",
+      "--mount",
+      "type=bind,src=/home/u/wt,dst=/workspace",
+      "--mount",
+      "type=bind,src=/home/u/.stoa,dst=/root/.stoa,readonly",
       "-w",
       "/workspace",
       "-e",
@@ -156,15 +158,28 @@ describe("buildDockerRunArgs", () => {
     expect(i).toBeLessThan(args.indexOf("agent:latest"));
   });
 
-  it("keeps an untrusted worktree path as ONE discrete -v token (no shell, no split)", () => {
+  it("keeps an untrusted worktree path as ONE discrete --mount token (no shell, no split)", () => {
     const evil = "/tmp/a b; rm -rf ~ $(whoami)";
     const args = buildDockerRunArgs({
       ...base,
       mounts: [{ hostPath: evil, containerPath: "/workspace" }],
     });
-    // The -v value is exactly one token; the metachars never become argv of their own.
-    expect(args).toContain(`${evil}:/workspace`);
-    expect(args.filter((t) => t === `${evil}:/workspace`)).toHaveLength(1);
+    const token = `type=bind,src=${evil},dst=/workspace`;
+    expect(args).toContain(token);
+    expect(args.filter((t) => t === token)).toHaveLength(1);
+  });
+
+  it("a COLON in the host path can't shift a mount field (the -v misparse regression)", () => {
+    // A POSIX path may legally contain ':' — with -v host:ctr this would inject a
+    // spurious 3rd field (e.g. an :ro / :z option). --mount keeps src explicit.
+    const colon = "/tmp/weird:path";
+    const args = buildDockerRunArgs({
+      ...base,
+      mounts: [{ hostPath: colon, containerPath: "/workspace" }],
+    });
+    expect(args).toContain(`type=bind,src=${colon},dst=/workspace`);
+    // No bare host:ctr token leaked.
+    expect(args.some((t) => t.startsWith("-v"))).toBe(false);
   });
 });
 
