@@ -11,6 +11,7 @@ import { infraQueries } from "./infra";
 import { dispatchQueries } from "./dispatch";
 import { analyticsQueries } from "./analytics";
 import { tokensQueries } from "./tokens";
+import { checkpointsQueries } from "./checkpoints";
 
 /**
  * The prepared-statement builders, composed from per-domain modules (#54). Each
@@ -31,6 +32,7 @@ export const queries = {
   ...dispatchQueries,
   ...analyticsQueries,
   ...tokensQueries,
+  ...checkpointsQueries,
 };
 
 // Audit read surface (#10). Dynamic filters (types/time/pagination) mean the SQL

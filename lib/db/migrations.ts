@@ -1273,6 +1273,45 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 52,
+    name: "add_checkpoints",
+    up: (db) => {
+      // #44 Checkpoint / time-travel timeline. A DURABLE metadata + lineage layer
+      // over the git shadow-commit snapshots (refs/stoa/snap/<session>/<seq>) —
+      // the snapshot stays the store of worktree BYTES; this row pins one by
+      // (seq, snapshot_sha) and adds what git refs can't hold: a human label, the
+      // transcript anchor (claude_session_id at capture — native fork branches at
+      // the transcript TIP), a kind, and fork lineage. snapshot_sha is stored too,
+      // so a rewind/fork target survives the ref's FIFO prune (MAX 20) while the
+      // object lives; a row whose sha no longer resolves is shown "expired", never
+      // a broken target. ON DELETE CASCADE reaps a deleted session's checkpoints;
+      // parent_checkpoint_id is SET NULL so a fork's lineage survives deleting its
+      // source checkpoint.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS checkpoints (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          snapshot_sha TEXT NOT NULL,
+          summary TEXT,
+          transcript_session_id TEXT,
+          kind TEXT NOT NULL DEFAULT 'manual',
+          created_by TEXT NOT NULL DEFAULT 'manual',
+          parent_checkpoint_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+          FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id) ON DELETE SET NULL
+        )
+      `);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id, seq)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_checkpoints_parent ON checkpoints(parent_checkpoint_id)`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
