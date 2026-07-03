@@ -20,7 +20,7 @@
  *     terminal with a hardened wrapper. Off by default because writing into a
  *     session unattended is the risky part (same stance as STOA_AUTO_RESUME).
  *
- * Thin shell over the prepared statements in lib/db/queries.ts; id generation,
+ * Thin shell over the prepared statements in lib/db/queries/; id generation,
  * the order-independent pair key, validation + length caps live here (the DB layer
  * stays pure SQL), mirroring lib/notes.ts.
  */

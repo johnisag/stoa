@@ -5,7 +5,7 @@
  * same task. After all sessions finish, the user compares their diffs and picks
  * a winner. The losing sessions and worktrees are cleaned up.
  *
- * All DB mutations go through the prepared-statement helpers in lib/db/queries.ts.
+ * All DB mutations go through the prepared-statement helpers in lib/db/queries/.
  * All session/worktree operations go through the existing orchestration seams
  * (spawnWorker / killWorker) so the tmux/pty/Windows paths stay consistent.
  */

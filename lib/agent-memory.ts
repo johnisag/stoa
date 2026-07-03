@@ -14,7 +14,7 @@
  * auto-injected into a terminal — so, unlike inter-agent channels, there is no
  * keystroke-injection surface here.
  *
- * Thin shell over the prepared statements in lib/db/queries.ts; validation +
+ * Thin shell over the prepared statements in lib/db/queries/; validation +
  * length caps live here (the DB layer stays pure SQL), mirroring lib/saved-workflows.ts.
  */
 
