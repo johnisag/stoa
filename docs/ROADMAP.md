@@ -859,10 +859,22 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     `server.ts`, `lib/notifications.ts`, `hooks/useNotifications.ts`,
     `hooks/useSessionMute.ts`, `components/NotificationSettings.tsx`,
     `components/SessionCard.tsx`.
-53. **Jump-between-commands + sticky command header** — `feature` · L. Prompt-boundary
-    navigation over the captured VT buffer (the Warp-blocks 80%, no OSC needed).
-    _Seam:_ `components/Terminal/index.tsx`, new `lib/terminal-blocks.ts`,
-    `lib/keybindings.ts`.
+53. ✅ **Jump-between-commands + sticky command header** — `feature` · L.
+    **SHIPPED.** Prompt-boundary navigation over the captured VT buffer (the
+    Warp-blocks 80%, no OSC needed). Pure `lib/terminal-blocks.ts`:
+    `classifyBoundaryLine` detects a command boundary from the RENDERED line
+    (bash/sh/zsh/pwsh/starship prompt sigils incl. glued PS1, empty prompts, and
+    the agent input box `> ` — while rejecting a mid-line shell redirect `>` and
+    prose), `parseTerminalBlocks` splits the buffer into contiguous
+    shell/agent/start blocks, and `blockIndexForLine` / `nextBlockLine` /
+    `truncateLabel` drive the jump + the sticky header label. Wired into the
+    Terminal (a `CommandBlockHeader` that sticks the current command's label +
+    prev/next jump) via a `paneCommands` store, with keyboard jump in `app/page.tsx`.
+    Screen-derived (reads the rendered VT, never raw bytes — the repo invariant).
+    Unit-tested (heuristics incl. false-positive guards, block parsing, navigation,
+    label truncation). _Seam:_ `lib/terminal-blocks.ts`,
+    `components/Terminal/index.tsx`, `components/Terminal/CommandBlockHeader.tsx`,
+    `components/Pane/index.tsx`, `stores/paneCommands.ts`, `app/page.tsx`.
 54. **Split `lib/db/queries.ts` into domain modules** — `tech-debt` · L. Split the
     194-builder god-object into domain files re-composed in an index (zero call-site
     churn); type the prepared-statement wrappers to drop `as Row[]` casts. _Why:_ a
