@@ -1,20 +1,28 @@
 /**
- * The AsyncLocalStorage startup guard (server.ts's first import). Importing it
- * MUST leave `globalThis.AsyncLocalStorage` populated with the real async_hooks
- * class — Next.js's app-render reads exactly that global, and without it the
- * custom production server crashes at startup with the E504 invariant
- * (reproduced on Node 24.11.1 + Next 16 + tsx). It must also be idempotent: it
- * never overwrites a value the runtime/Next already provided.
+ * The AsyncLocalStorage startup guard (server.ts's first import). It MUST leave
+ * `globalThis.AsyncLocalStorage` populated with the real async_hooks class —
+ * Next.js's app-render reads exactly that global, and without it the custom
+ * production server crashes at startup with the E504 invariant (reproduced on
+ * Node 24.11.1 + Next 16 + tsx). It must also be idempotent: never overwrite a
+ * value the runtime/Next already provided. Both branches exercise the REAL
+ * exported function so a regression (e.g. dropping the `if (!…)` guard) fails.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { installAsyncLocalStorageGlobal } from "@/lib/als-global";
 
 const g = globalThis as unknown as { AsyncLocalStorage?: unknown };
 
-describe("lib/als-global (startup E504 guard)", () => {
-  it("populates globalThis.AsyncLocalStorage with the real async_hooks class", async () => {
-    delete g.AsyncLocalStorage; // clear any pre-existing value
-    await import("@/lib/als-global");
+// Importing the module already ran the side-effect once; snapshot the real class
+// so we can restore it after each test (other suites may rely on the global).
+afterEach(() => {
+  g.AsyncLocalStorage = AsyncLocalStorage;
+});
+
+describe("installAsyncLocalStorageGlobal (startup E504 guard)", () => {
+  it("populates globalThis.AsyncLocalStorage with the real async_hooks class when absent", () => {
+    delete g.AsyncLocalStorage;
+    installAsyncLocalStorageGlobal();
     expect(g.AsyncLocalStorage).toBe(AsyncLocalStorage);
     // It actually works as an ALS (round-trips a store through .run()).
     const als = new (g.AsyncLocalStorage as typeof AsyncLocalStorage)<number>();
@@ -24,9 +32,7 @@ describe("lib/als-global (startup E504 guard)", () => {
   it("does NOT overwrite an AsyncLocalStorage already on the global (idempotent)", () => {
     const sentinel: unknown = class Existing {};
     g.AsyncLocalStorage = sentinel;
-    // The guard's rule: only fill when absent — a present value is left alone.
-    if (!g.AsyncLocalStorage) g.AsyncLocalStorage = AsyncLocalStorage;
+    installAsyncLocalStorageGlobal(); // the REAL guard — must leave the sentinel
     expect(g.AsyncLocalStorage).toBe(sentinel);
-    g.AsyncLocalStorage = AsyncLocalStorage; // restore so later tests are unaffected
   });
 });

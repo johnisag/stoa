@@ -16,7 +16,18 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-const g = globalThis as typeof globalThis & { AsyncLocalStorage?: unknown };
-if (!g.AsyncLocalStorage) {
-  g.AsyncLocalStorage = AsyncLocalStorage;
+/**
+ * Set `globalThis.AsyncLocalStorage` from node:async_hooks when it is absent.
+ * Idempotent — a value already on the global (one Next or the runtime provided)
+ * is left untouched. Exported so a test can exercise THIS logic directly (rather
+ * than an inline copy); the side-effect call below is what server.ts's
+ * first-import relies on.
+ */
+export function installAsyncLocalStorageGlobal(): void {
+  const g = globalThis as unknown as { AsyncLocalStorage?: unknown };
+  if (!g.AsyncLocalStorage) {
+    g.AsyncLocalStorage = AsyncLocalStorage;
+  }
 }
+
+installAsyncLocalStorageGlobal();
