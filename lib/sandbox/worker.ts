@@ -32,3 +32,18 @@ export function decideWorkerSandbox(deps: {
     ? { approvalMode: "sandboxed-auto", sandboxActive: true }
     : { approvalMode: "full-bypass", sandboxActive: false };
 }
+
+/**
+ * FAIL-CLOSED coupling of the bypass flag to the ACTUAL wrap outcome (#27). The
+ * bypass flag may be pushed only when the tentative gate said sandboxed-auto AND
+ * the wrap did NOT downgrade — so if the OS wrap can't confine (a downgrade), the
+ * flag is withheld and the worker prompts rather than running
+ * unattended-and-unconfined. The caller MUST feed this result into buildAgentArgs'
+ * sandboxActive so the flag and the confinement are decided by ONE verdict.
+ */
+export function effectiveSandboxActive(
+  tentativeActive: boolean,
+  wrapDowngraded: boolean
+): boolean {
+  return tentativeActive && !wrapDowngraded;
+}

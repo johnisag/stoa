@@ -15,6 +15,11 @@ export interface RwRootsInput {
   /** The main repo's git-common dir (its `.git`), so index/refs/objects writes
    *  succeed inside the sandbox. Null when it can't be resolved. */
   gitCommonDir?: string | null;
+  /** The agent's OWN state dir (expanded ~/.claude, ~/.codex, …) — the CLI writes
+   *  its rollout/transcript there at runtime (e.g. ~/.claude/projects/…jsonl,
+   *  which Stoa reads for cost/resume/fork/checkpoints). A read-only home would
+   *  break it, so it MUST be writable. Null when unknown. */
+  agentConfigDir?: string | null;
   /** Stoa's state dir (~/.stoa) — the DB + snapshot refs + worktrees base. */
   stoaHome: string;
 }
@@ -29,6 +34,7 @@ export function computeRwRoots(input: RwRootsInput): string[] {
   };
   for (const p of input.worktreePaths) add(p);
   add(input.gitCommonDir);
+  add(input.agentConfigDir);
   add(input.stoaHome);
   return roots;
 }

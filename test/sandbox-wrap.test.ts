@@ -10,7 +10,10 @@ import { wrapSpawnForSandbox } from "@/lib/sandbox/wrap";
 import { computeRwRoots } from "@/lib/sandbox/policy";
 import { detectSandboxTool } from "@/lib/sandbox/detect";
 import { coerceApprovalMode } from "@/lib/sandbox/types";
-import { decideWorkerSandbox } from "@/lib/sandbox/worker";
+import {
+  decideWorkerSandbox,
+  effectiveSandboxActive,
+} from "@/lib/sandbox/worker";
 
 const SPAWN = { file: "claude", args: ["--resume", "abc", "-p", "do it"] };
 const POLICY = { rwRoots: ["/wt/a"], allowNet: true };
@@ -141,6 +144,29 @@ describe("computeRwRoots", () => {
         stoaHome: "/home/u/.stoa",
       })
     ).toEqual(["/wt/a", "/home/u/.stoa"]);
+  });
+
+  it("includes the agent's own state dir rw (so it can write its transcript)", () => {
+    // A read-only ~/.claude breaks Claude's rollout/transcript writes → the
+    // whole cost/resume/fork/checkpoint pipeline. It MUST be writable.
+    expect(
+      computeRwRoots({
+        worktreePaths: ["/wt/a"],
+        gitCommonDir: "/main/.git",
+        agentConfigDir: "/home/u/.claude",
+        stoaHome: "/home/u/.stoa",
+      })
+    ).toEqual(["/wt/a", "/main/.git", "/home/u/.claude", "/home/u/.stoa"]);
+  });
+});
+
+describe("effectiveSandboxActive (fail-closed flag/wrap coupling)", () => {
+  it("is active only when the gate says active AND the wrap did not downgrade", () => {
+    expect(effectiveSandboxActive(true, false)).toBe(true);
+    // A wrap downgrade withdraws the bypass flag → the worker prompts, never
+    // runs unattended-and-unconfined.
+    expect(effectiveSandboxActive(true, true)).toBe(false);
+    expect(effectiveSandboxActive(false, false)).toBe(false);
   });
 });
 
