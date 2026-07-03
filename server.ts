@@ -51,18 +51,11 @@ import {
   listQueue,
 } from "./lib/prompt-queue";
 import { dueSchedules, fireSchedule } from "./lib/scheduler";
-import {
-  nextRateLimitAction,
-  RESUME_MAX_PER_DAY,
-  RESUME_FALLBACK_MS,
-} from "./lib/rate-limit";
+import { RESUME_MAX_PER_DAY, RESUME_FALLBACK_MS } from "./lib/rate-limit";
 import { utcDay } from "./lib/utc-day";
-import {
-  nextAutoAnswerAction,
-  promptSignature,
-  shouldRearmAutoAnswer,
-  shouldAcknowledgeQueued,
-} from "./lib/auto-steer";
+// nextAutoAnswerAction stays: the push fan-out reuses it to suppress a "needs you"
+// push for a prompt the answer actor is about to auto-answer this tick.
+import { nextAutoAnswerAction } from "./lib/auto-steer";
 import {
   nextErrorLoopAction,
   buildLoopPushBody,
@@ -99,20 +92,13 @@ import { extractTranscriptEntries } from "./lib/summarize";
 import { readClaudeTranscriptRaw } from "./lib/claude-transcript";
 import { mkdir, writeFile } from "fs/promises";
 import { join as joinNativePath, dirname as nativeDirname } from "path";
-import {
-  isChannelDeliveryTurn,
-  buildChannelDeliveryText,
-} from "./lib/channel-delivery";
+import { buildChannelDeliveryText } from "./lib/channel-delivery";
 import {
   nextUnreadMessage,
   claimDelivery,
   resetDelivery,
   sessionsWithPendingDelivery,
 } from "./lib/channels";
-import {
-  queueDispatchBlocked,
-  channelDeliveryBlocked,
-} from "./lib/tick-guards";
 import { computeSessionCosts } from "./lib/session-cost";
 import {
   persistCostSamples,
@@ -135,6 +121,15 @@ import {
   anyTickEnabled,
   describeEnabled,
 } from "./lib/auto-features";
+import {
+  makeClaimWrite,
+  runWriteActor,
+  queueActor,
+  resumeActor,
+  answerActor,
+  channelActor,
+  type TickContext,
+} from "./lib/status-tick";
 import { homeDir, defaultInteractiveShell } from "./lib/platform";
 import { getDb, queries, type Session } from "./lib/db";
 import { REMOTE_ADDR_HEADER } from "./lib/api-security";
@@ -668,205 +663,72 @@ app.prepare().then(() => {
           }
         }
       }
-      for (const s of curr) {
-        // #21: a budget-parked session gets NO new work (fail-closed park).
-        // The user can still type manually; the queue resumes on unpark.
-        if (isBudgetParked(s.id)) continue;
-        // Cross-loop guard: never paste a queued prompt into a rate-limited session
-        // (the resume loop below owns it — pasting here would hit the limited TUI
-        // before its reset and lose the prompt) or one a channel push is mid-paste
-        // into. A rate-limited "limit reached" screen classifies as idle, so without
-        // this the queued/scheduled/fork-seed prompt would dispatch prematurely.
-        if (
-          queueDispatchBlocked({
-            rateLimited: !!s.rateLimit,
-            channelInFlight: channelDelivering.has(s.id),
-          })
-        ) {
-          // Reset the once-guard for a rate-limited session so it dispatches fresh
-          // once the limit clears (a transient channel-in-flight just skips a tick).
-          if (s.rateLimit) queueDispatched.delete(s.id);
-          continue;
-        }
-        const next = peekPrompt(s.id);
-        if (
-          next == null ||
-          s.status === "running" ||
-          s.status === "error" ||
-          s.status === "dead"
-        ) {
-          queueDispatched.delete(s.id);
-          continue;
-        }
-        if (s.status === "waiting") {
-          // Promote a SETTLED turn to "idle" next tick so its queued task can
-          // dispatch — but NOT when a real prompt is detected. Acknowledging a
-          // borderline permission dialog (one that intermittently fails the
-          // waiting-pattern check) would flip it to "idle" and paste the queued
-          // task straight into the open prompt. Leave a prompt for the human.
-          if (shouldAcknowledgeQueued(s.status, !!s.prompt)) {
-            statusDetector.acknowledge(s.name);
-          }
-          continue;
-        }
-        // idle → ready for the next instruction.
-        if (queueDispatched.has(s.id)) continue;
-        queueDispatched.add(s.id);
-        void getSessionBackend()
-          .pasteText(s.name, next, { enter: true })
-          .then(() => {
-            dequeuePrompt(s.id);
-          })
-          .catch((err) => {
-            queueDispatched.delete(s.id); // let the next tick retry
-            console.error("queue dispatch failed:", err);
-          });
-      }
+      // #31: assemble the per-tick context ONCE, then drive the four WRITE actors
+      // (queue > resume > answer > channel) through the claimWrite arbiter so "at
+      // most one terminal write per session per tick" is STRUCTURAL, not per-pair
+      // predicates. Observe/escalate stages stay inline above & below. Each actor's
+      // decide() sets its once-guard synchronously BEFORE runWriteActor fires the
+      // send fire-and-forget, so a later actor in the same tick sees it — identical
+      // interleaving to the old inline loops. lib/status-tick.ts owns the actors.
+      const tickNowMs = Date.now();
+      const ctx: TickContext = {
+        curr,
+        byId: new Map(curr.map((s) => [s.id, s])),
+        nowMs: tickNowMs,
+        resumeDay: utcDay(tickNowMs),
+        knobs: {
+          resumeFallbackMs: RESUME_FALLBACK_MS,
+          resumeMaxPerDay: RESUME_MAX_PER_DAY,
+        },
+        flags: {
+          autoResume: AUTO_RESUME_ENABLED,
+          autoAnswer: AUTO_ANSWER_ENABLED,
+          channelDeliver: CHANNEL_DELIVER_ENABLED,
+        },
+        maps: {
+          queueDispatched,
+          rateLimitResumed,
+          rateLimitParkedAt,
+          rateLimitResumeDay,
+          rateLimitBudgetLogged,
+          autoAnswered,
+          channelDelivering,
+        },
+        deps: {
+          backend: getSessionBackend,
+          isBudgetParked,
+          peekPrompt,
+          dequeuePrompt: (id) => {
+            dequeuePrompt(id);
+          },
+          acknowledge: (name) => statusDetector.acknowledge(name),
+          nextUnreadMessage,
+          claimDelivery,
+          resetDelivery,
+          buildChannelDeliveryText,
+          log: (m) => console.log(m),
+        },
+        claimWrite: makeClaimWrite(),
+      };
 
-      // Rate-limit auto-resume (opt-in). Detection rides on the same capture
-      // (s.rateLimit) and is always surfaced; the unattended NUDGE is gated by
-      // STOA_AUTO_RESUME=1 — injecting input into a session unattended is the
-      // risky part, so it's off by default (mirrors the budget caps). For each
-      // session, the pure nextRateLimitAction decides wait/resume/idle from the
-      // detected state + reset time; we act only on "resume" (reset has passed)
-      // and only once per episode. Clear the once-guard the moment a session is
-      // no longer rate-limited so a later limit can resume again.
-      const rlNowMs = Date.now();
-      const resumeDay = utcDay(rlNowMs);
-      for (const s of curr) {
-        if (!s.rateLimit) {
-          rateLimitResumed.delete(s.id);
-          rateLimitParkedAt.delete(s.id);
-          rateLimitBudgetLogged.delete(s.id);
-          continue;
-        }
-        // Never nudge an errored/dead session — that's not a recoverable
-        // count-down-and-resume wait. (#51 removed the old pattern overlap:
-        // pure rate-limit wording no longer classifies as error, and a screen
-        // with BOTH error wording AND a reset time now classifies rate-limited
-        // — this guard stays as defense for GENUINE errors.)
-        if (s.status === "error" || s.status === "dead") {
-          rateLimitResumed.delete(s.id);
-          rateLimitParkedAt.delete(s.id);
-          rateLimitBudgetLogged.delete(s.id);
-          continue;
-        }
-        // Anchor the no-reset fallback at the moment the limit was first seen.
-        if (!rateLimitParkedAt.has(s.id)) rateLimitParkedAt.set(s.id, rlNowMs);
-        if (!AUTO_RESUME_ENABLED || rateLimitResumed.has(s.id)) continue;
-        // #21: a budget-parked session must not be auto-nudged back to work.
-        if (isBudgetParked(s.id)) continue;
-        // Per-day resume budget: roll the counter over when the UTC day changes.
-        let budget = rateLimitResumeDay.get(s.id);
-        if (!budget || budget.day !== resumeDay) {
-          budget = { day: resumeDay, count: 0 };
-          rateLimitResumeDay.set(s.id, budget);
-          rateLimitBudgetLogged.delete(s.id); // a fresh day may log again
-        }
-        const action = nextRateLimitAction({
-          detected: true,
-          resetAtMs: s.rateLimit.resetAt,
-          nowMs: rlNowMs,
-          // Never nudge a session that's showing a real prompt — the resume Enter /
-          // queued task would answer the open dialog instead of re-triggering the
-          // counted-down turn. Wait until the prompt clears.
-          hasPrompt: !!s.prompt,
-          // Don't nudge a session that's actively working (a spinner) — it isn't
-          // idly parked at the limit, so injecting Enter would hit a live turn.
-          busy: s.status === "running",
-          parkedAtMs: rateLimitParkedAt.get(s.id) ?? null,
-          fallbackMs: RESUME_FALLBACK_MS,
-          resumesUsedToday: budget.count,
-          maxPerDay: RESUME_MAX_PER_DAY,
-        });
-        if (action !== "resume") {
-          // If the day's budget is what's holding us back — and not some other
-          // guard (busy / a real prompt), which would make "until tomorrow"
-          // misleading — say so ONCE.
-          if (
-            RESUME_MAX_PER_DAY > 0 &&
-            budget.count >= RESUME_MAX_PER_DAY &&
-            s.status !== "running" &&
-            !s.prompt &&
-            !rateLimitBudgetLogged.has(s.id)
-          ) {
-            rateLimitBudgetLogged.add(s.id);
-            console.log(
-              `rate-limit auto-resume: daily budget (${RESUME_MAX_PER_DAY}) spent for ${s.name} — holding until tomorrow.`
-            );
-          }
-          continue; // still counting down / prompt up / busy / budget spent / no reset
-        }
-        // If the queue loop above already sent this session's queued prompt this
-        // idle period, that IS the resume — don't also nudge (would double-send).
-        if (queueDispatched.has(s.id)) {
-          rateLimitResumed.add(s.id);
-          budget.count++; // the queue loop's delivered send counts against the cap
-          continue;
-        }
-        // A queued prompt is the natural resume payload; otherwise nudge with a
-        // bare Enter to re-trigger the agent's pending turn. Guard once-per-
-        // episode BEFORE the async send so a slow send can't double-fire; charge
-        // the daily budget only on a DELIVERED nudge (in .then), so a failed send
-        // that retries next tick doesn't burn a resume.
-        rateLimitResumed.add(s.id);
-        const queued = peekPrompt(s.id);
-        const backend = getSessionBackend();
-        const send = queued
-          ? backend.pasteText(s.name, queued, { enter: true })
-          : backend.sendEnter(s.name);
-        void send
-          .then(() => {
-            budget.count++;
-            if (queued) dequeuePrompt(s.id);
-          })
-          .catch((err) => {
-            rateLimitResumed.delete(s.id); // let the next tick retry
-            console.error("rate-limit resume failed:", err);
-          });
-      }
+      // WRITE ACTOR 1 — queue-dispatch (always on): drain the next queued prompt
+      // for a genuinely idle-ready session; acknowledge a settled waiting turn.
+      for (const s of curr) runWriteActor(queueActor, ctx, s);
 
-      // Auto-steer: policy auto-answer (opt-in). Detection (s.prompt) rides on the
-      // same capture and is always surfaced; the unattended Enter is gated by
-      // STOA_AUTO_ANSWER=1 — pressing a key into a session is the risky part, so
-      // it's off by default. The pure nextAutoAnswerAction decides answer/escalate/
-      // idle; we ONLY send Enter on "answer" (a routine prompt whose default is the
-      // safe affirmative) and ONLY once per distinct prompt line, so a slow agent
-      // can't get the same Enter spammed every 2.5s. A rate-limited session is
-      // handled by the loop above, never here (its prompt, if any, isn't routine).
+      // WRITE ACTOR 2 — rate-limit auto-resume (opt-in nudge). Runs for EVERY
+      // session: unconditionally clears the once/park/log guards when a session is
+      // no longer limited (or errored/dead) and anchors parkedAt at first sight of
+      // the limit; the actual nudge is gated by AUTO_RESUME inside decide(). A
+      // queued prompt already sent by actor 1 this idle period COUNTS as the resume
+      // (marks resumed + charges the daily budget, sends nothing).
+      for (const s of curr) runWriteActor(resumeActor, ctx, s);
+
+      // WRITE ACTOR 3 — auto-answer (opt-in): press Enter on a routine prompt whose
+      // default is the safe affirmative, once per distinct prompt. Never a
+      // rate-limited session (actor 2 owns it). Feature-gated; its liveIds prune of
+      // the once-per-prompt guard runs only while enabled, as before.
       if (AUTO_ANSWER_ENABLED) {
-        for (const s of curr) {
-          // Don't answer unless actively waiting on a prompt and not rate-limited
-          // (the resume loop owns the rate-limited case).
-          if (!s.prompt || s.rateLimit || s.status !== "waiting") {
-            // Re-arm the once-per-prompt guard ONLY when the turn truly settled
-            // (idle/dead) — NOT on a transient "running"/spinner flap, which would
-            // clear the guard and let the SAME prompt be answered a second time
-            // when it re-reads as "waiting" next tick. The guard is keyed by the
-            // prompt signature, so a genuinely NEW prompt is still answered.
-            if (shouldRearmAutoAnswer(s.status)) autoAnswered.delete(s.id);
-            continue;
-          }
-          const action = nextAutoAnswerAction({
-            prompt: s.prompt,
-            status: s.status,
-          });
-          if (action !== "answer") continue; // escalate / idle → leave it waiting
-          // Once per DISTINCT prompt (stable signature: a countdown can't re-trigger).
-          const sig = promptSignature(s.prompt);
-          if (autoAnswered.get(s.id) === sig) continue;
-          // Guard BEFORE the async send so a slow send can't double-fire.
-          autoAnswered.set(s.id, sig);
-          console.log(
-            `auto-answer: accepted ${s.prompt.kind} prompt in ${s.name} (${s.prompt.line})`
-          );
-          void getSessionBackend()
-            .sendEnter(s.name)
-            .catch((err) => {
-              autoAnswered.delete(s.id); // let the next tick retry
-              console.error("auto-answer failed:", err);
-            });
-        }
+        for (const s of curr) runWriteActor(answerActor, ctx, s);
         for (const id of [...autoAnswered.keys()])
           if (!liveIds.has(id)) autoAnswered.delete(id);
       }
@@ -968,79 +830,16 @@ app.prepare().then(() => {
           if (!liveIds.has(id)) stuckSessions.delete(id);
       }
 
-      // Inter-agent channel delivery (opt-in via STOA_AUTO_CHANNEL_DELIVER=1).
-      // Channels are always pull-readable (channel_inbox); this only adds the
-      // unattended PUSH — injecting one unread message into the recipient's
-      // terminal at a clean turn boundary so a sibling doesn't have to poll.
-      // Mirrors the prompt-queue dispatch: gate on a settled, ready session (the
-      // pure isChannelDeliveryTurn), pick the single oldest unread, atomically
-      // CLAIM it (mark delivered) BEFORE pasting the directive "from another
-      // agent" wrapper — so two concurrent delivery attempts can't both paste the
-      // same message. One delivery in flight per session (channelDelivering) so a
-      // slow paste can't overlap; the once-guard clears on success/failure so the
-      // NEXT unread is delivered on a later tick (one message at a time).
+      // WRITE ACTOR 4 — inter-agent channel delivery (opt-in): inject one unread
+      // message into a settled recipient's terminal, claiming the row atomically
+      // BEFORE the paste so two attempts can't double-deliver. One SELECT DISTINCT
+      // for recipients with a pending message; resolve each through the tick's byId
+      // index (a session not live this snapshot is skipped, as before) and run the
+      // actor. The liveIds prune of the in-flight guard runs only while enabled.
       if (CHANNEL_DELIVER_ENABLED) {
-        // One SELECT DISTINCT for the recipients with an unread message, instead
-        // of probing every live session's inbox — then process only those that
-        // are actually live this snapshot. Behavior-identical to the old per-
-        // session loop (a session with no pending message just fell through the
-        // `if (!msg) continue` below), but no per-session query.
-        const byId = new Map(curr.map((s) => [s.id, s]));
         for (const recipientId of sessionsWithPendingDelivery()) {
-          const s = byId.get(recipientId);
-          if (!s) continue; // pending for a session not live in this snapshot
-          // #21: no channel pushes into a budget-parked session (fail-closed).
-          if (isBudgetParked(s.id)) continue;
-          // Mutual exclusion with the other tick loops (all fire on "idle" off the
-          // same snapshot): skip if a delivery is in flight, the queue already
-          // pasted this idle period, the session is rate-limited (the resume loop
-          // owns it — injecting would burn the unread mid-limit), or it was just
-          // resumed this tick (a channel paste would interleave with the resume
-          // Enter). Encoded in one pure, tested predicate (lib/tick-guards.ts).
-          if (
-            channelDeliveryBlocked({
-              rateLimited: !!s.rateLimit,
-              rateLimitResumed: rateLimitResumed.has(s.id),
-              queueDispatched: queueDispatched.has(s.id),
-              channelInFlight: channelDelivering.has(s.id),
-            })
-          )
-            continue;
-          if (
-            !isChannelDeliveryTurn({ status: s.status, hasPrompt: !!s.prompt })
-          )
-            continue;
-          const msg = nextUnreadMessage(s.id);
-          if (!msg) continue;
-          // ATOMICALLY CLAIM the row BEFORE pasting so two concurrent delivery
-          // attempts of the same pending message can't both paste it (the old
-          // flow pasted first, then marked — a double-deliver window). claimDelivery
-          // flips delivered_at/read_at WHERE still-pending; only the caller that
-          // wins (changes === 1) pastes. A loser (or a message a pull just
-          // consumed) skips.
-          if (!claimDelivery(msg.id)) continue;
-          channelDelivering.add(s.id);
-          const text = buildChannelDeliveryText(msg);
-          void getSessionBackend()
-            .pasteText(s.name, text, { enter: true })
-            .catch((err) => {
-              console.error("channel delivery failed:", err);
-              // The paste failed (e.g. the pane died mid-tick) — UN-CLAIM the
-              // row so the next tick re-delivers it. Without this the claim
-              // would leave it stamped delivered+read: invisible to both push
-              // and pull, silently lost. The atomic claim still prevented the
-              // concurrent double-deliver; this restores at-least-once. Guarded
-              // so a DB error during un-claim can't surface as an unhandled
-              // rejection out of this .catch.
-              try {
-                resetDelivery(msg.id);
-              } catch (resetErr) {
-                console.error("channel un-claim failed:", resetErr);
-              }
-            })
-            .finally(() => {
-              channelDelivering.delete(s.id);
-            });
+          const s = ctx.byId.get(recipientId);
+          if (s) runWriteActor(channelActor, ctx, s);
         }
         for (const id of [...channelDelivering])
           if (!liveIds.has(id)) channelDelivering.delete(id);
