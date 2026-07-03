@@ -72,10 +72,13 @@ export type TerminalBlockKind = "shell" | "agent" | "start";
  *       column 0, with a `@` inside the brackets (so a plain `[note]$` / a
  *       timestamp `[..:..]>` in prose can't match).
  *
- * KNOWN MISSES (accepted — "prefer missing a boundary over inventing one"): a
- * space-separated macOS zsh `cwd % cmd` (indistinguishable from `50 % off`
- * prose), the classic `host:cwd user$`, and a marker-less default PS1
- * (`bash-5.1$`, `host%`). The agent-turn box (the headline surface) is unaffected.
+ * KNOWN MISSES (accepted — "prefer missing a boundary over inventing one"): any
+ * prompt whose sigil is SPACE-SEPARATED from its prefix — macOS zsh `cwd % cmd`
+ * (indistinguishable from `50 % off` prose), Git Bash / Raspberry Pi OS
+ * `…MINGW64 ~/proj $` / `pi@host:~ $` (space before `$`), the classic
+ * `host:cwd user$`, and a marker-less default PS1 (`bash-5.1$`, `host%`). Catching
+ * these safely would re-open the round-1 prose over-split. The agent-turn box (the
+ * headline surface) is unaffected.
  */
 // Capture group 1 in each is the typed command (may be empty). Numbered — not
 // named — groups because the tsconfig target (ES2017) predates named groups.
