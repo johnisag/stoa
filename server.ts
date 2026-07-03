@@ -211,6 +211,12 @@ app.prepare().then(() => {
         }
         // A read-only OBSERVER (spectator) token: reject every mutating method
         // (only GET/HEAD/OPTIONS pass), and stamp the scope for admin-only routes.
+        // NOTE: this is a coarse method gate — a few GET handlers do benign
+        // state-SYNC writes (e.g. touch updated_at, backfill claude_session_id,
+        // cache PR status) that an observer's Live-Wall polling can trigger. That's
+        // not an escalation (the observer can't choose what's written, and no
+        // action route uses GET); a route that must be strictly read-only for an
+        // observer checks requestScope() === "admin" itself.
         if (decision.type === "allow" && decision.scope === "observer") {
           const method = (req.method || "GET").toUpperCase();
           if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {

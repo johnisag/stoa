@@ -58,14 +58,16 @@ function connectionIp(request: NextRequest): string | null {
 // OVERWRITING any client-supplied copy (so it's unspoofable, same as the remote-addr
 // header). The coarse gate already denies an observer any non-GET request; this
 // header lets an admin-only READ route (e.g. the token list) additionally require
-// admin. Absent → admin (auth disabled / trusted loopback — no observer exists).
+// admin. server.ts sets "admin" explicitly on the auth-off / trusted-loopback /
+// master-token paths, so admin never depends on the default below.
 export const SCOPE_HEADER = "x-stoa-scope";
 
-/** The caller's auth scope as injected by the server auth gate. */
+/** The caller's auth scope as injected by the server auth gate. FAIL-CLOSED: only
+ * an exact "admin" header grants admin; anything else — including an ABSENT header
+ * (a route somehow reached without the gate) — is the least-privilege observer, so
+ * the resolver can never fail open on its own. */
 export function requestScope(request: NextRequest): "admin" | "observer" {
-  return request.headers.get(SCOPE_HEADER) === "observer"
-    ? "observer"
-    : "admin";
+  return request.headers.get(SCOPE_HEADER) === "admin" ? "admin" : "observer";
 }
 
 /** 403 if the caller is a read-only observer, else null. For admin-only routes the
