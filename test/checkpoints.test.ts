@@ -31,8 +31,11 @@ import {
   createCheckpoint,
   listCheckpoints,
   prepareForkFromSnapshot,
+  buildForkFeatureName,
   type CheckpointRow,
 } from "@/lib/checkpoints";
+// The REAL slug/branch derivation (not mocked) — the truncation bug lives here.
+import { slugify, generateBranchName } from "@/lib/git";
 
 function db() {
   const d = new Database(":memory:");
@@ -232,6 +235,7 @@ describe("prepareForkFromSnapshot", () => {
     expect(prep).toMatchObject({
       worktreePath: "/wt/fork",
       branchName: "feature/fork-me",
+      projectPath: "/main-repo", // owning repo, for later cleanup on failure
       snapshotSeq: 3,
       snapshotSha: "shaTARGET",
       sourceCheckpointId: null, // that turn was never labeled a checkpoint
@@ -308,6 +312,40 @@ describe("prepareForkFromSnapshot", () => {
     expect(createWorktree).toHaveBeenCalledWith(
       expect.objectContaining({ projectPath: "/repo", baseRef: "shaTARGET" })
     );
+  });
+});
+
+describe("buildForkFeatureName (regression: slugify 50-char cap must not eat the id)", () => {
+  it("keeps the unique id distinct across two forks of the SAME long-named session", () => {
+    // A name that, alone, slugs to ~50 chars — appending the id naively would
+    // see it truncated away, so two forks would collide (the panel's major bug).
+    const longName =
+      "My Really Long Session Name For Investigating The Bug (fork @7)";
+    const a = generateBranchName(
+      buildForkFeatureName(longName, "aaaaaaaa-1111-2222-3333-444444444444")
+    );
+    const b = generateBranchName(
+      buildForkFeatureName(longName, "bbbbbbbb-5555-6666-7777-888888888888")
+    );
+    expect(a).not.toBe(b);
+    // The 8-hex id survives the slug cap (present in each branch name).
+    expect(a).toContain("aaaaaaaa");
+    expect(b).toContain("bbbbbbbb");
+    // And both are within the 50-char slug budget (never silently over-cap).
+    expect(
+      slugify(buildForkFeatureName(longName, "cccccccc-dddd").padEnd(80, "z"))
+        .length
+    ).toBeLessThanOrEqual(50);
+  });
+
+  it("still yields distinct branches for short names", () => {
+    const a = generateBranchName(
+      buildForkFeatureName("quick", "abcd1234-xxxx")
+    );
+    const b = generateBranchName(
+      buildForkFeatureName("quick", "ef567890-yyyy")
+    );
+    expect(a).not.toBe(b);
   });
 });
 

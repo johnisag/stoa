@@ -31,7 +31,4 @@ export const checkpointsQueries = {
       db,
       `SELECT * FROM checkpoints WHERE session_id = ? ORDER BY seq DESC, created_at DESC`
     ),
-
-  deleteCheckpoint: (db: Database.Database) =>
-    getStmt(db, `DELETE FROM checkpoints WHERE id = ?`),
 };
