@@ -30,6 +30,9 @@ vi.mock("@/lib/session-backend", () => ({
     sendEnter: vi.fn(async () => {}),
     sendKeysInterpreted: vi.fn(async () => {}),
   }),
+  // #27: workers read the backend type to gate the OS sandbox. tmux → the
+  // sandbox never engages (full-bypass), i.e. pre-#27 behavior these tests assert.
+  getBackendType: () => "tmux",
 }));
 vi.mock("@/lib/worktrees", () => ({
   createWorktree: vi.fn(async () => ({ worktreePath: "/tmp/wt" })),

@@ -14,6 +14,10 @@ import {
   getAllProviderDefinitions,
   isValidProviderId,
 } from "./providers/registry";
+// Type-only — the sandbox wrap/detect surface pulls in server-only platform
+// helpers, but the ApprovalMode TYPE is erased at build so this stays safe to
+// pull into the client-shared launch path.
+import type { ApprovalMode } from "./sandbox/types";
 
 export type AgentType = ProviderId;
 
@@ -56,12 +60,44 @@ export interface BuildFlagsOptions {
   parentSessionId?: string | null; // For fork
   skipPermissions?: boolean;
   autoApprove?: boolean; // Use auto-approve flag from registry
+  // #27 tri-state launch tier. When set it SUPERSEDES the autoApprove/
+  // skipPermissions booleans for the bypass-flag decision. Undefined → derived
+  // from those booleans (legacy callers behave EXACTLY as before).
+  approvalMode?: ApprovalMode;
+  // #27 whether a real OS sandbox WILL confine this launch. Gates the bypass flag
+  // in "sandboxed-auto": the flag is pushed only when a sandbox is active, so an
+  // unhonorable "sandboxed-auto" fails CLOSED (no flag → the agent prompts, and
+  // Codex keeps its own sandbox) rather than becoming an unconfined bypass.
+  sandboxActive?: boolean;
   model?: string;
   initialPrompt?: string; // Initial prompt to send to agent
   // Extra launch tokens appended before the positional prompt — used to wire a
   // conductor's MCP server (e.g. Codex's `-c mcp_servers.stoa.*`). Clean argv
   // tokens; buildAgentArgs passes them through, the tmux caller shell-quotes.
   extraArgs?: string[];
+}
+
+/**
+ * #27 — whether to push a provider's auto-approve/bypass flag for this launch.
+ * The SINGLE source of truth shared by buildAgentArgs (pty) and every
+ * buildFlags (tmux) so the two paths can't diverge.
+ *
+ *   - "full-bypass"    → push (today's yolo).
+ *   - "sandboxed-auto" → push ONLY when a sandbox is active (fail-closed:
+ *                        no sandbox → no flag → the agent prompts / Codex keeps
+ *                        its own sandbox, never unattended-and-unconfined).
+ *   - "prompt"         → never push.
+ *
+ * The mode is DERIVED from the legacy autoApprove/skipPermissions booleans when
+ * `approvalMode` is unset, so pre-#27 callers are byte-identical.
+ */
+export function shouldBypassPrompts(options: BuildFlagsOptions): boolean {
+  const mode: ApprovalMode =
+    options.approvalMode ??
+    (options.autoApprove || options.skipPermissions ? "full-bypass" : "prompt");
+  if (mode === "full-bypass") return true;
+  if (mode === "sandboxed-auto") return options.sandboxActive === true;
+  return false;
 }
 
 // Common spinner characters used across CLIs
@@ -102,10 +138,7 @@ export const claudeProvider: AgentProvider = {
     const flags: string[] = [];
 
     // Auto-approve flag from registry
-    if (
-      (options.skipPermissions || options.autoApprove) &&
-      def.autoApproveFlag
-    ) {
+    if (shouldBypassPrompts(options) && def.autoApproveFlag) {
       flags.push(def.autoApproveFlag);
     }
 
@@ -205,10 +238,7 @@ export const codexProvider: AgentProvider = {
     const flags: string[] = [];
 
     // Auto-approve flag from registry
-    if (
-      (options.skipPermissions || options.autoApprove) &&
-      def.autoApproveFlag
-    ) {
+    if (shouldBypassPrompts(options) && def.autoApproveFlag) {
       flags.push(def.autoApproveFlag);
     }
 
@@ -267,10 +297,7 @@ export const hermesProvider: AgentProvider = {
   buildFlags(options: BuildFlagsOptions): string[] {
     const def = getProviderDefinition("hermes");
     const flags: string[] = [];
-    if (
-      (options.skipPermissions || options.autoApprove) &&
-      def.autoApproveFlag
-    ) {
+    if (shouldBypassPrompts(options) && def.autoApproveFlag) {
       flags.push(def.autoApproveFlag);
     }
     // Resume from the banner-captured session id (the status route persists it
@@ -341,10 +368,7 @@ export const kiloProvider: AgentProvider = {
   buildFlags(options: BuildFlagsOptions): string[] {
     const def = getProviderDefinition("kilo");
     const flags: string[] = [];
-    if (
-      (options.skipPermissions || options.autoApprove) &&
-      def.autoApproveFlag
-    ) {
+    if (shouldBypassPrompts(options) && def.autoApproveFlag) {
       flags.push(def.autoApproveFlag);
     }
     if (options.sessionId && def.resumeFlag) {
@@ -409,10 +433,7 @@ export const kimiProvider: AgentProvider = {
   buildFlags(options: BuildFlagsOptions): string[] {
     const def = getProviderDefinition("kimi");
     const flags: string[] = [];
-    if (
-      (options.skipPermissions || options.autoApprove) &&
-      def.autoApproveFlag
-    ) {
+    if (shouldBypassPrompts(options) && def.autoApproveFlag) {
       flags.push(def.autoApproveFlag);
     }
     if (options.sessionId && def.resumeFlag) {
@@ -523,7 +544,7 @@ export function buildAgentArgs(
 
   if (def.defaultArgs) args.push(...def.defaultArgs);
 
-  if ((options.skipPermissions || options.autoApprove) && def.autoApproveFlag) {
+  if (shouldBypassPrompts(options) && def.autoApproveFlag) {
     args.push(def.autoApproveFlag);
   }
   if (shouldPassModel(def, options)) {

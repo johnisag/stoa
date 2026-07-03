@@ -1312,6 +1312,30 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: 53,
+    name: "add_approval_mode_to_sessions",
+    up: (db) => {
+      // #27 OS-level sandbox launch tier. Replaces all-or-nothing auto_approve
+      // with a tri-state: 'prompt' | 'sandboxed-auto' | 'full-bypass'. Backfill
+      // from the existing boolean so behavior is UNCHANGED on upgrade
+      // (auto_approve=1 → 'full-bypass' = today's yolo; 0 → 'prompt'). auto_approve
+      // is KEPT and kept in sync (the ~4 badge read-sites still read it), so this
+      // migration is purely additive.
+      // hasTable guard: an upgrade fixture mid-migration may not have created
+      // the sessions table (it predates the migration system), so don't ALTER a
+      // table that isn't there (mirrors migrations 47/49).
+      if (
+        hasTable(db, "sessions") &&
+        !hasColumn(db, "sessions", "approval_mode")
+      ) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN approval_mode TEXT`);
+        db.exec(
+          `UPDATE sessions SET approval_mode = CASE WHEN auto_approve = 1 THEN 'full-bypass' ELSE 'prompt' END WHERE approval_mode IS NULL`
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
