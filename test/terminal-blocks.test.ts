@@ -221,6 +221,7 @@ describe("classifyBoundaryLine", () => {
       "bash-5.1$ ls", // marker-less default PS1
       "myhost% ls", // bare `host%`
       "pi@raspberrypi:~ $ sudo reboot", // Raspberry Pi OS `~ $` (space before $)
+      "me@HOST MINGW64 ~/proj $ git status", // Git Bash default (space before $)
     ]) {
       expect(classifyBoundaryLine(knownMiss), knownMiss).toBeNull();
     }
