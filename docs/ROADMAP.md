@@ -888,11 +888,21 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     label truncation). _Seam:_ `lib/terminal-blocks.ts`,
     `components/Terminal/index.tsx`, `components/Terminal/CommandBlockHeader.tsx`,
     `components/Pane/index.tsx`, `stores/paneCommands.ts`, `app/page.tsx`.
-54. **Split `lib/db/queries.ts` into domain modules** — `tech-debt` · L. Split the
-    194-builder god-object into domain files re-composed in an index (zero call-site
-    churn); type the prepared-statement wrappers to drop `as Row[]` casts. _Why:_ a
-    constant merge-conflict magnet; untyped casts feed the budget kill loop. _Seam:_
-    `lib/db/queries.ts`, `lib/db/index.ts`.
+54. ✅ **Split `lib/db/queries.ts` into domain modules** — `tech-debt` · L.
+    **SHIPPED (the split; typing deferred → item 59).** The 1500-line, ~194-builder
+    god-object (a constant merge-conflict magnet) is decomposed into eight
+    by-domain modules under `lib/db/queries/` — `sessions`, `messaging`, `projects`,
+    `workflows-kb`, `channels`, `infra`, `dispatch`, `analytics` — each exporting a
+    `*Queries` object, plus a shared `_shared.ts` holding the one per-db
+    prepared-statement `getStmt` cache. `lib/db/queries/index.ts` re-composes them by
+    spread into the same `queries` object (keys are unique across domains, so it
+    reproduces the original exactly) and keeps the audit read helpers. ZERO
+    call-site churn: `./queries` now resolves to the index, so all ~475 `queries.*`
+    call sites and every test are unchanged — the full suite passing is the
+    behavior-identity proof. _Deferred → item 59:_ typing the `getStmt` wrapper with
+    a per-query Row type to drop the `as Row[]` casts — that is call-site churn
+    (~475 sites) in tension with this item's zero-churn split, so it is carved out.
+    _Seam:_ `lib/db/queries/` (new dir), `lib/db/queries.ts` (removed).
 55. ✅ **Centralize `STOA_AUTO_*` flags + guarded-interval helper** — `tech-debt` ·
     M. **SHIPPED (pure refactor).** New `lib/auto-features.ts`: one typed
     `getAutoFeatures()` snapshot of the parsed `STOA_AUTO_*` booleans (delegating
@@ -946,6 +956,14 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     locator back over `postMessage`; the parent validates envelope + `event.origin`,
     normalizes every untrusted field, and gates acceptance on an in-flight pick.
     _Seam:_ new proxy route, `components/PreviewPanel/`, `lib/diff-comment.ts`.
+59. **Type the `queries` prepared-statement wrappers (drop `as Row[]`)** —
+    `tech-debt` · M. The deferred half of #54: give `getStmt` a per-query Row type
+    (e.g. `getStmt<Row, Params>(...)` returning a typed `Statement`) so the ~475
+    `.all()/.get() as Row[]` call-site casts can be dropped — the casts currently
+    let a schema/column drift slip past the compiler (they feed the budget kill
+    loop's untyped rows). Do it incrementally per domain module so each call-site
+    batch is a small, reviewable diff. _Seam:_ `lib/db/queries/_shared.ts`, the
+    eight `lib/db/queries/*.ts` domain modules + their call sites.
 
 ---
 
