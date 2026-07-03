@@ -14,6 +14,7 @@ import {
   Gauge,
   TerminalSquare,
   History,
+  KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -117,6 +118,12 @@ export const FLEET_NAV: readonly FleetNavEntry[] = [
     label: "Commands",
     icon: TerminalSquare,
     ariaLabel: "Commands (author native slash commands)",
+  },
+  {
+    id: "sharing",
+    label: "Sharing",
+    icon: KeyRound,
+    ariaLabel: "Sharing & devices (named revocable access links)",
   },
   {
     id: "notifications",

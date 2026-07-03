@@ -35,6 +35,7 @@ describe("FLEET_NAV", () => {
       "ask-stoa",
       "notes",
       "commands",
+      "sharing",
       "notifications",
       "guide",
       "quick-switch",

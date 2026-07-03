@@ -510,6 +510,20 @@ export function createSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_warm_worktrees_repo_status ON warm_worktrees(repo_id, status);
 
+    -- #46/#49 per-device named revocable tokens with a scope. Only a SHA-256 hash
+    -- of the secret is stored (never plaintext). scope: 'admin' (full) | 'observer'
+    -- (read-only spectator). The legacy ~/.stoa/token stays an implicit admin token.
+    CREATE TABLE IF NOT EXISTS auth_tokens (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'admin',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash ON auth_tokens(token_hash);
+
     -- Default Uncategorized project
     INSERT OR IGNORE INTO projects (id, name, working_directory, is_uncategorized, sort_order)
     VALUES ('uncategorized', 'Uncategorized', '~', 1, 999999);

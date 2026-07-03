@@ -48,6 +48,7 @@ export function MobileView({
   onShowGuide,
   onShowNotes,
   onShowCommands,
+  onShowSharing,
   attachToSession,
   openSessionInNewTab,
   handleNewSessionInProject,
@@ -145,6 +146,10 @@ export function MobileView({
             }}
             onShowCommands={() => {
               onShowCommands();
+              setSidebarOpen(false);
+            }}
+            onShowSharing={() => {
+              onShowSharing();
               setSidebarOpen(false);
             }}
           />

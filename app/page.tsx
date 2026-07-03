@@ -58,6 +58,7 @@ import { ShortcutsHelp } from "@/components/ShortcutsHelp";
 import { StoaGuide } from "@/components/StoaGuide";
 import { NotesDialog } from "@/components/Notes/NotesDialog";
 import { CommandsDialog } from "@/components/Commands/CommandsDialog";
+import { SharingDialog } from "@/components/Sharing/SharingDialog";
 import { SessionDiffModal } from "@/components/SessionDiffModal";
 import type { Keybinding } from "@/lib/keybindings";
 
@@ -241,6 +242,7 @@ function HomeContent() {
   const [showGuide, setShowGuide] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [showCommands, setShowCommands] = useState(false);
+  const [showSharing, setShowSharing] = useState(false);
   // Session whose diff to show via the "See changes" jump (fired when a turn
   // completes). null = the diff modal is closed.
   const [seeChangesSessionId, setSeeChangesSessionId] = useState<string | null>(
@@ -926,6 +928,7 @@ function HomeContent() {
     onShowGuide: () => setShowGuide(true),
     onShowNotes: () => setShowNotes(true),
     onShowCommands: () => setShowCommands(true),
+    onShowSharing: () => setShowSharing(true),
     notificationSettings,
     permissionGranted,
     updateSettings,
@@ -968,6 +971,7 @@ function HomeContent() {
       <StoaGuide open={showGuide} onOpenChange={setShowGuide} />
       <NotesDialog open={showNotes} onOpenChange={setShowNotes} />
       <CommandsDialog open={showCommands} onOpenChange={setShowCommands} />
+      <SharingDialog open={showSharing} onOpenChange={setShowSharing} />
       {/* Dispatch + Verdict Inbox are now first-class pane TABs (see addViewTab),
           not dialogs — opened from the nav / cross-links via onOpenDispatch /
           onOpenVerdictInbox. */}

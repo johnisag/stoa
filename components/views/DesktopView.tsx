@@ -72,6 +72,7 @@ export function DesktopView({
   onShowGuide,
   onShowNotes,
   onShowCommands,
+  onShowSharing,
   notificationSettings,
   permissionGranted,
   updateSettings,
@@ -151,6 +152,7 @@ export function DesktopView({
               onShowGuide={onShowGuide}
               onShowNotes={onShowNotes}
               onShowCommands={onShowCommands}
+              onShowSharing={onShowSharing}
             />
           </div>
         ) : (
