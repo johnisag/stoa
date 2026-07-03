@@ -855,10 +855,13 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     methods (spawn + attachStream) into a `docker run --rm -i -t --init <mounts>
 <image> <agent>`, forwarding the other 9 verbatim — so `capture`/status
     detection/resize/write keep working through the container pty unchanged. New
-    pure `lib/container/` (`buildDockerRunArgs` — discrete-token argv, nothing
-    injects; `computeContainerMounts` reusing the sandbox rw set mapped to fixed
-    POSIX paths; `detectContainerRuntime` via `resolveBinary` that FAILS OPEN to a
-    plain pty; `isValidImageName`). Lifetime rides `docker run --rm` + a tty, so
+    pure `lib/container/` (`buildDockerRunArgs` — discrete-token argv via field-safe
+    `--mount` so a `:`-bearing host path can't inject; `computeContainerMounts`
+    mirroring the sandbox rw set for the SINGLE-worktree case, mapped to fixed POSIX
+    paths (config dirs re-rooted at their home-relative path, so a nested one like
+    `~/.config/kilo` lands at `/root/.config/kilo`); `detectContainerRuntime` via
+    `resolveBinary` that FAILS OPEN to a plain pty; `isValidImageName`). Lifetime
+    rides `docker run --rm` + a tty, so
     the existing kill reaps the container with NO extra teardown; the rw
     bind-mounted worktree means the agent's edits land on the host (host-side
     `getSessionDiff` works — no diff-apply-back needed in PR1). Opt-in via
@@ -870,7 +873,8 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
       git for LINKED worktrees on Windows/macOS Desktop; `--user` uid:gid ownership on
       native Linux; wrapping the Tier-2 daemon; container-aware Agent Monitor
       (`pid()` returns the docker-client pid); a `container_id` column + orphan reaper;
-      env scrubbing + net-off. _Seam:_ new `lib/container/`,
+      MULTI-REPO sessions (mount every `worktree_path`, not just the cwd); env
+      scrubbing + net-off. _Seam:_ new `lib/container/`,
       `lib/session-backend/pty/container-transport.ts`, `lib/session-backend/index.ts`,
       `lib/session-backend/pty-backend.ts`, `server.ts`.
 48. ⏳ **MCP elicitation + sampling (2025-11 spec)** — `orchestration` · L. **ELICITATION
