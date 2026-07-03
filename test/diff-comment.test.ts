@@ -171,4 +171,23 @@ describe("formatPreviewComment (#28 click-to-comment message)", () => {
     expect(m).not.toContain("\x1b");
     expect(m).toContain("line one\ntwo[A three");
   });
+
+  it("says 'this page' (not a placeholder <element>) for a url-only manual note", () => {
+    // The shipped no-picker path builds normalizeLocator({ url }) — no element
+    // was clicked, so the header must not read like the locator failed.
+    const m = formatPreviewComment({
+      locator: normalizeLocator({ url: "http://localhost:3000" }),
+      note: "the header is misaligned",
+    });
+    expect(m).toContain("[Stoa] UI note on this page:");
+    expect(m).not.toContain("<element>");
+    expect(m).toBe(
+      [
+        "[Stoa] UI note on this page:",
+        "page: http://localhost:3000",
+        "",
+        "the header is misaligned",
+      ].join("\n")
+    );
+  });
 });
