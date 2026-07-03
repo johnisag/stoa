@@ -591,12 +591,25 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     Auth step requires BOTH a found CLI and auth evidence (a stale
     ~/.claude.json can't read as signed-in). Dismissible (localStorage), never
     nags. 18-test payload→steps matrix.
-31. **Refactor `server.ts` tick into a write-arbiter orchestrator** — `tech-debt` · L.
-    A `TickContext` + ordered pure "tick actors" each exposing `decide()` with one
-    shared `claimWrite()` arbiter, so "one write per session per tick" is structural,
-    not per-pair predicates. _Why:_ the 460-line mega-loop with 9 cross-coupled maps
-    is the highest-risk, least-testable module (already a source of composition bugs).
-    _Seam:_ `server.ts`, `lib/tick-guards.ts`, new `lib/status-tick.ts`.
+31. ✅ **Refactor `server.ts` tick into a write-arbiter orchestrator** — `tech-debt`
+    · L. **SHIPPED (behavior-identical).** The four terminal-writing stages of the
+    status tick (queue-dispatch, rate-limit resume, auto-answer, channel-delivery)
+    are now ordered pure `WriteActor`s in new `lib/status-tick.ts`, each exposing
+    `decide(ctx, s) → WriteIntent | null` with NO I/O, funneled through one
+    fresh-per-tick `claimWrite()` arbiter so "at most one terminal write per session
+    per tick" is STRUCTURAL. `TickContext` is built once (the snapshot, `byId`, one
+    `nowMs`, the flags/knobs, all persistent guard maps by reference, injected I/O
+    deps) and passed to every actor; `runWriteActor` fires the granted intent
+    fire-and-forget with the same `onCommit`/`onFail`/`onSettled`. The escalate-only
+    (error-loop, watchdog) and observe-only (WS/push/verify/snapshot/prune/idle-clear)
+    stages stay inline in `server.ts`. The hard couplings claimWrite does NOT subsume
+    are kept explicit: rate-limited HARD ownership (a limited session blocks
+    queue/answer/channel even on a tick it never writes), the queue-counts-as-resume
+    budget charge (a synchronous `noWrite` intent), the acknowledge step, and the
+    cross-tick once-guards. `queueDispatchBlocked`/`channelDeliveryBlocked` stay
+    unchanged (provably-identical diff). New `test/status-tick.test.ts` locks the
+    arbiter, the 5 parity cases, acknowledge, once-guards, and claim-before-paste.
+    _Seam:_ `server.ts`, new `lib/status-tick.ts`, `lib/tick-guards.ts`.
 32. ✅ **Single `buildAgentArgsForSession` chokepoint** — `tech-debt` · M.
     **SHIPPED.** New `lib/session-launch.ts` is the ONE place a Session becomes
     launch options: `resolveSessionLaunchOptions(session, opts)` does the shell
