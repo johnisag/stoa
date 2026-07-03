@@ -13,6 +13,7 @@ import {
   shouldBypassPrompts,
   getProviderDefinition,
 } from "@/lib/providers";
+import { effectiveSandboxActive } from "@/lib/sandbox/worker";
 
 const CLAUDE_FLAG = getProviderDefinition("claude").autoApproveFlag!;
 const CODEX_FLAG = getProviderDefinition("codex").autoApproveFlag!;
@@ -99,6 +100,28 @@ describe("buildAgentArgs — the bypass flag per mode", () => {
       buildAgentArgs("codex", {
         approvalMode: "sandboxed-auto",
         sandboxActive: true,
+      }).args
+    ).toContain(CODEX_FLAG);
+  });
+
+  it("FAIL-CLOSED coupling: a wrap DOWNGRADE strips the bypass flag even when the gate was active (the orchestration path)", () => {
+    // Mirrors orchestration: sandboxActive := effectiveSandboxActive(gate, downgraded).
+    // A downgraded wrap → sandboxActive false → NO bypass flag (Codex regression:
+    // the sandbox-disabling flag must not survive a downgrade to an unconfined run).
+    const gateActive = true;
+    const downgraded = true;
+    const active = effectiveSandboxActive(gateActive, downgraded);
+    expect(
+      buildAgentArgs("codex", {
+        approvalMode: "sandboxed-auto",
+        sandboxActive: active,
+      }).args
+    ).not.toContain(CODEX_FLAG);
+    // And when the wrap succeeds (not downgraded), the flag IS pushed (confined).
+    expect(
+      buildAgentArgs("codex", {
+        approvalMode: "sandboxed-auto",
+        sandboxActive: effectiveSandboxActive(true, false),
       }).args
     ).toContain(CODEX_FLAG);
   });
