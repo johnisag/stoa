@@ -141,6 +141,47 @@ describe("classifyBoundaryLine", () => {
     }
   });
 
+  it("does NOT treat a `:`-glued token in prose as a prompt (URLs, ratios, times)", () => {
+    // `:` is pervasive in prose, so it is NOT a glued-prompt marker — only @ ~ \\
+    // are. These all contain a `:`-glued sigil that must stay interior output.
+    for (const line of [
+      "Server running at http://localhost:3000> open in browser",
+      "Dev server ready on http://127.0.0.1:5173> press q to quit",
+      "Map<K:V> keyed by id", // generic type
+      "Events fire at 12:30> daily and 18:45> nightly", // time>
+      "ratio 16:9% bigger than before", // ratio%
+      "success rate is 95:5% and climbing", // ratio%
+      "[2024-06-01T12:00:00Z]> request completed", // timestamp>
+      "foo:bar> as a separator", // colon-glued >
+      "at 10:30% capacity, we scale", // time%
+    ]) {
+      expect(classifyBoundaryLine(line), line).toBeNull();
+    }
+  });
+
+  it("recognizes the Fedora/RHEL/Arch bracket prompt [user@host cwd]$", () => {
+    expect(classifyBoundaryLine("[john@fedora stoa]$ npm test")).toEqual({
+      kind: "shell",
+      label: "npm test",
+    });
+    // A plain bracket (no @) or a timestamp bracket is NOT a prompt.
+    expect(classifyBoundaryLine("[note] $ 5 remaining")).toBeNull();
+    expect(classifyBoundaryLine("[2024-06-01]> done")).toBeNull();
+  });
+
+  it("documents the accepted default-prompt misses (no over-split is worth it)", () => {
+    // KNOWN, DELIBERATE misses — catching them safely conflicts with the prose
+    // exclusions above. Locked so a future maintainer sees they are intentional.
+    for (const knownMiss of [
+      "stoa % npm test", // macOS zsh default `cwd %` (vs "50 % off")
+      "johns-mac:stoa john$ npm test", // classic macOS `host:cwd user$`
+      "bash-5.1$ ls", // marker-less default PS1
+      "myhost% ls", // bare `host%`
+    ]) {
+      expect(classifyBoundaryLine(knownMiss), knownMiss).toBeNull();
+    }
+  });
+
   it("keeps a whole markdown-heavy agent turn as ONE block (no over-split)", () => {
     const turn = [
       "╭─────────────────────────────╮",

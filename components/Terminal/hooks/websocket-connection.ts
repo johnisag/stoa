@@ -226,20 +226,20 @@ export function createWebSocketConnection(
       sendInput("\n");
       return false;
     }
-    // Mod+Shift+Arrow are APP-navigation chords (block-jump up/down, pane-tab
-    // left/right) handled by the global keybindings — never terminal input. On
-    // Windows/Linux `mod` is Ctrl, and xterm WOULD emit a modified-arrow escape
-    // (ESC[1;6A/B/C/D) to the pty for Ctrl+Shift+Arrow (only Cmd is bailed out).
-    // Returning false makes xterm ignore the key so nothing reaches the pty; the
-    // event still bubbles to the window keybinding that performs the navigation.
+    // Mod+Shift+ArrowUp/Down are the block-jump chords — the ONLY mod+shift+Arrow
+    // chords marked allowInInput, so their bubble-phase window keybinding fires
+    // while the terminal is focused. On Windows/Linux `mod` is Ctrl and xterm
+    // WOULD emit a modified-arrow escape (ESC[1;6A/B) to the pty (only Cmd is
+    // bailed out), so swallow them here (return false → xterm ignores the key;
+    // the jump still runs via the window keybinding). Left/Right are the pane-tab
+    // chords — NOT allowInInput (they intentionally reach a focused terminal), so
+    // they are left alone: swallowing them would make Left/Right a dead key here
+    // AND rob a pty TUI of ESC[1;6C/D.
     if (
       event.type === "keydown" &&
       event.shiftKey &&
       (event.ctrlKey || event.metaKey) &&
-      (event.key === "ArrowUp" ||
-        event.key === "ArrowDown" ||
-        event.key === "ArrowLeft" ||
-        event.key === "ArrowRight")
+      (event.key === "ArrowUp" || event.key === "ArrowDown")
     ) {
       return false;
     }
