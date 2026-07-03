@@ -129,10 +129,24 @@ export async function listCheckpoints(
 export interface SnapshotForkPrep {
   worktreePath: string;
   branchName: string;
+  /** The repo that owns the worktree — needed to clean it up on a later failure. */
+  projectPath: string;
   snapshotSeq: number;
   snapshotSha: string;
   /** The checkpoint pinning this seq, if any — threaded as the child's lineage. */
   sourceCheckpointId: string | null;
+}
+
+/**
+ * Compose the worktree feature name for a fork so the UNIQUE id always survives
+ * `slugify`'s 50-char cap (lib/git.ts) — the id is what keeps two forks of the
+ * same (possibly long-named) session from colliding on branch/path, and a
+ * name-only slug would truncate an appended id away. We bound the human-readable
+ * name so there is always ample room for the id token before the slug is capped.
+ * Pure → unit-tested against the real slugify.
+ */
+export function buildForkFeatureName(name: string, uniqueId: string): string {
+  return `${name.slice(0, 32)} ${uniqueId.slice(0, 8)}`;
 }
 
 /**
@@ -174,6 +188,7 @@ export async function prepareForkFromSnapshot(
   return {
     worktreePath: info.worktreePath,
     branchName: info.branchName,
+    projectPath,
     snapshotSeq: seq,
     snapshotSha: target.sha,
     sourceCheckpointId: source?.id ?? null,

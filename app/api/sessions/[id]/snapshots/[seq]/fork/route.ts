@@ -11,7 +11,12 @@ import {
 import { getSessionBackend } from "@/lib/session-backend";
 import { enqueuePrompt } from "@/lib/prompt-queue";
 import { readClaudeSessionUsage } from "@/lib/session-cost";
-import { prepareForkFromSnapshot, createCheckpoint } from "@/lib/checkpoints";
+import {
+  prepareForkFromSnapshot,
+  createCheckpoint,
+  buildForkFeatureName,
+} from "@/lib/checkpoints";
+import { deleteWorktree } from "@/lib/worktrees";
 
 interface RouteParams {
   params: Promise<{ id: string; seq: string }>;
@@ -48,14 +53,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const newName = sanitizedName || `${parent.name} (fork @${seqNum})`;
     const agentType = parent.agent_type || "claude";
 
-    // Materialize the turn's tree as an isolated worktree. Suffix the feature
-    // name with the new id so repeat forks never collide on branch/path.
+    // Materialize the turn's tree as an isolated worktree. The feature name
+    // carries the new id so repeat forks never collide on branch/path — via a
+    // helper that keeps the id from being truncated by slugify's 50-char cap.
     let prep;
     try {
       prep = await prepareForkFromSnapshot(
         parent,
         seqNum,
-        { featureName: `${newName} ${newId.slice(0, 8)}` },
+        { featureName: buildForkFeatureName(newName, newId) },
         db
       );
     } catch (err) {
@@ -73,110 +79,126 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    const tmuxName = sessionKey({
-      kind: "agent",
-      provider: agentType,
-      id: newId,
-    });
-    queries
-      .createSession(db)
-      .run(
-        newId,
-        newName,
-        tmuxName,
-        prep.worktreePath,
-        parentId,
-        parent.model,
-        parent.system_prompt,
-        parent.group_path || "sessions",
-        agentType,
-        parent.auto_approve ? 1 : 0,
-        parent.project_id || "uncategorized"
-      );
-
-    // Conversation fork seam — identical to the plain fork route (native branches
-    // the transcript at tip on first attach; scrollback seeds a fresh session).
-    const forkMode = forkModeForProvider(agentType);
-    let seeded = false;
-    if (forkMode === "scrollback") {
-      try {
-        const scrollback = await getSessionBackend().capture(
-          backendKeyForSession(parent),
-          { lines: FORK_SCROLLBACK_LINES }
+    // The worktree + branch now exist on disk. If anything below throws before
+    // we return, they'd be orphaned — so clean them up best-effort on failure
+    // (mirrors the create-worktree-then-session convention in lib/dispatch).
+    try {
+      const tmuxName = sessionKey({
+        kind: "agent",
+        provider: agentType,
+        id: newId,
+      });
+      queries
+        .createSession(db)
+        .run(
+          newId,
+          newName,
+          tmuxName,
+          prep.worktreePath,
+          parentId,
+          parent.model,
+          parent.system_prompt,
+          parent.group_path || "sessions",
+          agentType,
+          parent.auto_approve ? 1 : 0,
+          parent.project_id || "uncategorized"
         );
-        const seed = buildForkSeed(scrollback, parent.name);
-        if (seed) {
-          enqueuePrompt(newId, seed);
-          seeded = true;
-        }
-      } catch (err) {
-        console.warn("snapshot fork: scrollback capture failed, no seed:", err);
-      }
-    } else if (forkMode === "native") {
-      if (parent.claude_session_id && parent.working_directory) {
+
+      // Conversation fork seam — identical to the plain fork route (native
+      // branches the transcript at tip on first attach; scrollback seeds a fresh
+      // session).
+      const forkMode = forkModeForProvider(agentType);
+      let seeded = false;
+      if (forkMode === "scrollback") {
         try {
-          const parentUsage = await readClaudeSessionUsage(
-            parent.working_directory,
-            parent.claude_session_id
+          const scrollback = await getSessionBackend().capture(
+            backendKeyForSession(parent),
+            { lines: FORK_SCROLLBACK_LINES }
           );
-          if (parentUsage) {
-            queries
-              .updateSessionForkBaseline(db)
-              .run(JSON.stringify(parentUsage.tokens), newId);
+          const seed = buildForkSeed(scrollback, parent.name);
+          if (seed) {
+            enqueuePrompt(newId, seed);
+            seeded = true;
           }
         } catch (err) {
-          console.warn("snapshot fork: parent usage read failed:", err);
+          console.warn(
+            "snapshot fork: scrollback capture failed, no seed:",
+            err
+          );
+        }
+      } else if (forkMode === "native") {
+        if (parent.claude_session_id && parent.working_directory) {
+          try {
+            const parentUsage = await readClaudeSessionUsage(
+              parent.working_directory,
+              parent.claude_session_id
+            );
+            if (parentUsage) {
+              queries
+                .updateSessionForkBaseline(db)
+                .run(JSON.stringify(parentUsage.tokens), newId);
+            }
+          } catch (err) {
+            console.warn("snapshot fork: parent usage read failed:", err);
+          }
         }
       }
-    }
 
-    // Record a fork-origin checkpoint in the NEW session pinning its starting
-    // tree, with lineage back to the source checkpoint (if that turn was one).
-    // Best-effort: a failure here doesn't undo the (already valid) fork.
-    let originCheckpointId: string | null = null;
-    try {
-      const origin = await createCheckpoint(
+      // Record a fork-origin checkpoint in the NEW session pinning its starting
+      // tree, with lineage back to the source checkpoint (if that turn was one).
+      // Best-effort: a failure here doesn't undo the (already valid) fork.
+      let originCheckpointId: string | null = null;
+      try {
+        const origin = await createCheckpoint(
+          {
+            id: newId,
+            working_directory: prep.worktreePath,
+            claude_session_id: null,
+          },
+          {
+            label: `Forked from ${parent.name} @${seqNum}`,
+            kind: "fork-origin",
+            createdBy: "system",
+            parentCheckpointId: prep.sourceCheckpointId,
+          },
+          db
+        );
+        originCheckpointId = origin?.id ?? null;
+      } catch (err) {
+        console.warn("snapshot fork: fork-origin checkpoint failed:", err);
+      }
+
+      // Copy local messages for logging continuity (mirrors the plain fork route).
+      const parentMessages = queries
+        .getSessionMessages(db)
+        .all(parentId) as Message[];
+      for (const msg of parentMessages) {
+        queries
+          .createMessage(db)
+          .run(newId, msg.role, msg.content, msg.duration_ms);
+      }
+
+      const session = queries.getSession(db).get(newId) as Session;
+      return NextResponse.json(
         {
-          id: newId,
-          working_directory: prep.worktreePath,
-          claude_session_id: null,
+          session,
+          forkMode,
+          seeded,
+          worktreePath: prep.worktreePath,
+          branchName: prep.branchName,
+          originCheckpointId,
+          messagesCopied: parentMessages.length,
         },
-        {
-          label: `Forked from ${parent.name} @${seqNum}`,
-          kind: "fork-origin",
-          createdBy: "system",
-          parentCheckpointId: prep.sourceCheckpointId,
-        },
-        db
+        { status: 201 }
       );
-      originCheckpointId = origin?.id ?? null;
     } catch (err) {
-      console.warn("snapshot fork: fork-origin checkpoint failed:", err);
+      // Roll back the orphaned worktree + its feature branch, then rethrow to
+      // the outer handler (which returns 500). Never let cleanup mask the cause.
+      await deleteWorktree(prep.worktreePath, prep.projectPath, true).catch(
+        () => {}
+      );
+      throw err;
     }
-
-    // Copy local messages for logging continuity (mirrors the plain fork route).
-    const parentMessages = queries
-      .getSessionMessages(db)
-      .all(parentId) as Message[];
-    for (const msg of parentMessages) {
-      queries
-        .createMessage(db)
-        .run(newId, msg.role, msg.content, msg.duration_ms);
-    }
-
-    const session = queries.getSession(db).get(newId) as Session;
-    return NextResponse.json(
-      {
-        session,
-        forkMode,
-        seeded,
-        worktreePath: prep.worktreePath,
-        branchName: prep.branchName,
-        originCheckpointId,
-        messagesCopied: parentMessages.length,
-      },
-      { status: 201 }
-    );
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error("Error forking from snapshot:", msg);
