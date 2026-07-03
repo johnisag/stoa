@@ -545,20 +545,21 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     (Seatbelt/bubblewrap/restricted-worktree+proxy). _Why:_ workers run with full
     host access today — the biggest blast radius for unattended fleets. _Seam:_ new
     `lib/sandbox/`, `lib/providers/registry.ts`, `lib/orchestration.ts`.
-28. ✅ **Embedded live app preview with click-to-comment** — `feature` · L.
-    **SHIPPED.** A `PreviewPanel` iframe over the worktree dev-server URL with a
-    device selector and an element PICKER that turns a click into a STRUCTURED
-    locator (tag + nearest id/data-testid + text snippet + short DOM path — never
-    a screenshot) and then a structured comment routed to the worker. The picker's
-    logic is split into a pure, client-safe half: `lib/preview-picker.ts`
-    (`canInjectPicker` same-origin fail-closed test, `buildPickerScript` injected
-    into the same-origin dev-server document, `parsePickerMessage` which validates
-    every field of the untrusted `postMessage` envelope before trusting it) and
-    `lib/diff-comment.ts` (`PreviewLocator` + the locator→comment formatting).
-    Cross-origin previews degrade to a manual note (a parent page can't script a
-    cross-origin frame). Unit-tested (origin gating, script build, message
-    validation, comment formatting). _Seam:_ `components/PreviewPanel/`,
-    `lib/preview-picker.ts`, `lib/diff-comment.ts`, `components/SessionCard.tsx`.
+28. ✅ **Embedded live app preview (+ structured note to the agent)** — `feature`
+    · L. **SHIPPED (preview + manual comment; element picker deferred).** A
+    `PreviewPanel` iframe over the worktree dev-server URL (`previewUrlFromPorts`)
+    with a device-width selector, a reload, an in-panel `?` help primer, and a
+    composer that sends a STRUCTURED note (page URL + the user's text, via
+    `lib/diff-comment.ts` → `/api/sessions/[id]/send-keys`, the same channel as a
+    diff-review note — no new transport). The frame is sandboxed
+    `allow-scripts allow-same-origin allow-forms` (no popups/modals). Client-safe
+    `lib/preview.ts` (`DEVICE_PRESETS`, `previewUrlFromPorts`) + `lib/diff-comment.ts`
+    are unit-tested. _Deferred → item 58:_ the click-an-element PICKER (structured
+    locator capture) needs the framed dev server to be SAME-ORIGIN with Stoa; a
+    browser blocks reading a cross-origin frame and a dev server always runs on its
+    own port, so the picker never fires without a same-origin proxy — cut rather
+    than shipped as unreachable code. _Seam:_ `components/PreviewPanel/`,
+    `lib/preview.ts`, `lib/diff-comment.ts`, `components/SessionCard.tsx`.
 29. ✅ **Terminal gestures (cursor-drag, double-tap, pinch)** — `mobile` · L.
     **SHIPPED.** A pure gesture state machine
     (`components/Terminal/hooks/useTerminalGestures.ts`: detectGesture /
@@ -908,6 +909,18 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     copy-JSON) stayed in the shell by design. 4 new tests for the extracted pure
     hook logic. _Seam:_ `components/views/WorkflowsView/*`, `hooks/useWorkflow*`,
     `hooks/useCanvasSelection.ts`.
+58. **Click-to-comment element picker for the live preview** — `feature` · L.
+    The deferred half of #28: let a user CLICK an element in the preview frame and
+    attach a note to a captured STRUCTURED locator (tag + nearest id/data-testid +
+    text + short DOM path), instead of describing it by hand. Blocked on
+    same-origin: a browser won't let the parent read/script a cross-origin frame,
+    and a dev server always runs on its own port. _Needs first:_ a same-origin
+    dev-server PROXY (e.g. `/api/preview/[sessionId]/…` streaming to `localhost:PORT`
+    with base/asset-path rewriting — HMR websocket proxying is the hard part). Once
+    same-origin, inject a picker script into the framed document that posts the
+    locator back over `postMessage`; the parent validates envelope + `event.origin`,
+    normalizes every untrusted field, and gates acceptance on an in-flight pick.
+    _Seam:_ new proxy route, `components/PreviewPanel/`, `lib/diff-comment.ts`.
 
 ---
 
