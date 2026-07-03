@@ -132,7 +132,8 @@ import {
 } from "./lib/status-tick";
 import { homeDir, defaultInteractiveShell } from "./lib/platform";
 import { getDb, queries, type Session } from "./lib/db";
-import { REMOTE_ADDR_HEADER } from "./lib/api-security";
+import { REMOTE_ADDR_HEADER, SCOPE_HEADER } from "./lib/api-security";
+import { resolveTokenScope } from "./lib/tokens";
 import { statusDetector, type SessionStatus } from "./lib/status-detector";
 import {
   getServerToken,
@@ -186,6 +187,11 @@ app.prepare().then(() => {
       if (remoteAddr) req.headers[REMOTE_ADDR_HEADER] = remoteAddr;
       else delete req.headers[REMOTE_ADDR_HEADER];
 
+      // #46/#49 scope: strip any client-supplied x-stoa-scope, default admin, and
+      // let the auth gate downgrade to observer. Unspoofable (server-set), so an
+      // admin-only route can trust it (like the remote-addr header above).
+      delete req.headers[SCOPE_HEADER];
+      req.headers[SCOPE_HEADER] = "admin";
       if (AUTH_ENABLED) {
         const decision = decideHttpAuth({
           serverToken: SERVER_TOKEN,
@@ -195,12 +201,25 @@ app.prepare().then(() => {
           authHeader: req.headers.authorization,
           cookieHeader: req.headers.cookie,
           queryToken: firstQueryValue(parsedUrl.query.token),
+          resolveScope: resolveTokenScope,
         });
         if (decision.type === "deny") {
           res.statusCode = 401;
           res.setHeader("content-type", "text/html; charset=utf-8");
           res.end(AUTH_REQUIRED_HTML);
           return;
+        }
+        // A read-only OBSERVER (spectator) token: reject every mutating method
+        // (only GET/HEAD/OPTIONS pass), and stamp the scope for admin-only routes.
+        if (decision.type === "allow" && decision.scope === "observer") {
+          const method = (req.method || "GET").toUpperCase();
+          if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+            res.statusCode = 403;
+            res.setHeader("content-type", "text/plain; charset=utf-8");
+            res.end("read-only (observer) token");
+            return;
+          }
+          req.headers[SCOPE_HEADER] = "observer";
         }
         if (decision.type === "bootstrap") {
           // Valid ?token= → set the cookie and redirect to the same URL without
@@ -270,10 +289,21 @@ app.prepare().then(() => {
       authHeader: request.headers.authorization,
       cookieHeader: request.headers.cookie,
       queryToken: firstQueryValue(query.token),
+      resolveScope: resolveTokenScope,
     });
     if (decision.type === "deny") {
       socket.write(
         `HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n${decision.reason}`
+      );
+      socket.destroy();
+      return;
+    }
+    // #46/#49 The terminal WS is a WRITE surface (keystrokes into a session), so a
+    // read-only observer is rejected. The events WS (Live Wall status stream) is
+    // read-only and open to observers — the whole point of a spectator link.
+    if (pathname === "/ws/terminal" && decision.scope !== "admin") {
+      socket.write(
+        `HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\nread-only (observer) token`
       );
       socket.destroy();
       return;

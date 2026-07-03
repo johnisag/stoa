@@ -268,12 +268,35 @@ export function isOriginAllowed(
   return false;
 }
 
+/** Access scope of a resolved credential. `observer` is a read-only spectator
+ * (#46/#49); `admin` is full control. The legacy master token, a trusted address,
+ * and auth-disabled all resolve to `admin`. */
+export type AuthScope = "admin" | "observer";
+
+/** Resolve a DB-backed token to its scope, or null if it matches none. Injected
+ * (server.ts supplies lib/tokens.ts's resolveTokenScope) so auth.ts stays pure. */
+export type ScopeResolver = (token: string) => AuthScope | null;
+
 export type HttpAuthDecision =
-  | { type: "allow" }
-  | { type: "bootstrap"; token: string } // valid ?token= → set cookie + redirect
+  | { type: "allow"; scope: AuthScope }
+  // valid ?token= → set cookie (to the presented token) + redirect:
+  | { type: "bootstrap"; token: string; scope: AuthScope }
   | { type: "deny" };
 
-/** Decide HTTP access: loopback-trusted, else token via Bearer/cookie/query. */
+/** The master token → admin (timing-safe); else a DB token → its scope. Returns
+ * null when the presented value matches neither. */
+function scopeOfToken(
+  tok: string,
+  serverToken: string,
+  resolveScope?: ScopeResolver
+): AuthScope | null {
+  if (safeEqual(tok, serverToken)) return "admin";
+  return resolveScope?.(tok) ?? null;
+}
+
+/** Decide HTTP access + the caller's SCOPE. Loopback/tailscale-trusted and
+ * auth-disabled → admin; else a Bearer/cookie/query token resolves to admin (the
+ * master token) or its DB scope. The CALLER enforces what a scope may reach. */
 export function decideHttpAuth(opts: {
   serverToken: string | null;
   remoteAddr?: string | null;
@@ -282,27 +305,39 @@ export function decideHttpAuth(opts: {
   authHeader?: string | null;
   cookieHeader?: string | null;
   queryToken?: string | null;
+  resolveScope?: ScopeResolver;
 }): HttpAuthDecision {
   const { serverToken } = opts;
-  if (serverToken === null) return { type: "allow" }; // auth disabled
-  if (isTrustedAddress(opts.remoteAddr, opts)) return { type: "allow" };
+  if (serverToken === null) return { type: "allow", scope: "admin" }; // auth off
+  if (isTrustedAddress(opts.remoteAddr, opts))
+    return { type: "allow", scope: "admin" };
 
   const b = bearer(opts.authHeader);
-  if (b && safeEqual(b, serverToken)) return { type: "allow" };
+  if (b) {
+    const s = scopeOfToken(b, serverToken, opts.resolveScope);
+    if (s) return { type: "allow", scope: s };
+  }
 
   const cookieTok = parseCookies(opts.cookieHeader)[COOKIE_NAME];
-  if (cookieTok && safeEqual(cookieTok, serverToken)) return { type: "allow" };
+  if (cookieTok) {
+    const s = scopeOfToken(cookieTok, serverToken, opts.resolveScope);
+    if (s) return { type: "allow", scope: s };
+  }
 
-  if (opts.queryToken && safeEqual(opts.queryToken, serverToken))
-    return { type: "bootstrap", token: serverToken };
+  if (opts.queryToken) {
+    const s = scopeOfToken(opts.queryToken, serverToken, opts.resolveScope);
+    if (s) return { type: "bootstrap", token: opts.queryToken, scope: s };
+  }
 
   return { type: "deny" };
 }
 
 export type WsAuthDecision =
-  { type: "allow" } | { type: "deny"; reason: "origin" | "token" };
+  | { type: "allow"; scope: AuthScope }
+  | { type: "deny"; reason: "origin" | "token" };
 
-/** Decide WS upgrade: Origin allowlist ALWAYS, then the same token check. */
+/** Decide WS upgrade: Origin allowlist ALWAYS (CSWSH), then the same scoped token
+ * check. The caller gates the WRITE surface (/ws/terminal) on scope === "admin". */
 export function decideWsAuth(opts: {
   serverToken: string | null;
   origin?: string | null;
@@ -314,23 +349,33 @@ export function decideWsAuth(opts: {
   authHeader?: string | null;
   cookieHeader?: string | null;
   queryToken?: string | null;
+  resolveScope?: ScopeResolver;
 }): WsAuthDecision {
   // CSWSH defense runs regardless of token/loopback.
   if (!isOriginAllowed(opts.origin, opts.host, opts.allowedOrigins)) {
     return { type: "deny", reason: "origin" };
   }
-  if (opts.serverToken === null) return { type: "allow" };
-  if (isTrustedAddress(opts.remoteAddr, opts)) return { type: "allow" };
+  if (opts.serverToken === null) return { type: "allow", scope: "admin" };
+  if (isTrustedAddress(opts.remoteAddr, opts))
+    return { type: "allow", scope: "admin" };
 
+  const st = opts.serverToken;
   const b = bearer(opts.authHeader);
-  if (b && safeEqual(b, opts.serverToken)) return { type: "allow" };
+  if (b) {
+    const s = scopeOfToken(b, st, opts.resolveScope);
+    if (s) return { type: "allow", scope: s };
+  }
 
   const cookieTok = parseCookies(opts.cookieHeader)[COOKIE_NAME];
-  if (cookieTok && safeEqual(cookieTok, opts.serverToken))
-    return { type: "allow" };
+  if (cookieTok) {
+    const s = scopeOfToken(cookieTok, st, opts.resolveScope);
+    if (s) return { type: "allow", scope: s };
+  }
 
-  if (opts.queryToken && safeEqual(opts.queryToken, opts.serverToken))
-    return { type: "allow" };
+  if (opts.queryToken) {
+    const s = scopeOfToken(opts.queryToken, st, opts.resolveScope);
+    if (s) return { type: "allow", scope: s };
+  }
 
   return { type: "deny", reason: "token" };
 }

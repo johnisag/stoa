@@ -138,12 +138,13 @@ describe("decideHttpAuth", () => {
   it("allows everything when auth is disabled (serverToken null)", () => {
     expect(
       decideHttpAuth({ ...base, serverToken: null, remoteAddr: "10.0.0.9" })
-    ).toEqual({ type: "allow" });
+    ).toEqual({ type: "allow", scope: "admin" });
   });
 
   it("trusts loopback without a token", () => {
     expect(decideHttpAuth({ ...base, remoteAddr: "127.0.0.1" })).toEqual({
       type: "allow",
+      scope: "admin",
     });
   });
 
@@ -160,7 +161,7 @@ describe("decideHttpAuth", () => {
         remoteAddr: "192.168.1.5",
         authHeader: `Bearer ${TOKEN}`,
       })
-    ).toEqual({ type: "allow" });
+    ).toEqual({ type: "allow", scope: "admin" });
   });
 
   it("allows remote with a valid cookie", () => {
@@ -170,7 +171,7 @@ describe("decideHttpAuth", () => {
         remoteAddr: "192.168.1.5",
         cookieHeader: `${COOKIE_NAME}=${TOKEN}`,
       })
-    ).toEqual({ type: "allow" });
+    ).toEqual({ type: "allow", scope: "admin" });
   });
 
   it("bootstraps (set-cookie + redirect) on a valid ?token=", () => {
@@ -180,7 +181,7 @@ describe("decideHttpAuth", () => {
         remoteAddr: "192.168.1.5",
         queryToken: TOKEN,
       })
-    ).toEqual({ type: "bootstrap", token: TOKEN });
+    ).toEqual({ type: "bootstrap", token: TOKEN, scope: "admin" });
   });
 
   it("denies a wrong token", () => {
@@ -210,7 +211,7 @@ describe("decideHttpAuth", () => {
         trustTailscale: true,
         remoteAddr: "100.96.1.2",
       })
-    ).toEqual({ type: "allow" });
+    ).toEqual({ type: "allow", scope: "admin" });
   });
 
   it("trustTailscale does NOT trust a plain-LAN address", () => {
@@ -221,6 +222,89 @@ describe("decideHttpAuth", () => {
         remoteAddr: "192.168.1.50",
       })
     ).toEqual({ type: "deny" });
+  });
+});
+
+describe("decideHttpAuth — #46/#49 scoped tokens (injected resolver)", () => {
+  // A remote (non-loopback) caller so the token path is exercised, not the trust.
+  const base = {
+    serverToken: TOKEN,
+    trustLoopback: false,
+    remoteAddr: "203.0.113.9",
+    // The injected DB-token resolver: "obs-tok" → observer, "adm-tok" → admin.
+    resolveScope: (t: string) =>
+      t === "obs-tok"
+        ? ("observer" as const)
+        : t === "adm-tok"
+          ? ("admin" as const)
+          : null,
+  };
+
+  it("the master token still resolves to admin (resolver not consulted)", () => {
+    expect(
+      decideHttpAuth({ ...base, cookieHeader: `stoa_token=${TOKEN}` })
+    ).toEqual({ type: "allow", scope: "admin" });
+  });
+
+  it("a DB observer token → allow with scope observer", () => {
+    expect(
+      decideHttpAuth({ ...base, cookieHeader: "stoa_token=obs-tok" })
+    ).toEqual({ type: "allow", scope: "observer" });
+  });
+
+  it("a DB admin token → allow with scope admin (via Bearer)", () => {
+    expect(decideHttpAuth({ ...base, authHeader: "Bearer adm-tok" })).toEqual({
+      type: "allow",
+      scope: "admin",
+    });
+  });
+
+  it("a ?token= observer → bootstrap carries the presented token + its scope", () => {
+    expect(decideHttpAuth({ ...base, queryToken: "obs-tok" })).toEqual({
+      type: "bootstrap",
+      token: "obs-tok",
+      scope: "observer",
+    });
+  });
+
+  it("a token the resolver rejects → deny", () => {
+    expect(
+      decideHttpAuth({ ...base, cookieHeader: "stoa_token=ghost" })
+    ).toEqual({ type: "deny" });
+  });
+});
+
+describe("decideWsAuth — #46/#49 scoped tokens carry scope for the caller's terminal gate", () => {
+  const base = {
+    serverToken: TOKEN,
+    host: "stoa.local",
+    allowedOrigins: [] as string[],
+    trustLoopback: false,
+    remoteAddr: "203.0.113.9",
+    resolveScope: (t: string) =>
+      t === "obs-tok" ? ("observer" as const) : null,
+  };
+
+  it("an observer token is allowed at the WS gate with scope observer (the caller then blocks /ws/terminal)", () => {
+    expect(
+      decideWsAuth({ ...base, cookieHeader: "stoa_token=obs-tok" })
+    ).toEqual({ type: "allow", scope: "observer" });
+  });
+
+  it("the master token → admin", () => {
+    expect(
+      decideWsAuth({ ...base, cookieHeader: `stoa_token=${TOKEN}` })
+    ).toEqual({ type: "allow", scope: "admin" });
+  });
+
+  it("origin denial still precedes the token/scope check", () => {
+    expect(
+      decideWsAuth({
+        ...base,
+        origin: "https://evil.example",
+        cookieHeader: "stoa_token=obs-tok",
+      })
+    ).toEqual({ type: "deny", reason: "origin" });
   });
 });
 
@@ -251,7 +335,7 @@ describe("decideWsAuth", () => {
         origin: "http://localhost:3011",
         remoteAddr: "127.0.0.1",
       })
-    ).toEqual({ type: "allow" });
+    ).toEqual({ type: "allow", scope: "admin" });
   });
 
   it("allows same-origin remote with a valid cookie", () => {
@@ -263,7 +347,7 @@ describe("decideWsAuth", () => {
         remoteAddr: "192.168.1.5",
         cookieHeader: `${COOKIE_NAME}=${TOKEN}`,
       })
-    ).toEqual({ type: "allow" });
+    ).toEqual({ type: "allow", scope: "admin" });
   });
 
   it("denies same-origin remote without a token", () => {
@@ -284,7 +368,7 @@ describe("decideWsAuth", () => {
         remoteAddr: "192.168.1.5",
         authHeader: `Bearer ${TOKEN}`,
       })
-    ).toEqual({ type: "allow" });
+    ).toEqual({ type: "allow", scope: "admin" });
   });
 
   it("origin check still applies when the token gate is disabled", () => {
@@ -301,7 +385,7 @@ describe("decideWsAuth", () => {
         serverToken: null,
         origin: "http://localhost:3011",
       })
-    ).toEqual({ type: "allow" });
+    ).toEqual({ type: "allow", scope: "admin" });
   });
 });
 
@@ -367,6 +451,7 @@ describe("readSharedOrigins (stoa share origin registry)", () => {
     // registered → allowed
     expect(decideWsAuth({ ...base, allowedOrigins: [tunnel] })).toEqual({
       type: "allow",
+      scope: "admin",
     });
     // NOT registered → denied on origin BEFORE the token is even considered
     expect(decideWsAuth({ ...base, allowedOrigins: [] })).toEqual({

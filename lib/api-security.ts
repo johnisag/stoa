@@ -11,6 +11,7 @@
  */
 
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import * as path from "path";
 import { expandHome, homeDir, isWindows } from "./platform";
 import { getDb, queries } from "./db";
@@ -51,6 +52,27 @@ function connectionIp(request: NextRequest): string | null {
   if (header) return header.trim() || null;
   const ip = (request as unknown as { ip?: string | null }).ip;
   return ip || null;
+}
+
+// #46/#49 auth scope. server.ts's auth gate injects the resolved scope here,
+// OVERWRITING any client-supplied copy (so it's unspoofable, same as the remote-addr
+// header). The coarse gate already denies an observer any non-GET request; this
+// header lets an admin-only READ route (e.g. the token list) additionally require
+// admin. Absent → admin (auth disabled / trusted loopback — no observer exists).
+export const SCOPE_HEADER = "x-stoa-scope";
+
+/** The caller's auth scope as injected by the server auth gate. */
+export function requestScope(request: NextRequest): "admin" | "observer" {
+  return request.headers.get(SCOPE_HEADER) === "observer"
+    ? "observer"
+    : "admin";
+}
+
+/** 403 if the caller is a read-only observer, else null. For admin-only routes the
+ * coarse method gate doesn't already cover (an admin-only GET). */
+export function requireAdmin(request: NextRequest): NextResponse | null {
+  if (requestScope(request) === "admin") return null;
+  return NextResponse.json({ error: "admin token required" }, { status: 403 });
 }
 
 function looksLocal(request: NextRequest): boolean {

@@ -1246,6 +1246,33 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 51,
+    name: "add_auth_tokens",
+    up: (db) => {
+      // #46/#49 per-device named revocable tokens with a SCOPE. We store only a
+      // SHA-256 hash of the secret (never the plaintext), so a DB read can't
+      // recover a usable token. `scope` is 'admin' (full control) or 'observer'
+      // (read-only spectator: Live Wall stream + GETs, rejected by every mutation).
+      // The legacy ~/.stoa/token stays valid as an implicit admin token (existing
+      // shared URLs keep working); this table is ADDITIVE. `revoked_at` non-null →
+      // the token fails auth immediately (revocation is checked live).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          token_hash TEXT NOT NULL,
+          scope TEXT NOT NULL DEFAULT 'admin',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          last_used_at TEXT,
+          revoked_at TEXT
+        )
+      `);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash ON auth_tokens(token_hash)`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

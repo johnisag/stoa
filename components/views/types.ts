@@ -68,6 +68,7 @@ export interface ViewProps {
   onShowNotes: () => void;
   /** Open the Commands dialog (author native per-provider slash commands). */
   onShowCommands: () => void;
+  onShowSharing: () => void;
 
   // Notification settings
   notificationSettings: NotificationSettings;

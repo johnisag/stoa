@@ -34,6 +34,8 @@ interface SidebarFooterProps {
   onShowNotes?: () => void;
   /** Opens the Commands dialog (author native slash commands). */
   onShowCommands?: () => void;
+  /** Opens the Sharing & devices dialog (named revocable access links). */
+  onShowSharing?: () => void;
 }
 
 export function SidebarFooter({
@@ -48,6 +50,7 @@ export function SidebarFooter({
   onShowChat,
   onShowNotes,
   onShowCommands,
+  onShowSharing,
 }: SidebarFooterProps = {}) {
   // "Needs me" count for the Verdict Inbox / Fleet Board nav badges — a cheap 30s
   // background poll shared with the desktop header (same query key). Only run it
@@ -122,6 +125,13 @@ export function SidebarFooter({
               entry={fleetNavEntry("commands")}
               variant="footer"
               onClick={onShowCommands}
+            />
+          )}
+          {onShowSharing && (
+            <NavIconButton
+              entry={fleetNavEntry("sharing")}
+              variant="footer"
+              onClick={onShowSharing}
             />
           )}
           {onShowNotifications && (
