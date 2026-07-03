@@ -82,6 +82,14 @@ describe("validateFields", () => {
     ).toBe(false); // duplicate key
   });
 
+  it("rejects reserved property-name keys (__proto__/constructor/prototype)", () => {
+    for (const key of ["__proto__", "constructor", "prototype"]) {
+      expect(
+        validateFields({ message: "m", fields: [{ key, type: "string" }] }).ok
+      ).toBe(false);
+    }
+  });
+
   it("rejects an enum without valid values (and dedupes-check)", () => {
     expect(
       validateFields({ message: "m", fields: [{ key: "a", type: "enum" }] }).ok

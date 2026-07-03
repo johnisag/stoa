@@ -13,8 +13,11 @@ import {
   listPending,
   sweepExpired,
   _resetElicitStore,
+  _elicitStoreSize,
   ELICIT_TTL_MS,
+  ELICIT_RETAIN_MS,
   MAX_PENDING_PER_CONDUCTOR,
+  MAX_PENDING_TOTAL,
 } from "@/lib/mcp/elicit-store";
 import type { ElicitRequest } from "@/lib/mcp/elicit-schema";
 
@@ -46,6 +49,38 @@ describe("createElicit / getElicit", () => {
     expect(over.ok).toBe(false);
     // A different conductor is unaffected.
     expect(createElicit("other", REQ, 1000).ok).toBe(true);
+  });
+
+  it("enforces a GLOBAL pending cap (varying conductorId can't bypass it)", () => {
+    // Each new conductorId dodges the per-conductor cap, but not the global one.
+    for (let i = 0; i < MAX_PENDING_TOTAL; i++) {
+      expect(createElicit(`c${i}`, REQ, 1000).ok).toBe(true);
+    }
+    expect(createElicit("c-over", REQ, 1000).ok).toBe(false);
+  });
+});
+
+describe("bounded growth (regression: settled entries must be reaped)", () => {
+  it("shrinks the Map after answered/expired entries age past the retention window", () => {
+    const a = createElicit("s", REQ, 0);
+    const b = createElicit("s", REQ, 0);
+    if (!a.ok || !b.ok) throw new Error("setup");
+    answerElicit(a.id, { action: "cancel" }, 100); // settledAt=100
+    expect(_elicitStoreSize()).toBe(2); // both still present right after
+    // Well past both the TTL (b expires) and the retention window → all reaped.
+    sweepExpired(ELICIT_TTL_MS + ELICIT_RETAIN_MS + 1);
+    // A second sweep reaps b, which only just expired on the first pass.
+    sweepExpired(2 * (ELICIT_TTL_MS + ELICIT_RETAIN_MS));
+    expect(_elicitStoreSize()).toBe(0);
+  });
+
+  it("does NOT reap a freshly-answered entry (the tool must still read it)", () => {
+    const a = createElicit("s", REQ, 0);
+    if (!a.ok) throw new Error("setup");
+    answerElicit(a.id, { action: "accept", content: { target: "a" } }, 100);
+    // Only a moment later — the poll hasn't necessarily read it yet.
+    sweepExpired(200);
+    expect(getElicit(a.id, 200)?.answer).toMatchObject({ action: "accept" });
   });
 });
 

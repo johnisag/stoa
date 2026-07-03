@@ -42,6 +42,14 @@ export const MAX_ENUM_VALUES = 24;
 export const MAX_ENUM_VALUE_LEN = 200;
 
 const KEY_RE = /^[A-Za-z0-9_.-]+$/;
+// Reserved property names — a field keyed like this is a validate/coerce
+// inconsistency (its accept path can never succeed) and pointlessly touches the
+// prototype chain, so reject it up front.
+const RESERVED_KEYS: ReadonlySet<string> = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
 const FIELD_TYPES: ReadonlySet<string> = new Set([
   "string",
   "number",
@@ -94,6 +102,9 @@ export function validateFields(raw: unknown): ValidateResult {
         ok: false,
         error: `field key "${f.key.slice(0, 32)}" must match ${KEY_RE} and be ≤ ${MAX_KEY_LEN} chars`,
       };
+    }
+    if (RESERVED_KEYS.has(f.key)) {
+      return { ok: false, error: `field key "${f.key}" is reserved` };
     }
     if (seen.has(f.key)) {
       return { ok: false, error: `duplicate field key "${f.key}"` };
