@@ -29,6 +29,13 @@ export interface CreateWorktreeOptions {
   projectPath: string;
   featureName: string;
   baseBranch?: string;
+  /**
+   * Exact ref/sha to branch FROM (e.g. a checkpoint snapshot commit under
+   * refs/stoa/snap/…). When set, the worktree is created at THIS commit while
+   * `baseBranch` stays the logical label recorded in WorktreeInfo. Used by
+   * fork-from-checkpoint (#44) to materialize a past working-tree state.
+   */
+  baseRef?: string;
 }
 
 /**
@@ -63,7 +70,7 @@ function generateWorktreeDirName(
 export async function createWorktree(
   options: CreateWorktreeOptions
 ): Promise<WorktreeInfo> {
-  const { projectPath, featureName, baseBranch = "main" } = options;
+  const { projectPath, featureName, baseBranch = "main", baseRef } = options;
 
   const resolvedProjectPath = resolvePath(projectPath);
 
@@ -93,11 +100,14 @@ export async function createWorktree(
   // Ensure worktrees directory exists
   await ensureWorktreesDir();
 
+  // Branch from an exact commit (baseRef, e.g. a checkpoint snapshot) when given,
+  // else from the logical base branch. A sha resolves via addWorktreeWithBranch's
+  // bare-name fallback (origin/<sha> and refs/heads/<sha> miss; <sha> resolves).
   await addWorktreeWithBranch(
     resolvedProjectPath,
     worktreePath,
     branchName,
-    baseBranch
+    baseRef ?? baseBranch
   );
 
   return {

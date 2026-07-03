@@ -783,10 +783,28 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     bullets that were missing (Quick Switcher, Best of N). Purely
     presentational (no logic, no tests needed). _Seam:_
     `components/StoaGuide.tsx`, `README.md`.
-44. **Checkpoint / time-travel / fork-from-any-point** — `feature` · L. A persisted
-    checkpoint timeline (worktree state + transcript point) with rewind + "fork from
-    here"; watchdog auto-rewinds wedged workers. _Seam:_ `lib/snapshots.ts`,
-    `lib/fork.ts`, `lib/db/migrations.ts`, `lib/fleet-board`, `lib/watchdog.ts`.
+44. ✅ **Checkpoint / time-travel / fork-from-any-point** — `feature` · L. **SHIPPED.**
+    A durable, labeled CHECKPOINT layer over the existing git shadow-commit
+    snapshots (`lib/snapshots.ts`): migration 52 + `checkpoints` table (pins a
+    snapshot by seq + sha with a human label, kind, transcript anchor, and fork
+    lineage), `lib/db/queries/checkpoints.ts`, and orchestration in new
+    `lib/checkpoints.ts` — `createCheckpoint` (pins the current tree, falling back
+    to the latest snapshot when unchanged), `listCheckpoints` (reconciles each
+    against live snapshot refs → `expired` flag; a pinned snapshot that ages out
+    of the last-20 FIFO window becomes a record, never a broken target), and
+    `prepareForkFromSnapshot`. **Fork-from-any-point**: `POST /snapshots/[seq]/fork`
+    branches a fresh, isolated git worktree at that turn's snapshot commit (the CODE
+    state then) + the provider's conversation fork (native `--fork-session` at the
+    transcript tip); the child records a `fork-origin` checkpoint with lineage back
+    to a checkpoint at that seq. Rewind/time-travel reuses the existing snapshot
+    restore path. UI: `SnapshotTimeline` is now checkpoint-aware — labeled
+    "Checkpoint" (inline label), per-turn kind badges, an expired-records tail,
+    "Fork from here", and a `?` help panel. _Deferred (own follow-up):_ watchdog
+    auto-rewind of wedged workers + mid-transcript fork fidelity (v2 branches at
+    tip); keeping a snapshot ref alive while a checkpoint pins it (currently a
+    pinned snapshot beyond the 20-window shows expired). _Seam:_ `lib/checkpoints.ts`,
+    `lib/snapshots.ts`, `lib/fork.ts`, `lib/worktrees.ts`, `lib/db/migrations.ts`,
+    `components/SnapshotTimeline.tsx`.
 45. ✅ **OpenTelemetry GenAI trace export** — `orchestration` · M. **SHIPPED.**
     A dependency-light OTLP/HTTP-JSON exporter in new `lib/telemetry/otel.ts`
     that is a hard NO-OP unless `STOA_OTEL_ENDPOINT` is set (guarded up front —

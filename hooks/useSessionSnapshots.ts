@@ -1,13 +1,15 @@
 "use client";
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-// Keep this `import type` — lib/snapshots pulls in server-only git/child_process;
-// a value import here would bundle it into the client.
+// Keep these `import type` — lib/snapshots + lib/checkpoints pull in server-only
+// git/child_process/db; a value import would bundle them into the client.
 import type { Snapshot } from "@/lib/snapshots";
+import type { CheckpointView } from "@/lib/checkpoints";
 
-export type { Snapshot };
+export type { Snapshot, CheckpointView };
 
 const key = (sessionId: string) => ["session-snapshots", sessionId];
+const ckey = (sessionId: string) => ["session-checkpoints", sessionId];
 
 /** A session's turn snapshots (newest handling left to the caller). */
 export function useSessionSnapshots(sessionId: string, enabled: boolean) {
@@ -26,20 +28,69 @@ export function useSessionSnapshots(sessionId: string, enabled: boolean) {
   });
 }
 
-/** Capture a checkpoint now; refreshes the list. */
+/** A session's durable, labeled checkpoints (newest-first, `expired`-flagged). */
+export function useSessionCheckpoints(sessionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ckey(sessionId),
+    enabled,
+    queryFn: async (): Promise<CheckpointView[]> => {
+      const res = await fetch(`/api/sessions/${sessionId}/checkpoints`);
+      if (!res.ok) throw new Error(`checkpoints ${res.status}`);
+      const data = await res.json();
+      return data.checkpoints ?? [];
+    },
+    staleTime: 0,
+    gcTime: 30000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Pin the current tree as a durable, labeled checkpoint; refreshes both lists
+ *  (creating a checkpoint captures a snapshot under the hood). */
 export function useCreateCheckpoint(sessionId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (): Promise<Snapshot | null> => {
-      const res = await fetch(`/api/sessions/${sessionId}/snapshots`, {
+    mutationFn: async (label?: string): Promise<{ created: boolean }> => {
+      const res = await fetch(`/api/sessions/${sessionId}/checkpoints`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: label ?? "" }),
       });
       if (!res.ok) throw new Error(`checkpoint ${res.status}`);
-      const data = await res.json();
-      return data.snapshot ?? null;
+      return res.json();
     },
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: key(sessionId) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: key(sessionId) });
+      queryClient.invalidateQueries({ queryKey: ckey(sessionId) });
+    },
+  });
+}
+
+/** Fork a new isolated session from a turn's snapshot (a worktree branched at
+ *  that point + the provider's conversation fork). */
+export function useForkFromSnapshot(sessionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: {
+      seq: number;
+      name?: string;
+    }): Promise<{ session: { id: string; name: string } }> => {
+      const res = await fetch(
+        `/api/sessions/${sessionId}/snapshots/${vars.seq}/fork`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: vars.name }),
+        }
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || `fork ${res.status}`);
+      }
+      return res.json();
+    },
+    // A fresh session appeared — refresh the session list.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sessions"] }),
   });
 }
 

@@ -54,3 +54,27 @@ describe("fresh schema sessions columns", () => {
     expect(hasColumn("sessions", "fork_cost_baseline")).toBe(true);
   });
 });
+
+describe("fresh schema checkpoints (#44 — schema/migration parity)", () => {
+  it("has the checkpoints table with its pin + lineage columns", () => {
+    for (const col of [
+      "id",
+      "session_id",
+      "seq",
+      "snapshot_sha",
+      "summary",
+      "transcript_session_id",
+      "kind",
+      "created_by",
+      "parent_checkpoint_id",
+      "created_at",
+    ]) {
+      expect(hasColumn("checkpoints", col)).toBe(true);
+    }
+  });
+
+  it("has the checkpoints session + parent indexes (mirrors migration 52)", () => {
+    expect(hasIndex("idx_checkpoints_session")).toBe(true);
+    expect(hasIndex("idx_checkpoints_parent")).toBe(true);
+  });
+});

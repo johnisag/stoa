@@ -524,6 +524,26 @@ export function createSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash ON auth_tokens(token_hash);
 
+    -- #44 Checkpoint / time-travel timeline. Durable metadata pinning a git
+    -- shadow-commit snapshot (seq + sha) with a label, transcript anchor
+    -- (claude_session_id at capture), kind, and fork lineage. See migration 52.
+    CREATE TABLE IF NOT EXISTS checkpoints (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      snapshot_sha TEXT NOT NULL,
+      summary TEXT,
+      transcript_session_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'manual',
+      created_by TEXT NOT NULL DEFAULT 'manual',
+      parent_checkpoint_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_checkpoints_parent ON checkpoints(parent_checkpoint_id);
+
     -- Default Uncategorized project
     INSERT OR IGNORE INTO projects (id, name, working_directory, is_uncategorized, sort_order)
     VALUES ('uncategorized', 'Uncategorized', '~', 1, 999999);
