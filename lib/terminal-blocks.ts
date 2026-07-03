@@ -61,16 +61,28 @@ export type TerminalBlockKind = "shell" | "agent" | "start";
  *       prose, so one preceded by start-or-whitespace is a safe prompt even
  *       mid-line (`~/proj ❯ cmd`).
  *   (3) GLUED PS1 — the sigil hugs a prompt-prefix TOKEN carrying a path/host
- *       marker (`@ : ~ \`) with NO intervening space: `user@host:~/proj$ cmd`,
+ *       marker (`@ ~ \`) with NO intervening space: `user@host:~/proj$ cmd`,
  *       `PS C:\proj> cmd`, `root@box:/# cmd`. The marker distinguishes a real
- *       prompt from a word ending in a sigil, and the no-space hug keeps ` > `
- *       redirects and ` % ` prose out. Includes `>` so Windows `C:\path>` matches.
+ *       prompt from a word ending in a sigil. `:` is DELIBERATELY NOT a marker:
+ *       it is pervasive in prose (`http://host:3000> ready`, `ratio 16:9% up`,
+ *       `Map<K:V> keyed`, `[12:00:00Z]> done`) and would re-open the round-1
+ *       over-split — every real prompt that has a `:` also has an `@`/`~`/`\`,
+ *       so dropping `:` loses no real prompt. Includes `>` so `C:\path>` matches.
+ *   (4) BRACKET PS1 — the Fedora/RHEL/Arch default `[user@host cwd]$ cmd`, at
+ *       column 0, with a `@` inside the brackets (so a plain `[note]$` / a
+ *       timestamp `[..:..]>` in prose can't match).
+ *
+ * KNOWN MISSES (accepted — "prefer missing a boundary over inventing one"): a
+ * space-separated macOS zsh `cwd % cmd` (indistinguishable from `50 % off`
+ * prose), the classic `host:cwd user$`, and a marker-less default PS1
+ * (`bash-5.1$`, `host%`). The agent-turn box (the headline surface) is unaffected.
  */
 // Capture group 1 in each is the typed command (may be empty). Numbered — not
 // named — groups because the tsconfig target (ES2017) predates named groups.
 const SHELL_PROMPT_COL0_RE = /^[$%]\s(.*)$/u;
 const SHELL_PROMPT_GLYPH_RE = /(?:^|\s)[❯➜]\s(.*)$/u;
-const SHELL_PROMPT_GLUED_RE = /(?:^|\s)[^\s]*[@:~\\][^\s]*[$#%>]\s(.*)$/u;
+const SHELL_PROMPT_GLUED_RE = /(?:^|\s)[^\s]*[@~\\][^\s]*[$#%>]\s(.*)$/u;
+const SHELL_PROMPT_BRACKET_RE = /^\[[^\]]*@[^\]]*\]\s*[$#%]\s(.*)$/u;
 
 /** Match a shell prompt line, returning the typed command (may be ""), or null. */
 function matchShellPrompt(raw: string): string | null {
@@ -80,6 +92,8 @@ function matchShellPrompt(raw: string): string | null {
   if (glyph) return glyph[1] ?? "";
   const glued = SHELL_PROMPT_GLUED_RE.exec(raw);
   if (glued) return glued[1] ?? "";
+  const bracket = SHELL_PROMPT_BRACKET_RE.exec(raw);
+  if (bracket) return bracket[1] ?? "";
   return null;
 }
 
@@ -92,10 +106,11 @@ function matchShellPrompt(raw: string): string | null {
  *       prompt glyph `❯` / `➜` — these never appear in prose, so a lone one is a
  *       prompt (`❯`, `~/proj ❯`).
  *   (b) The last token GLUES a sigil (`$ # % > ❯ ➜`) onto a prompt-prefix marker
- *       (`@ : ~ \`) with no intervening space (`user@host:~$`, `C:\proj%`,
+ *       (`@ ~ \`) with no intervening space (`user@host:~$`, `C:\proj%`,
  *       `PS C:\proj>`) — the marker is what separates a real prompt from a word
  *       that ends in a sigil, so `>` is safe HERE (unlike a lone `>`) because it
  *       still requires the marker (this catches the empty Windows pwsh prompt).
+ *       `:` is not a marker (pervasive in prose — see the glued rule above).
  * A LONE `>` / `$` / `#` / `%` (no marker) is never an empty prompt — too common
  * as a redirect / heading / prose tail. Pure + covered by classifyBoundaryLine tests.
  */
@@ -111,7 +126,7 @@ function isBareEmptyPrompt(line: string): boolean {
   // (a) A lone dedicated prompt glyph is a prompt even after a space ("~ ❯").
   if (token === sigil) return DEDICATED_PROMPT_GLYPHS.has(sigil);
   // (b) Any sigil GLUED onto a prompt-prefix marker in the same token.
-  return /[@:~\\]/u.test(token.slice(0, -1));
+  return /[@~\\]/u.test(token.slice(0, -1));
 }
 
 /**
