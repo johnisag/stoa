@@ -16,6 +16,10 @@ export interface Session {
   project_id: string | null;
   agent_type: AgentType;
   auto_approve: boolean;
+  /** #27 tri-state launch tier: 'prompt' | 'sandboxed-auto' | 'full-bypass'.
+   *  NULL on rows predating migration 53 → the launch resolver derives it from
+   *  auto_approve (fail-closed). Kept in sync with auto_approve for the badges. */
+  approval_mode?: string | null;
   // Worktree fields (optional)
   worktree_path: string | null;
   branch_name: string | null;

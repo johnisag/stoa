@@ -37,6 +37,7 @@ import {
 } from "./providers";
 import { resolveModelForAgent } from "./model-catalog";
 import { resolveNativeForkParentId } from "./fork";
+import { coerceApprovalMode } from "./sandbox/types";
 import type { Session } from "./db";
 
 /** Per-call overrides layered on top of what the Session row itself dictates. */
@@ -83,6 +84,14 @@ export function resolveSessionLaunchOptions(
     sessionId: session.claude_session_id,
     parentSessionId,
     autoApprove: session.auto_approve,
+    // #27 tri-state tier. NULL (pre-migration-53 row) derives from auto_approve
+    // so behavior is unchanged; coerce fails closed to "prompt" on anything odd.
+    // sandboxActive is left unset here (the OS-sandbox wrap + its detection are
+    // computed on the server spawn path), so a "sandboxed-auto" reaching this
+    // client-shared resolver fails closed to a no-bypass "prompt" launch.
+    approvalMode: coerceApprovalMode(
+      session.approval_mode ?? (session.auto_approve ? "full-bypass" : "prompt")
+    ),
     // Static-agent clamp: a legacy/foreign model is dropped to the safe catalog
     // value here. A free-text agent (hermes/kilo/kimi) forwards its model
     // VERBATIM — kept safe not by this clamp but by the write-boundary

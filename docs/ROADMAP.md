@@ -540,11 +540,33 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     makes cheap-model routing (#20) safe. _Seam:_ `lib/dispatch/judge.ts`,
     migration 50, `auto-merge.ts`, `reconciler.ts`, `verdict-inbox.ts`,
     AllocationConsole, repos PATCH route.
-27. **OS-level sandbox launch tier (replace all-or-nothing yolo)** — `security` · L.
-    Tri-state Prompt/Sandboxed-auto/Full-bypass; wrap the agent in FS+net isolation
-    (Seatbelt/bubblewrap/restricted-worktree+proxy). _Why:_ workers run with full
-    host access today — the biggest blast radius for unattended fleets. _Seam:_ new
-    `lib/sandbox/`, `lib/providers/registry.ts`, `lib/orchestration.ts`.
+27. ⏳ **OS-level sandbox launch tier (replace all-or-nothing yolo)** — `security` · L.
+    **FOUNDATION SHIPPED (opt-in Linux/bwrap on the pty backend); tmux composition +
+    interactive UI + validated default = follow-ups.** Replaces the all-or-nothing
+    `auto_approve` with a tri-state `approval_mode` (`prompt` / `sandboxed-auto` /
+    `full-bypass`) that DECOUPLES "suppress permission prompts" from "unrestricted
+    host access". New pure `lib/sandbox/` (`wrapSpawnForSandbox` — an ADDITIVE argv
+    transform, byte-identical to pre-#27 for any mode but `sandboxed-auto` or when no
+    primitive is present; a `bwrap` builder that binds the worktree(s) +
+    git-common-dir + `~/.stoa` rw over a `--ro-bind / /` root, opt-in `--unshare-net`;
+    feature-detection via `resolveBinary` that FAILS CLOSED to a pass-through; a
+    `computeRwRoots` policy; the `decideWorkerSandbox` gate). Every dynamic value
+    (an rwRoot path) is a discrete argv token — no shell, so nothing injects.
+    `shouldBypassPrompts` (shared by `buildAgentArgs` + every `buildFlags`) pushes the
+    bypass flag only for `full-bypass` OR `sandboxed-auto`-with-an-active-sandbox — so
+    an unhonorable `sandboxed-auto` withholds the flag (the agent prompts; **Codex
+    keeps its own sandbox** — its bypass flag disables it), never running
+    unattended-and-unconfined. Migration 53 backfills `approval_mode` from
+    `auto_approve` (zero behavior change on upgrade). Wired opt-in for orchestration
+    WORKERS via `STOA_SANDBOX=1`, gated to the pty backend + a detected primitive.
+    _Deferred (follow-ups):_ the tmux command-string composition (Linux's default
+    backend — until then set `STOA_BACKEND=pty` to engage the sandbox); macOS
+    Seatbelt/`sandbox-exec`; the 3-way create-dialog selector (PR1 keeps the checkbox
+    → `prompt`/`full-bypass`); a network egress ALLOWLIST proxy (PR1 ships
+    all-or-nothing `--unshare-net`); env-var scrubbing; and flipping the worker
+    DEFAULT to `sandboxed-auto` (gated behind live per-agent bind-set validation).
+    _Seam:_ new `lib/sandbox/`, `lib/providers.ts`, `lib/session-launch.ts`,
+    `lib/orchestration.ts`, `lib/db/migrations.ts`.
 28. ✅ **Embedded live app preview (+ structured note to the agent)** — `feature`
     · L. **SHIPPED (preview + manual comment; element picker deferred).** A
     `PreviewPanel` iframe over the worktree dev-server URL (`previewUrlFromPorts`)

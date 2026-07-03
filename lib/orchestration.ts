@@ -18,9 +18,14 @@ import { sessionKey } from "./providers/registry";
 import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
-import { getSessionBackend } from "./session-backend";
-import { expandHome } from "./platform";
+import { getSessionBackend, getBackendType } from "./session-backend";
+import { expandHome, homeDir } from "./platform";
 import { emitGenAiEvent } from "./telemetry/otel";
+import { detectSandboxTool } from "./sandbox/detect";
+import { wrapSpawnForSandbox } from "./sandbox/wrap";
+import { computeRwRoots } from "./sandbox/policy";
+import { decideWorkerSandbox } from "./sandbox/worker";
+import { join } from "path";
 
 const execFileAsync = promisify(execFile);
 
@@ -79,6 +84,47 @@ function taskToSessionName(task: string): string {
   const truncated = task.slice(0, 50);
   const lastSpace = truncated.lastIndexOf(" ");
   return lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated;
+}
+
+/**
+ * Resolve a worker's writable roots (its worktree + the git-common dir so
+ * index/refs/objects writes succeed + ~/.stoa) and wrap its argv in the OS
+ * sandbox (#27). Best-effort: a downgrade returns the argv UNCHANGED — the caller
+ * already withheld the bypass flag when the sandbox can't confine, so the worker
+ * fails closed to prompting, never unattended-and-unconfined.
+ */
+async function wrapWorkerSpawn(
+  binary: string,
+  args: string[],
+  cwd: string
+): Promise<{ binary: string; args: string[] }> {
+  let gitCommonDir: string | null = null;
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+      { windowsHide: true }
+    );
+    gitCommonDir = stdout.trim() || null;
+  } catch {
+    // Not a git repo (or git absent) — bind just the cwd + Stoa home.
+  }
+  const rwRoots = computeRwRoots({
+    worktreePaths: [cwd],
+    gitCommonDir,
+    stoaHome: join(homeDir(), ".stoa"),
+  });
+  const wrap = wrapSpawnForSandbox({ file: binary, args }, "sandboxed-auto", {
+    rwRoots,
+    allowNet: true,
+  });
+  if (wrap.downgraded) {
+    console.warn(
+      `[sandbox] worker sandbox downgraded (${wrap.reason ?? "unknown"}) — running unconfined`
+    );
+    return { binary, args };
+  }
+  return { binary: wrap.file, args: [...wrap.argsPrefix, binary, ...args] };
 }
 
 /**
@@ -189,14 +235,45 @@ export async function spawnWorker(
   // Raw cwd (may contain "~"); each backend expands it for its platform.
   const cwd = actualWorkingDir;
 
+  // #27 OS sandbox tier (opt-in via STOA_SANDBOX). Workers still auto-approve;
+  // sandboxed-auto additionally CONFINES the process. Gated to the pty backend +
+  // a detected primitive so a bypass flag is never pushed on the (PR1-unwrapped)
+  // tmux path — falls back to today's full-bypass otherwise. See decideWorkerSandbox.
+  const sandboxEnabled = process.env.STOA_SANDBOX === "1";
+  const { approvalMode, sandboxActive } = decideWorkerSandbox({
+    sandboxEnabled,
+    backendType: getBackendType(),
+    detected: sandboxEnabled ? detectSandboxTool() !== null : false,
+  });
+
   // tmux backend: banner-wrapped shell command. pty backend: direct argv.
-  const flags = provider.buildFlags({ model, autoApprove: true });
+  // The tmux command is NEVER OS-wrapped in PR1, so its flags use sandboxActive:false
+  // (fail-closed: sandboxed-auto → no bypass flag there — but that path only runs
+  // when the backend is tmux, where approvalMode is full-bypass anyway).
+  const flags = provider.buildFlags({
+    model,
+    approvalMode,
+    sandboxActive: false,
+  });
   const agentCmd = `${provider.command} ${flags.join(" ")}`;
   const newSessionCmd = wrapWithBanner(agentCmd);
   const { binary, args } = buildAgentArgs(provider.id, {
     model,
-    autoApprove: true,
+    approvalMode,
+    sandboxActive,
   });
+
+  // Wrap the pty argv in the OS sandbox when active (additive: a pass-through /
+  // downgrade never changes the launch). Best-effort — a downgrade logs and runs
+  // unconfined-but-still-prompting (buildAgentArgs already withheld the bypass
+  // flag when !sandboxActive, so it never runs unattended-and-unconfined).
+  let spawnBinary = binary;
+  let spawnArgs = args;
+  if (sandboxActive) {
+    const wrapped = await wrapWorkerSpawn(binary, args, expandHome(cwd));
+    spawnBinary = wrapped.binary;
+    spawnArgs = wrapped.args;
+  }
 
   // GenAI "run" span boundary — a worker (one agent run) starts here. Timings
   // are captured now and emitted at the terminal branch below. No-op unless
@@ -208,8 +285,8 @@ export async function spawnWorker(
       name: tmuxSessionName,
       cwd,
       command: newSessionCmd,
-      binary,
-      args,
+      binary: spawnBinary,
+      args: spawnArgs,
     });
 
     // Wait for the agent's prompt before sending the task, auto-accepting any

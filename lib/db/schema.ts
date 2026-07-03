@@ -28,6 +28,9 @@ export function createSchema(db: Database.Database): void {
       worker_task TEXT,
       worker_status TEXT,
       auto_approve INTEGER NOT NULL DEFAULT 0,
+      -- #27 tri-state launch tier (mirrors migration 53). NULL → the launch
+      -- resolver derives it from auto_approve (fail-closed).
+      approval_mode TEXT,
       project_id TEXT REFERENCES projects(id),
       tmux_name TEXT,
       worktree_paths TEXT,
