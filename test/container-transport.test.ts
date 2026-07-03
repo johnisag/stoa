@@ -181,6 +181,22 @@ describe("buildDockerRunArgs", () => {
     // No bare host:ctr token leaked.
     expect(args.some((t) => t.startsWith("-v"))).toBe(false);
   });
+
+  it("a COMMA in the host path is CSV-QUOTED so it can't inject a mount field", () => {
+    // getRepoName = path.basename (NOT slugified), so a project dir named `a,b`
+    // reaches the mount src. An unquoted comma would split the --mount CSV
+    // (e.g. `src=/a,readonly` injects a readonly flag → silent RO worktree).
+    const comma = "/home/u/proj,readonly/wt";
+    const args = buildDockerRunArgs({
+      ...base,
+      mounts: [{ hostPath: comma, containerPath: "/workspace" }],
+    });
+    const i = args.indexOf("--mount");
+    // The src field is quoted as one CSV field: type=bind,"src=…,…",dst=/workspace
+    expect(args[i + 1]).toBe(`type=bind,"src=${comma}",dst=/workspace`);
+    // The raw comma never appears as a bare `readonly` field of its own.
+    expect(args[i + 1]).not.toMatch(/,readonly,/);
+  });
 });
 
 // A recording stub delegate — proves the decorator composes through the seam
