@@ -447,6 +447,58 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["id"],
         },
       },
+      {
+        name: "request_operator_input",
+        description:
+          "Ask the human OPERATOR a structured question and BLOCK until they answer in Stoa's UI (MCP elicitation, #48). Use when a decision is genuinely the operator's to make and you can't safely pick a default — e.g. which deployment target, a missing secret's name, or a yes/no gate before a risky action. Describe a small form as a flat list of primitive fields; returns the operator's typed answers, or that they declined/cancelled. Don't use it for anything you can decide yourself.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            conductorId: {
+              type: "string",
+              description:
+                "Your session ID. Required unless CONDUCTOR_SESSION_ID env var is set.",
+            },
+            message: {
+              type: "string",
+              description:
+                "The question/context shown to the operator above the form.",
+            },
+            fields: {
+              type: "array",
+              description:
+                "The form fields to collect (1–12). Each is a primitive input.",
+              items: {
+                type: "object",
+                properties: {
+                  key: {
+                    type: "string",
+                    description:
+                      "Answer key / identifier (letters, digits, _ . - ).",
+                  },
+                  type: {
+                    type: "string",
+                    enum: ["string", "number", "boolean", "enum"],
+                    description: "The field's primitive type.",
+                  },
+                  description: {
+                    type: "string",
+                    description: "Label / hint shown next to the input.",
+                  },
+                  enumValues: {
+                    type: "array",
+                    items: { type: "string" },
+                    description:
+                      "The allowed options — REQUIRED when type is 'enum'.",
+                  },
+                },
+                required: ["key", "type"],
+              },
+            },
+          },
+          required: ["message", "fields"],
+        },
+      },
     ],
   };
 });

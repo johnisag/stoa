@@ -9,6 +9,7 @@ import { useInbox, type InboxItem } from "@/data/verdict-inbox/queries";
 import { needsMe } from "@/lib/verdict-inbox-selectors";
 import { InboxCard } from "./InboxCard";
 import { VerdictInboxHelp } from "./VerdictInboxHelp";
+import { ElicitationRequests } from "./ElicitationRequests";
 
 type Filter = "all" | "needs-me" | "in-review" | "approved";
 
@@ -162,6 +163,9 @@ export function VerdictInboxView({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-4">
+        {/* Pending MCP elicitations — agents blocked on operator input (#48).
+            Always shown when present, above the filtered review list. */}
+        {!showHelp && <ElicitationRequests />}
         {showHelp ? (
           <VerdictInboxHelp onClose={() => setShowHelp(false)} />
         ) : isLoading ? (

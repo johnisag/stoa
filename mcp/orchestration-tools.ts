@@ -69,6 +69,55 @@ export function oneLinePreview(value: string, max = 120): string {
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }
 
+// #48 MCP elicitation — the tool blocks, polling its pending request over HTTP
+// while the operator answers in Stoa's UI. Bounded well under the store's TTL so
+// a slow/absent operator can't hold the tool call (or the stdio pipe) forever.
+const ELICIT_POLL_INTERVAL_MS = 2000;
+const ELICIT_POLL_TIMEOUT_MS = 8 * 60 * 1000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+interface ElicitPollResult {
+  status: string;
+  action: string | null;
+  content: Record<string, unknown> | null;
+}
+
+async function pollElicit(id: string): Promise<ElicitPollResult> {
+  const deadline = Date.now() + ELICIT_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    // apiCall returns the parsed body regardless of HTTP status; a 404 body is
+    // { status: "unknown" }, which is non-pending → we stop and report it.
+    const res = (await apiCall(
+      `/api/mcp/elicit/${encodeURIComponent(id)}`
+    )) as ElicitPollResult;
+    if (res?.status && res.status !== "pending") return res;
+    await sleep(ELICIT_POLL_INTERVAL_MS);
+  }
+  return { status: "timeout", action: null, content: null };
+}
+
+/** Render an elicitation outcome as the tool's text result. Deliberately NEVER
+ * prefixed with "Error:" — an operator decline/cancel/timeout is a normal
+ * outcome, not a tool failure (see toolResultStatus in orchestration-server). */
+export function formatElicitResult(r: ElicitPollResult): string {
+  if (r.status === "answered") {
+    if (r.action === "accept" && r.content) {
+      const lines = Object.entries(r.content).map(
+        ([k, v]) => `- ${k}: ${String(v)}`
+      );
+      return `Operator provided input:\n${lines.join("\n")}`;
+    }
+    if (r.action === "decline") return "Operator declined to provide input.";
+    return "Operator cancelled the request.";
+  }
+  if (r.status === "expired")
+    return "The operator-input request expired with no answer.";
+  if (r.status === "timeout")
+    return "Timed out waiting for operator input (no answer).";
+  return "The operator-input request is no longer available (treated as cancelled).";
+}
+
 export async function handleToolCall(request: {
   params: { name: string; arguments?: Record<string, unknown> };
 }) {
@@ -785,6 +834,47 @@ export async function handleToolCall(request: {
                   ? `Deleted schedule ${id}.`
                   : `No schedule with id "${id}" to delete.`,
             },
+          ],
+        };
+      }
+
+      case "request_operator_input": {
+        const conductorId = getConductorId(args);
+        if (!conductorId) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: conductorId is required. Pass it as a parameter or set CONDUCTOR_SESSION_ID env var.",
+              },
+            ],
+          };
+        }
+        // requireString throws on a missing message → caught below as an Error.
+        const message = requireString(args, "message");
+        const created = await apiCall("/api/mcp/elicit", {
+          method: "POST",
+          body: JSON.stringify({
+            conductorId,
+            message,
+            fields: args?.fields,
+          }),
+        });
+        if (created?.error || !created?.elicitationId) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: ${created?.error ?? "could not create the operator-input request"}`,
+              },
+            ],
+          };
+        }
+        // Block until the operator answers, the request expires, or we time out.
+        const result = await pollElicit(created.elicitationId);
+        return {
+          content: [
+            { type: "text" as const, text: formatElicitResult(result) },
           ],
         };
       }

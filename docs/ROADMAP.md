@@ -829,10 +829,30 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     `ContainerTransport` implementing `PtyTransport` (not a new backend): run the
     agent in Docker/dev-container; "pairing" applies the diff back to the host.
     _Seam:_ new ContainerTransport, `lib/session-diff.ts`, `lib/multi-repo-stage.ts`.
-48. **MCP elicitation + sampling (2025-11 spec)** — `orchestration` · L. Under-specified
-    tool calls request structured input via the confirm UI; server tools request
-    completions through the host (operator model/budget). _Seam:_
-    `mcp/orchestration-server.ts`, `lib/verdict-inbox.ts`, `lib/ask.ts`.
+48. ⏳ **MCP elicitation + sampling (2025-11 spec)** — `orchestration` · L. **ELICITATION
+    SHIPPED; sampling deferred to a v2 follow-up.** A new MCP tool
+    `request_operator_input` lets an orchestration agent ask the human OPERATOR a
+    structured question and BLOCK until they answer in Stoa's own confirm UI —
+    routed over the existing HTTP `apiCall` path, NOT the SDK's stdio
+    `server.elicitInput` (which targets the agent's terminal and depends on
+    unverifiable per-agent-CLI client-capability advertisement). Pieces: a
+    fail-closed schema (`lib/mcp/elicit-schema.ts` — allowlists the 2025-11
+    primitive field types string/number/boolean/enum, caps count/size, and
+    re-coerces every submitted value server-side so the browser form is never
+    trusted), an in-memory process-local pending store (`lib/mcp/elicit-store.ts`
+    — TTL sweep + per-conductor DoS cap + answer-once TOCTOU guard), three routes
+    under `app/api/mcp/elicit` (create is localhost-gated; the operator answer is
+    normal-auth so a `stoa share` admin can reply while the observer gate blocks
+    read-only tokens), the `request_operator_input` tool that POSTs then polls
+    (bounded well under the TTL), and a schema-driven form surfaced at the top of
+    the Verdict Inbox (`ElicitationRequests`). Decline/cancel/timeout render as
+    NON-error tool text (a routine refusal isn't a tool failure). _Deferred (v2):_
+    SAMPLING (server tool requests an LLM completion via the host's model/budget)
+    — needs a new operator model setting + an enforced request-count/spend cap +
+    the model-catalog clamp, so it doesn't ride the first PR as an unbounded
+    cost/DoS surface; plus the SDK-native agent-hosted elicitation/sampling paths.
+    _Seam:_ `mcp/orchestration-server.ts`, `mcp/orchestration-tools.ts`,
+    `lib/mcp/`, `app/api/mcp/elicit/`, `components/views/VerdictInboxView/`.
 49. **Per-device named revocable tokens** — `security` · L. Evolve the single shared
     token into a named, individually-revocable set (phone/laptop/spectator) with
     scope. _Seam:_ `lib/auth.ts`, new tokens table, Settings panel.
