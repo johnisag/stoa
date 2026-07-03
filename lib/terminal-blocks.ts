@@ -44,30 +44,40 @@ export type TerminalBlockKind = "shell" | "agent" | "start";
 /**
  * A shell prompt line: some leading context (user@host, a path, git branch, …),
  * then a prompt sigil, a single space, and the typed command. The whole trick is
- * telling a real prompt from output that merely contains a sigil, WITHOUT any OSC
- * 133 integration. Two accepted shapes, matched on the FIRST qualifying sigil so
- * a command that itself contains a redirect (`$ cat a > b`) stays ONE block:
+ * telling a real prompt from OUTPUT that merely contains a sigil — critical here
+ * because Stoa's primary surface is markdown-heavy AI-agent output, which is full
+ * of `# headings`, `> quotes`, ` > ` redirects, and ` % ` / ` $ ` in prose. An
+ * over-eager sigil match shreds one agent turn into dozens of bogus "commands".
+ * So the sigils are split by how ambiguous they are, matched on the FIRST
+ * qualifying position so a command containing a redirect (`$ cat a > b`) stays
+ * ONE block:
  *
- *   (a) BARE sigil — preceded by whitespace or start-of-line: `❯ cmd`, `$ cmd`,
- *       `➜  repo cmd`. Any of `$ # % > ❯ ➜`. The whitespace anchor is what keeps
- *       the `>` inside `<anonymous> (` (preceded by `s`) out.
- *   (b) GLUED sigil — the classic PS1 where the sigil hugs the path/host with no
- *       space (`user@host:~/proj$ cmd`, `PS C:\proj> cmd`). Permitted only when
- *       the prefix carries a prompt marker (`@ : ~ \`), so a stray `word> ` in
- *       prose can't match. Covers Windows `C:\path>` and bash `~/dir$`.
- *
- * The sigils cover bash/zsh/fish/pwsh/PS1:
- *   $  bash/sh   #  root   %  zsh(default)   >  cmd/pwsh   ❯ ➜  starship/pure/ohmyzsh
+ *   (1) COLUMN-0 `$` / `%` — a bare `$ ` or `% ` at the very start of the line is
+ *       a strong bash/zsh prompt. `#` and `>` are EXCLUDED from this bare form:
+ *       a leading `# ` is far more often a markdown H1 and a leading `> ` a
+ *       blockquote/diff-quote than a bare root/continuation prompt (those render
+ *       glued to a host/path, caught by (3)).
+ *   (2) DEDICATED GLYPH `❯` / `➜` — starship/pure/oh-my-zsh. These never occur in
+ *       prose, so one preceded by start-or-whitespace is a safe prompt even
+ *       mid-line (`~/proj ❯ cmd`).
+ *   (3) GLUED PS1 — the sigil hugs a prompt-prefix TOKEN carrying a path/host
+ *       marker (`@ : ~ \`) with NO intervening space: `user@host:~/proj$ cmd`,
+ *       `PS C:\proj> cmd`, `root@box:/# cmd`. The marker distinguishes a real
+ *       prompt from a word ending in a sigil, and the no-space hug keeps ` > `
+ *       redirects and ` % ` prose out. Includes `>` so Windows `C:\path>` matches.
  */
 // Capture group 1 in each is the typed command (may be empty). Numbered — not
 // named — groups because the tsconfig target (ES2017) predates named groups.
-const SHELL_PROMPT_BARE_RE = /^.{0,200}?(?:^|\s)[$#%>❯➜]\s(.*)$/u;
-const SHELL_PROMPT_GLUED_RE = /^.{0,200}?[@:~\\][^\s]*?[$#%>]\s(.*)$/u;
+const SHELL_PROMPT_COL0_RE = /^[$%]\s(.*)$/u;
+const SHELL_PROMPT_GLYPH_RE = /(?:^|\s)[❯➜]\s(.*)$/u;
+const SHELL_PROMPT_GLUED_RE = /(?:^|\s)[^\s]*[@:~\\][^\s]*[$#%>]\s(.*)$/u;
 
 /** Match a shell prompt line, returning the typed command (may be ""), or null. */
 function matchShellPrompt(raw: string): string | null {
-  const bare = SHELL_PROMPT_BARE_RE.exec(raw);
-  if (bare) return bare[1] ?? "";
+  const col0 = SHELL_PROMPT_COL0_RE.exec(raw);
+  if (col0) return col0[1] ?? "";
+  const glyph = SHELL_PROMPT_GLYPH_RE.exec(raw);
+  if (glyph) return glyph[1] ?? "";
   const glued = SHELL_PROMPT_GLUED_RE.exec(raw);
   if (glued) return glued[1] ?? "";
   return null;
@@ -76,24 +86,25 @@ function matchShellPrompt(raw: string): string | null {
 /**
  * An EMPTY prompt at end-of-line — awaiting input, its trailing space trimmed off
  * by translateToString, so the sigil is the last visible char. Two safe shapes,
- * chosen so ordinary output ending in a glyph (`it costs 5%`, `fix TODO #`) never
- * matches:
+ * chosen so ordinary output ending in a glyph (`it costs 5%`, `fix TODO #`,
+ * `<div>`) never matches:
  *   (a) The whole trimmed line, or its last space-separated token, IS a dedicated
  *       prompt glyph `❯` / `➜` — these never appear in prose, so a lone one is a
  *       prompt (`❯`, `~/proj ❯`).
- *   (b) The last token GLUES a sigil (`$ # % ❯ ➜`) onto a prompt-prefix marker
- *       (`@ : ~ \`) with no intervening space (`user@host:~$`, `C:\proj%`) — the
- *       marker is what separates a real prompt from a word that ends in a sigil.
- * `>` is intentionally absent from the glued EOL set (too common as HTML `<div>`
- * / a redirect); a `>` empty prompt still matches when its trailing space survives
- * (SHELL_PROMPT_BARE_RE). Pure + covered by classifyBoundaryLine tests.
+ *   (b) The last token GLUES a sigil (`$ # % > ❯ ➜`) onto a prompt-prefix marker
+ *       (`@ : ~ \`) with no intervening space (`user@host:~$`, `C:\proj%`,
+ *       `PS C:\proj>`) — the marker is what separates a real prompt from a word
+ *       that ends in a sigil, so `>` is safe HERE (unlike a lone `>`) because it
+ *       still requires the marker (this catches the empty Windows pwsh prompt).
+ * A LONE `>` / `$` / `#` / `%` (no marker) is never an empty prompt — too common
+ * as a redirect / heading / prose tail. Pure + covered by classifyBoundaryLine tests.
  */
-const BARE_PROMPT_SIGILS = new Set(["$", "#", "%", "❯", "➜"]);
+const EMPTY_PROMPT_SIGILS = new Set(["$", "#", "%", ">", "❯", "➜"]);
 const DEDICATED_PROMPT_GLYPHS = new Set(["❯", "➜"]);
 function isBareEmptyPrompt(line: string): boolean {
   const trimmed = line.replace(/\s+$/u, "");
   const sigil = trimmed.slice(-1);
-  if (!BARE_PROMPT_SIGILS.has(sigil)) return false;
+  if (!EMPTY_PROMPT_SIGILS.has(sigil)) return false;
   // The last whitespace-delimited token, e.g. "user@host:~$" or "❯".
   const lastSpace = trimmed.lastIndexOf(" ");
   const token = lastSpace === -1 ? trimmed : trimmed.slice(lastSpace + 1);
@@ -105,13 +116,14 @@ function isBareEmptyPrompt(line: string): boolean {
 
 /**
  * The Claude Code / Codex user-input box: the prompt line inside the rounded box
- * renders as "> " (optionally the typed message follows). This is the agent-turn
- * boundary — a new user message opens a new logical "command". We require the
- * "> " to be at the START of the (left-trimmed) line so a quoted ">" mid-output
- * doesn't match; the box border chars (│ ╭ ╰) are stripped first by the caller's
- * normalization below.
+ * renders as a VERTICAL box border, some padding, then "> " and the typed
+ * message: `│ > run the tests            │`. Requiring the leading vertical
+ * border is what tells this agent-turn boundary apart from a markdown blockquote
+ * or diff-quote (`> text` with NO box) — which are pervasive in agent output and
+ * must NOT open a new block. A bare `> ` with no border is therefore deliberately
+ * NOT an agent boundary.
  */
-const AGENT_PROMPT_RE = /^>\s(.*)$/u;
+const AGENT_BOX_PROMPT_RE = /^\s*[│┃╎╏┆┇┊┋]\s*>\s(.*)$/u;
 
 /** Trailing box-border chrome (right edge of the input box) + its padding. */
 const TRAILING_BOX_RE = /[\s│┃╎╏┆┇┊┋╭╮╰╯─━]+$/u;
@@ -119,15 +131,6 @@ const TRAILING_BOX_RE = /[\s│┃╎╏┆┇┊┋╭╮╰╯─━]+$/u;
 /** Collapse internal runs of whitespace and trim — for a tidy one-line label. */
 function tidyLabel(s: string): string {
   return s.replace(/\s+/gu, " ").trim();
-}
-
-/**
- * Strip leading box-drawing chrome from an agent input box so the inner "> "
- * prompt is anchorable. Only strips a LEADING run (border + spaces), never inner
- * text, so a message body that happens to contain a pipe is left intact.
- */
-function stripLeadingBox(line: string): string {
-  return line.replace(/^[\s│┃╎╏┆┇┊┋╭╮╰╯─━]+/u, "");
 }
 
 /** Truncate a label to a sane header width, adding an ellipsis when clipped. */
@@ -145,11 +148,11 @@ export function truncateLabel(label: string, max = 80): string {
 export function classifyBoundaryLine(
   raw: string
 ): { kind: TerminalBlockKind; label: string } | null {
-  // Agent input box first: strip only the LEADING border chrome, then look for
-  // the "> " prompt. Checked before the shell sigils because ">" is also a shell
-  // sigil — the anchored "^> " form is the more specific agent signal.
-  const unboxed = stripLeadingBox(raw);
-  const agent = AGENT_PROMPT_RE.exec(unboxed);
+  // Agent input box first: a vertical box border + "> " prompt. Checked before
+  // the shell sigils because a boxed "> " is the specific agent-turn signal; a
+  // bare "> " (no box) is NOT a boundary (markdown quote / redirect on the
+  // primary agent-output surface).
+  const agent = AGENT_BOX_PROMPT_RE.exec(raw);
   if (agent) {
     // Drop the box's RIGHT border + padding from the label (│ ... │ → the text).
     const inner = (agent[1] ?? "").replace(TRAILING_BOX_RE, "");

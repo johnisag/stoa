@@ -14,11 +14,15 @@ describe("classifyBoundaryLine", () => {
       kind: "shell",
       label: "ls -la",
     });
-    expect(classifyBoundaryLine("# whoami")).toEqual({
+    // Root prompt: a bare "# cmd" is EXCLUDED (markdown H1 collision); the real
+    // root prompt renders glued to a host/path, which matches.
+    expect(classifyBoundaryLine("root@box:/# whoami")).toEqual({
       kind: "shell",
       label: "whoami",
     });
-    expect(classifyBoundaryLine("user@host ~ % git status")).toEqual({
+    // zsh: the `%` sigil glued to the path token (a bare " % " with a space is
+    // deliberately NOT matched — it collides with " 50 % off" prose).
+    expect(classifyBoundaryLine("user@host:~/proj% git status")).toEqual({
       kind: "shell",
       label: "git status",
     });
@@ -50,17 +54,24 @@ describe("classifyBoundaryLine", () => {
       kind: "shell",
       label: "(prompt)",
     });
+    // Empty Windows pwsh prompt — the `>` is glued to a drive path, so it counts
+    // (a LONE `>` does not — that's a redirect / blockquote).
+    expect(classifyBoundaryLine("PS C:\\proj>")).toEqual({
+      kind: "shell",
+      label: "(prompt)",
+    });
   });
 
-  it("recognizes the agent input box '> ' prompt inside box chrome", () => {
+  it("recognizes the agent input box '> ' prompt ONLY inside box chrome", () => {
     expect(classifyBoundaryLine("│ > fix the failing test")).toEqual({
       kind: "agent",
       label: "fix the failing test",
     });
-    expect(classifyBoundaryLine("> explain this stack trace")).toEqual({
-      kind: "agent",
-      label: "explain this stack trace",
-    });
+    // A bare "> …" with NO box border is a markdown quote / diff line / redirect,
+    // NOT an agent turn — it must not open a block (this is the primary-surface
+    // over-split the heuristic exists to avoid).
+    expect(classifyBoundaryLine("> explain this stack trace")).toBeNull();
+    expect(classifyBoundaryLine("> a quoted markdown line")).toBeNull();
   });
 
   it("does NOT treat ordinary output as a boundary", () => {
@@ -107,6 +118,53 @@ describe("classifyBoundaryLine", () => {
       label: "(prompt)",
     });
   });
+
+  it("does NOT invent boundaries from sigils in markdown / prose (the primary surface)", () => {
+    // Stoa's main surface is markdown-heavy agent output. NONE of these are
+    // prompts — a space-delimited or leading sigil in prose must stay interior.
+    for (const line of [
+      "# Authentication", // markdown H1
+      "## Security notes", // markdown H2
+      "> Note: tokens expire in 5 % of cases", // blockquote + prose %
+      "> a quoted line", // blockquote
+      "- validate > sign > store", // prose with >
+      "You can pipe output: cat creds > out.txt", // redirect in prose
+      "run at 10 % capacity now", // prose %
+      "The cost is $ 5 today", // prose $
+      "if x # 3 then", // prose #
+      "50 % off today", // prose %
+      "cat a.txt > b.txt", // bare redirect line
+      "email me @ 50 % done", // @ + % in prose
+      "issue # 42 is open", // prose #
+    ]) {
+      expect(classifyBoundaryLine(line), line).toBeNull();
+    }
+  });
+
+  it("keeps a whole markdown-heavy agent turn as ONE block (no over-split)", () => {
+    const turn = [
+      "╭─────────────────────────────╮",
+      "│ > explain the auth flow      │",
+      "╰─────────────────────────────╯",
+      "● Here's the flow:",
+      "# Authentication",
+      "> Note: tokens expire in 5 % of cases",
+      "- validate > sign > store",
+      "You can pipe output: cat creds > out.txt",
+      "## Security",
+      "issue # 42 tracks the rotation",
+      "Done.",
+    ];
+    const blocks = parseTerminalBlocks(turn);
+    // Exactly ONE agent boundary (the boxed user message); everything else is its
+    // output — no bogus blocks minted from headings/quotes/redirects.
+    const agentBlocks = blocks.filter((b) => b.kind === "agent");
+    expect(agentBlocks).toHaveLength(1);
+    expect(agentBlocks[0].label).toBe("explain the auth flow");
+    // A leading "start" block for the top border, then the one agent block = 2.
+    expect(blocks).toHaveLength(2);
+    assertContiguous(blocks, turn.length);
+  });
 });
 
 describe("parseTerminalBlocks — a bash session", () => {
@@ -125,16 +183,17 @@ describe("parseTerminalBlocks — a bash session", () => {
 
   it("splits into one block per prompt line, contiguous and covering the buffer", () => {
     const blocks = parseTerminalBlocks(screen);
-    // Note: lines 1-2 ("> stoa@1.0.0" / "> vitest run") ARE npm output but read
-    // as agent-prompt boundaries — an inherent ambiguity of the "> " heuristic
-    // with no OSC integration. We assert the boundaries the parser actually finds
-    // and that the ranges stay contiguous + complete (the navigation invariant).
+    // Lines 1-2 ("> stoa@1.0.0" / "> vitest run") are npm OUTPUT — a bare "> " with
+    // no box border is correctly NOT a boundary, so they stay INSIDE the "npm test"
+    // block (which therefore spans lines 0-5, up to the next real prompt).
     expect(blocks[0]).toEqual({
       startLine: 0,
-      endLine: 0,
+      endLine: 5,
       label: "npm test",
       kind: "shell",
     });
+    // Exactly three real prompts → three blocks (no bogus splits from npm's "> ").
+    expect(blocks).toHaveLength(3);
     // Contiguity + full coverage is the load-bearing invariant for navigation.
     assertContiguous(blocks, screen.length);
     // The two git-related prompts are found.

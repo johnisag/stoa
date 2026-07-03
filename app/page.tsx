@@ -137,8 +137,11 @@ const NAV_KEYBINDINGS: Keybinding[] = [
   // pane's terminal. UNLIKE the pane toggles above these ARE allowInInput: the
   // user drives them WHILE focused in the terminal (that's the whole point), so
   // the .xterm guard must NOT suppress them. mod+shift+arrow up/down are free
-  // (left/right are the tab-nav chords) and xterm doesn't bind them, so nothing
-  // is stolen from the terminal.
+  // (left/right are the tab-nav chords). On Windows/Linux xterm WOULD emit a
+  // modified-arrow escape for Ctrl+Shift+Arrow, so the Terminal's custom key
+  // handler (websocket-connection.ts) swallows the whole mod+shift+Arrow class
+  // before xterm sees it — the escape never reaches the pty, and this bubble-phase
+  // keybinding still fires.
   {
     chord: "mod+shift+arrowup",
     action: "jump-prev-block",
