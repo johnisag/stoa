@@ -108,14 +108,13 @@ export interface TickKnobs {
   resumeMaxPerDay: number;
 }
 
-/** The unattended-write feature flags (the startup STOA_AUTO_* snapshot). queue is
- * always on and has no flag. `autoResume` gates only the resume ACTION — the resume
- * actor's pre-state management (guard-clears, park-anchor) is unconditional, so the
- * resume actor always runs and reads this flag internally. */
+/** Feature flags the ACTORS read. Only `autoResume` is needed here: it gates the
+ * resume ACTION while the resume actor still runs every tick for its unconditional
+ * pre-state management (guard-clears + park-anchor). The AUTO_ANSWER / AUTO_CHANNEL
+ * gates live in the server orchestrator (it wraps the answer/channel actor loops in
+ * their `if`), so they are deliberately NOT here. */
 export interface TickFlags {
   autoResume: boolean;
-  autoAnswer: boolean;
-  channelDeliver: boolean;
 }
 
 /** Built ONCE per tick and passed to every actor. */
@@ -157,11 +156,15 @@ export type WriteIntent =
 
 export interface WriteActor {
   name: "queue" | "resume" | "answer" | "channel";
-  /** Feature gate (queue is always on). */
-  enabled: (ctx: TickContext) => boolean;
+  /** The stem for the on-reject console.error — kept per-actor so the exact
+   * operator-facing strings the inline loops logged survive verbatim (e.g.
+   * "rate-limit resume failed:") for any log-grep / alerting keyed on them. */
+  failLog: string;
   /** Pure except it MAY set its once-guard synchronously + run the inline
    * pre-side-effects (park-anchor, budget rollover, guard-clears, acknowledge)
-   * exactly as today. Returns the intent to fire, or null to skip. */
+   * exactly as today. Returns the intent to fire, or null to skip. Feature gating
+   * (AUTO_ANSWER_ENABLED / AUTO_CHANNEL) stays in the server orchestrator, which
+   * runs queue/resume unconditionally and wraps answer/channel in their flag `if`. */
   decide: (ctx: TickContext, s: ManagedStatus) => WriteIntent | null;
 }
 
@@ -199,7 +202,7 @@ export function runWriteActor(
     .then(() => intent.onCommit?.())
     .catch((err) => {
       intent.onFail?.();
-      console.error(`${actor.name} write failed:`, err);
+      console.error(actor.failLog, err);
     })
     .finally(() => intent.onSettled?.());
 }
@@ -208,10 +211,10 @@ export function runWriteActor(
 // Drain the next queued prompt when a session is genuinely idle-ready. A settled
 // waiting turn (no prompt) is ACKNOWLEDGED here (a state mutation, not a write) so
 // it flips to idle and dispatches next tick — but a real prompt is left for the
-// human. Mirrors server.ts's old 671-724 loop verbatim.
+// human. Mirrors the server's old prompt-queue dispatch loop verbatim.
 export const queueActor: WriteActor = {
   name: "queue",
-  enabled: () => true,
+  failLog: "queue dispatch failed:",
   decide(ctx, s) {
     const { maps, deps } = ctx;
     if (deps.isBudgetParked(s.id)) return null;
@@ -260,13 +263,12 @@ export const queueActor: WriteActor = {
 
 // ── WRITE ACTOR 2: rate-limit auto-resume ──────────────────────────────────
 // Owns the rate-limited session. Runs pre-state management for EVERY session
-// (clear guards when not limited / errored, anchor parkedAt) before the resume
-// decision. Mirrors server.ts's old 736-827 loop verbatim.
+// (clear guards when not limited / errored, anchor parkedAt) UNCONDITIONALLY —
+// the server runs this actor every tick; `flags.autoResume` gates only the nudge
+// action, inside decide(). Mirrors the server's old rate-limit resume loop.
 export const resumeActor: WriteActor = {
   name: "resume",
-  // ALWAYS runs: the pre-state management (guard-clears + park-anchor) is
-  // unconditional. `flags.autoResume` gates only the resume action, inside decide.
-  enabled: () => true,
+  failLog: "rate-limit resume failed:",
   decide(ctx, s) {
     const { maps, deps, knobs } = ctx;
     if (!s.rateLimit) {
@@ -363,10 +365,10 @@ export const resumeActor: WriteActor = {
 // ── WRITE ACTOR 3: auto-answer ─────────────────────────────────────────────
 // Press Enter on a routine prompt whose default is the safe affirmative, once per
 // distinct prompt. Never touches a rate-limited session (resume owns it). Mirrors
-// server.ts's old 837-869 loop verbatim.
+// the server's old auto-answer loop verbatim.
 export const answerActor: WriteActor = {
   name: "answer",
-  enabled: (ctx) => ctx.flags.autoAnswer,
+  failLog: "auto-answer failed:",
   decide(ctx, s) {
     const { maps } = ctx;
     if (!s.prompt || s.rateLimit || s.status !== "waiting") {
@@ -395,10 +397,10 @@ export const answerActor: WriteActor = {
 // ── WRITE ACTOR 4: inter-agent channel delivery ────────────────────────────
 // Inject one unread channel message into a settled recipient's terminal, claiming
 // the row atomically BEFORE the paste so two attempts can't double-deliver. One
-// delivery in flight per session. Mirrors server.ts's old 989-1044 loop verbatim.
+// delivery in flight per session. Mirrors the server's old channel-delivery loop.
 export const channelActor: WriteActor = {
   name: "channel",
-  enabled: (ctx) => ctx.flags.channelDeliver,
+  failLog: "channel delivery failed:",
   decide(ctx, s) {
     const { maps, deps } = ctx;
     if (deps.isBudgetParked(s.id)) return null;
@@ -415,9 +417,14 @@ export const channelActor: WriteActor = {
       return null;
     const msg = deps.nextUnreadMessage(s.id);
     if (!msg) return null;
-    // Atomically claim BEFORE pasting; a loser (or a message a pull consumed) skips.
-    if (!deps.claimDelivery(msg.id)) return null;
+    // Claim the per-tick WRITE slot BEFORE the DB row: an earlier actor writing this
+    // session can't actually happen here (channelDeliveryBlocked already gated
+    // queue/resume, and answer targets waiting+prompt not idle), so this never
+    // denies — but claiming write-first means we can NEVER stamp a row delivered and
+    // then skip it (a silently-lost message), keeping the arbiter safe by construction.
     if (!ctx.claimWrite(s.id)) return null;
+    // Atomically claim the row BEFORE pasting; a loser (or a message a pull consumed) skips.
+    if (!deps.claimDelivery(msg.id)) return null;
     maps.channelDelivering.add(s.id);
     const text = deps.buildChannelDeliveryText(msg);
     return {

@@ -680,11 +680,7 @@ app.prepare().then(() => {
           resumeFallbackMs: RESUME_FALLBACK_MS,
           resumeMaxPerDay: RESUME_MAX_PER_DAY,
         },
-        flags: {
-          autoResume: AUTO_RESUME_ENABLED,
-          autoAnswer: AUTO_ANSWER_ENABLED,
-          channelDeliver: CHANNEL_DELIVER_ENABLED,
-        },
+        flags: { autoResume: AUTO_RESUME_ENABLED },
         maps: {
           queueDispatched,
           rateLimitResumed,

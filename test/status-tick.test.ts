@@ -113,12 +113,7 @@ function makeCtx(
     nowMs: 100_000,
     resumeDay: "2026-07-03",
     knobs: { resumeFallbackMs: 0, resumeMaxPerDay: 0, ...over.knobs },
-    flags: {
-      autoResume: true,
-      autoAnswer: true,
-      channelDeliver: true,
-      ...over.flags,
-    },
+    flags: { autoResume: true, ...over.flags },
     maps: over.maps ?? emptyMaps(),
     deps,
     claimWrite: makeClaimWrite(),
@@ -345,6 +340,19 @@ describe("channelActor", () => {
       deps: { nextUnreadMessage: () => msg, claimDelivery: () => false },
     });
     expect(channelActor.decide(ctx, ready())).toBeNull();
+    expect(ctx.maps.channelDelivering.size).toBe(0);
+  });
+
+  it("claims the WRITE slot before the row — a denied slot never stamps a message (no lost delivery)", () => {
+    const claimDelivery = vi.fn(() => true);
+    const ctx = makeCtx({
+      deps: { nextUnreadMessage: () => msg, claimDelivery },
+    });
+    ctx.claimWrite("s1"); // a (hypothetical) earlier actor already claimed this tick
+    expect(channelActor.decide(ctx, ready())).toBeNull();
+    // Because the write slot was denied FIRST, the DB row is never claimed —
+    // otherwise it would be stamped delivered+read yet never pasted (lost).
+    expect(claimDelivery).not.toHaveBeenCalled();
     expect(ctx.maps.channelDelivering.size).toBe(0);
   });
 
