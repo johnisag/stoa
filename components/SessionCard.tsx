@@ -58,7 +58,7 @@ import { AutoApproveBadge } from "./AutoApproveBadge";
 import { SessionQuickActions } from "./SessionQuickActions";
 import { SessionDiffModal } from "./SessionDiffModal";
 import { PreviewPanel } from "./PreviewPanel";
-import { previewUrlFromPorts } from "@/lib/preview-picker";
+import { previewUrlFromPorts } from "@/lib/preview";
 import { SnapshotTimeline } from "./SnapshotTimeline";
 import { PromptQueueModal } from "./PromptQueueModal";
 import { SessionSummaryModal } from "./SessionSummaryModal";
