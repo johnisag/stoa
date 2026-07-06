@@ -163,11 +163,16 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
   was extracted to a shared `lib/monitor-collect.ts` (both monitor routes use it). Only
   fields already on the wire (cost/processes) cross — no raw command lines. _Seam:_
   `lib/monitor-snapshot.ts`, `lib/monitor-collect.ts`, `app/api/monitor`.
-- **M6 — Optional `abtop --json` external sensor** — `orchestration` · M.
-  _(deferred — the only option that adds a non-npm dependency.)_ When an `abtop`
-  binary is present, best-effort `execFile abtop --json --once` (argv array, JS
-  parse, fail-closed) to enrich Codex/OpenCode sessions Stoa can't parse natively,
-  incl. agents started OUTSIDE Stoa. Strictly optional, never a hard dependency.
+- ✅ **M6 — Optional `abtop --json` external sensor** — `orchestration` · M.
+  **SHIPPED.** When an `abtop` binary is present, `/api/monitor?format=json`
+  best-effort runs `abtop --json --once` (argv array, `.cmd`/`.bat` shim-safe on
+  Windows, fail-closed) and merges only a sanitized telemetry subset into Stoa's
+  snapshot: agent kind, stable session id, model/status, context %, token buckets,
+  branch, child count, MCP names, and port numbers. Stoa rows are enriched only
+  when abtop reports a Stoa-owned session identity; ambiguous same-cwd external
+  sessions are appended as read-only `source: "abtop"` rows. Raw cwd values are used
+  only for local de-duping; raw command lines, chat tails, summaries, and file paths
+  never cross the JSON boundary. _Seam:_ `lib/abtop-sensor.ts`, `app/api/monitor`.
 
 ### Tier 1 — High impact (ranks 1–32)
 

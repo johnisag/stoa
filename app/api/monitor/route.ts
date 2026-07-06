@@ -5,6 +5,10 @@ import { buildMonitorRows } from "@/lib/agent-monitor";
 import { collectMonitorProcessInfo } from "@/lib/monitor-collect";
 import { readRateLimitWindowRecord } from "@/lib/rate-limit-window-source";
 import {
+  collectAbtopTelemetry,
+  mergeAbtopAgentSnapshots,
+} from "@/lib/abtop-sensor";
+import {
   buildTelemetrySnapshot,
   type TelemetrySnapshot,
 } from "@/lib/monitor-snapshot";
@@ -30,15 +34,26 @@ export async function GET(req: NextRequest) {
     const sessions = queries.getAllSessions(db).all() as Session[];
     const costs = await computeSessionCosts(sessions);
     const rows = buildMonitorRows(sessions, costs);
-    const processInfo = await collectMonitorProcessInfo();
+    const [processInfo, abtopAgents] = await Promise.all([
+      collectMonitorProcessInfo(),
+      collectAbtopTelemetry(),
+    ]);
     const rateLimit = readRateLimitWindowRecord();
 
-    const snapshot: TelemetrySnapshot = buildTelemetrySnapshot({
+    const baseSnapshot: TelemetrySnapshot = buildTelemetrySnapshot({
       generatedAt: Date.now(),
       rateLimit,
       rows,
       processInfo,
     });
+    const snapshot: TelemetrySnapshot = {
+      ...baseSnapshot,
+      agents: mergeAbtopAgentSnapshots(
+        baseSnapshot.agents,
+        sessions,
+        abtopAgents
+      ),
+    };
     return NextResponse.json(snapshot);
   } catch (error) {
     console.error("monitor snapshot route failed:", error);
