@@ -42,6 +42,8 @@ export interface TokensSnapshot {
 
 /** One agent/session's telemetry. */
 export interface AgentSnapshot {
+  /** Where this row came from. `abtop` rows are external/read-only, not Stoa-controllable. */
+  source: "stoa" | "abtop";
   id: string;
   name: string;
   agent_type: string;
@@ -109,6 +111,7 @@ export function buildTelemetrySnapshot(input: {
     const proc = input.processInfo[r.id];
     const ports = proc?.ports ?? [];
     return {
+      source: "stoa",
       id: r.id,
       name: r.name,
       agent_type: r.agentType,

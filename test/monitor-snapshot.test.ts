@@ -54,6 +54,7 @@ describe("buildTelemetrySnapshot (M5 — abtop-aligned wire shape)", () => {
     expect(snap.rate_limits).toBeNull();
     expect(snap.agents).toEqual([
       {
+        source: "stoa",
         id: "s1",
         name: "sess",
         agent_type: "claude",
