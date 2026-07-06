@@ -3,7 +3,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // Capture every command TmuxBackend shells out, with canned stdout for reads.
 // This locks the macOS/Linux tmux command construction (exact strings +
 // escaping) without needing a real tmux binary, so it runs on every OS in CI.
-const { calls } = vi.hoisted(() => ({ calls: [] as string[] }));
+const { execCalls, execFileCalls } = vi.hoisted(() => ({
+  execCalls: [] as string[],
+  execFileCalls: [] as Array<{ file: string; args: string[] }>,
+}));
 
 vi.mock("child_process", () => ({
   exec: (cmd: string, optsOrCb: unknown, cb?: unknown) => {
@@ -11,7 +14,7 @@ vi.mock("child_process", () => ({
       err: Error | null,
       result: { stdout: string; stderr: string }
     ) => void;
-    calls.push(cmd);
+    execCalls.push(cmd);
     let stdout = "";
     if (cmd.includes("list-sessions") && cmd.includes("session_activity")) {
       stdout = "claude-1\t1700000000\ncodex-2\t1700000005\n";
@@ -28,45 +31,64 @@ vi.mock("child_process", () => ({
     }
     callback(null, { stdout, stderr: "" });
   },
+  execFileSync: () => {
+    throw new Error("tmux absent in test path");
+  },
+  execFile: (file: string, args: string[], optsOrCb: unknown, cb?: unknown) => {
+    const callback = (typeof optsOrCb === "function" ? optsOrCb : cb) as (
+      err: Error | null,
+      result: { stdout: string; stderr: string }
+    ) => void;
+    execFileCalls.push({ file, args });
+    callback(null, { stdout: "", stderr: "" });
+  },
 }));
 
 import { TmuxBackend } from "@/lib/session-backend/tmux-backend";
 
 const tb = new TmuxBackend();
-const last = () => calls[calls.length - 1];
+const last = () => execCalls[execCalls.length - 1];
+const lastExecFile = () => execFileCalls[execFileCalls.length - 1];
 beforeEach(() => {
-  calls.length = 0;
+  execCalls.length = 0;
+  execFileCalls.length = 0;
 });
 
 describe("TmuxBackend command construction (macOS/Linux path)", () => {
-  it("create: mouse + new-session -d, ~ expanded to $HOME for the shell", async () => {
+  it("create: mouse + new-session use argv tokens, with ~ expanded before tmux", async () => {
     await tb.create({
       name: "claude-1",
       cwd: "~/proj",
       command: "claude --foo",
     });
-    expect(last()).toBe(
-      'tmux set -g mouse on 2>/dev/null; tmux new-session -d -s "claude-1" -c "$HOME/proj" "claude --foo"'
-    );
+    expect(execFileCalls).toEqual([
+      { file: "tmux", args: ["set", "-g", "mouse", "on"] },
+      {
+        file: "tmux",
+        args: [
+          "new-session",
+          "-d",
+          "-s",
+          "claude-1",
+          "-c",
+          expect.stringMatching(/[\\/]proj$/),
+          "claude --foo",
+        ],
+      },
+    ]);
+    expect(execCalls).toHaveLength(0);
   });
 
-  it("create: escapes shell metacharacters in the session name (q hardening)", async () => {
-    // Names are internally generated (provider-uuid) today, so this is contract
-    // hardening — but the backend must escape the chars active inside double quotes
-    // (\\ \" $ `) so a hypothetical metachar name can't break out of the -s "..." wrapper.
-    await tb.create({ name: 'a$b`c"d\\e', cwd: "~", command: "claude" });
-    expect(last()).toContain(String.raw`-s "a\$b\`c\"d\\e"`);
-  });
+  it("create: hostile cwd and command remain argv data, not shell syntax", async () => {
+    const cwd = String.raw`/tmp/repo" ; touch /tmp/pwn #`;
+    const command = String.raw`bash /tmp/stoa"$(touch /tmp/pwn)`.trim();
+    await tb.create({ name: 'a$b`c"d\\e', cwd, command });
 
-  it("create: a normal provider-uuid name is unchanged (escaping is a no-op)", async () => {
-    await tb.create({
-      name: "claude-1",
-      cwd: "~/proj",
-      command: "claude --foo",
+    expect(execCalls).toHaveLength(0);
+    expect(execFileCalls[1]).toEqual({
+      file: "tmux",
+      args: ["new-session", "-d", "-s", 'a$b`c"d\\e', "-c", cwd, command],
     });
-    expect(last()).toBe(
-      'tmux set -g mouse on 2>/dev/null; tmux new-session -d -s "claude-1" -c "$HOME/proj" "claude --foo"'
-    );
   });
 
   it("capture: visible screen vs N scrollback lines", async () => {
@@ -122,7 +144,7 @@ describe("TmuxBackend command construction (macOS/Linux path)", () => {
 
   it("pasteText: load-buffer/paste-buffer/delete-buffer then Enter", async () => {
     await tb.pasteText("claude-1", "multi\nline", { enter: true });
-    const joined = calls.join("\n");
+    const joined = execCalls.join("\n");
     expect(joined).toMatch(/tmux load-buffer -b "send-[\w-]+" ".*"/);
     expect(joined).toMatch(/tmux paste-buffer -b "send-[\w-]+" -t "claude-1"/);
     expect(joined).toMatch(/tmux delete-buffer -b "send-[\w-]+"/);

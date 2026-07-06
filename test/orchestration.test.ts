@@ -13,7 +13,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type Database from "better-sqlite3";
 
-const state = vi.hoisted(() => ({ db: null as unknown }));
+const state = vi.hoisted(() => ({
+  db: null as unknown,
+  sandboxPath: null as string | null,
+}));
 
 // Backend: record create/kill calls; capture() returns a ready banner so the
 // spawn poll loop exits fast.
@@ -30,9 +33,10 @@ vi.mock("@/lib/session-backend", () => ({
     sendEnter: vi.fn(async () => {}),
     sendKeysInterpreted: vi.fn(async () => {}),
   }),
-  // #27: workers read the backend type to gate the OS sandbox. tmux → the
-  // sandbox never engages (full-bypass), i.e. pre-#27 behavior these tests assert.
-  getBackendType: () => "tmux",
+}));
+vi.mock("@/lib/sandbox/detect", () => ({
+  detectSandboxTool: () =>
+    state.sandboxPath ? { tool: "bwrap", path: state.sandboxPath } : null,
 }));
 vi.mock("@/lib/worktrees", () => ({
   createWorktree: vi.fn(async () => ({ worktreePath: "/tmp/wt" })),
@@ -68,6 +72,8 @@ vi.mock("@/lib/db", async (importOriginal) => {
 });
 
 import { randomUUID } from "crypto";
+import { readFileSync } from "fs";
+
 import {
   spawnWorker,
   getWorkers,
@@ -102,6 +108,8 @@ function addSession(over: Partial<Record<string, unknown>> = {}): string {
 beforeEach(() => {
   backendCreate.mockClear();
   backendKill.mockClear();
+  state.sandboxPath = null;
+  delete process.env.STOA_SANDBOX;
   db().prepare("DELETE FROM sessions").run();
 });
 
@@ -132,6 +140,60 @@ describe("spawnWorker — conductor FK guard", () => {
     const workers = await getWorkers(conductor);
     expect(workers).toHaveLength(1);
     expect(workers[0].task).toBe("implement the feature");
+  });
+  it("wraps the tmux command string when STOA_SANDBOX detects bwrap", async () => {
+    process.env.STOA_SANDBOX = "1";
+    state.sandboxPath = "/usr/bin/bwrap";
+    const conductor = addSession();
+    const hostileWorkingDir = String.raw`/tmp/repo with space; touch /tmp/pwn $(whoami)`;
+
+    await spawnWorker({
+      conductorSessionId: conductor,
+      task: "sandboxed task",
+      workingDirectory: hostileWorkingDir,
+      useWorktree: false,
+      agentType: "claude",
+      model: "sonnet",
+    });
+
+    const createArg = (backendCreate.mock.calls as unknown[][])[0]?.[0] as
+      { binary: string; args: string[]; command: string } | undefined;
+    expect(createArg!.binary).toBe("/usr/bin/bwrap");
+    expect(createArg!.args).toContain("claude");
+    expect(createArg!.args).toContain("--dangerously-skip-permissions");
+    expect(createArg!.command).toMatch(/^bash /);
+    const scriptPath = createArg!.command.slice("bash ".length);
+    const script = readFileSync(scriptPath, "utf8");
+    expect(script).toContain("exec /usr/bin/bwrap");
+    expect(script).toContain("--ro-bind / /");
+    expect(script).toContain(
+      `--bind '${hostileWorkingDir}' '${hostileWorkingDir}'`
+    );
+    expect(script).toContain("-- claude");
+    expect(script).toContain("--dangerously-skip-permissions");
+  });
+
+  it("warns when STOA_SANDBOX is requested but no primitive is available", async () => {
+    process.env.STOA_SANDBOX = "1";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const conductor = addSession();
+
+    await spawnWorker({
+      conductorSessionId: conductor,
+      task: "unsandboxed task",
+      workingDirectory: "/repo",
+      useWorktree: false,
+      agentType: "claude",
+      model: "sonnet",
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[sandbox] STOA_SANDBOX=1 but no Linux/bwrap primitive found; running unconfined with full-bypass"
+    );
+    const createArg = (backendCreate.mock.calls as unknown[][])[0]?.[0] as
+      { args: string[] } | undefined;
+    expect(createArg!.args).toContain("--dangerously-skip-permissions");
+    warn.mockRestore();
   });
 });
 

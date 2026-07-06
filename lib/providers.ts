@@ -623,6 +623,11 @@ export function shellQuoteArg(token: string): string {
   return `"${escapeForDoubleQuotes(token)}"`;
 }
 
+/** Convert a clean spawn tuple into the POSIX shell command used by tmux/banner paths. */
+export function spawnToShellCommand(spawn: AgentSpawn): string {
+  return [spawn.binary, ...spawn.args].map(shellQuoteArg).join(" ");
+}
+
 /**
  * Assemble the tmux backend's flag list: the provider's buildFlags() output plus
  * the conductor's (already shell-quoted) extraArgs, with extraArgs placed BEFORE

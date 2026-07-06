@@ -30,6 +30,8 @@ vi.mock("@/lib/model-catalog", () => ({
 vi.mock("@/lib/providers", () => ({
   getProvider: () => ({ id: "claude" }),
   buildAgentArgs: () => ({ binary: "claude", args: [] }),
+  spawnToShellCommand: ({ binary, args }: { binary: string; args: string[] }) =>
+    [binary, ...args].join(" "),
   shellQuoteArg: (s: string) => s,
 }));
 

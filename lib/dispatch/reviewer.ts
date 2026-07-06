@@ -18,7 +18,7 @@ import { promisify } from "util";
 import { getDb, queries } from "../db";
 import { resolveModelForAgent } from "../model-catalog";
 import { modelForFixRound } from "../model-router";
-import { getProvider, buildAgentArgs, shellQuoteArg } from "../providers";
+import { getProvider, buildAgentArgs, spawnToShellCommand } from "../providers";
 import type { AgentType } from "../providers";
 import { sessionKey } from "../providers/registry";
 import { wrapWithBanner } from "../banner";
@@ -553,9 +553,7 @@ export async function spawnWorktreeWorker(
       autoApprove: true,
       initialPrompt: prompt,
     });
-    const command = wrapWithBanner(
-      [binary, ...args.map(shellQuoteArg)].join(" ")
-    );
+    const command = wrapWithBanner(spawnToShellCommand({ binary, args }));
     await getSessionBackend().create({
       name: tmuxName,
       cwd,

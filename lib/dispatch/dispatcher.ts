@@ -18,7 +18,7 @@ import { createWorktree, deleteWorktree } from "../worktrees";
 import { setupWorktree } from "../env-setup";
 import { getLessonsBlock } from "./lessons";
 import { resolveModelForAgent } from "../model-catalog";
-import { getProvider, buildAgentArgs, shellQuoteArg } from "../providers";
+import { getProvider, buildAgentArgs, spawnToShellCommand } from "../providers";
 import { sessionKey } from "../providers/registry";
 import { wrapWithBanner } from "../banner";
 import { getSessionBackend } from "../session-backend";
@@ -215,9 +215,7 @@ export async function dispatchOne(
       initialPrompt: prompt,
     });
     // tmux backend consumes `command`; pty backend consumes binary/args.
-    const command = wrapWithBanner(
-      [binary, ...args.map(shellQuoteArg)].join(" ")
-    );
+    const command = wrapWithBanner(spawnToShellCommand({ binary, args }));
     await getSessionBackend().create({
       name: tmuxName,
       cwd: worktreePath,
