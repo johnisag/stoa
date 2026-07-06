@@ -13,12 +13,17 @@ import { db, queries, type Session } from "./db";
 import { createWorktree, deleteWorktree } from "./worktrees";
 import { setupWorktree } from "./env-setup";
 import { resolveModelForAgent } from "./model-catalog";
-import { type AgentType, getProvider, buildAgentArgs } from "./providers";
+import {
+  type AgentType,
+  getProvider,
+  buildAgentArgs,
+  spawnToShellCommand,
+} from "./providers";
 import { sessionKey } from "./providers/registry";
 import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
-import { getSessionBackend, getBackendType } from "./session-backend";
+import { getSessionBackend } from "./session-backend";
 import { expandHome, homeDir } from "./platform";
 import { emitGenAiEvent } from "./telemetry/otel";
 import { detectSandboxTool } from "./sandbox/detect";
@@ -225,15 +230,19 @@ export async function spawnWorker(
   const cwd = actualWorkingDir;
 
   // #27 OS sandbox tier (opt-in via STOA_SANDBOX). Workers still auto-approve;
-  // sandboxed-auto additionally CONFINES the process. Gated to the pty backend +
-  // a detected primitive; falls back to today's full-bypass otherwise. Detect
-  // ONCE and inject that verdict into the wrap so the bypass flag and the
-  // confinement are decided by a SINGLE detection (no TOCTOU fail-open).
+  // sandboxed-auto additionally CONFINES the process when a primitive is
+  // detected. Detect ONCE and inject that verdict into the wrap so the bypass
+  // flag and the confinement are decided by a SINGLE detection (no TOCTOU
+  // fail-open).
   const sandboxEnabled = process.env.STOA_SANDBOX === "1";
   const detected = sandboxEnabled ? detectSandboxTool() : null;
+  if (sandboxEnabled && !detected) {
+    console.warn(
+      "[sandbox] STOA_SANDBOX=1 but no Linux/bwrap primitive found; running unconfined with full-bypass"
+    );
+  }
   const { approvalMode, sandboxActive: tentativeActive } = decideWorkerSandbox({
     sandboxEnabled,
-    backendType: getBackendType(),
     detected: detected !== null,
   });
 
@@ -260,17 +269,6 @@ export async function spawnWorker(
     }
   }
 
-  // tmux backend: banner-wrapped shell command. pty backend: direct argv. The
-  // tmux command is NEVER OS-wrapped in PR1, so its flags use sandboxActive:false
-  // (fail-closed: sandboxed-auto → no bypass flag there — and that path only runs
-  // on the tmux backend, where approvalMode is full-bypass anyway).
-  const flags = provider.buildFlags({
-    model,
-    approvalMode,
-    sandboxActive: false,
-  });
-  const agentCmd = `${provider.command} ${flags.join(" ")}`;
-  const newSessionCmd = wrapWithBanner(agentCmd);
   const { binary, args } = buildAgentArgs(provider.id, {
     model,
     approvalMode,
@@ -284,6 +282,14 @@ export async function spawnWorker(
     spawnBinary = wrapPrefix.file;
     spawnArgs = [...wrapPrefix.argsPrefix, binary, ...args];
   }
+
+  // tmux backend: banner-wrapped shell command. pty backend: direct argv. Build
+  // the tmux command from the SAME resolved spawn tuple as the pty path so bwrap
+  // composition and bypass-flag gating cannot drift between backends. Every token
+  // is shell-quoted at the final boundary (tmux's command string).
+  const newSessionCmd = wrapWithBanner(
+    spawnToShellCommand({ binary: spawnBinary, args: spawnArgs })
+  );
 
   // GenAI "run" span boundary — a worker (one agent run) starts here. Timings
   // are captured now and emitted at the terminal branch below. No-op unless

@@ -5,15 +5,16 @@
  * used to be assembled inline across lib/ and app/api/. This is the macOS/Linux
  * backend and the behavioral reference for the future pty backend.
  *
- * POSIX-only by design: it shells out to `tmux` and relies on shell features
- * (`;`, `||`, `2>/dev/null`). The pty backend will not use a shell at all.
+ * POSIX-only by design: create uses argv-safe `execFile`; read/control helpers
+ * retain the historical tmux shell snippets (`||`, `2>/dev/null`). The pty backend
+ * does not use a shell at all.
  */
 
-import { exec } from "child_process";
+import { exec, execFile } from "child_process";
 import { promisify } from "util";
 import { writeFile, unlink } from "fs/promises";
 import path from "path";
-import { tmpDir } from "../platform";
+import { expandHome, resolveBinary, tmpDir } from "../platform";
 import type {
   SessionBackend,
   SessionActivity,
@@ -23,6 +24,8 @@ import type {
 } from "./types";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+const tmuxBinary = resolveBinary("tmux") || "tmux";
 
 /**
  * Wrap a session name for use inside a double-quoted shell argument, escaping the
@@ -40,11 +43,14 @@ let pasteCounter = 0;
 
 export class TmuxBackend implements SessionBackend {
   async create({ name, cwd, command }: CreateOptions): Promise<void> {
-    // A leading "~" is expanded by the shell that runs this command via $HOME.
-    const shellCwd = cwd.replace(/^~/, "$HOME");
-    // Matches: tmux set -g mouse on 2>/dev/null; tmux new-session -d -s "name" -c "cwd" "command"
-    await execAsync(
-      `tmux set -g mouse on 2>/dev/null; tmux new-session -d -s ${q(name)} -c "${shellCwd}" "${command}"`
+    const resolvedCwd = expandHome(cwd);
+    await execFileAsync(tmuxBinary, ["set", "-g", "mouse", "on"], {
+      windowsHide: true,
+    });
+    await execFileAsync(
+      tmuxBinary,
+      ["new-session", "-d", "-s", name, "-c", resolvedCwd, command],
+      { windowsHide: true }
     );
   }
 

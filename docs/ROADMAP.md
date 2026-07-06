@@ -546,8 +546,8 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     migration 50, `auto-merge.ts`, `reconciler.ts`, `verdict-inbox.ts`,
     AllocationConsole, repos PATCH route.
 27. ⏳ **OS-level sandbox launch tier (replace all-or-nothing yolo)** — `security` · L.
-    **FOUNDATION SHIPPED (opt-in Linux/bwrap on the pty backend); tmux composition +
-    interactive UI + validated default = follow-ups.** Replaces the all-or-nothing
+    **FOUNDATION SHIPPED (opt-in Linux/bwrap on pty + tmux workers); interactive UI +
+    validated default = follow-ups.** Replaces the all-or-nothing
     `auto_approve` with a tri-state `approval_mode` (`prompt` / `sandboxed-auto` /
     `full-bypass`) that DECOUPLES "suppress permission prompts" from "unrestricted
     host access". New pure `lib/sandbox/` (`wrapSpawnForSandbox` — an ADDITIVE argv
@@ -556,7 +556,8 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     git-common-dir + `~/.stoa` rw over a `--ro-bind / /` root, opt-in `--unshare-net`;
     feature-detection via `resolveBinary` that FAILS CLOSED to a pass-through; a
     `computeRwRoots` policy; the `decideWorkerSandbox` gate). Every dynamic value
-    (an rwRoot path) is a discrete argv token — no shell, so nothing injects.
+    (an rwRoot path) is a discrete argv token on pty and is shell-quoted only at the
+    tmux command-string boundary, so nothing injects.
     `shouldBypassPrompts` (shared by `buildAgentArgs` + every `buildFlags`) pushes the
     bypass flag only for `full-bypass` OR `sandboxed-auto`-with-an-active-sandbox — so
     an unhonorable `sandboxed-auto` withholds the flag (the agent prompts; **Codex
@@ -570,6 +571,9 @@ sec}`) → the M2a record at `~/.stoa/rate-limits.json` — fail-open, and skips
     → `prompt`/`full-bypass`); a network egress ALLOWLIST proxy (PR1 ships
     all-or-nothing `--unshare-net`); env-var scrubbing; and flipping the worker
     DEFAULT to `sandboxed-auto` (gated behind live per-agent bind-set validation).
+    **Follow-up shipped here:** tmux worker launches now compose the same resolved
+    sandbox spawn tuple as pty before wrapping it in the banner init script, so Linux's
+    default tmux backend honors `STOA_SANDBOX=1` too.
     _Seam:_ new `lib/sandbox/`, `lib/providers.ts`, `lib/session-launch.ts`,
     `lib/orchestration.ts`, `lib/db/migrations.ts`.
 28. ✅ **Embedded live app preview (+ structured note to the agent)** — `feature`

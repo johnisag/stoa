@@ -198,21 +198,19 @@ describe("coerceApprovalMode (fail-closed)", () => {
 });
 
 describe("decideWorkerSandbox", () => {
-  it("engages sandboxed-auto ONLY when opt-in + pty backend + primitive", () => {
+  it("engages sandboxed-auto when opt-in + primitive", () => {
     expect(
       decideWorkerSandbox({
         sandboxEnabled: true,
-        backendType: "pty",
         detected: true,
       })
     ).toEqual({ approvalMode: "sandboxed-auto", sandboxActive: true });
   });
 
-  it("stays full-bypass off (no opt-in), on tmux, or with no primitive", () => {
+  it("stays full-bypass with no opt-in or no primitive", () => {
     const cases = [
-      { sandboxEnabled: false, backendType: "pty" as const, detected: true },
-      { sandboxEnabled: true, backendType: "tmux" as const, detected: true },
-      { sandboxEnabled: true, backendType: "pty" as const, detected: false },
+      { sandboxEnabled: false, detected: true },
+      { sandboxEnabled: true, detected: false },
     ];
     for (const c of cases) {
       expect(decideWorkerSandbox(c)).toEqual({
@@ -220,5 +218,14 @@ describe("decideWorkerSandbox", () => {
         sandboxActive: false,
       });
     }
+  });
+
+  it("engages on tmux too now that command-string wrapping is wired", () => {
+    expect(
+      decideWorkerSandbox({
+        sandboxEnabled: true,
+        detected: true,
+      })
+    ).toEqual({ approvalMode: "sandboxed-auto", sandboxActive: true });
   });
 });
