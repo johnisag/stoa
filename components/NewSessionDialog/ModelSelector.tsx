@@ -37,7 +37,7 @@ export function ModelSelector({
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="e.g. anthropic/claude-sonnet-4.6 — blank for the agent default"
+          placeholder="e.g. gpt-5.5 or provider/model — blank for the agent default"
         />
       ) : (
         <>

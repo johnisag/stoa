@@ -108,7 +108,7 @@ describe("F-A — buildForkSpawn (fork spawns the original provider, not claude)
       isRoot: false,
     });
     expect(spawn.binary).toBe("hermes");
-    expect(spawn.args).toEqual(["-m", "claude-opus-4-8"]); // HERMES_DEFAULT_MODEL
+    expect(spawn.args).toEqual(["-m", "gpt-5.5"]); // HERMES_DEFAULT_MODEL
     expect(command).not.toContain(evil);
     expect(command).not.toContain("rm -rf");
   });
