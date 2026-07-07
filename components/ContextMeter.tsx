@@ -1,6 +1,6 @@
 "use client";
 
-import { Gauge } from "lucide-react";
+import { AlertTriangle, Gauge } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -18,16 +18,42 @@ const pctLabel = (pct: number) => `${Math.round(pct * 100)}%`;
  * muted → amber → red as it fills so silent context exhaustion is visible.
  * Self-contained (reads useSessionCosts, the same transcript-token signal
  * CostIndicator uses) so it doesn't thread token counts through every view.
- * Claude-only today; hidden until there's a non-zero reading. NOT the fleet
+ * Hidden until a tracked provider has a non-zero reading. NOT the fleet
  * $-spend badge (that's CostIndicator).
  */
 export function ContextMeter({ sessionId }: { sessionId: string }) {
   const { data } = useSessionCosts();
   const cost = data?.sessions[sessionId];
-  // Hide for unsupported agents / before the first reading lands.
-  if (!cost || !cost.supported || cost.contextTokens <= 0) return null;
+  if (!cost) return null;
 
-  const window = contextWindowFor(cost.model);
+  if (cost.trackable && !cost.supported) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            aria-label="Context window tracking unavailable"
+            className="flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-600 tabular-nums dark:text-amber-400"
+          >
+            <AlertTriangle className="h-3 w-3" />?
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-xs">
+          <p className="font-medium">Context window unavailable</p>
+          <p className="text-muted-foreground mt-1 text-[10px]">
+            Tracking is paused until Stoa can verify this provider session.
+          </p>
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  // Hide for untracked agents / before the first reading lands.
+  if (!cost.supported || cost.contextTokens <= 0) return null;
+
+  const window =
+    cost.contextWindow && cost.contextWindow > 0
+      ? cost.contextWindow
+      : contextWindowFor(cost.model);
   const { pct, tone } = tokenMeter(cost.contextTokens, window);
 
   const tint =

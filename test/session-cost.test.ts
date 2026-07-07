@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  afterAll,
+  beforeEach,
+} from "vitest";
 import {
   parseClaudeUsage,
   parseClaudeContextTokens,
@@ -9,6 +17,7 @@ import {
   computeSessionCosts,
 } from "../lib/session-cost";
 import { readClaudeTranscriptRaw } from "../lib/claude-transcript";
+import { readCodexSessionUsage } from "../lib/codex-usage";
 import type { Session } from "../lib/db";
 
 // Mock the transcript fs boundary so computeSessionCosts can be exercised with a
@@ -18,6 +27,11 @@ vi.mock("../lib/claude-transcript", () => ({
   resolveClaudeTranscriptPath: vi.fn(
     (_cwd: string, id: string) => `/fake/${id}.jsonl`
   ),
+}));
+
+vi.mock("../lib/codex-usage", () => ({
+  readCodexSessionUsage: vi.fn(),
+  refreshCodexThreadVerifications: vi.fn(async () => {}),
 }));
 
 // Exercise the cost LOGIC with the transcript cache OFF, so these tests read the
@@ -33,6 +47,11 @@ beforeAll(() => {
 afterAll(() => {
   if (prevCacheEnv === undefined) delete process.env.STOA_TRANSCRIPT_CACHE;
   else process.env.STOA_TRANSCRIPT_CACHE = prevCacheEnv;
+});
+
+beforeEach(() => {
+  vi.mocked(readClaudeTranscriptRaw).mockReset();
+  vi.mocked(readCodexSessionUsage).mockReset();
 });
 
 // A few JSONL lines like Claude Code writes: user turns (no usage) + assistant
@@ -356,14 +375,13 @@ describe("computeSessionCosts (#22 — direct: short-circuits + bounded concurre
     } as unknown as Session;
   }
 
-  it("short-circuits supported:false WITHOUT touching the reader: no reader / no transcript id / no cwd", async () => {
-    vi.mocked(readClaudeTranscriptRaw).mockClear();
+  it("short-circuits supported:false for no reader / no transcript id / no cwd", async () => {
     const costs = await computeSessionCosts([
-      cs({ id: "codex", agent_type: "codex" }), // provider has no reader
+      cs({ id: "hermes", agent_type: "hermes" }), // provider has no reader
       cs({ id: "noid", claude_session_id: null }), // transcript id never captured
       cs({ id: "nocwd", working_directory: null }), // cwd unset
     ]);
-    for (const id of ["codex", "noid", "nocwd"]) {
+    for (const id of ["hermes", "noid", "nocwd"]) {
       expect(costs[id]).toMatchObject({
         tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         costUsd: null,
@@ -372,6 +390,187 @@ describe("computeSessionCosts (#22 — direct: short-circuits + bounded concurre
       });
     }
     expect(readClaudeTranscriptRaw).not.toHaveBeenCalled();
+  });
+
+  it("reports Codex unsupported when no deterministic rollout can be located", async () => {
+    vi.mocked(readCodexSessionUsage).mockResolvedValue(undefined);
+    const costs = await computeSessionCosts([
+      cs({ id: "codex", agent_type: "codex", model: "gpt-5.5" }),
+    ]);
+    expect(costs["codex"]).toMatchObject({
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      costUsd: null,
+      contextTokens: 0,
+      contextWindow: null,
+      supported: false,
+    });
+  });
+
+  it("reports Codex unsupported when a verified rollout cannot be read", async () => {
+    vi.mocked(readCodexSessionUsage).mockResolvedValue(null);
+    const costs = await computeSessionCosts([
+      cs({ id: "codex", agent_type: "codex", model: "gpt-5.5" }),
+    ]);
+    expect(costs["codex"]).toMatchObject({
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      costUsd: null,
+      contextTokens: 0,
+      contextWindow: null,
+      supported: false,
+    });
+  });
+
+  it("prices Codex rollouts and carries their runtime context window", async () => {
+    vi.mocked(readCodexSessionUsage).mockResolvedValue({
+      tokens: { input: 1_000, cacheRead: 9_000, output: 100, cacheWrite: 0 },
+      standardTokens: {
+        input: 1_000,
+        cacheRead: 9_000,
+        output: 100,
+        cacheWrite: 0,
+      },
+      longContextTokens: {
+        input: 0,
+        cacheRead: 0,
+        output: 0,
+        cacheWrite: 0,
+      },
+      contextTokens: 10_000,
+      contextWindow: 258_400,
+      model: "gpt-5-codex",
+    });
+    const costs = await computeSessionCosts([
+      cs({ id: "codex", agent_type: "codex", model: "gpt-unknown" }),
+    ]);
+    expect(costs["codex"]).toMatchObject({
+      model: "gpt-5-codex",
+      tokens: { input: 1_000, cacheRead: 9_000, output: 100, cacheWrite: 0 },
+      contextTokens: 10_000,
+      contextWindow: 258_400,
+      supported: true,
+    });
+    expect(costs["codex"].costUsd).toBeCloseTo(0.004725, 8);
+  });
+
+  it("uses Codex long-context pricing only when rollout telemetry crosses the threshold", async () => {
+    vi.mocked(readCodexSessionUsage).mockResolvedValue({
+      tokens: {
+        input: 1_000_000,
+        cacheRead: 1_000_000,
+        output: 1_000_000,
+        cacheWrite: 0,
+      },
+      standardTokens: {
+        input: 0,
+        cacheRead: 0,
+        output: 0,
+        cacheWrite: 0,
+      },
+      longContextTokens: {
+        input: 1_000_000,
+        cacheRead: 1_000_000,
+        output: 1_000_000,
+        cacheWrite: 0,
+      },
+      contextTokens: 272_001,
+      contextWindow: 1_050_000,
+      model: "gpt-5.5",
+      longContext: true,
+    });
+    const costs = await computeSessionCosts([
+      cs({ id: "codex", agent_type: "codex", model: "gpt-5.5" }),
+    ]);
+    expect(costs["codex"].costUsd).toBeCloseTo(56, 8);
+  });
+
+  it("blends standard and long-context Codex pricing by token delta", async () => {
+    vi.mocked(readCodexSessionUsage).mockResolvedValue({
+      tokens: {
+        input: 2_000_000,
+        cacheRead: 2_000_000,
+        output: 2_000_000,
+        cacheWrite: 0,
+      },
+      standardTokens: {
+        input: 1_000_000,
+        cacheRead: 1_000_000,
+        output: 1_000_000,
+        cacheWrite: 0,
+      },
+      longContextTokens: {
+        input: 1_000_000,
+        cacheRead: 1_000_000,
+        output: 1_000_000,
+        cacheWrite: 0,
+      },
+      contextTokens: 10_000,
+      contextWindow: 1_050_000,
+      model: "gpt-5.5",
+      longContext: true,
+    });
+    const costs = await computeSessionCosts([
+      cs({ id: "codex", agent_type: "codex", model: "gpt-5.5" }),
+    ]);
+    expect(costs["codex"].costUsd).toBeCloseTo(91.5, 8);
+  });
+
+  it("nets a fork baseline across Codex standard and long-context buckets", async () => {
+    vi.mocked(readCodexSessionUsage).mockResolvedValue({
+      tokens: {
+        input: 2_000_000,
+        cacheRead: 2_000_000,
+        output: 2_000_000,
+        cacheWrite: 0,
+      },
+      standardTokens: {
+        input: 1_000_000,
+        cacheRead: 1_000_000,
+        output: 1_000_000,
+        cacheWrite: 0,
+      },
+      longContextTokens: {
+        input: 1_000_000,
+        cacheRead: 1_000_000,
+        output: 1_000_000,
+        cacheWrite: 0,
+      },
+      contextTokens: 10_000,
+      contextWindow: 1_050_000,
+      model: "gpt-5.5",
+      longContext: true,
+    });
+    const costs = await computeSessionCosts([
+      cs({
+        id: "codex",
+        agent_type: "codex",
+        model: "gpt-5.5",
+        fork_cost_baseline: JSON.stringify({
+          input: 1_000_000,
+          cacheRead: 1_000_000,
+          output: 1_000_000,
+          cacheWrite: 0,
+        }),
+      }),
+    ]);
+    expect(costs["codex"].tokens).toEqual({
+      input: 1_000_000,
+      cacheRead: 1_000_000,
+      output: 1_000_000,
+      cacheWrite: 0,
+    });
+    expect(costs["codex"].standardTokens).toEqual({
+      input: 500_000,
+      cacheRead: 500_000,
+      output: 500_000,
+      cacheWrite: 0,
+    });
+    expect(costs["codex"].longContextTokens).toEqual({
+      input: 500_000,
+      cacheRead: 500_000,
+      output: 500_000,
+      cacheWrite: 0,
+    });
+    expect(costs["codex"].costUsd).toBeCloseTo(45.75, 8);
   });
 
   it("an unreadable transcript is best-effort ZERO (still supported, never a throw)", async () => {
@@ -433,14 +632,15 @@ describe("computeSessionCosts (#22 — direct: short-circuits + bounded concurre
 });
 
 describe("costReaderFor (provider seam)", () => {
-  it("has a usage reader for Claude (the only parseable transcript today)", () => {
+  it("has usage readers for providers with parseable telemetry", () => {
     expect(typeof costReaderFor("claude")).toBe("function");
+    expect(typeof costReaderFor("codex")).toBe("function");
   });
 
   it("returns undefined for agents without a reader and for unknown ids", () => {
     // These report supported:false in the cost UI — adding one is registering a
     // reader, not a special-case in computeSessionCosts.
-    for (const a of ["codex", "hermes", "kilo", "kimi", "shell", "nope"]) {
+    for (const a of ["hermes", "kilo", "kimi", "shell", "nope"]) {
       expect(costReaderFor(a)).toBeUndefined();
     }
   });

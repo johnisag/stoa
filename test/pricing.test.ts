@@ -20,9 +20,41 @@ describe("priceForModel", () => {
     expect(priceForModel("anthropic/claude-haiku-4.5")?.input).toBe(0.8);
   });
   it("returns null for unknown / empty models", () => {
-    expect(priceForModel("gpt-5-codex")).toBeNull();
+    expect(priceForModel("gpt-unknown")).toBeNull();
     expect(priceForModel("")).toBeNull();
     expect(priceForModel(null)).toBeNull();
+  });
+  it("matches current OpenAI GPT/Codex published token prices", () => {
+    expect(priceForModel("gpt-5.5")).toMatchObject({
+      input: 5,
+      cacheRead: 0.5,
+      output: 30,
+    });
+    expect(priceForModel("gpt-5.4-mini")).toMatchObject({
+      input: 0.75,
+      cacheRead: 0.075,
+      output: 4.5,
+    });
+    expect(priceForModel("gpt-5.4-nano")).toMatchObject({
+      input: 0.2,
+      cacheRead: 0.02,
+      output: 1.25,
+    });
+    expect(priceForModel("gpt-5.3-codex-spark")).toMatchObject({
+      input: 1.75,
+      cacheRead: 0.175,
+      output: 14,
+    });
+    expect(priceForModel("gpt-5-codex")).toMatchObject({
+      input: 1.75,
+      cacheRead: 0.175,
+      output: 14,
+    });
+    expect(priceForModel("gpt-5.5", { longContext: true })).toMatchObject({
+      input: 10,
+      cacheRead: 1,
+      output: 45,
+    });
   });
 });
 
@@ -43,13 +75,38 @@ describe("computeCostUsd", () => {
     );
     expect(cost).toBeCloseTo(20.25, 6);
   });
-  it("is null when the model is unpriced (e.g. Codex/Hermes)", () => {
+  it("is null when the model is unpriced", () => {
     expect(
       computeCostUsd(
         { input: 9, output: 9, cacheRead: 0, cacheWrite: 0 },
-        "gpt-5"
+        "gpt-unknown"
       )
     ).toBeNull();
+  });
+  it("prices OpenAI cached input separately from fresh input", () => {
+    const cost = computeCostUsd(
+      {
+        input: 1_000_000,
+        cacheRead: 1_000_000,
+        output: 1_000_000,
+        cacheWrite: 0,
+      },
+      "gpt-5.5"
+    );
+    expect(cost).toBeCloseTo(35.5, 6);
+  });
+  it("applies OpenAI long-context rates when a GPT prompt crosses 272K input tokens", () => {
+    const cost = computeCostUsd(
+      {
+        input: 1_000_000,
+        cacheRead: 1_000_000,
+        output: 1_000_000,
+        cacheWrite: 0,
+      },
+      "gpt-5.5",
+      { longContext: true }
+    );
+    expect(cost).toBeCloseTo(56, 6);
   });
   it("zero usage costs zero", () => {
     expect(computeCostUsd(ZERO_USAGE, "claude-opus-4-8")).toBe(0);
@@ -104,7 +161,7 @@ describe("cacheSavingsUsd (#12)", () => {
     expect(
       cacheSavingsUsd(
         { input: 0, output: 0, cacheRead: 1_000, cacheWrite: 0 },
-        "gpt-5"
+        "gpt-unknown"
       )
     ).toBeNull();
   });

@@ -1175,7 +1175,9 @@ app.prepare().then(() => {
         if (!cost) continue;
         const pct = tokenMeter(
           cost.contextTokens,
-          contextWindowFor(cost.model ?? s.model)
+          cost.contextWindow && cost.contextWindow > 0
+            ? cost.contextWindow
+            : contextWindowFor(cost.model ?? s.model)
         ).pct;
         // #25: a session awaiting its post-compact pointer is handled first
         // and never starts another compaction this tick. The pre-check runs

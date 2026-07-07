@@ -8,9 +8,10 @@ import { readRateLimitWindow } from "@/lib/rate-limit-window-source";
 export type { SessionCost } from "@/lib/session-cost";
 
 // GET /api/sessions/cost — estimated token cost per session + a fleet total,
-// plus the active budget caps and each session's level vs them. Claude-only
-// today (other agents report supported:false). Best-effort: a session with no
-// readable transcript contributes zero. Not on the hot poll path.
+// plus the active budget caps and each session's level vs them. Providers
+// without a deterministic usage source report supported:false. Best-effort: a
+// session with a located but unreadable source contributes zero. Not on the hot
+// poll path.
 export async function GET() {
   try {
     const db = getDb();

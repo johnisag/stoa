@@ -51,7 +51,7 @@ export interface MonitorRow {
   /** Estimated USD the prompt cache saved this session vs. full input price (#12), or
    *  null when the model is unpriced. */
   cacheSavingsUsd: number | null;
-  /** True when a cost/usage estimate is available (a Claude transcript today). */
+  /** True when a cost/usage estimate is available for the provider. */
   supported: boolean;
 }
 
@@ -70,6 +70,34 @@ export function monitorStatusRank(status: string): number {
   return STATUS_RANK[status] ?? 5;
 }
 
+function addCosts(...parts: Array<number | null>): number | null {
+  let total = 0;
+  let priced = false;
+  for (const part of parts) {
+    if (part != null) {
+      total += part;
+      priced = true;
+    }
+  }
+  return priced ? total : null;
+}
+
+function monitorCacheSavingsUsd(
+  tokens: TokenUsage,
+  model: string | null,
+  cost: SessionCost | undefined
+): number | null {
+  if (cost?.standardTokens || cost?.longContextTokens) {
+    return addCosts(
+      computeCacheSavingsUsd(cost.standardTokens ?? ZERO_USAGE, model),
+      computeCacheSavingsUsd(cost.longContextTokens ?? ZERO_USAGE, model, {
+        longContext: true,
+      })
+    );
+  }
+  return computeCacheSavingsUsd(tokens, model);
+}
+
 /**
  * Merge the session roster with the cost/usage estimate (and optional managed
  * statuses) into per-session monitor rows, sorted attention-first then by name
@@ -86,7 +114,11 @@ export function buildMonitorRows(
     const tokens = cost?.tokens ?? ZERO_USAGE;
     const model = cost?.model ?? s.model ?? null;
     const contextTokens = cost?.contextTokens ?? 0;
-    const meter = tokenMeter(contextTokens, contextWindowFor(model));
+    const contextWindow =
+      cost?.contextWindow && cost.contextWindow > 0
+        ? cost.contextWindow
+        : contextWindowFor(model);
+    const meter = tokenMeter(contextTokens, contextWindow);
     return {
       id: s.id,
       name: s.name,
@@ -101,7 +133,7 @@ export function buildMonitorRows(
       contextPct: meter.pct,
       contextTone: meter.tone,
       cacheHitRate: computeCacheHitRate(tokens),
-      cacheSavingsUsd: computeCacheSavingsUsd(tokens, model),
+      cacheSavingsUsd: monitorCacheSavingsUsd(tokens, model, cost),
       supported: cost?.supported ?? false,
     };
   });
