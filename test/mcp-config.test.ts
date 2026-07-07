@@ -12,7 +12,7 @@ import {
   writeFileSync,
   existsSync,
 } from "fs";
-import { execFileSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import { tmpdir } from "os";
 import path from "path";
 import {
@@ -25,6 +25,17 @@ import {
   planHermesRegistration,
 } from "@/lib/mcp-config";
 import { CONDUCTOR_MARKER_FILE } from "@/lib/conductor-marker";
+import { isWindows, resolveBinary } from "@/lib/platform";
+
+function expectedMcpCommand() {
+  return isWindows
+    ? process.env.ComSpec || "cmd.exe"
+    : resolveBinary("npx") || "npx";
+}
+
+function expectedMcpArgsPrefix() {
+  return isWindows ? ["/d", "/c", "npx"] : [];
+}
 
 describe("ensureMcpConfig", () => {
   let dir: string;
@@ -39,7 +50,10 @@ describe("ensureMcpConfig", () => {
     ensureMcpConfig(dir, "session-abc");
     const cfg = JSON.parse(readFileSync(path.join(dir, ".mcp.json"), "utf-8"));
     expect(cfg.mcpServers.stoa).toBeTruthy();
-    expect(cfg.mcpServers.stoa.command).toBe("npx");
+    expect(cfg.mcpServers.stoa.command).toBe(expectedMcpCommand());
+    expect(
+      cfg.mcpServers.stoa.args.slice(0, expectedMcpArgsPrefix().length)
+    ).toEqual(expectedMcpArgsPrefix());
     expect(cfg.mcpServers.stoa.args).toContain("tsx");
     expect(cfg.mcpServers.stoa.env.CONDUCTOR_SESSION_ID).toBe("session-abc");
     expect(hasMcpConfig(dir)).toBe(true);
@@ -108,10 +122,27 @@ describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
     for (let i = 0; i < args.length; i += 2) expect(args[i]).toBe("-c");
 
     const kv = args.filter((_, i) => i % 2 === 1);
-    expect(kv).toContain("mcp_servers.stoa.command='npx'");
-    expect(kv.some((s) => /^mcp_servers\.stoa\.args=\['tsx',/.test(s))).toBe(
-      true
+    const commandToken = kv.find((s) =>
+      s.startsWith("mcp_servers.stoa.command=")
     );
+    expect(commandToken).toBeTruthy();
+    expect(commandToken).toContain(expectedMcpCommand());
+    const argsToken = kv.find((s) => s.startsWith("mcp_servers.stoa.args="))!;
+    for (const prefix of expectedMcpArgsPrefix()) {
+      expect(argsToken).toContain(`'${prefix}'`);
+    }
+    if (isWindows) {
+      // Codex starts MCP servers with a direct child-process spawn. On Windows the
+      // generated command must be a real executable (`cmd.exe`), not npx.cmd.
+      const probe = spawnSync(
+        expectedMcpCommand(),
+        [...expectedMcpArgsPrefix(), "--version"],
+        { encoding: "utf8" }
+      );
+      expect(probe.error).toBeUndefined();
+      expect(probe.status).toBe(0);
+    }
+    expect(argsToken).toContain("'tsx'");
     expect(kv).toContain(
       "mcp_servers.stoa.env.CONDUCTOR_SESSION_ID='sess-123'"
     );
@@ -140,20 +171,33 @@ describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
 });
 
 describe("planHermesRegistration — stale-path self-correction (F3)", () => {
-  const cur = "/abs/stoa/mcp/orchestration-server.ts";
+  const cur = JSON.stringify({
+    schemaVersion: 2,
+    serverPath: "/abs/stoa/mcp/orchestration-server.ts",
+    command: "npx",
+    args: ["tsx", "/abs/stoa/mcp/orchestration-server.ts"],
+  });
 
-  it("skips when listed AND recorded at the current path", () => {
+  it("skips when listed AND recorded at the current registration identity", () => {
     expect(planHermesRegistration(true, cur, cur)).toEqual({
       skip: true,
       removeFirst: false,
     });
   });
 
-  it("re-points (remove-first) when listed at a STALE path", () => {
-    expect(planHermesRegistration(true, "/old/path/server.ts", cur)).toEqual({
+  it("re-points (remove-first) when listed at a STALE identity", () => {
+    expect(
+      planHermesRegistration(true, JSON.stringify({ old: true }), cur)
+    ).toEqual({
       skip: false,
       removeFirst: true,
     });
+  });
+
+  it("treats the old path-only marker format as stale", () => {
+    expect(
+      planHermesRegistration(true, "/abs/stoa/mcp/orchestration-server.ts", cur)
+    ).toEqual({ skip: false, removeFirst: true });
   });
 
   it("re-registers (remove-first) when listed but the path is unknown", () => {
@@ -215,8 +259,9 @@ describe("Hermes conductor wiring", () => {
       "add",
       "stoa",
       "--command",
-      "npx",
+      expectedMcpCommand(),
       "--args",
+      ...expectedMcpArgsPrefix(),
       "tsx",
       "/abs/orchestration-server.ts",
     ]);

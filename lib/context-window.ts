@@ -9,11 +9,18 @@
 
 /** Fallback cap when the model is unknown/unpriced — a conservative 200k. */
 export const DEFAULT_CONTEXT_WINDOW = 200_000;
+/** Effective input budget Codex CLI reports for current GPT-5.x Codex sessions. */
+export const CODEX_CONTEXT_WINDOW = 258_400;
 
 // Matched on the tier word so it works for Stoa's stored values — bare aliases
 // ("sonnet"/"opus"/"haiku"), full ids ("claude-sonnet-4-6"), AND Hermes
 // free-text ("anthropic/claude-sonnet-4.6"). Tokens.
 const CONTEXT_WINDOWS: Array<{ match: RegExp; window: number }> = [
+  { match: /\bgpt-5\.5\b/i, window: CODEX_CONTEXT_WINDOW },
+  {
+    match: /\bgpt-5(?:\.\d+)?-codex(?:-spark)?\b/i,
+    window: CODEX_CONTEXT_WINDOW,
+  },
   // Sonnet's 1M-token beta is opt-in; the default surface is 200k like the rest.
   { match: /opus/i, window: 200_000 },
   { match: /sonnet/i, window: 200_000 },

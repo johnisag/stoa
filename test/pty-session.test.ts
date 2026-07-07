@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { tmpdir } from "os";
+import path from "path";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import {
   spawnSession,
@@ -164,6 +166,22 @@ describe("pty registry / PtySession", () => {
     });
     expect(b).toBe(a);
     killSession("test-idem");
+  });
+
+  it("fails fast with a clear error when the working directory is missing", () => {
+    const missingCwd = path.join(
+      tmpdir(),
+      `stoa-missing-cwd-${process.pid}-${Date.now()}`
+    );
+
+    expect(() =>
+      spawnSession("test-missing-cwd", {
+        binary: "node",
+        args: ["-e", "process.exit(0)"],
+        cwd: missingCwd,
+      })
+    ).toThrow(`Working directory does not exist: ${missingCwd}`);
+    expect(hasSession("test-missing-cwd")).toBe(false);
   });
 
   it("renames a registry key, preserving the session object", () => {

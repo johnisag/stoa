@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  CODEX_CONTEXT_WINDOW,
   contextWindowFor,
   tokenMeter,
   DEFAULT_CONTEXT_WINDOW,
@@ -11,8 +12,13 @@ describe("contextWindowFor", () => {
     expect(contextWindowFor("claude-sonnet-4-6")).toBe(200_000);
     expect(contextWindowFor("anthropic/claude-haiku-4.5")).toBe(200_000);
   });
+  it("matches Codex's reported GPT context window instead of the unknown fallback", () => {
+    expect(contextWindowFor("gpt-5.5")).toBe(CODEX_CONTEXT_WINDOW);
+    expect(contextWindowFor("gpt-5-codex")).toBe(CODEX_CONTEXT_WINDOW);
+    expect(contextWindowFor("gpt-5.3-codex-spark")).toBe(CODEX_CONTEXT_WINDOW);
+  });
   it("falls back to the default cap for unknown / empty models", () => {
-    expect(contextWindowFor("gpt-5-codex")).toBe(DEFAULT_CONTEXT_WINDOW);
+    expect(contextWindowFor("gpt-unknown")).toBe(DEFAULT_CONTEXT_WINDOW);
     expect(contextWindowFor("")).toBe(DEFAULT_CONTEXT_WINDOW);
     expect(contextWindowFor(null)).toBe(DEFAULT_CONTEXT_WINDOW);
     expect(contextWindowFor(undefined)).toBe(DEFAULT_CONTEXT_WINDOW);

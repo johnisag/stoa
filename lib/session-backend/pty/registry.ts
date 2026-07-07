@@ -12,6 +12,7 @@
  * this into a separate long-lived pty-host process.
  */
 
+import { statSync } from "fs";
 import * as pty from "node-pty";
 import {
   isWindows,
@@ -84,6 +85,21 @@ function buildEnv(extra?: Record<string, string>): Record<string, string> {
   return { ...base, ...(extra ?? {}) };
 }
 
+/**
+ * Validate the cwd before node-pty reaches CreateProcess. Windows reports a
+ * missing directory as opaque error 267; surfacing the path here makes stale
+ * worktrees and deleted projects actionable instead of looking like a pty bug.
+ */
+function resolveSpawnCwd(rawCwd: string): string {
+  const cwd = expandHome(rawCwd) || homeDir();
+  try {
+    if (statSync(cwd).isDirectory()) return cwd;
+  } catch {
+    // Fall through to the consistent error below.
+  }
+  throw new Error(`Working directory does not exist: ${cwd}`);
+}
+
 /** Whether a session with this key currently exists (alive or not yet reaped). */
 export function hasSession(key: string): boolean {
   return sessions.has(key);
@@ -112,7 +128,7 @@ export function spawnSession(key: string, spec: SpawnSpec): PtySession {
 
   const cols = spec.cols ?? DEFAULT_COLS;
   const rows = spec.rows ?? DEFAULT_ROWS;
-  const cwd = expandHome(spec.cwd) || homeDir();
+  const cwd = resolveSpawnCwd(spec.cwd);
   const { file, args } = resolveSpawn(spec.binary, spec.args);
 
   const proc = pty.spawn(file, args, {

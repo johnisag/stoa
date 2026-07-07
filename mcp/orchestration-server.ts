@@ -22,6 +22,7 @@
  * session ID as conductorId. The UI will show the conductor/worker hierarchy.
  */
 
+import "../lib/als-global";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
