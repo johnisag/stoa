@@ -68,6 +68,7 @@ interface GitDrawerProps {
   /** Explicit repo paths to aggregate (a multi-repo workspace session's worktrees)
    * — drives the multi-status query so it shows THOSE, not the project's repos. */
   repoPaths?: string[];
+  onOpenFile?: (file: GitFile | MultiRepoGitFile) => void;
 }
 
 export function GitDrawer({
@@ -77,6 +78,7 @@ export function GitDrawer({
   projectId,
   repositories = [],
   repoPaths,
+  onOpenFile,
 }: GitDrawerProps) {
   const queryClient = useQueryClient();
 
@@ -176,8 +178,14 @@ export function GitDrawer({
   // Animation
   const { isAnimatingIn, isClosing } = useDrawerAnimation(open);
 
-  // Clear selected file when drawer opens
+  // Prefer the pane's full editor; keep the dialog fallback for deleted files
+  // and standalone drawer usage.
   const handleFileClick = (file: GitFile | MultiRepoGitFile) => {
+    if (onOpenFile && file.status !== "deleted") {
+      onOpenFile(file);
+      return;
+    }
+
     setSelectedFile(file);
   };
 
