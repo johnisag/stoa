@@ -26,7 +26,7 @@
     ".husky/pre-commit": "042eaf5386ffbfccd14639db8112e12d297a7d4d2caf25c36a4b10edcb822fc2",
     ".prettierrc": "91a7d7e8c41f0fead73e66589dfc16d2b4a8784c4fd1ad134cf8a9510debe317",
     "scripts/claude-statusline-hook.js": "ceaa102289a1c91894dac45b1829cd56adaeae182e2ff7e4f06b428cfdb165f9",
-    "scripts/guard-surfaces.mjs": "eb339a1b5d2aae688c94658e39ffab6d8b441c9d7ed09fdfba89353b7e8c77c7",
+    "scripts/guard-surfaces.mjs": "e0a6d022e74e065e7c6a6a81c0da2e39f7bca67a9e52f156fbc6ba9818d174b4",
     "scripts/install.ps1": "23b36b86349d106fe3c0f8794cd2ae1d5ac3f51ad5f5805bd288c60971895d0c",
     "scripts/install.sh": "32caad34f76aac6dbc9b14fa4e6383f85f587fd599540c2d3f6d5a2af4b48118",
     "scripts/lib/ai-clis.sh": "209457010f89b2e7893e5ed6f039cdafaa1110c36070efcc2226a4c07c345d96",

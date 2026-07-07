@@ -31,9 +31,11 @@ interface Rec {
 class FakeTransport implements PtyTransport {
   recs: Rec[] = [];
   writes: Array<[string, string]> = [];
+  rejectWith: unknown = null;
   private nextId = 0;
 
   attachStream(req: AttachRequest): Promise<AttachHandle> {
+    if (this.rejectWith) return Promise.reject(this.rejectWith);
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const id = this.nextId++;
@@ -225,5 +227,29 @@ describe("AttachSession — attach-race sequence guard", () => {
     expect(out).toEqual([]); // no snapshot streamed after close
     t.recs[0].onOutput("late"); // a racing byte is dropped
     expect(out).toEqual([]);
+  });
+
+  it("surfaces a sanitized attach/spawn failure reason to the client", async () => {
+    const t = new FakeTransport();
+    t.rejectWith = new Error(
+      "Error: Working directory does not exist: C:\\gone"
+    );
+    const { errors, sink } = makeSink();
+    const s = new AttachSession(t, sink);
+
+    await s.attach("k");
+
+    expect(errors).toEqual(["Working directory does not exist: C:\\gone"]);
+  });
+
+  it("maps low-level backend attach failures to friendly client messages", async () => {
+    const t = new FakeTransport();
+    t.rejectWith = new Error("Error: host closed");
+    const { errors, sink } = makeSink();
+    const s = new AttachSession(t, sink);
+
+    await s.attach("k");
+
+    expect(errors).toEqual(["Session backend disconnected"]);
   });
 });

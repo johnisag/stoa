@@ -9,10 +9,97 @@ import { writeFileSync, existsSync, readFileSync, mkdirSync, rmSync } from "fs";
 import { execFileSync } from "child_process";
 import path from "path";
 import os from "os";
-import { resolveBinary } from "./platform";
+import { isWindows, resolveBinary } from "./platform";
 import { CONDUCTOR_MARKER_FILE } from "./conductor-marker";
 
 const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
+
+interface McpServerCommand {
+  command: string;
+  argsPrefix: string[];
+}
+
+interface McpServerCommandDeps {
+  onWindows?: boolean;
+  resolveBin?: (name: string) => string | null;
+  exists?: (path: string) => boolean;
+  execPath?: string;
+  npmExecPath?: string;
+}
+
+function windowsNpxCliPath(deps: McpServerCommandDeps = {}): string | null {
+  const candidates = new Set<string>();
+  const resolveBin = deps.resolveBin ?? resolveBinary;
+  const exists = deps.exists ?? existsSync;
+  const npx = resolveBin("npx");
+  if (npx) {
+    candidates.add(
+      path.join(path.dirname(npx), "node_modules", "npm", "bin", "npx-cli.js")
+    );
+  }
+  const execPath = deps.execPath ?? process.execPath;
+  if (execPath) {
+    candidates.add(
+      path.join(
+        path.dirname(execPath),
+        "node_modules",
+        "npm",
+        "bin",
+        "npx-cli.js"
+      )
+    );
+  }
+  const npmExecPath = deps.npmExecPath ?? process.env.npm_execpath;
+  if (npmExecPath) {
+    candidates.add(path.join(path.dirname(npmExecPath), "npx-cli.js"));
+  }
+  for (const candidate of candidates) {
+    if (exists(candidate)) return candidate;
+  }
+  return null;
+}
+
+function mcpServerCommand(deps: McpServerCommandDeps = {}): McpServerCommand {
+  const onWindows = deps.onWindows ?? isWindows;
+  const resolveBin = deps.resolveBin ?? resolveBinary;
+  if (onWindows) {
+    // Codex starts MCP servers with a direct child-process spawn. npm's Windows
+    // shims (`npx.cmd`) are batch files, and cmd.exe would re-parse metachars in
+    // checkout paths. Run npm's JS entrypoint under node so all paths stay argv.
+    const npxCli = windowsNpxCliPath(deps);
+    if (!npxCli) {
+      throw new Error(
+        "Unable to locate npm npx-cli.js on Windows; cannot safely configure Stoa MCP server"
+      );
+    }
+    return {
+      command:
+        resolveBin("node") || deps.execPath || process.execPath || "node",
+      argsPrefix: [npxCli],
+    };
+  }
+  return { command: resolveBin("npx") || "npx", argsPrefix: [] };
+}
+
+export function _mcpServerCommandForTests(
+  deps: McpServerCommandDeps
+): McpServerCommand {
+  return mcpServerCommand(deps);
+}
+
+function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hermesRegistrationIdentity(serverPath: string): string {
+  const mcp = mcpServerCommand();
+  return JSON.stringify({
+    schemaVersion: 2,
+    serverPath,
+    command: mcp.command,
+    args: [...mcp.argsPrefix, "tsx", serverPath],
+  });
+}
 
 /** Absolute path to the orchestration MCP server entrypoint (server cwd-based). */
 function getOrchestrationServerPath(): string {
@@ -49,11 +136,15 @@ export function ensureMcpConfig(
       // Only adopt a plain object — an array/null/primitive would survive
       // JSON.parse but then silently drop our `stoa` server on stringify
       // (e.g. JSON.stringify([]) === "[]"), breaking orchestration.
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        config = parsed as McpConfig;
-        if (!config.mcpServers) {
-          config.mcpServers = {};
-        }
+      if (isPlainObjectRecord(parsed)) {
+        const parsedConfig = parsed as Partial<McpConfig> &
+          Record<string, unknown>;
+        config = {
+          ...parsedConfig,
+          mcpServers: isPlainObjectRecord(parsedConfig.mcpServers)
+            ? (parsedConfig.mcpServers as McpConfig["mcpServers"])
+            : {},
+        };
       }
     } catch {
       // Invalid JSON, start fresh
@@ -62,9 +153,10 @@ export function ensureMcpConfig(
   }
 
   // Add/update stoa orchestration server
+  const mcp = mcpServerCommand();
   config.mcpServers["stoa"] = {
-    command: "npx",
-    args: ["tsx", orchestrationServerPath],
+    command: mcp.command,
+    args: [...mcp.argsPrefix, "tsx", orchestrationServerPath],
     env: {
       STOA_URL,
       CONDUCTOR_SESSION_ID: sessionId,
@@ -137,11 +229,14 @@ function ensureGitExcluded(workingDirectory: string, entry: string): void {
  */
 export function buildCodexOrchestrationArgs(sessionId: string): string[] {
   const serverPath = getOrchestrationServerPath();
+  const mcp = mcpServerCommand();
   const set = (kv: string): string[] => ["-c", kv];
   return [
-    ...set(`mcp_servers.stoa.command=${tomlString("npx")}`),
+    ...set(`mcp_servers.stoa.command=${tomlString(mcp.command)}`),
     ...set(
-      `mcp_servers.stoa.args=[${tomlString("tsx")},${tomlString(serverPath)}]`
+      `mcp_servers.stoa.args=[${[...mcp.argsPrefix, "tsx", serverPath]
+        .map(tomlString)
+        .join(",")}]`
     ),
     ...set(`mcp_servers.stoa.env.STOA_URL=${tomlString(STOA_URL)}`),
     ...set(
@@ -208,28 +303,30 @@ export function removeConductorMarker(
 /** argv for `hermes mcp add` registering the stoa stdio server (command + args
  * only — no per-session env; the id comes from the cwd marker). */
 export function buildHermesRegisterArgs(serverPath: string): string[] {
+  const mcp = mcpServerCommand();
   return [
     "mcp",
     "add",
     "stoa",
     "--command",
-    "npx",
+    mcp.command,
     "--args",
+    ...mcp.argsPrefix,
     "tsx",
     serverPath,
   ];
 }
 
-/** Where we record the server path last registered with Hermes, so we can tell
- * a fresh install from a STALE one (Stoa moved) — `hermes mcp list` only shows
- * the name, not the path, so name-presence alone can't detect a drifted path. */
+/** Where we record the exact Hermes registration last written, so we can tell a
+ * fresh install from a STALE one (Stoa moved, npx/cmd path changed, or schema
+ * changed) — `hermes mcp list` only shows the name, not the full config. */
 const HERMES_PATH_MARKER = path.join(
   os.homedir(),
   ".stoa",
   "hermes-stoa-server-path"
 );
 
-function readRegisteredHermesPath(): string | null {
+function readRegisteredHermesIdentity(): string | null {
   try {
     if (existsSync(HERMES_PATH_MARKER))
       return readFileSync(HERMES_PATH_MARKER, "utf-8").trim();
@@ -239,10 +336,10 @@ function readRegisteredHermesPath(): string | null {
   return null;
 }
 
-function writeRegisteredHermesPath(serverPath: string): void {
+function writeRegisteredHermesIdentity(identity: string): void {
   try {
     mkdirSync(path.dirname(HERMES_PATH_MARKER), { recursive: true });
-    writeFileSync(HERMES_PATH_MARKER, serverPath + "\n");
+    writeFileSync(HERMES_PATH_MARKER, identity + "\n");
   } catch {
     // ignore — worst case we re-register once next time
   }
@@ -250,17 +347,17 @@ function writeRegisteredHermesPath(serverPath: string): void {
 
 /**
  * Decide what to do about the global `stoa` Hermes registration (pure, so it's
- * unit-testable). Skip only when it's listed AND points at the current server
- * path; otherwise (re)register, removing a stale entry first. Without the
- * remove-first, a moved Stoa checkout would keep pointing Hermes conductors at
- * a dead path and orchestration would silently no-op.
+ * unit-testable). Skip only when it's listed AND matches the current registration
+ * identity; otherwise (re)register, removing a stale entry first. Without the
+ * remove-first, a moved Stoa checkout or changed MCP launcher would keep pointing
+ * Hermes conductors at a dead path/command and orchestration would silently no-op.
  */
 export function planHermesRegistration(
   stoaListed: boolean,
-  recordedPath: string | null,
-  currentPath: string
+  recordedIdentity: string | null,
+  currentIdentity: string
 ): { skip: boolean; removeFirst: boolean } {
-  if (stoaListed && recordedPath === currentPath)
+  if (stoaListed && recordedIdentity === currentIdentity)
     return { skip: true, removeFirst: false };
   return { skip: false, removeFirst: stoaListed };
 }
@@ -279,6 +376,7 @@ export function ensureHermesMcpRegistered(): void {
   try {
     const hermes = resolveBinary("hermes") || "hermes";
     const serverPath = getOrchestrationServerPath();
+    const identity = hermesRegistrationIdentity(serverPath);
     const list = execFileSync(hermes, ["mcp", "list"], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -289,8 +387,8 @@ export function ensureHermesMcpRegistered(): void {
     const stoaListed = /(^|\s)stoa(\s|$)/m.test(list);
     const plan = planHermesRegistration(
       stoaListed,
-      readRegisteredHermesPath(),
-      serverPath
+      readRegisteredHermesIdentity(),
+      identity
     );
     if (plan.skip) return;
     if (plan.removeFirst) {
@@ -312,7 +410,7 @@ export function ensureHermesMcpRegistered(): void {
       killSignal: "SIGKILL",
       windowsHide: true,
     });
-    writeRegisteredHermesPath(serverPath);
+    writeRegisteredHermesIdentity(identity);
   } catch {
     // Hermes missing / not configured / add failed / timed out — leave it.
   }

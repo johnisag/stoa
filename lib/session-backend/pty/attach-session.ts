@@ -14,6 +14,17 @@ export interface AttachSink {
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
+function attachErrorMessage(err: unknown): string {
+  const raw =
+    err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const message = raw.trim().replace(/^(Error:\s*)+/, "");
+  if (/^Working directory does not exist:/i.test(message)) return message;
+  if (/no such session/i.test(message)) return "Session is no longer running";
+  if (/host closed|socket|ECONN|connection/i.test(message))
+    return "Session backend disconnected";
+  return "Failed to attach session";
+}
+
 /**
  * Per-client attach state machine shared by every pty terminal socket.
  *
@@ -98,7 +109,7 @@ export class AttachSession {
     } catch (err) {
       if (seq === this.attachSeq) {
         console.error("pty attach failed:", err);
-        this.sink.error("Failed to attach session");
+        this.sink.error(attachErrorMessage(err));
       }
     }
   }

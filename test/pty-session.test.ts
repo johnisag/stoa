@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { tmpdir } from "os";
+import path from "path";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import {
   spawnSession,
@@ -8,6 +10,7 @@ import {
   killSessionAndWait,
   renameSession,
   _resetRegistryForTests,
+  _resolveSpawnForTests,
 } from "@/lib/session-backend/pty/registry";
 
 afterEach(async () => {
@@ -32,6 +35,80 @@ function processExists(pid: number): boolean {
     return false;
   }
 }
+
+describe("pty registry Windows shim routing", () => {
+  it("unwraps npm .cmd shims to node + the underlying JS entrypoint", () => {
+    const shim = [
+      "@ECHO off",
+      'IF EXIST "%dp0%\\node.exe" (',
+      '  SET "_prog=%dp0%\\node.exe"',
+      ") ELSE (",
+      '  SET "_prog=node"',
+      ")",
+      'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*',
+    ].join("\r\n");
+
+    const result = _resolveSpawnForTests(
+      "C:\\Users\\johnis\\AppData\\Roaming\\npm\\codex.cmd",
+      [
+        "-c",
+        "mcp_servers.stoa.args=['C:\\tmp\\stoa&clean\\mcp\\orchestration-server.ts']",
+        'prompt keeps 100% "quotes" and ^ carets',
+      ],
+      {
+        onWindows: true,
+        readFile: () => shim,
+        exists: () => false,
+        resolveBin: (name) =>
+          name === "node" ? "C:\\Program Files\\nodejs\\node.exe" : null,
+      }
+    );
+
+    expect(result).toEqual({
+      file: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Users\\johnis\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+        "-c",
+        "mcp_servers.stoa.args=['C:\\tmp\\stoa&clean\\mcp\\orchestration-server.ts']",
+        'prompt keeps 100% "quotes" and ^ carets',
+      ],
+    });
+  });
+
+  it("unwraps npm .cmd shims that target a native exe", () => {
+    const shim =
+      '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*';
+
+    const result = _resolveSpawnForTests(
+      "C:\\Users\\johnis\\AppData\\Roaming\\npm\\claude.cmd",
+      ["--model", "opus"],
+      {
+        onWindows: true,
+        readFile: () => shim,
+        exists: () => false,
+        resolveBin: () => null,
+      }
+    );
+
+    expect(result).toEqual({
+      file: "C:\\Users\\johnis\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+      args: ["--model", "opus"],
+    });
+  });
+
+  it("fails closed for unrecognized .cmd shims instead of shelling through cmd.exe", () => {
+    expect(() =>
+      _resolveSpawnForTests("C:\\bin\\tool.cmd", ["--cwd", "C:\\tmp\\stoa"], {
+        onWindows: true,
+        readFile: () => "@ECHO off\r\nunknown",
+        exists: () => false,
+        resolveBin: () => null,
+      })
+    ).toThrow(
+      "Unable to safely launch Windows command shim: C:\\bin\\tool.cmd"
+    );
+  });
+});
 
 describe("pty registry / PtySession", () => {
   it("spawns a process and exposes rendered capture + raw buffer + live stream", async () => {
@@ -164,6 +241,22 @@ describe("pty registry / PtySession", () => {
     });
     expect(b).toBe(a);
     killSession("test-idem");
+  });
+
+  it("fails fast with a clear error when the working directory is missing", () => {
+    const missingCwd = path.join(
+      tmpdir(),
+      `stoa-missing-cwd-${process.pid}-${Date.now()}`
+    );
+
+    expect(() =>
+      spawnSession("test-missing-cwd", {
+        binary: "node",
+        args: ["-e", "process.exit(0)"],
+        cwd: missingCwd,
+      })
+    ).toThrow(`Working directory does not exist: ${missingCwd}`);
+    expect(hasSession("test-missing-cwd")).toBe(false);
   });
 
   it("renames a registry key, preserving the session object", () => {

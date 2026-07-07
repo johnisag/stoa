@@ -9,6 +9,8 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { readFileSync } from "fs";
+import path from "path";
 import { installAsyncLocalStorageGlobal } from "@/lib/als-global";
 
 const g = globalThis as unknown as { AsyncLocalStorage?: unknown };
@@ -34,5 +36,16 @@ describe("installAsyncLocalStorageGlobal (startup E504 guard)", () => {
     g.AsyncLocalStorage = sentinel;
     installAsyncLocalStorageGlobal(); // the REAL guard — must leave the sentinel
     expect(g.AsyncLocalStorage).toBe(sentinel);
+  });
+
+  it("loads the guard before any other MCP orchestration-server import", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "mcp", "orchestration-server.ts"),
+      "utf8"
+    );
+    const firstImport = source
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("import "));
+    expect(firstImport).toBe('import "../lib/als-global";');
   });
 });
