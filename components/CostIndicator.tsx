@@ -1,6 +1,6 @@
 "use client";
 
-import { DollarSign } from "lucide-react";
+import { AlertTriangle, DollarSign } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -57,11 +57,15 @@ function SpendSparkline() {
  * with a per-session breakdown on hover. Tints amber/red when a session crosses
  * the soft/hard budget cap (if configured). Self-contained (reads useSessionCosts),
  * so it doesn't thread cost through every view + preserves the SessionCard memo.
- * Claude-only today; hidden until there's a non-zero estimate.
+ * Hidden until tracked providers have a non-zero estimate.
  */
 export function CostIndicator() {
   const { data } = useSessionCosts();
-  if (!data || data.totalUsd <= 0) return null;
+  const unavailableCount = data
+    ? Object.values(data.sessions).filter((s) => s.trackable && !s.supported)
+        .length
+    : 0;
+  if (!data || (data.totalUsd <= 0 && unavailableCount === 0)) return null;
 
   const levels = data.levels ?? {};
   const levelValues = Object.values(levels);
@@ -74,13 +78,16 @@ export function CostIndicator() {
   const tint =
     worst === "hard"
       ? "bg-red-500/15 text-red-600 dark:text-red-400"
-      : worst === "soft"
+      : worst === "soft" || unavailableCount > 0
         ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
         : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400";
 
   const rows = Object.entries(data.sessions)
     .filter(([, s]) => s.costUsd && s.costUsd > 0)
     .sort(([, a], [, b]) => (b.costUsd ?? 0) - (a.costUsd ?? 0))
+    .slice(0, 8);
+  const unavailableRows = Object.entries(data.sessions)
+    .filter(([, s]) => s.trackable && !s.supported)
     .slice(0, 8);
 
   const { softUsd, hardUsd } = data.budget ?? { softUsd: null, hardUsd: null };
@@ -90,15 +97,31 @@ export function CostIndicator() {
       <TooltipTrigger asChild>
         <button
           type="button"
-          aria-label={`Estimated spend across sessions: ${fmt(data.totalUsd)}`}
+          aria-label={`Estimated spend across sessions: ${fmt(data.totalUsd)}${
+            unavailableCount > 0
+              ? `; ${unavailableCount} session${unavailableCount === 1 ? "" : "s"} not tracked`
+              : ""
+          }`}
           className={`focus-visible:ring-ring/60 flex cursor-default items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium outline-none focus-visible:ring-2 ${tint}`}
         >
           <DollarSign className="h-3 w-3" />
           {fmt(data.totalUsd)}
+          {unavailableCount > 0 && (
+            <>
+              <AlertTriangle className="ml-0.5 h-3 w-3" />
+              <span>{unavailableCount} untracked</span>
+            </>
+          )}
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-xs">
-        <p className="mb-1 font-medium">Estimated spend · Claude sessions</p>
+        <p className="mb-1 font-medium">Estimated spend · tracked sessions</p>
+        {unavailableCount > 0 && (
+          <p className="text-muted-foreground mb-1 text-[10px]">
+            {unavailableCount} trackable session
+            {unavailableCount === 1 ? "" : "s"} unavailable
+          </p>
+        )}
         <ul className="space-y-0.5">
           {rows.map(([id, s]) => (
             <li key={id} className="flex justify-between gap-3 tabular-nums">
@@ -114,6 +137,18 @@ export function CostIndicator() {
             </li>
           ))}
         </ul>
+        {unavailableRows.length > 0 && (
+          <ul className="mt-1 space-y-0.5 border-t pt-1">
+            {unavailableRows.map(([id, s]) => (
+              <li key={id} className="flex justify-between gap-3">
+                <span className="max-w-[12rem] truncate">{s.name}</span>
+                <span className="text-amber-600 dark:text-amber-400">
+                  untracked
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
         {(softUsd || hardUsd) && (
           <p className="text-muted-foreground mt-1 text-[10px]">
             Cap/session: soft {softUsd ? `$${softUsd}` : "—"} · hard{" "}
@@ -122,7 +157,7 @@ export function CostIndicator() {
         )}
         <SpendSparkline />
         <p className="text-muted-foreground mt-0.5 text-[10px]">
-          Rough estimate: transcript tokens × model price.
+          Rough estimate from provider token telemetry and model pricing.
         </p>
       </TooltipContent>
     </Tooltip>

@@ -72,6 +72,33 @@ describe("buildMonitorRows (#M1 — agent monitor telemetry)", () => {
     expect(rows[0].cacheSavingsUsd).toBeCloseTo((200 * 2.7) / 1_000_000, 10);
   });
 
+  it("uses split standard/long-context rates for per-session cache savings", () => {
+    const rows = buildMonitorRows([session({ id: "g", model: "gpt-5.5" })], {
+      g: cost({
+        model: "gpt-5.5",
+        tokens: {
+          input: 0,
+          output: 0,
+          cacheRead: 2_000_000,
+          cacheWrite: 0,
+        },
+        standardTokens: {
+          input: 0,
+          output: 0,
+          cacheRead: 1_000_000,
+          cacheWrite: 0,
+        },
+        longContextTokens: {
+          input: 0,
+          output: 0,
+          cacheRead: 1_000_000,
+          cacheWrite: 0,
+        },
+      }),
+    });
+    expect(rows[0].cacheSavingsUsd).toBeCloseTo(13.5, 10);
+  });
+
   it("sorts attention-first (waiting/error before running/idle), then by name", () => {
     const rows = buildMonitorRows(
       [
@@ -102,6 +129,17 @@ describe("buildMonitorRows (#M1 — agent monitor telemetry)", () => {
     });
     expect(rows[0].contextTone).toBe("full");
     expect(rows[0].contextPct).toBeCloseTo(0.95);
+  });
+
+  it("prefers a runtime context window over the static model fallback", () => {
+    const rows = buildMonitorRows([session({ id: "a", model: "gpt-5.5" })], {
+      a: cost({
+        model: "gpt-5.5",
+        contextTokens: 129_200,
+        contextWindow: 258_400,
+      }),
+    });
+    expect(rows[0].contextPct).toBeCloseTo(0.5);
   });
 });
 
@@ -163,7 +201,7 @@ describe("fleetCacheSavingsUsd (#12)", () => {
   });
   it("is null when NO row has a priced model (unknown model)", () => {
     const rows = buildMonitorRows(
-      [session({ id: "u", model: "gpt-5-codex" })],
+      [session({ id: "u", model: "gpt-unknown" })],
       {}
     );
     expect(rows[0].cacheSavingsUsd).toBeNull();

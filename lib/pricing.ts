@@ -20,17 +20,57 @@ export const ZERO_USAGE: TokenUsage = {
   cacheWrite: 0,
 };
 
-interface ModelPrice {
+interface TokenRates {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
 }
 
+interface ModelPrice extends TokenRates {
+  longContext?: TokenRates;
+}
+
+export interface CostOptions {
+  longContext?: boolean;
+}
+
 // Matched on the tier word so it works for Stoa's stored values — bare aliases
 // ("sonnet"/"opus"/"haiku"), full ids ("claude-sonnet-4-6"), AND Hermes
 // free-text ("anthropic/claude-sonnet-4.6"). $/Mtok.
 const MODEL_PRICES: Array<{ match: RegExp; price: ModelPrice }> = [
+  {
+    match: /\bgpt-5\.5\b/i,
+    price: {
+      input: 5,
+      output: 30,
+      cacheWrite: 5,
+      cacheRead: 0.5,
+      longContext: { input: 10, output: 45, cacheWrite: 10, cacheRead: 1 },
+    },
+  },
+  {
+    match: /\bgpt-5\.4-mini\b/i,
+    price: { input: 0.75, output: 4.5, cacheWrite: 0.75, cacheRead: 0.075 },
+  },
+  {
+    match: /\bgpt-5\.4-nano\b/i,
+    price: { input: 0.2, output: 1.25, cacheWrite: 0.2, cacheRead: 0.02 },
+  },
+  {
+    match: /\bgpt-5\.4\b/i,
+    price: {
+      input: 2.5,
+      output: 15,
+      cacheWrite: 2.5,
+      cacheRead: 0.25,
+      longContext: { input: 5, output: 22.5, cacheWrite: 5, cacheRead: 0.5 },
+    },
+  },
+  {
+    match: /\bgpt-5(?:\.3)?-codex(?:-spark)?\b/i,
+    price: { input: 1.75, output: 14, cacheWrite: 1.75, cacheRead: 0.175 },
+  },
   {
     match: /opus/i,
     price: { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
@@ -46,11 +86,17 @@ const MODEL_PRICES: Array<{ match: RegExp; price: ModelPrice }> = [
 ];
 
 export function priceForModel(
-  modelId: string | null | undefined
-): ModelPrice | null {
+  modelId: string | null | undefined,
+  options: CostOptions = {}
+): TokenRates | null {
   if (!modelId) return null;
-  for (const { match, price } of MODEL_PRICES)
-    if (match.test(modelId)) return price;
+  for (const { match, price } of MODEL_PRICES) {
+    if (match.test(modelId)) {
+      return options.longContext && price.longContext
+        ? price.longContext
+        : price;
+    }
+  }
   return null;
 }
 
@@ -62,9 +108,10 @@ export function totalTokens(u: TokenUsage): number {
 /** Estimated USD for a usage tally under a model, or null if the model is unpriced. */
 export function computeCostUsd(
   usage: TokenUsage,
-  modelId: string | null | undefined
+  modelId: string | null | undefined,
+  options: CostOptions = {}
 ): number | null {
-  const p = priceForModel(modelId);
+  const p = priceForModel(modelId, options);
   if (!p) return null;
   return (
     (usage.input * p.input +
@@ -93,9 +140,10 @@ export function cacheHitRate(u: TokenUsage): number | null {
  */
 export function cacheSavingsUsd(
   u: TokenUsage,
-  modelId: string | null | undefined
+  modelId: string | null | undefined,
+  options: CostOptions = {}
 ): number | null {
-  const p = priceForModel(modelId);
+  const p = priceForModel(modelId, options);
   if (!p) return null;
   return (u.cacheRead * (p.input - p.cacheRead)) / 1_000_000;
 }

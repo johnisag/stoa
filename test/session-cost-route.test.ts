@@ -37,6 +37,11 @@ vi.mock("@/lib/claude-transcript", () => ({
   ),
 }));
 
+vi.mock("@/lib/codex-usage", () => ({
+  readCodexSessionUsage: vi.fn(async () => undefined),
+  refreshCodexThreadVerifications: vi.fn(async () => {}),
+}));
+
 import { GET } from "@/app/api/sessions/cost/route";
 import { readClaudeTranscriptRaw } from "@/lib/claude-transcript";
 import { queries } from "@/lib/db";

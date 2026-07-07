@@ -10,10 +10,15 @@ import {
   getProviderIdFromSessionName,
   getSessionIdFromName,
 } from "@/lib/providers/registry";
-import { getDb } from "@/lib/db";
-import { getSessionBackend } from "@/lib/session-backend";
+import { getDb, queries, type Session } from "@/lib/db";
+import { getSessionBackend, type SessionActivity } from "@/lib/session-backend";
 import { claudeProjectDirName, findClaudeProjectDir } from "@/lib/platform";
 import { getBudgetStage, isBudgetParked } from "@/lib/budget-park";
+import {
+  clearCodexThreadVerification,
+  markCodexThreadVerified,
+  resolveCodexThreadIdForSession,
+} from "@/lib/codex-usage";
 
 const backend = getSessionBackend();
 
@@ -38,8 +43,18 @@ interface SessionStatusResponse {
   budgetParked?: boolean;
 }
 
-async function getTmuxSessions(): Promise<string[]> {
-  return backend.list();
+async function getTmuxSessions(): Promise<SessionActivity[]> {
+  try {
+    const withActivity = await backend.listWithActivity();
+    if (withActivity.length > 0) return withActivity;
+  } catch {
+    // Fall through to the name-only list below.
+  }
+  try {
+    return (await backend.list()).map((name) => ({ name, activity: null }));
+  } catch {
+    return [];
+  }
 }
 
 async function getTmuxSessionCwd(sessionName: string): Promise<string | null> {
@@ -144,7 +159,9 @@ async function getClaudeSessionId(sessionName: string): Promise<string | null> {
 // the shared `claude_session_id` column. Other agents have no resume id.
 async function getProviderSessionId(
   sessionName: string,
-  agentType: AgentType
+  agentType: AgentType,
+  session: Session | null,
+  activitySeconds: number | null
 ): Promise<string | null> {
   if (agentType === "hermes") {
     return statusDetector.getHermesSessionId(sessionName);
@@ -158,6 +175,10 @@ async function getProviderSessionId(
     // never confuses two sessions that share a cwd. Banner-only on purpose: a
     // cwd-keyed on-disk fallback could resolve a stale same-cwd id.
     return statusDetector.getKimiSessionId(sessionName);
+  }
+  if (agentType === "codex") {
+    if (!session) return null;
+    return resolveCodexThreadIdForSession(session, activitySeconds);
   }
   return null;
 }
@@ -182,7 +203,11 @@ function getAgentTypeFromSessionName(sessionName: string): AgentType {
 
 export async function GET() {
   try {
-    const sessions = await getTmuxSessions();
+    const backendSessions = await getTmuxSessions();
+    const sessions = backendSessions.map((s) => s.name);
+    const activityByName = new Map(
+      backendSessions.map((s) => [s.name, s.activity] as const)
+    );
 
     // Get status for stoa managed sessions
     const managedSessions = sessions.filter((s) => UUID_PATTERN.test(s));
@@ -192,22 +217,48 @@ export async function GET() {
 
     const db = getDb();
     const sessionsToUpdate: string[] = [];
+    const getSessionStmt = queries.getSession(db);
 
     // Process all sessions in parallel for speed
     const sessionPromises = managedSessions.map(async (sessionName) => {
       const agentType = getAgentTypeFromSessionName(sessionName);
       const id = getSessionIdFromName(sessionName);
+      const sessionRow =
+        (getSessionStmt.get(id) as Session | undefined) ?? null;
       // One screen capture yields the status, the preview line, rate-limit, and
       // whether an actual prompt is on screen.
       const { status, lastLine, rateLimit, prompt } =
         await statusDetector.getStatusDetail(sessionName);
       // Resolve the agent resume-id AFTER getStatusDetail: its capturePane()
       // populates the Hermes banner-id cache, so reading it here captures the id
-      // on the same poll the banner is visible rather than one poll behind. Skip
-      // the (fs-scanning) resolution entirely once we already know it.
+      // on the same poll the banner is visible rather than one poll behind.
+      // Codex still refreshes against live activity so a new thread can replace
+      // an older cached id when the terminal session restarts in the same cwd.
       let claudeSessionId = resolvedSessionIds.get(id) ?? null;
-      if (!claudeSessionId) {
-        claudeSessionId = await getProviderSessionId(sessionName, agentType);
+      if (agentType === "codex") {
+        const activity = activityByName.get(sessionName) ?? null;
+        const liveId = await getProviderSessionId(
+          sessionName,
+          agentType,
+          sessionRow,
+          activity
+        );
+        if (liveId) {
+          claudeSessionId = liveId;
+          resolvedSessionIds.set(id, liveId);
+          markCodexThreadVerified(id, liveId, activity);
+        } else {
+          claudeSessionId = null;
+          resolvedSessionIds.delete(id);
+          clearCodexThreadVerification(id);
+        }
+      } else if (!claudeSessionId) {
+        claudeSessionId = await getProviderSessionId(
+          sessionName,
+          agentType,
+          sessionRow,
+          activityByName.get(sessionName) ?? null
+        );
         if (claudeSessionId) resolvedSessionIds.set(id, claudeSessionId);
       }
 
@@ -282,15 +333,20 @@ export async function GET() {
     const updateClaudeIdStmt = db.prepare(
       "UPDATE sessions SET claude_session_id = ? WHERE id = ? AND (claude_session_id IS NULL OR claude_session_id != ?)"
     );
+    const clearClaudeIdStmt = db.prepare(
+      "UPDATE sessions SET claude_session_id = NULL WHERE id = ? AND claude_session_id IS NOT NULL"
+    );
 
     for (const id of sessionsToUpdate) {
       updateStatusStmt.run(id);
     }
 
     // Update claude_session_id directly here instead of requiring separate API calls
-    for (const { id, claudeSessionId } of results) {
+    for (const { id, agentType, claudeSessionId } of results) {
       if (claudeSessionId) {
         updateClaudeIdStmt.run(claudeSessionId, id, claudeSessionId);
+      } else if (agentType === "codex") {
+        clearClaudeIdStmt.run(id);
       }
     }
 

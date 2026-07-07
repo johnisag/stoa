@@ -5,6 +5,10 @@ import {
   resolveClaudeTranscriptPath,
 } from "./claude-transcript";
 import {
+  readCodexSessionUsage,
+  refreshCodexThreadVerifications,
+} from "./codex-usage";
+import {
   createStatGatedCache,
   transcriptCacheEnabled,
 } from "./transcript-cache";
@@ -23,7 +27,15 @@ export interface SessionCost {
    * transcript carries no usage yet. Powers the per-session context meter.
    */
   contextTokens: number;
-  /** false for non-Claude agents (no comparable transcript) — shown as "—". */
+  /** Runtime-reported context window when the provider exposes one. */
+  contextWindow?: number | null;
+  /** Token buckets priced at standard context rates when a provider exposes splits. */
+  standardTokens?: TokenUsage;
+  /** Token buckets priced at long-context rates when a provider exposes splits. */
+  longContextTokens?: TokenUsage;
+  /** true when this provider has a reader, even if the live source is unavailable. */
+  trackable?: boolean;
+  /** false when no deterministic usage source is available. */
   supported: boolean;
 }
 
@@ -32,11 +44,23 @@ export interface SessionCost {
  * reads for /summarize). Each assistant line carries `message.usage`
  * {input_tokens, output_tokens, cache_creation_input_tokens,
  * cache_read_input_tokens} — disjoint buckets, so summing them is correct.
- * Claude-only today (Codex/Hermes don't expose a comparable transcript) —
- * callers treat other agents as unsupported.
+ * Claude is one supported source; Codex has a separate rollout reader below.
  */
 
 type ClaudeUsage = { tokens: TokenUsage; contextTokens: number };
+type UsageReading = {
+  tokens: TokenUsage;
+  standardTokens?: TokenUsage;
+  longContextTokens?: TokenUsage;
+  contextTokens: number;
+  contextWindow?: number | null;
+  longContext?: boolean;
+  model?: string | null;
+};
+type UsageReadResult = {
+  supported: boolean;
+  usage: UsageReading | null;
+};
 
 /**
  * Single-pass core (#42): ONE walk over the transcript produces BOTH the
@@ -207,24 +231,45 @@ export async function readClaudeSessionUsage(
   });
 }
 
-/** Reads a provider's on-disk transcript and returns cumulative token usage +
- *  the live context-window occupancy, or null when it can't be read. */
-export type UsageReader = (
-  cwd: string,
-  sessionId: string
-) => Promise<{ tokens: TokenUsage; contextTokens: number } | null>;
+/** Reads a provider's on-disk transcript/log and returns cumulative token usage +
+ *  the live context-window occupancy. `supported:false` means no deterministic
+ *  source could be located for this session. */
+export type UsageReader = (session: Session) => Promise<UsageReadResult>;
+
+async function readClaudeUsageForSession(
+  session: Session
+): Promise<UsageReadResult> {
+  if (!session.claude_session_id || !session.working_directory) {
+    return { supported: false, usage: null };
+  }
+  return {
+    supported: true,
+    usage: await readClaudeSessionUsage(
+      session.working_directory,
+      session.claude_session_id
+    ),
+  };
+}
+
+async function readCodexUsageForSession(
+  session: Session
+): Promise<UsageReadResult> {
+  const usage = await readCodexSessionUsage(session);
+  if (usage === undefined) return { supported: false, usage: null };
+  if (usage === null) return { supported: false, usage: null };
+  return { supported: true, usage };
+}
 
 /**
  * Per-provider transcript usage readers — the single seam for "which agents have
  * a cost estimate". A provider with an entry here gets token tracking, the cost
  * UI, AND persistence (#15) automatically; one without is reported supported:false
- * (shown "—"). Claude is the only agent today that writes a parseable per-turn
- * usage transcript (the JSONL Stoa already reads for /summarize); Codex / Hermes /
- * Kilo / Kimi expose no comparable stream yet, so they're a reader away — register
- * one here and the whole cost surface lights up for it. See docs/ROADMAP.md.
+ * (shown "—"). Register a provider here and the whole cost surface lights up for
+ * it. See docs/ROADMAP.md.
  */
 const USAGE_READERS: Partial<Record<AgentType, UsageReader>> = {
-  claude: (cwd, sessionId) => readClaudeSessionUsage(cwd, sessionId),
+  claude: readClaudeUsageForSession,
+  codex: readCodexUsageForSession,
 };
 
 /** The usage reader for a provider, or undefined when its cost isn't trackable. */
@@ -233,23 +278,89 @@ export function costReaderFor(agentType: string): UsageReader | undefined {
 }
 
 /**
- * Estimated cost for every session, keyed by id (Claude-only; others
- * supported:false). Reads transcripts with BOUNDED concurrency (a large window
+ * Estimated cost for every session, keyed by id. Reads usage sources with
+ * BOUNDED concurrency (a large window
  * could otherwise fan out hundreds of concurrent file reads → fd exhaustion +
  * a memory spike). Shared by the cost API, the analytics layer, and the
  * server-side budget enforcement loop.
  */
 const COST_READ_CONCURRENCY = 12;
 
+function addCosts(...parts: Array<number | null>): number | null {
+  let total = 0;
+  let priced = false;
+  for (const part of parts) {
+    if (part != null) {
+      total += part;
+      priced = true;
+    }
+  }
+  return priced ? total : null;
+}
+
+const TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
+function netForkUsageBuckets(
+  standardTokens: TokenUsage,
+  longContextTokens: TokenUsage,
+  baseline: TokenUsage | null
+): { standardTokens: TokenUsage; longContextTokens: TokenUsage } {
+  if (!baseline) {
+    return { standardTokens, longContextTokens };
+  }
+  const standardNet: TokenUsage = { ...ZERO_USAGE };
+  const longNet: TokenUsage = { ...ZERO_USAGE };
+  for (const key of TOKEN_KEYS) {
+    const standard = standardTokens[key];
+    const long = longContextTokens[key];
+    const total = standard + long;
+    const remaining = Math.max(0, total - baseline[key]);
+    if (total <= 0 || remaining <= 0) {
+      standardNet[key] = 0;
+      longNet[key] = 0;
+      continue;
+    }
+    standardNet[key] = Math.min(
+      standard,
+      Math.floor((standard / total) * remaining)
+    );
+    longNet[key] = remaining - standardNet[key];
+  }
+  return { standardTokens: standardNet, longContextTokens: longNet };
+}
+
+function computeUsageCostUsd(
+  model: string | null,
+  standardTokens: TokenUsage | null,
+  longContextTokens: TokenUsage | null,
+  tokens: TokenUsage,
+  usage: UsageReading | null
+): number | null {
+  if (standardTokens || longContextTokens) {
+    return addCosts(
+      computeCostUsd(standardTokens ?? ZERO_USAGE, model),
+      computeCostUsd(longContextTokens ?? ZERO_USAGE, model, {
+        longContext: true,
+      })
+    );
+  }
+  return computeCostUsd(tokens, model, {
+    longContext: usage?.longContext === true,
+  });
+}
+
 export async function computeSessionCosts(
   sessions: Session[]
 ): Promise<Record<string, SessionCost>> {
+  await refreshCodexThreadVerifications(sessions);
+
   const mapOne = async (s: Session): Promise<[string, SessionCost]> => {
     const base = { name: s.name, model: s.model };
     const reader = costReaderFor(s.agent_type);
-    // `claude_session_id` is the stored transcript id (banner-capture providers
-    // reuse the column); a provider needs a reader AND a located transcript + cwd.
-    if (!reader || !s.claude_session_id || !s.working_directory) {
+    // `claude_session_id` is the stored provider transcript/thread id when one
+    // is available. Some readers can safely resolve a source from the full
+    // session row; they report supported:false when that would be ambiguous.
+    if (!reader || !s.working_directory) {
       return [
         s.id,
         {
@@ -257,25 +368,78 @@ export async function computeSessionCosts(
           tokens: ZERO_USAGE,
           costUsd: null,
           contextTokens: 0,
+          contextWindow: null,
+          trackable: !!reader,
           supported: false,
         },
       ];
     }
-    const usage = await reader(s.working_directory, s.claude_session_id);
+    const result = await reader(s);
+    if (!result.supported) {
+      return [
+        s.id,
+        {
+          ...base,
+          tokens: ZERO_USAGE,
+          costUsd: null,
+          contextTokens: 0,
+          contextWindow: null,
+          trackable: true,
+          supported: false,
+        },
+      ];
+    }
+    const usage = result.usage;
     // Net out a native fork's inherited parent history (#1) so only the fork's own
     // spend counts. contextTokens is the live window occupancy (last turn) and
     // legitimately includes the inherited context, so it's NOT baseline-adjusted.
-    const tokens = netForkUsage(
-      usage?.tokens ?? ZERO_USAGE,
-      parseForkBaseline(s.fork_cost_baseline)
-    );
+    const baseline = parseForkBaseline(s.fork_cost_baseline);
+    const rawStandardTokens = usage?.standardTokens;
+    const rawLongContextTokens = usage?.longContextTokens;
+    const splitTokens =
+      rawStandardTokens || rawLongContextTokens
+        ? netForkUsageBuckets(
+            rawStandardTokens ?? ZERO_USAGE,
+            rawLongContextTokens ?? ZERO_USAGE,
+            baseline
+          )
+        : null;
+    const tokens = splitTokens
+      ? {
+          input:
+            splitTokens.standardTokens.input +
+            splitTokens.longContextTokens.input,
+          output:
+            splitTokens.standardTokens.output +
+            splitTokens.longContextTokens.output,
+          cacheRead:
+            splitTokens.standardTokens.cacheRead +
+            splitTokens.longContextTokens.cacheRead,
+          cacheWrite:
+            splitTokens.standardTokens.cacheWrite +
+            splitTokens.longContextTokens.cacheWrite,
+        }
+      : netForkUsage(usage?.tokens ?? ZERO_USAGE, baseline);
+    const model = usage?.model ?? s.model;
     return [
       s.id,
       {
         ...base,
+        model,
         tokens,
-        costUsd: computeCostUsd(tokens, s.model),
+        costUsd: computeUsageCostUsd(
+          model,
+          splitTokens?.standardTokens ?? null,
+          splitTokens?.longContextTokens ?? null,
+          tokens,
+          usage
+        ),
+        standardTokens: splitTokens?.standardTokens ?? usage?.standardTokens,
+        longContextTokens:
+          splitTokens?.longContextTokens ?? usage?.longContextTokens,
         contextTokens: usage?.contextTokens ?? 0,
+        contextWindow: usage?.contextWindow ?? null,
+        trackable: true,
         supported: true,
       },
     ];
