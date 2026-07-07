@@ -173,24 +173,22 @@ describe("mcpServerCommand", () => {
   it("uses node + npx-cli.js on Windows so npx.cmd never reparses paths", () => {
     const result = _mcpServerCommandForTests({
       onWindows: true,
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath:
-        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+      execPath: "C:/Program Files/nodejs/node.exe",
+      npmExecPath: "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js",
       resolveBin: (name) =>
         name === "node"
-          ? "C:\\Program Files\\nodejs\\node.exe"
+          ? "C:/Program Files/nodejs/node.exe"
           : name === "npx"
-            ? "C:\\Program Files\\nodejs\\npx.cmd"
+            ? "C:/Program Files/nodejs/npx.cmd"
             : null,
-      exists: (candidate) => candidate.endsWith("npm\\bin\\npx-cli.js"),
+      exists: (candidate) =>
+        candidate.replace(/\\/g, "/").endsWith("npm/bin/npx-cli.js"),
     });
 
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      argsPrefix: [
-        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js",
-      ],
-    });
+    expect(result.command).toBe("C:/Program Files/nodejs/node.exe");
+    expect(result.argsPrefix.map((p) => p.replace(/\\/g, "/"))).toEqual([
+      "C:/Program Files/nodejs/node_modules/npm/bin/npx-cli.js",
+    ]);
   });
 
   it("refuses to fall back to npx.cmd on Windows when npx-cli.js is missing", () => {
