@@ -10,7 +10,7 @@
 /** Fallback cap when the model is unknown/unpriced — a conservative 200k. */
 export const DEFAULT_CONTEXT_WINDOW = 200_000;
 /** Official OpenAI API context window for GPT-5.5. */
-export const GPT_55_CONTEXT_WINDOW = 1_000_000;
+export const GPT_55_CONTEXT_WINDOW = 1_050_000;
 /** Effective input budget Codex CLI reports for current Codex-specific sessions. */
 export const CODEX_CONTEXT_WINDOW = 258_400;
 
