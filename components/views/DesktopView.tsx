@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { SessionList } from "@/components/SessionList";
 import { NewSessionDialog } from "@/components/NewSessionDialog";
 import { NotificationSettings } from "@/components/NotificationSettings";
@@ -40,6 +48,26 @@ import { useAttentionCount } from "@/data/verdict-inbox/useAttentionCount";
 import type { ViewProps } from "./types";
 import { fileOpenActions } from "@/stores/fileOpen";
 import { joinPath } from "@/lib/path-display";
+import {
+  SIDEBAR_COLLAPSED_WIDTH,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  resolveSidebarWidth,
+} from "@/lib/desktop-sidebar-width";
+
+const SIDEBAR_WIDTH_STORAGE_KEY = "stoa:desktop-sidebar-width";
+const SIDEBAR_KEYBOARD_STEP = 16;
+const useIsomorphicLayoutEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
+
+function persistSidebarWidth(width: number) {
+  try {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width));
+  } catch {
+    // Ignore storage failures in private or restricted contexts.
+  }
+}
 
 export function DesktopView({
   sessions,
@@ -94,14 +122,97 @@ export function DesktopView({
   // poll and defeat its React.memo. `sessions` is a separate query key the
   // status poll doesn't touch, so these refs stay stable between polls.
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const preferredSidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
+  const renderedSidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const [sidebarWidthReady, setSidebarWidthReady] = useState(false);
+  const [sidebarMaxWidth, setSidebarMaxWidth] = useState(SIDEBAR_MAX_WIDTH);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+
+  const getRootWidth = useCallback(
+    () => rootRef.current?.getBoundingClientRect().width,
+    []
+  );
+
+  const applySidebarWidth = useCallback(
+    (
+      width: number,
+      options: {
+        persist?: boolean;
+        preserveWiderPreference?: boolean;
+        remember?: boolean;
+      } = {}
+    ) => {
+      const next = resolveSidebarWidth(width, {
+        containerWidth: getRootWidth(),
+        currentPreference: preferredSidebarWidthRef.current,
+        preserveWiderPreference: options.preserveWiderPreference,
+      });
+
+      if (options.remember !== false) {
+        preferredSidebarWidthRef.current = next.preference;
+      }
+      renderedSidebarWidthRef.current = next.width;
+      setSidebarMaxWidth(next.maxWidth);
+      setSidebarWidth(next.width);
+      if (options.persist) persistSidebarWidth(next.preference);
+    },
+    [getRootWidth]
+  );
 
   useEffect(() => {
     return () => {
       if (copyTimeoutRef.current) {
         clearTimeout(copyTimeoutRef.current);
       }
+      resizeCleanupRef.current?.();
     };
   }, []);
+
+  useIsomorphicLayoutEffect(() => {
+    let readyFrame: number | null = null;
+
+    try {
+      const storedWidth = window.localStorage.getItem(
+        SIDEBAR_WIDTH_STORAGE_KEY
+      );
+      const parsedWidth = storedWidth
+        ? Number.parseInt(storedWidth, 10)
+        : SIDEBAR_DEFAULT_WIDTH;
+
+      applySidebarWidth(
+        Number.isFinite(parsedWidth) ? parsedWidth : SIDEBAR_DEFAULT_WIDTH
+      );
+    } catch {
+      // Ignore storage failures in private or restricted contexts.
+      applySidebarWidth(SIDEBAR_DEFAULT_WIDTH);
+    } finally {
+      readyFrame = window.requestAnimationFrame(() =>
+        setSidebarWidthReady(true)
+      );
+    }
+
+    return () => {
+      if (readyFrame !== null) window.cancelAnimationFrame(readyFrame);
+    };
+  }, [applySidebarWidth]);
+
+  useEffect(() => {
+    const handleWindowResize = () => {
+      applySidebarWidth(preferredSidebarWidthRef.current, {
+        remember: false,
+      });
+    };
+
+    window.addEventListener("resize", handleWindowResize);
+    return () => window.removeEventListener("resize", handleWindowResize);
+  }, [applySidebarWidth]);
+
+  useEffect(() => {
+    if (!sidebarOpen) resizeCleanupRef.current?.();
+  }, [sidebarOpen]);
 
   const handleSelect = useCallback(
     (id: string) => {
@@ -123,16 +234,140 @@ export function DesktopView({
   // answer "what needs me?" off the one inbox count, so the badges agree.
   const attentionCount = useAttentionCount();
 
+  const handleSidebarResizePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!sidebarOpen || !event.isPrimary || event.button !== 0) return;
+
+      const resizeHandle = event.currentTarget;
+      event.preventDefault();
+      resizeHandle.focus({ preventScroll: true });
+      resizeCleanupRef.current?.();
+
+      const activePointerId = event.pointerId;
+      const startClientX = event.clientX;
+      const startWidth = renderedSidebarWidthRef.current;
+      const previousCursor = document.body.style.cursor;
+      const previousUserSelect = document.body.style.userSelect;
+      let cleanupComplete = false;
+
+      setIsResizingSidebar(true);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+
+      try {
+        resizeHandle.setPointerCapture(activePointerId);
+      } catch {
+        // Pointer capture can fail if the browser has already canceled it.
+      }
+
+      function handlePointerMove(moveEvent: PointerEvent) {
+        if (moveEvent.pointerId !== activePointerId) return;
+        if ((moveEvent.buttons & 1) !== 1) {
+          cleanupResize();
+          return;
+        }
+        moveEvent.preventDefault();
+        applySidebarWidth(startWidth + moveEvent.clientX - startClientX, {
+          preserveWiderPreference: true,
+        });
+      }
+
+      function cleanupResize() {
+        if (cleanupComplete) return;
+        cleanupComplete = true;
+
+        document.body.style.cursor = previousCursor;
+        document.body.style.userSelect = previousUserSelect;
+        document.removeEventListener("pointermove", handlePointerMove);
+        document.removeEventListener("pointerup", handlePointerUp);
+        document.removeEventListener("pointercancel", handlePointerUp);
+        document.removeEventListener("mouseup", handleMouseUp);
+        window.removeEventListener("blur", cleanupResize);
+        try {
+          resizeHandle.releasePointerCapture(activePointerId);
+        } catch {
+          // Pointer capture may already be released after pointerup/cancel.
+        }
+        persistSidebarWidth(preferredSidebarWidthRef.current);
+        setIsResizingSidebar(false);
+        resizeCleanupRef.current = null;
+      }
+
+      function handlePointerUp(upEvent: PointerEvent) {
+        if (upEvent.pointerId !== activePointerId) return;
+        cleanupResize();
+      }
+
+      function handleMouseUp(mouseEvent: MouseEvent) {
+        if (mouseEvent.button === 0) cleanupResize();
+      }
+
+      document.addEventListener("pointermove", handlePointerMove);
+      document.addEventListener("pointerup", handlePointerUp);
+      document.addEventListener("pointercancel", handlePointerUp);
+      document.addEventListener("mouseup", handleMouseUp);
+      window.addEventListener("blur", cleanupResize);
+      resizeCleanupRef.current = cleanupResize;
+    },
+    [applySidebarWidth, sidebarOpen]
+  );
+
+  const handleSidebarResizeKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!sidebarOpen) return;
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+
+      const step = event.shiftKey
+        ? SIDEBAR_KEYBOARD_STEP * 4
+        : SIDEBAR_KEYBOARD_STEP;
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applySidebarWidth(renderedSidebarWidthRef.current - step, {
+          persist: true,
+          preserveWiderPreference: true,
+        });
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        const widthBase =
+          preferredSidebarWidthRef.current > sidebarMaxWidth
+            ? preferredSidebarWidthRef.current
+            : renderedSidebarWidthRef.current;
+        applySidebarWidth(widthBase + step, {
+          persist: true,
+          preserveWiderPreference: true,
+        });
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        applySidebarWidth(SIDEBAR_MIN_WIDTH, { persist: true });
+      } else if (event.key === "End") {
+        event.preventDefault();
+        applySidebarWidth(sidebarMaxWidth, {
+          persist: true,
+          preserveWiderPreference: true,
+        });
+      }
+    },
+    [applySidebarWidth, sidebarMaxWidth, sidebarOpen]
+  );
+
   return (
-    <div className="bg-background flex h-screen overflow-hidden">
+    <div ref={rootRef} className="bg-background flex h-screen overflow-hidden">
       {/* Desktop Sidebar — full list (w-60) or a thin icon rail (w-12). The
           container animates the width; the inner content is fixed-width so it
           slides cleanly instead of squishing during the transition. */}
       <div
-        className={` ${sidebarOpen ? "w-60" : "w-12"} bg-sidebar-background flex-shrink-0 overflow-hidden shadow-xl shadow-black/10 transition-all duration-200 dark:shadow-black/30`}
+        className={`bg-sidebar-background flex-shrink-0 overflow-hidden shadow-xl shadow-black/10 dark:shadow-black/30 ${
+          isResizingSidebar || !sidebarWidthReady
+            ? ""
+            : "transition-[width] duration-200"
+        }`}
+        style={{
+          width: sidebarOpen ? sidebarWidth : SIDEBAR_COLLAPSED_WIDTH,
+        }}
       >
         {sidebarOpen ? (
-          <div className="flex h-full w-60 flex-col">
+          <div className="flex h-full flex-col" style={{ width: sidebarWidth }}>
             {/* Session list */}
             <div className="min-h-0 flex-1 overflow-hidden">
               <SessionList
@@ -167,6 +402,23 @@ export function DesktopView({
           />
         )}
       </div>
+
+      {sidebarOpen && (
+        <div
+          role="separator"
+          aria-label="Resize sessions sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={SIDEBAR_MIN_WIDTH}
+          aria-valuemax={sidebarMaxWidth}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          className="focus-visible:ring-ring/60 group focus-visible:bg-primary/10 relative z-10 flex w-2 flex-shrink-0 cursor-col-resize touch-none items-stretch justify-center focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset"
+          onPointerDown={handleSidebarResizePointerDown}
+          onKeyDown={handleSidebarResizeKeyDown}
+        >
+          <div className="bg-border group-hover:bg-primary/60 group-focus-visible:bg-primary group-active:bg-primary h-full w-px transition-colors" />
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex min-w-0 flex-1 flex-col">
