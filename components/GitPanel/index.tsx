@@ -99,6 +99,7 @@ interface GitPanelProps {
    * — drives the multi-status query so it shows THOSE, not the project's repos. */
   repoPaths?: string[];
   onFileSelect?: (file: GitFile, diff: string) => void;
+  onOpenFile?: (file: GitFile | MultiRepoGitFile) => void;
 }
 
 interface SelectedFile {
@@ -112,6 +113,7 @@ export function GitPanel({
   projectId,
   repositories = [],
   repoPaths,
+  onOpenFile,
 }: GitPanelProps) {
   const { isMobile } = useViewport();
   const confirm = useConfirm();
@@ -216,6 +218,11 @@ export function GitPanel({
   };
 
   const handleFileClick = async (file: GitFile | MultiRepoGitFile) => {
+    if (onOpenFile && file.status !== "deleted") {
+      onOpenFile(file);
+      return;
+    }
+
     setLoadingDiff(true);
     try {
       const isUntracked = file.status === "untracked";

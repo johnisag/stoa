@@ -35,6 +35,10 @@ import {
   parseWorktreePaths,
   worktreePathsToRepositories,
 } from "@/lib/workspace-session";
+import {
+  gitChangeEditorPath,
+  type GitChangeEditorFile,
+} from "@/lib/git-change-editor-path";
 import { ShellDrawer } from "@/components/ShellDrawer";
 import { PromptQueueModal } from "@/components/PromptQueueModal";
 import { useSnapshot } from "valtio";
@@ -451,6 +455,19 @@ export const Pane = memo(function Pane({
     [terminalRef]
   );
 
+  const handleGitFileOpen = useCallback(
+    (file: GitChangeEditorFile) => {
+      if (!session?.working_directory) return;
+
+      const filePath = gitChangeEditorPath(file, session.working_directory);
+      if (!filePath) return;
+
+      setViewMode("files");
+      void fileEditor.openFile(filePath);
+    },
+    [fileEditor, session?.working_directory]
+  );
+
   // Insert a saved snippet (from the shared store the mobile toolbar also uses)
   // into the active terminal. Content is already control-char-sanitized by
   // SnippetsModal. Use bracketed PASTE (not sendInput) so a multi-line snippet
@@ -777,6 +794,7 @@ export const Pane = memo(function Pane({
                 repoPaths={
                   workspacePaths.length > 0 ? workspacePaths : undefined
                 }
+                onOpenFile={handleGitFileOpen}
               />
             </div>
           )}
@@ -922,6 +940,7 @@ export const Pane = memo(function Pane({
                     repoPaths={
                       workspacePaths.length > 0 ? workspacePaths : undefined
                     }
+                    onOpenFile={handleGitFileOpen}
                   />
                 ) : (
                   <FileExplorerDrawer
