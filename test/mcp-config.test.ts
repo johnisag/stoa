@@ -23,6 +23,7 @@ import {
   writeConductorMarker,
   removeConductorMarker,
   planHermesRegistration,
+  _mcpServerCommandForTests,
 } from "@/lib/mcp-config";
 import { CONDUCTOR_MARKER_FILE } from "@/lib/conductor-marker";
 import { isWindows, resolveBinary } from "@/lib/platform";
@@ -119,6 +120,24 @@ describe("ensureMcpConfig", () => {
     expect(hasMcpConfig(dir)).toBe(true);
   });
 
+  it("recovers when mcpServers itself is malformed", () => {
+    for (const malformed of [[], "oops", null]) {
+      writeFileSync(
+        path.join(dir, ".mcp.json"),
+        JSON.stringify({ mcpServers: malformed, other: true })
+      );
+
+      ensureMcpConfig(dir, "s1");
+      const cfg = JSON.parse(
+        readFileSync(path.join(dir, ".mcp.json"), "utf-8")
+      );
+
+      expect(cfg.other).toBe(true);
+      expect(Array.isArray(cfg.mcpServers)).toBe(false);
+      expect(cfg.mcpServers.stoa).toBeTruthy();
+    }
+  });
+
   it("git-excludes .mcp.json locally so it doesn't pollute the repo", () => {
     // Make the temp dir a git repo so the exclude path resolves.
     execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
@@ -147,6 +166,50 @@ describe("ensureMcpConfig", () => {
   it("is a no-op-safe write on a non-git dir (no throw, config still written)", () => {
     expect(() => ensureMcpConfig(dir, "s1")).not.toThrow();
     expect(existsSync(path.join(dir, ".mcp.json"))).toBe(true);
+  });
+});
+
+describe("mcpServerCommand", () => {
+  it("uses node + npx-cli.js on Windows so npx.cmd never reparses paths", () => {
+    const result = _mcpServerCommandForTests({
+      onWindows: true,
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      npmExecPath:
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+      resolveBin: (name) =>
+        name === "node"
+          ? "C:\\Program Files\\nodejs\\node.exe"
+          : name === "npx"
+            ? "C:\\Program Files\\nodejs\\npx.cmd"
+            : null,
+      exists: (candidate) => candidate.endsWith("npm\\bin\\npx-cli.js"),
+    });
+
+    expect(result).toEqual({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      argsPrefix: [
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js",
+      ],
+    });
+  });
+
+  it("refuses to fall back to npx.cmd on Windows when npx-cli.js is missing", () => {
+    expect(() =>
+      _mcpServerCommandForTests({
+        onWindows: true,
+        execPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath: undefined,
+        resolveBin: (name) =>
+          name === "node"
+            ? "C:\\Program Files\\nodejs\\node.exe"
+            : name === "npx"
+              ? "C:\\Program Files\\nodejs\\npx.cmd"
+              : null,
+        exists: () => false,
+      })
+    ).toThrow(
+      "Unable to locate npm npx-cli.js on Windows; cannot safely configure Stoa MCP server"
+    );
   });
 });
 

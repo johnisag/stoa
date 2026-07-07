@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   CODEX_CONTEXT_WINDOW,
+  GPT_55_CONTEXT_WINDOW,
   contextWindowFor,
   tokenMeter,
   DEFAULT_CONTEXT_WINDOW,
@@ -12,8 +13,10 @@ describe("contextWindowFor", () => {
     expect(contextWindowFor("claude-sonnet-4-6")).toBe(200_000);
     expect(contextWindowFor("anthropic/claude-haiku-4.5")).toBe(200_000);
   });
-  it("matches Codex's reported GPT context window instead of the unknown fallback", () => {
-    expect(contextWindowFor("gpt-5.5")).toBe(CODEX_CONTEXT_WINDOW);
+  it("uses the official GPT-5.5 API context window for the generic model id", () => {
+    expect(contextWindowFor("gpt-5.5")).toBe(GPT_55_CONTEXT_WINDOW);
+  });
+  it("keeps Codex-specific GPT ids on Codex's reported effective budget", () => {
     expect(contextWindowFor("gpt-5-codex")).toBe(CODEX_CONTEXT_WINDOW);
     expect(contextWindowFor("gpt-5.3-codex-spark")).toBe(CODEX_CONTEXT_WINDOW);
   });

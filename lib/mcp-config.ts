@@ -19,18 +19,29 @@ interface McpServerCommand {
   argsPrefix: string[];
 }
 
-function windowsNpxCliPath(): string | null {
+interface McpServerCommandDeps {
+  onWindows?: boolean;
+  resolveBin?: (name: string) => string | null;
+  exists?: (path: string) => boolean;
+  execPath?: string;
+  npmExecPath?: string;
+}
+
+function windowsNpxCliPath(deps: McpServerCommandDeps = {}): string | null {
   const candidates = new Set<string>();
-  const npx = resolveBinary("npx");
+  const resolveBin = deps.resolveBin ?? resolveBinary;
+  const exists = deps.exists ?? existsSync;
+  const npx = resolveBin("npx");
   if (npx) {
     candidates.add(
       path.join(path.dirname(npx), "node_modules", "npm", "bin", "npx-cli.js")
     );
   }
-  if (process.execPath) {
+  const execPath = deps.execPath ?? process.execPath;
+  if (execPath) {
     candidates.add(
       path.join(
-        path.dirname(process.execPath),
+        path.dirname(execPath),
         "node_modules",
         "npm",
         "bin",
@@ -38,29 +49,46 @@ function windowsNpxCliPath(): string | null {
       )
     );
   }
-  const npmExecPath = process.env.npm_execpath;
+  const npmExecPath = deps.npmExecPath ?? process.env.npm_execpath;
   if (npmExecPath) {
     candidates.add(path.join(path.dirname(npmExecPath), "npx-cli.js"));
   }
   for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
+    if (exists(candidate)) return candidate;
   }
   return null;
 }
 
-function mcpServerCommand(): McpServerCommand {
-  if (isWindows) {
+function mcpServerCommand(deps: McpServerCommandDeps = {}): McpServerCommand {
+  const onWindows = deps.onWindows ?? isWindows;
+  const resolveBin = deps.resolveBin ?? resolveBinary;
+  if (onWindows) {
     // Codex starts MCP servers with a direct child-process spawn. npm's Windows
     // shims (`npx.cmd`) are batch files, and cmd.exe would re-parse metachars in
     // checkout paths. Run npm's JS entrypoint under node so all paths stay argv.
-    const npxCli = windowsNpxCliPath();
-    if (npxCli)
-      return {
-        command: resolveBinary("node") || process.execPath || "node",
-        argsPrefix: [npxCli],
-      };
+    const npxCli = windowsNpxCliPath(deps);
+    if (!npxCli) {
+      throw new Error(
+        "Unable to locate npm npx-cli.js on Windows; cannot safely configure Stoa MCP server"
+      );
+    }
+    return {
+      command:
+        resolveBin("node") || deps.execPath || process.execPath || "node",
+      argsPrefix: [npxCli],
+    };
   }
-  return { command: resolveBinary("npx") || "npx", argsPrefix: [] };
+  return { command: resolveBin("npx") || "npx", argsPrefix: [] };
+}
+
+export function _mcpServerCommandForTests(
+  deps: McpServerCommandDeps
+): McpServerCommand {
+  return mcpServerCommand(deps);
+}
+
+function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function hermesRegistrationIdentity(serverPath: string): string {
@@ -108,11 +136,15 @@ export function ensureMcpConfig(
       // Only adopt a plain object — an array/null/primitive would survive
       // JSON.parse but then silently drop our `stoa` server on stringify
       // (e.g. JSON.stringify([]) === "[]"), breaking orchestration.
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        config = parsed as McpConfig;
-        if (!config.mcpServers) {
-          config.mcpServers = {};
-        }
+      if (isPlainObjectRecord(parsed)) {
+        const parsedConfig = parsed as Partial<McpConfig> &
+          Record<string, unknown>;
+        config = {
+          ...parsedConfig,
+          mcpServers: isPlainObjectRecord(parsedConfig.mcpServers)
+            ? (parsedConfig.mcpServers as McpConfig["mcpServers"])
+            : {},
+        };
       }
     } catch {
       // Invalid JSON, start fresh

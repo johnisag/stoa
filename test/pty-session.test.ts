@@ -77,7 +77,7 @@ describe("pty registry Windows shim routing", () => {
 
   it("unwraps npm .cmd shims that target a native exe", () => {
     const shim =
-      'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*';
+      '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*';
 
     const result = _resolveSpawnForTests(
       "C:\\Users\\johnis\\AppData\\Roaming\\npm\\claude.cmd",
@@ -96,30 +96,9 @@ describe("pty registry Windows shim routing", () => {
     });
   });
 
-  it("quotes every token for unrecognized .cmd shims so path metacharacters stay literal", () => {
-    const result = _resolveSpawnForTests(
-      "C:\\Tools & SDKs\\tool.cmd",
-      ["--cwd", "C:\\tmp\\stoa&clean"],
-      {
-        onWindows: true,
-        readFile: () => "@ECHO off\r\nunknown",
-        exists: () => false,
-        resolveBin: () => null,
-      }
-    );
-
-    expect(result.file.toLowerCase()).toContain("cmd");
-    expect(result.args).toEqual([
-      "/d",
-      "/s",
-      "/c",
-      '"C:\\Tools & SDKs\\tool.cmd" "--cwd" "C:\\tmp\\stoa&clean"',
-    ]);
-  });
-
-  it("fails closed for unrecognized .cmd shims with cmd expansion characters", () => {
+  it("fails closed for unrecognized .cmd shims instead of shelling through cmd.exe", () => {
     expect(() =>
-      _resolveSpawnForTests("C:\\bin\\tool.cmd", ["echo %PATH%"], {
+      _resolveSpawnForTests("C:\\bin\\tool.cmd", ["--cwd", "C:\\tmp\\stoa"], {
         onWindows: true,
         readFile: () => "@ECHO off\r\nunknown",
         exists: () => false,

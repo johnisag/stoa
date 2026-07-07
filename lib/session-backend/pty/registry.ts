@@ -58,9 +58,9 @@ export function windowsConptyOptions(
  *
  * On Windows, npm-installed CLIs are `.cmd`/`.bat` shims that CreateProcess
  * cannot launch directly. Prefer unwrapping standard npm shims to their real
- * node/exe target so argv stays shell-free; fall back to a quoted cmd.exe command
- * string only for unrecognized shims. Otherwise spawn the resolved absolute path
- * (or the bare name if not found on PATH).
+ * node/exe target so argv stays shell-free; fail closed on unrecognized shims.
+ * Otherwise spawn the resolved absolute path (or the bare name if not found on
+ * PATH).
  */
 interface ResolveSpawnDeps {
   onWindows?: boolean;
@@ -110,7 +110,9 @@ function resolveNpmCmdShim(
     };
   }
 
-  const directExe = content.match(/&\s+"%dp0%\\([^"]+\.(?:exe|com))"\s+%\*/i);
+  const directExe = content.match(
+    /(?:^|[&|])\s*"%dp0%\\([^"]+\.(?:exe|com))"\s+%\*/im
+  );
   if (directExe) {
     return { file: joinAnySep(baseDir, directExe[1]), args: [...args] };
   }
@@ -118,26 +120,8 @@ function resolveNpmCmdShim(
   return null;
 }
 
-function cmdCommandToken(value: string): string | null {
-  if (/[\r\n"%^]/.test(value)) return null;
-  return `"${value}"`;
-}
-
-function resolveCmdShimViaCmd(
-  shimPath: string,
-  args: string[]
-): { file: string; args: string[] } {
-  const tokens = [shimPath, ...args].map(cmdCommandToken);
-  if (tokens.some((token) => token == null)) {
-    throw new Error(
-      `Unable to safely launch Windows command shim: ${shimPath}`
-    );
-  }
-  const comspec = process.env.ComSpec || "cmd.exe";
-  return {
-    file: comspec,
-    args: ["/d", "/s", "/c", tokens.join(" ")],
-  };
+function unsupportedCmdShim(shimPath: string): never {
+  throw new Error(`Unable to safely launch Windows command shim: ${shimPath}`);
 }
 
 function resolveSpawn(
@@ -149,7 +133,7 @@ function resolveSpawn(
   if ((deps.onWindows ?? isWindows) && /\.(cmd|bat)$/i.test(resolved)) {
     const npmShim = resolveNpmCmdShim(resolved, args, deps);
     if (npmShim) return npmShim;
-    return resolveCmdShimViaCmd(resolved, args);
+    return unsupportedCmdShim(resolved);
   }
   return { file: resolved, args };
 }
