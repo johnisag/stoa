@@ -19,15 +19,46 @@ interface McpServerCommand {
   argsPrefix: string[];
 }
 
+function windowsNpxCliPath(): string | null {
+  const candidates = new Set<string>();
+  const npx = resolveBinary("npx");
+  if (npx) {
+    candidates.add(
+      path.join(path.dirname(npx), "node_modules", "npm", "bin", "npx-cli.js")
+    );
+  }
+  if (process.execPath) {
+    candidates.add(
+      path.join(
+        path.dirname(process.execPath),
+        "node_modules",
+        "npm",
+        "bin",
+        "npx-cli.js"
+      )
+    );
+  }
+  const npmExecPath = process.env.npm_execpath;
+  if (npmExecPath) {
+    candidates.add(path.join(path.dirname(npmExecPath), "npx-cli.js"));
+  }
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 function mcpServerCommand(): McpServerCommand {
   if (isWindows) {
     // Codex starts MCP servers with a direct child-process spawn. npm's Windows
-    // shims (`npx.cmd`) are batch files and are not directly spawnable; launch a
-    // real executable and let cmd resolve/run the shim.
-    return {
-      command: process.env.ComSpec || "cmd.exe",
-      argsPrefix: ["/d", "/c", "npx"],
-    };
+    // shims (`npx.cmd`) are batch files, and cmd.exe would re-parse metachars in
+    // checkout paths. Run npm's JS entrypoint under node so all paths stay argv.
+    const npxCli = windowsNpxCliPath();
+    if (npxCli)
+      return {
+        command: resolveBinary("node") || process.execPath || "node",
+        argsPrefix: [npxCli],
+      };
   }
   return { command: resolveBinary("npx") || "npx", argsPrefix: [] };
 }

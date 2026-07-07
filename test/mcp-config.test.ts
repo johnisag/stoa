@@ -27,14 +27,45 @@ import {
 import { CONDUCTOR_MARKER_FILE } from "@/lib/conductor-marker";
 import { isWindows, resolveBinary } from "@/lib/platform";
 
+function expectedWindowsNpxCliPath() {
+  if (!isWindows) return null;
+  const candidates = new Set<string>();
+  const npx = resolveBinary("npx");
+  if (npx) {
+    candidates.add(
+      path.join(path.dirname(npx), "node_modules", "npm", "bin", "npx-cli.js")
+    );
+  }
+  if (process.execPath) {
+    candidates.add(
+      path.join(
+        path.dirname(process.execPath),
+        "node_modules",
+        "npm",
+        "bin",
+        "npx-cli.js"
+      )
+    );
+  }
+  const npmExecPath = process.env.npm_execpath;
+  if (npmExecPath) {
+    candidates.add(path.join(path.dirname(npmExecPath), "npx-cli.js"));
+  }
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 function expectedMcpCommand() {
-  return isWindows
-    ? process.env.ComSpec || "cmd.exe"
+  return isWindows && expectedWindowsNpxCliPath()
+    ? resolveBinary("node") || process.execPath || "node"
     : resolveBinary("npx") || "npx";
 }
 
 function expectedMcpArgsPrefix() {
-  return isWindows ? ["/d", "/c", "npx"] : [];
+  const npxCli = expectedWindowsNpxCliPath();
+  return isWindows && npxCli ? [npxCli] : [];
 }
 
 describe("ensureMcpConfig", () => {
@@ -132,8 +163,11 @@ describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
       expect(argsToken).toContain(`'${prefix}'`);
     }
     if (isWindows) {
-      // Codex starts MCP servers with a direct child-process spawn. On Windows the
-      // generated command must be a real executable (`cmd.exe`), not npx.cmd.
+      // Codex starts MCP servers with a direct child-process spawn. On Windows,
+      // use node+npx-cli.js so cmd.exe never reparses the server path.
+      expect(path.basename(expectedMcpCommand()).toLowerCase()).not.toBe(
+        "cmd.exe"
+      );
       const probe = spawnSync(
         expectedMcpCommand(),
         [...expectedMcpArgsPrefix(), "--version"],

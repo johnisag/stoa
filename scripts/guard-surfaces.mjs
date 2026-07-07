@@ -184,6 +184,20 @@ const SHELL_CMDS = new Set([
 // runs an attacker module's top level before main). A standalone token only.
 const CODE_LOAD_FLAG =
   /(^|\s)(-e|--eval|-p|--print|-c|-r|--require|--import|--loader|--experimental-loader|-m|--module)(\s|=|$)/;
+const CODE_LOAD_TOKENS = new Set([
+  "-e",
+  "--eval",
+  "-p",
+  "--print",
+  "-c",
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--experimental-loader",
+  "-m",
+  "--module",
+]);
 
 // Env vars that inject code into a spawned interpreter regardless of argv.
 const DANGEROUS_ENV =
@@ -230,6 +244,8 @@ export function findMcpServers(obj) {
             ? def.args
             : ""
         : "";
+      const argTokens =
+        isObj && Array.isArray(def.args) ? def.args.map(String) : null;
       // env can smuggle code into a spawned interpreter (NODE_OPTIONS=--require ...).
       const env =
         isObj &&
@@ -238,7 +254,7 @@ export function findMcpServers(obj) {
         !Array.isArray(def.env)
           ? def.env
           : {};
-      out.push({ name, command, args, env });
+      out.push({ name, command, args, argTokens, env });
     }
   }
   return out;
@@ -262,12 +278,27 @@ export function findMcpServers(obj) {
  * committed file `orchestration-server.ts`); the real gate is that .mcp.json /
  * .claude.json are now byte-pinned surfaceFiles, making this check defense-in-depth.
  */
-export function isAllowedMcpServer({ command, args, env } = {}, allowlist) {
+export function isAllowedMcpServer(
+  { command, args, argTokens: rawArgTokens, env } = {},
+  allowlist
+) {
   const cmd = String(command || "").trim();
-  const a = String(args || "").trim();
-  if (META_RE.test(`${cmd} ${a}`)) return false; // metachars / chaining / comment
+  const argTokens = Array.isArray(args)
+    ? args.map(String)
+    : Array.isArray(rawArgTokens)
+      ? rawArgTokens.map(String)
+      : null;
+  const a = Array.isArray(args) ? args.join(" ") : String(args || "").trim();
+  // String-form args may be shell-ish and are kept fail-closed on metachars.
+  // JSON-array args are real argv tokens, so a path like `stoa&clean` is safe.
+  if (META_RE.test(cmd) || (!argTokens && META_RE.test(a))) return false;
   if (SHELL_CMDS.has(basename(cmd).toLowerCase())) return false;
-  if (CODE_LOAD_FLAG.test(` ${a} `)) return false; // inline-eval / module-preload / -m
+  if (
+    argTokens
+      ? argTokens.some((t) => CODE_LOAD_TOKENS.has(t.split("=")[0]))
+      : CODE_LOAD_FLAG.test(` ${a} `)
+  )
+    return false; // inline-eval / module-preload / -m
   for (const [k, v] of Object.entries(
     env && typeof env === "object" ? env : {}
   )) {
@@ -288,7 +319,10 @@ export function isAllowedMcpServer({ command, args, env } = {}, allowlist) {
   const fileLike = (t) => /[\\/]/.test(t) || /\.[A-Za-z0-9]+$/.test(t);
   const bases = [
     baseOf(cmd),
-    ...a.split(/\s+/).filter(Boolean).filter(fileLike).map(baseOf),
+    ...(argTokens ?? a.split(/\s+/))
+      .filter(Boolean)
+      .filter(fileLike)
+      .map(baseOf),
   ].filter(Boolean);
   return (allowlist || []).some((allow) => bases.includes(allow));
 }

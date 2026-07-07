@@ -18,7 +18,11 @@ function attachErrorMessage(err: unknown): string {
   const raw =
     err instanceof Error ? err.message : typeof err === "string" ? err : "";
   const message = raw.trim().replace(/^(Error:\s*)+/, "");
-  return message || "Failed to attach session";
+  if (/^Working directory does not exist:/i.test(message)) return message;
+  if (/no such session/i.test(message)) return "Session is no longer running";
+  if (/host closed|socket|ECONN|connection/i.test(message))
+    return "Session backend disconnected";
+  return "Failed to attach session";
 }
 
 /**

@@ -241,4 +241,15 @@ describe("AttachSession — attach-race sequence guard", () => {
 
     expect(errors).toEqual(["Working directory does not exist: C:\\gone"]);
   });
+
+  it("maps low-level backend attach failures to friendly client messages", async () => {
+    const t = new FakeTransport();
+    t.rejectWith = new Error("Error: host closed");
+    const { errors, sink } = makeSink();
+    const s = new AttachSession(t, sink);
+
+    await s.attach("k");
+
+    expect(errors).toEqual(["Session backend disconnected"]);
+  });
 });

@@ -88,7 +88,15 @@ describe("findMcpServers / isStoaMcpServer (provider-agnostic MCP vector)", () =
       findMcpServers({
         mcpServers: { a: { command: "sh", args: ["-c", "x"] } },
       })
-    ).toEqual([{ name: "a", command: "sh", args: "-c x", env: {} }]);
+    ).toEqual([
+      {
+        name: "a",
+        command: "sh",
+        args: "-c x",
+        argTokens: ["-c", "x"],
+        env: {},
+      },
+    ]);
     expect(
       findMcpServers({ mcp_servers: { b: { command: "node" } } })[0].name
     ).toBe("b");
@@ -522,6 +530,38 @@ describe("adversarial-review fixes (MCP allow-check hardening)", () => {
         allow
       )
     ).toBe(true);
+  });
+  it("allows Stoa's Windows node+npx-cli argv wrapper without treating path metachars as shell", () => {
+    expect(
+      isAllowedMcpServer(
+        {
+          command: "node",
+          args: [
+            "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js",
+            "tsx",
+            "C:\\tmp\\stoa&clean\\mcp\\orchestration-server.ts",
+          ],
+        },
+        allow
+      )
+    ).toBe(true);
+  });
+  it("still rejects a cmd.exe wrapper even when it points at the Stoa server", () => {
+    expect(
+      isAllowedMcpServer(
+        {
+          command: "cmd.exe",
+          args: [
+            "/d",
+            "/c",
+            "npx",
+            "tsx",
+            "C:\\tmp\\stoa&clean\\mcp\\orchestration-server.ts",
+          ],
+        },
+        allow
+      )
+    ).toBe(false);
   });
   it("blocks node -r / --require / --import module-preload (pre-main RCE)", () => {
     expect(
