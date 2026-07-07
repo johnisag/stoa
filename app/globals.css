@@ -162,22 +162,44 @@ body {
   display: none;
 }
 
-/* TERMINAL scrollbar — gated on POINTER TYPE, not viewport width. A pointer
+/* TERMINAL scrollbar. A fine pointer
    device (desktop/laptop trackpad or mouse, incl. macOS at ANY zoom or in a
-   narrow/split pane) FORCES an always-present bar; touch devices are excluded so
-   they keep touch-scroll.ts's setup (it sets the viewport overflow:hidden and
-   drives a synthetic-wheel path — fighting that with `overflow-y:scroll` caused
-   double-scroll). Width-gating (min-width:769px) silently dropped the bar on a
+   narrow/split pane) FORCES an always-present bar. Desktop-width layouts do the
+   same, matching useViewport's mobile breakpoint: touch-scroll.ts only runs
+   below 768px, and it sets the viewport overflow:hidden and drives a
+   synthetic-wheel path. Fighting that mobile path with `overflow-y:scroll`
+   caused double-scroll. Pure width-gating silently dropped the bar on a
    zoomed-in or narrow Mac window, which is the "no scrollbar at all" report.
    IMPORTANT: modern Chromium (121+) ignores ::-webkit-scrollbar entirely once
    `scrollbar-color`/`scrollbar-width` are set on the same element, falling back
    to the STANDARD scrollbar — which on macOS still auto-hides. So Chromium +
    Safari (webkit) get ONLY the ::-webkit-scrollbar rules; the standard props are
-   scoped to Firefox via the @supports block (Firefox has no ::-webkit-scrollbar). */
-@media (pointer: fine) {
+   scoped to Firefox via the @supports block (Firefox has no ::-webkit-scrollbar).
+   xterm v6 also renders a custom `.xterm-scrollable-element > .scrollbar`
+   overlay; the native viewport gutter can be present while that real thumb is
+   hidden with `.invisible.fade`, so force the vertical overlay visible too. */
+@media (pointer: fine), (min-width: 768px) {
   .xterm .xterm-viewport {
     /* win over xterm.css (.xterm .xterm-viewport specificity) + any auto-hide */
     overflow-y: scroll !important;
+  }
+  .xterm .xterm-scrollable-element > .scrollbar.vertical {
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    width: 12px !important;
+    background: transparent !important;
+    transition: none !important;
+  }
+  .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+    width: 12px !important;
+    background: hsl(var(--muted-foreground) / 0.5) !important;
+    border-radius: 6px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider:hover {
+    background: hsl(var(--muted-foreground) / 0.7) !important;
   }
   .xterm .xterm-viewport::-webkit-scrollbar {
     width: 12px !important;
@@ -196,10 +218,17 @@ body {
   }
 }
 
-/* Touch devices (phones/tablets): a slim bar, and NEVER force overflow — leave
-   the viewport's overflow to touch-scroll.ts so native + synthetic scroll don't
-   both fire. */
-@media (pointer: coarse) {
+/* Mobile-width touch devices: a slim bar, and NEVER force overflow - leave the
+   viewport's overflow to touch-scroll.ts so native + synthetic scroll don't both
+   fire. */
+@media (pointer: coarse) and (max-width: 767.98px) {
+  .xterm .xterm-scrollable-element > .scrollbar.vertical {
+    width: 5px !important;
+  }
+  .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+    background: hsl(var(--muted-foreground) / 0.3) !important;
+    border-radius: 3px;
+  }
   .xterm .xterm-viewport::-webkit-scrollbar {
     width: 5px;
   }
