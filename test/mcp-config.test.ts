@@ -68,6 +68,11 @@ function expectedMcpArgsPrefix() {
   return isWindows && npxCli ? [npxCli] : [];
 }
 
+function expectedTomlString(v: string) {
+  if (!v.includes("'")) return `'${v}'`;
+  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 describe("ensureMcpConfig", () => {
   let dir: string;
   beforeEach(() => {
@@ -160,7 +165,7 @@ describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
     expect(commandToken).toContain(expectedMcpCommand());
     const argsToken = kv.find((s) => s.startsWith("mcp_servers.stoa.args="))!;
     for (const prefix of expectedMcpArgsPrefix()) {
-      expect(argsToken).toContain(`'${prefix}'`);
+      expect(argsToken).toContain(expectedTomlString(prefix));
     }
     if (isWindows) {
       // Codex starts MCP servers with a direct child-process spawn. On Windows,
@@ -184,12 +189,13 @@ describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
     expect(args.join(" ")).toContain("orchestration-server.ts");
   });
 
-  it("uses TOML single-quoted literals (keeps Windows backslashes intact)", () => {
+  it("uses TOML-safe literals for argv values (keeps Windows backslashes intact)", () => {
     const args = buildCodexOrchestrationArgs("s1");
     const argsToken = args.find((s) => s.startsWith("mcp_servers.stoa.args="))!;
-    // Single-quoted (literal) — never double-quoted, which would mangle `\m`.
-    expect(argsToken).not.toContain('"');
-    expect(argsToken).toContain("'tsx'");
+    expect(argsToken).toContain(expectedTomlString("tsx"));
+    for (const prefix of expectedMcpArgsPrefix()) {
+      expect(argsToken).toContain(expectedTomlString(prefix));
+    }
   });
 
   it("escapes a value containing a single quote as a double-quoted TOML string (F6)", () => {

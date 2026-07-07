@@ -10,6 +10,7 @@ import {
   killSessionAndWait,
   renameSession,
   _resetRegistryForTests,
+  _resolveSpawnForTests,
 } from "@/lib/session-backend/pty/registry";
 
 afterEach(async () => {
@@ -34,6 +35,101 @@ function processExists(pid: number): boolean {
     return false;
   }
 }
+
+describe("pty registry Windows shim routing", () => {
+  it("unwraps npm .cmd shims to node + the underlying JS entrypoint", () => {
+    const shim = [
+      "@ECHO off",
+      'IF EXIST "%dp0%\\node.exe" (',
+      '  SET "_prog=%dp0%\\node.exe"',
+      ") ELSE (",
+      '  SET "_prog=node"',
+      ")",
+      'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*',
+    ].join("\r\n");
+
+    const result = _resolveSpawnForTests(
+      "C:\\Users\\johnis\\AppData\\Roaming\\npm\\codex.cmd",
+      [
+        "-c",
+        "mcp_servers.stoa.args=['C:\\tmp\\stoa&clean\\mcp\\orchestration-server.ts']",
+        'prompt keeps 100% "quotes" and ^ carets',
+      ],
+      {
+        onWindows: true,
+        readFile: () => shim,
+        exists: () => false,
+        resolveBin: (name) =>
+          name === "node" ? "C:\\Program Files\\nodejs\\node.exe" : null,
+      }
+    );
+
+    expect(result).toEqual({
+      file: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Users\\johnis\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+        "-c",
+        "mcp_servers.stoa.args=['C:\\tmp\\stoa&clean\\mcp\\orchestration-server.ts']",
+        'prompt keeps 100% "quotes" and ^ carets',
+      ],
+    });
+  });
+
+  it("unwraps npm .cmd shims that target a native exe", () => {
+    const shim =
+      'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*';
+
+    const result = _resolveSpawnForTests(
+      "C:\\Users\\johnis\\AppData\\Roaming\\npm\\claude.cmd",
+      ["--model", "opus"],
+      {
+        onWindows: true,
+        readFile: () => shim,
+        exists: () => false,
+        resolveBin: () => null,
+      }
+    );
+
+    expect(result).toEqual({
+      file: "C:\\Users\\johnis\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+      args: ["--model", "opus"],
+    });
+  });
+
+  it("quotes every token for unrecognized .cmd shims so path metacharacters stay literal", () => {
+    const result = _resolveSpawnForTests(
+      "C:\\Tools & SDKs\\tool.cmd",
+      ["--cwd", "C:\\tmp\\stoa&clean"],
+      {
+        onWindows: true,
+        readFile: () => "@ECHO off\r\nunknown",
+        exists: () => false,
+        resolveBin: () => null,
+      }
+    );
+
+    expect(result.file.toLowerCase()).toContain("cmd");
+    expect(result.args).toEqual([
+      "/d",
+      "/s",
+      "/c",
+      '"C:\\Tools & SDKs\\tool.cmd" "--cwd" "C:\\tmp\\stoa&clean"',
+    ]);
+  });
+
+  it("fails closed for unrecognized .cmd shims with cmd expansion characters", () => {
+    expect(() =>
+      _resolveSpawnForTests("C:\\bin\\tool.cmd", ["echo %PATH%"], {
+        onWindows: true,
+        readFile: () => "@ECHO off\r\nunknown",
+        exists: () => false,
+        resolveBin: () => null,
+      })
+    ).toThrow(
+      "Unable to safely launch Windows command shim: C:\\bin\\tool.cmd"
+    );
+  });
+});
 
 describe("pty registry / PtySession", () => {
   it("spawns a process and exposes rendered capture + raw buffer + live stream", async () => {

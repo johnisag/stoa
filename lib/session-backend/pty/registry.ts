@@ -12,7 +12,7 @@
  * this into a separate long-lived pty-host process.
  */
 
-import { statSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import * as pty from "node-pty";
 import {
   isWindows,
@@ -57,19 +57,110 @@ export function windowsConptyOptions(
  * Resolve a binary + args into a spawnable (file, args) pair, cross-platform.
  *
  * On Windows, npm-installed CLIs are `.cmd`/`.bat` shims that CreateProcess
- * cannot launch directly, so we route them through cmd.exe. Otherwise we spawn
- * the resolved absolute path (or the bare name if not found on PATH).
+ * cannot launch directly. Prefer unwrapping standard npm shims to their real
+ * node/exe target so argv stays shell-free; fall back to a quoted cmd.exe command
+ * string only for unrecognized shims. Otherwise spawn the resolved absolute path
+ * (or the bare name if not found on PATH).
  */
-function resolveSpawn(
-  binary: string,
+interface ResolveSpawnDeps {
+  onWindows?: boolean;
+  resolveBin?: (name: string) => string | null;
+  readFile?: (path: string) => string;
+  exists?: (path: string) => boolean;
+}
+
+function dirnameAnySep(filePath: string): string {
+  const idx = Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/"));
+  return idx >= 0 ? filePath.slice(0, idx) : ".";
+}
+
+function joinAnySep(dir: string, relativePath: string): string {
+  const sep = dir.includes("\\") ? "\\" : "/";
+  const cleanDir = dir.replace(/[\\/]+$/, "");
+  const cleanRelative = relativePath.replace(/[\\/]+/g, sep);
+  return `${cleanDir}${sep}${cleanRelative}`;
+}
+
+function resolveNpmCmdShim(
+  shimPath: string,
+  args: string[],
+  deps: ResolveSpawnDeps
+): { file: string; args: string[] } | null {
+  const read = deps.readFile ?? ((p: string) => readFileSync(p, "utf8"));
+  let content: string;
+  try {
+    content = read(shimPath);
+  } catch {
+    return null;
+  }
+
+  const baseDir = dirnameAnySep(shimPath);
+  const nodeScript = content.match(/"%_prog%"\s+"%dp0%\\([^"]+)"\s+%\*/i);
+  if (nodeScript) {
+    const exists = deps.exists ?? existsSync;
+    const localNode = joinAnySep(baseDir, "node.exe");
+    const nodePath = exists(localNode)
+      ? localNode
+      : (deps.resolveBin ?? resolveBinary)("node") ||
+        process.execPath ||
+        "node";
+    return {
+      file: nodePath,
+      args: [joinAnySep(baseDir, nodeScript[1]), ...args],
+    };
+  }
+
+  const directExe = content.match(/&\s+"%dp0%\\([^"]+\.(?:exe|com))"\s+%\*/i);
+  if (directExe) {
+    return { file: joinAnySep(baseDir, directExe[1]), args: [...args] };
+  }
+
+  return null;
+}
+
+function cmdCommandToken(value: string): string | null {
+  if (/[\r\n"%^]/.test(value)) return null;
+  return `"${value}"`;
+}
+
+function resolveCmdShimViaCmd(
+  shimPath: string,
   args: string[]
 ): { file: string; args: string[] } {
-  const resolved = resolveBinary(binary) || binary;
-  if (isWindows && /\.(cmd|bat)$/i.test(resolved)) {
-    const comspec = process.env.ComSpec || "cmd.exe";
-    return { file: comspec, args: ["/c", resolved, ...args] };
+  const tokens = [shimPath, ...args].map(cmdCommandToken);
+  if (tokens.some((token) => token == null)) {
+    throw new Error(
+      `Unable to safely launch Windows command shim: ${shimPath}`
+    );
+  }
+  const comspec = process.env.ComSpec || "cmd.exe";
+  return {
+    file: comspec,
+    args: ["/d", "/s", "/c", tokens.join(" ")],
+  };
+}
+
+function resolveSpawn(
+  binary: string,
+  args: string[],
+  deps: ResolveSpawnDeps = {}
+): { file: string; args: string[] } {
+  const resolved = (deps.resolveBin ?? resolveBinary)(binary) || binary;
+  if ((deps.onWindows ?? isWindows) && /\.(cmd|bat)$/i.test(resolved)) {
+    const npmShim = resolveNpmCmdShim(resolved, args, deps);
+    if (npmShim) return npmShim;
+    return resolveCmdShimViaCmd(resolved, args);
   }
   return { file: resolved, args };
+}
+
+/** Exposed for cross-platform tests of Windows shim routing. */
+export function _resolveSpawnForTests(
+  binary: string,
+  args: string[],
+  deps?: ResolveSpawnDeps
+): { file: string; args: string[] } {
+  return resolveSpawn(binary, args, deps);
 }
 
 /** Build the child environment (inherit parent, normalize HOME/USER, overlay extras). */

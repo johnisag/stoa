@@ -546,6 +546,21 @@ describe("adversarial-review fixes (MCP allow-check hardening)", () => {
       )
     ).toBe(true);
   });
+  it("allows direct-spawn Windows command paths with path punctuation", () => {
+    expect(
+      isAllowedMcpServer(
+        {
+          command: "C:\\Tools & SDKs\\nodejs (x64)\\node.exe",
+          args: [
+            "C:\\Tools & SDKs\\nodejs (x64)\\node_modules\\npm\\bin\\npx-cli.js",
+            "tsx",
+            "C:\\tmp\\stoa&clean\\mcp\\orchestration-server.ts",
+          ],
+        },
+        allow
+      )
+    ).toBe(true);
+  });
   it("still rejects a cmd.exe wrapper even when it points at the Stoa server", () => {
     expect(
       isAllowedMcpServer(
@@ -562,6 +577,19 @@ describe("adversarial-review fixes (MCP allow-check hardening)", () => {
         allow
       )
     ).toBe(false);
+  });
+  it("rejects Windows .cmd/.bat wrappers even with structured argv args", () => {
+    for (const command of ["npx.cmd", "tool.bat"]) {
+      expect(
+        isAllowedMcpServer(
+          {
+            command,
+            args: ["tsx", "C:\\tmp\\stoa&clean\\mcp\\orchestration-server.ts"],
+          },
+          allow
+        )
+      ).toBe(false);
+    }
   });
   it("blocks node -r / --require / --import module-preload (pre-main RCE)", () => {
     expect(

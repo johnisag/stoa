@@ -207,6 +207,11 @@ const META_RE = /[;&|`$(){}<>#\n]|&&|\|\|/; // shell metachars / chaining / comm
 
 // -- pure helpers (unit-tested) --
 
+function basenameAnySep(p) {
+  const parts = String(p).split(/[\\/]/);
+  return parts[parts.length - 1] || String(p);
+}
+
 export function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -291,8 +296,11 @@ export function isAllowedMcpServer(
   const a = Array.isArray(args) ? args.join(" ") : String(args || "").trim();
   // String-form args may be shell-ish and are kept fail-closed on metachars.
   // JSON-array args are real argv tokens, so a path like `stoa&clean` is safe.
-  if (META_RE.test(cmd) || (!argTokens && META_RE.test(a))) return false;
-  if (SHELL_CMDS.has(basename(cmd).toLowerCase())) return false;
+  const commandIsPath = /[\\/]/.test(cmd) || /\.[A-Za-z0-9]+$/.test(cmd);
+  if ((!commandIsPath && META_RE.test(cmd)) || (!argTokens && META_RE.test(a)))
+    return false;
+  const cmdBase = basenameAnySep(cmd).toLowerCase();
+  if (SHELL_CMDS.has(cmdBase) || /\.(cmd|bat)$/i.test(cmdBase)) return false;
   if (
     argTokens
       ? argTokens.some((t) => CODE_LOAD_TOKENS.has(t.split("=")[0]))
@@ -315,7 +323,7 @@ export function isAllowedMcpServer(
   // script, as in `npx tsx <path>/orchestration-server.ts`. A bare arg is a package
   // / module name (`npx orchestration-server`, `python -m mod`) and must NOT match,
   // and a directory segment of a file path doesn't count (only its basename).
-  const baseOf = (t) => basename(t).replace(/\.[^.]+$/, "");
+  const baseOf = (t) => basenameAnySep(t).replace(/\.[^.]+$/, "");
   const fileLike = (t) => /[\\/]/.test(t) || /\.[A-Za-z0-9]+$/.test(t);
   const bases = [
     baseOf(cmd),
