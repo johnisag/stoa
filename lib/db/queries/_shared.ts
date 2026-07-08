@@ -9,10 +9,13 @@ const stmtCache = new WeakMap<
   Map<string, Database.Statement>
 >();
 
-export function getStmt(
+export function getStmt<
+  BindParameters extends unknown[] = unknown[],
+  Result = unknown,
+>(
   db: Database.Database,
   sql: string
-): Database.Statement {
+): Database.Statement<BindParameters, Result> {
   let dbCache = stmtCache.get(db);
   if (!dbCache) {
     dbCache = new Map<string, Database.Statement>();
@@ -23,5 +26,5 @@ export function getStmt(
     stmt = db.prepare(sql);
     dbCache.set(sql, stmt);
   }
-  return stmt;
+  return stmt as Database.Statement<BindParameters, Result>;
 }

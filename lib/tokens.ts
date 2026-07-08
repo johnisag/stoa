@@ -95,8 +95,7 @@ export function resolveTokenScope(
   db: Database.Database = getDb()
 ): TokenScope | null {
   if (typeof presented !== "string" || presented.length === 0) return null;
-  const row = queries.resolveAuthToken(db).get(hashToken(presented)) as
-    { id: string; scope: string } | undefined;
+  const row = queries.resolveAuthToken(db).get(hashToken(presented));
   if (!row) return null;
   try {
     queries.touchAuthToken(db).run(row.id);
@@ -108,7 +107,7 @@ export function resolveTokenScope(
 
 /** The token list for the settings UI (no secrets). */
 export function listTokens(db: Database.Database = getDb()): TokenInfo[] {
-  return queries.listAuthTokens(db).all() as TokenInfo[];
+  return queries.listAuthTokens(db).all();
 }
 
 /** Revoke a token by id. Returns true if a live token was revoked (idempotent). */
