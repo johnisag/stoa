@@ -107,7 +107,7 @@ export async function createCheckpoint(
       opts.createdBy ?? "manual",
       opts.parentCheckpointId ?? null
     );
-  return queries.getCheckpoint(db).get(id) as CheckpointRow;
+  return queries.getCheckpoint(db).get(id) ?? null;
 }
 
 /**
@@ -119,7 +119,7 @@ export async function listCheckpoints(
   session: CheckpointSession,
   db: Database.Database = getDb()
 ): Promise<CheckpointView[]> {
-  const rows = queries.listCheckpoints(db).all(session.id) as CheckpointRow[];
+  const rows = queries.listCheckpoints(db).all(session.id);
   if (rows.length === 0) return [];
   const live = await listSnapshots(session.working_directory, session.id);
   const liveShas = new Set(live.map((s) => s.sha));
@@ -182,8 +182,7 @@ export async function prepareForkFromSnapshot(
     baseRef: target.sha,
   });
 
-  const source = queries.getCheckpointBySeq(db).get(session.id, seq) as
-    CheckpointRow | undefined;
+  const source = queries.getCheckpointBySeq(db).get(session.id, seq);
 
   return {
     worktreePath: info.worktreePath,
