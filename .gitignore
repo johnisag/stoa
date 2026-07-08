@@ -65,6 +65,7 @@ docs/*
 !docs/setup/
 !docs/issues/
 !docs/ROADMAP.md
+!docs/fleet-management.md
 .mcp.json
 .git-evening
 
