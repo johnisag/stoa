@@ -35,6 +35,7 @@ npm-debug.log*
 # Claude Code local settings (machine-local; the rest of .claude/ — agent
 # configs — stays tracked). Untracked, so without this it would block
 # `stoa update`'s clean-tree check.
+.claude/settings.json
 .claude/settings.local.json
 
 # Testing
@@ -92,3 +93,7 @@ tmp-*.mjs
 # Kimi agent swarm scratchpads (local status/bug-hunting notes)
 competitor-wins-kimi.md
 new-bugs-kimi.md
+
+# Local agent/plugin scratch surfaces.
+.agents/
+.hermes/
