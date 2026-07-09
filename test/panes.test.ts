@@ -23,6 +23,7 @@ describe("lib/panes", () => {
       "analytics",
       "verdict-inbox",
       "fleet-board",
+      "fleet-management",
       "ask",
     ];
     for (const view of views) {
@@ -35,6 +36,7 @@ describe("lib/panes", () => {
     expect(isViewTab(undefined)).toBe(false);
     expect(isViewTab("workflows")).toBe(true);
     expect(isViewTab("fleet-board")).toBe(true);
+    expect(isViewTab("fleet-management")).toBe(true);
     expect(isViewTab("ask")).toBe(true);
   });
 

@@ -15,6 +15,7 @@ import {
   TerminalSquare,
   History,
   KeyRound,
+  Network,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,6 +80,12 @@ export const FLEET_NAV: readonly FleetNavEntry[] = [
     label: "Fleet Board",
     icon: Columns3,
     ariaLabel: "Fleet Board (the fleet by lifecycle stage)",
+  },
+  {
+    id: "fleet-management",
+    label: "Fleet Management",
+    icon: Network,
+    ariaLabel: "Fleet Management (plan and maintain agent fleets)",
   },
   {
     id: "live-wall",

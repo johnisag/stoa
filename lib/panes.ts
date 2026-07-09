@@ -24,6 +24,7 @@ export type ViewKind =
   | "analytics"
   | "verdict-inbox"
   | "fleet-board"
+  | "fleet-management"
   | "ask"
   | "best-of-n"
   | "live-wall"

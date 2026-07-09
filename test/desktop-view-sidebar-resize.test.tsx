@@ -110,6 +110,7 @@ function viewProps(): ViewProps {
     onOpenWorkflows: vi.fn(),
     onOpenVerdictInbox: vi.fn(),
     onOpenFleetBoard: vi.fn(),
+    onOpenFleetManagement: vi.fn(),
     onOpenLiveWall: vi.fn(),
     onOpenAgentMonitor: vi.fn(),
     onOpenActivity: vi.fn(),

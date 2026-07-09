@@ -78,13 +78,18 @@ export interface CreateSessionParams {
 
 /** Views the open_view action can navigate to (client-side navigation only). */
 export type CommandView =
-  "analytics" | "dispatch" | "verdict-inbox" | "fleet-board";
+  | "analytics"
+  | "dispatch"
+  | "verdict-inbox"
+  | "fleet-board"
+  | "fleet-management";
 
 export const COMMAND_VIEWS: readonly CommandView[] = [
   "analytics",
   "dispatch",
   "verdict-inbox",
   "fleet-board",
+  "fleet-management",
 ];
 
 /** Validated params for dispatch_issue: create a local (GitHub-free) task

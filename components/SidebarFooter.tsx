@@ -26,6 +26,8 @@ interface SidebarFooterProps {
   onShowVerdictInbox?: () => void;
   /** Opens the Fleet Board (the fleet by lifecycle stage). */
   onShowFleetBoard?: () => void;
+  /** Opens Fleet Management (plan and maintain agent fleets). */
+  onShowFleetManagement?: () => void;
   /** Opens the notification settings (sound, per-event toggles, push). */
   onShowNotifications?: () => void;
   /** Opens the Ask Stoa chatbox. */
@@ -46,6 +48,7 @@ export function SidebarFooter({
   onShowWorkflows,
   onShowVerdictInbox,
   onShowFleetBoard,
+  onShowFleetManagement,
   onShowNotifications,
   onShowChat,
   onShowNotes,
@@ -104,6 +107,13 @@ export function SidebarFooter({
               variant="footer"
               onClick={onShowFleetBoard}
               count={attentionCount}
+            />
+          )}
+          {onShowFleetManagement && (
+            <NavIconButton
+              entry={fleetNavEntry("fleet-management")}
+              variant="footer"
+              onClick={onShowFleetManagement}
             />
           )}
           {onShowChat && (

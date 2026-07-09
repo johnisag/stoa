@@ -64,7 +64,7 @@ const COMMAND_PREAMBLE = [
   "",
   "   - open_view: navigate the UI to a specific view (client-side only — nothing runs).",
   '     {"kind":"proposal","action":"open_view","params":{',
-  '       "view":"analytics" | "dispatch" | "verdict-inbox" | "fleet-board"}}',
+  '       "view":"analytics" | "dispatch" | "verdict-inbox" | "fleet-board" | "fleet-management"}}',
   "",
   "   - list_sessions: return a summary of the user's current sessions (read-only).",
   '     {"kind":"proposal","action":"list_sessions","params":{',

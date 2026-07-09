@@ -28,6 +28,7 @@ import {
   TerminalSquare,
   History,
   Pin,
+  Network,
 } from "lucide-react";
 import { statusGlyph } from "@/components/status-glyph";
 import type { Session } from "@/lib/db";
@@ -126,6 +127,8 @@ interface QuickSwitcherProps {
   onOpenVerdictInbox?: () => void;
   /** Open the Fleet Board (fleet by lifecycle stage). */
   onOpenFleetBoard?: () => void;
+  /** Open Fleet Management. */
+  onOpenFleetManagement?: () => void;
   /** Open the Insight / analytics view. */
   onOpenInsight?: () => void;
   /** Start a new session. */
@@ -157,6 +160,7 @@ export function QuickSwitcher({
   onOpenWorkflows,
   onOpenVerdictInbox,
   onOpenFleetBoard,
+  onOpenFleetManagement,
   onOpenInsight,
   onNewSession,
   onOpenAskStoa,
@@ -222,6 +226,13 @@ export function QuickSwitcher({
       <Columns3 className="h-4 w-4" />
     );
     add(
+      "open-fleet-management",
+      "Open Fleet Management",
+      ["fleet", "management", "plan", "agents", "orchestration"],
+      onOpenFleetManagement,
+      <Network className="h-4 w-4" />
+    );
+    add(
       "open-insight",
       "Open Insight",
       ["analytics", "ledger", "metrics", "stats", "cost"],
@@ -283,6 +294,7 @@ export function QuickSwitcher({
     onOpenDispatch,
     onOpenVerdictInbox,
     onOpenFleetBoard,
+    onOpenFleetManagement,
     onOpenInsight,
     onOpenWorkflows,
     onOpenAskStoa,

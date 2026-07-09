@@ -23,6 +23,16 @@ function hasIndex(name: string): boolean {
   );
 }
 
+function hasTable(name: string): boolean {
+  return (
+    (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+        .all(name) as { name: string }[]
+    ).length > 0
+  );
+}
+
 function hasColumn(table: string, column: string): boolean {
   return db
     .prepare(`PRAGMA table_info(${table})`)
@@ -76,5 +86,78 @@ describe("fresh schema checkpoints (#44 — schema/migration parity)", () => {
   it("has the checkpoints session + parent indexes (mirrors migration 52)", () => {
     expect(hasIndex("idx_checkpoints_session")).toBe(true);
     expect(hasIndex("idx_checkpoints_parent")).toBe(true);
+  });
+});
+
+describe("fresh schema fleet management tables", () => {
+  it("has the Phase 1 durable run graph tables", () => {
+    for (const table of [
+      "fleet_runs",
+      "fleet_tasks",
+      "fleet_workers",
+      "fleet_events",
+    ]) {
+      expect(hasTable(table)).toBe(true);
+    }
+  });
+
+  it("has the run, task, worker, and event columns Phase 1 queries rely on", () => {
+    for (const col of [
+      "id",
+      "name",
+      "goal",
+      "repo_id",
+      "project_id",
+      "status",
+      "budget_usd",
+      "provider",
+      "model",
+      "max_concurrency",
+      "review_policy",
+      "approval_state",
+      "settings_json",
+    ]) {
+      expect(hasColumn("fleet_runs", col)).toBe(true);
+    }
+    for (const col of [
+      "id",
+      "fleet_run_id",
+      "parent_task_id",
+      "title",
+      "status",
+      "task_type",
+      "sort_order",
+      "file_claims_json",
+    ]) {
+      expect(hasColumn("fleet_tasks", col)).toBe(true);
+    }
+    for (const col of [
+      "id",
+      "fleet_run_id",
+      "task_id",
+      "session_id",
+      "status",
+      "attempt",
+      "last_heartbeat_at",
+    ]) {
+      expect(hasColumn("fleet_workers", col)).toBe(true);
+    }
+    for (const col of [
+      "id",
+      "fleet_run_id",
+      "event_type",
+      "actor",
+      "payload",
+    ]) {
+      expect(hasColumn("fleet_events", col)).toBe(true);
+    }
+  });
+
+  it("has the fleet management query indexes", () => {
+    expect(hasIndex("idx_fleet_runs_status")).toBe(true);
+    expect(hasIndex("idx_fleet_runs_updated")).toBe(true);
+    expect(hasIndex("idx_fleet_tasks_run")).toBe(true);
+    expect(hasIndex("idx_fleet_workers_run")).toBe(true);
+    expect(hasIndex("idx_fleet_events_run")).toBe(true);
   });
 });
