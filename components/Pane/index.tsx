@@ -81,6 +81,13 @@ const FleetBoardView = dynamic(
     ),
   { ssr: false }
 );
+const FleetManagementView = dynamic(
+  () =>
+    import("@/components/views/FleetManagementView").then(
+      (mod) => mod.FleetManagementView
+    ),
+  { ssr: false }
+);
 const AnalyticsView = dynamic(
   () =>
     import("@/components/views/AnalyticsView").then((mod) => mod.AnalyticsView),
@@ -570,6 +577,8 @@ export const Pane = memo(function Pane({
             onClose={() => closeTab(paneId, tab.id)}
           />
         );
+      case "fleet-management":
+        return <FleetManagementView onClose={() => closeTab(paneId, tab.id)} />;
       case "analytics":
         return <AnalyticsView onClose={() => closeTab(paneId, tab.id)} />;
       case "dispatch":
@@ -600,6 +609,8 @@ export const Pane = memo(function Pane({
               else if (view === "analytics") addViewTab(paneId, "analytics");
               else if (view === "verdict-inbox") onVerdictInboxClick?.();
               else if (view === "fleet-board") onFleetBoardClick?.();
+              else if (view === "fleet-management")
+                addViewTab(paneId, "fleet-management");
             }}
             onOpenBonRun={(runId) => addBonRunTab(paneId, runId)}
           />

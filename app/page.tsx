@@ -759,6 +759,8 @@ function HomeContent() {
       addViewTab(focusedPaneId, "verdict-inbox");
     else if (action === "open-fleet-board")
       addViewTab(focusedPaneId, "fleet-board");
+    else if (action === "open-fleet-management")
+      addViewTab(focusedPaneId, "fleet-management");
     else if (action === "open-insight") addViewTab(focusedPaneId, "analytics");
     else if (action === "open-live-wall")
       addViewTab(focusedPaneId, "live-wall");
@@ -936,6 +938,7 @@ function HomeContent() {
     onOpenWorkflows: () => addWorkflowsTab(focusedPaneId),
     onOpenVerdictInbox: () => addViewTab(focusedPaneId, "verdict-inbox"),
     onOpenFleetBoard: () => addViewTab(focusedPaneId, "fleet-board"),
+    onOpenFleetManagement: () => addViewTab(focusedPaneId, "fleet-management"),
     onOpenLiveWall: () => addViewTab(focusedPaneId, "live-wall"),
     onOpenAgentMonitor: () => addViewTab(focusedPaneId, "agent-monitor"),
     onOpenActivity: () => addViewTab(focusedPaneId, "activity"),

@@ -54,6 +54,8 @@ export interface ViewProps {
   onOpenVerdictInbox: () => void;
   /** Open the Fleet Board as a pane tab (it's a window now, not a dialog). */
   onOpenFleetBoard: () => void;
+  /** Open Fleet Management as a pane tab. */
+  onOpenFleetManagement: () => void;
   /** Open the Live Wall (read-only grid of agent terminals) as a pane tab. */
   onOpenLiveWall: () => void;
   /** Open the Agent Monitor (per-session telemetry) as a pane tab. */

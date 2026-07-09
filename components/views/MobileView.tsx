@@ -34,6 +34,7 @@ export function MobileView({
   onOpenWorkflows,
   onOpenVerdictInbox,
   onOpenFleetBoard,
+  onOpenFleetManagement,
   onOpenLiveWall,
   onOpenAgentMonitor,
   onOpenActivity,
@@ -132,6 +133,10 @@ export function MobileView({
               onOpenFleetBoard();
               setSidebarOpen(false);
             }}
+            onShowFleetManagement={() => {
+              onOpenFleetManagement();
+              setSidebarOpen(false);
+            }}
             onShowNotifications={() => {
               setShowNotificationSettings(true);
               setSidebarOpen(false);
@@ -219,6 +224,7 @@ export function MobileView({
         onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={onOpenVerdictInbox}
         onOpenFleetBoard={onOpenFleetBoard}
+        onOpenFleetManagement={onOpenFleetManagement}
         onOpenInsight={onOpenAnalytics}
         onOpenAskStoa={onOpenAsk}
         onOpenNotes={onShowNotes}

@@ -34,7 +34,12 @@ export interface DispatchIssueCommandParams {
 
 /** Params for open_view. */
 export interface OpenViewCommandParams {
-  view: "analytics" | "dispatch" | "verdict-inbox" | "fleet-board";
+  view:
+    | "analytics"
+    | "dispatch"
+    | "verdict-inbox"
+    | "fleet-board"
+    | "fleet-management";
 }
 
 /** Params for list_sessions. */

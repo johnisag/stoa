@@ -92,6 +92,7 @@ export function DesktopView({
   onOpenWorkflows,
   onOpenVerdictInbox,
   onOpenFleetBoard,
+  onOpenFleetManagement,
   onOpenLiveWall,
   onOpenAgentMonitor,
   onOpenActivity,
@@ -549,6 +550,10 @@ export function DesktopView({
                   count: attentionCount,
                 },
                 {
+                  id: "fleet-management",
+                  onClick: onOpenFleetManagement,
+                },
+                {
                   id: "live-wall",
                   onClick: onOpenLiveWall,
                 },
@@ -741,6 +746,7 @@ export function DesktopView({
         onOpenWorkflows={onOpenWorkflows}
         onOpenVerdictInbox={onOpenVerdictInbox}
         onOpenFleetBoard={onOpenFleetBoard}
+        onOpenFleetManagement={onOpenFleetManagement}
         onOpenInsight={onOpenAnalytics}
         onOpenAskStoa={onOpenAsk}
         onOpenNotes={onShowNotes}

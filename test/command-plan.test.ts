@@ -25,6 +25,7 @@ describe("buildCommandPrompt", () => {
     expect(prompt).toContain("create_session");
     expect(prompt).toContain("dispatch_issue");
     expect(prompt).toContain("open_view");
+    expect(prompt).toContain("fleet-management");
     expect(prompt).toContain("list_sessions");
     expect(prompt).toContain("initialPrompt");
     expect(prompt).toContain("start a session");

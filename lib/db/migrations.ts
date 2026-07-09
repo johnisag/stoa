@@ -1336,6 +1336,82 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 54,
+    name: "add_fleet_management_tables",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS fleet_runs (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          repo_id TEXT,
+          project_id TEXT,
+          status TEXT NOT NULL DEFAULT 'draft',
+          budget_usd REAL,
+          provider TEXT NOT NULL DEFAULT 'claude',
+          model TEXT,
+          max_concurrency INTEGER NOT NULL DEFAULT 1,
+          review_policy TEXT NOT NULL DEFAULT 'four_agent',
+          approval_state TEXT NOT NULL DEFAULT 'draft',
+          settings_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE SET NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS fleet_tasks (
+          id TEXT PRIMARY KEY,
+          fleet_run_id TEXT NOT NULL,
+          parent_task_id TEXT,
+          title TEXT NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL DEFAULT 'draft',
+          task_type TEXT NOT NULL DEFAULT 'planning',
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          file_claims_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY (parent_task_id) REFERENCES fleet_tasks(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS fleet_workers (
+          id TEXT PRIMARY KEY,
+          fleet_run_id TEXT NOT NULL,
+          task_id TEXT,
+          session_id TEXT,
+          status TEXT NOT NULL DEFAULT 'waiting_for_operator',
+          provider TEXT,
+          model TEXT,
+          attempt INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          last_heartbeat_at TEXT,
+          ended_at TEXT,
+          FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE SET NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS fleet_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          fleet_run_id TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          actor TEXT NOT NULL DEFAULT 'system',
+          payload TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_fleet_runs_status ON fleet_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_fleet_runs_updated ON fleet_runs(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_fleet_tasks_run ON fleet_tasks(fleet_run_id, sort_order);
+        CREATE INDEX IF NOT EXISTS idx_fleet_workers_run ON fleet_workers(fleet_run_id);
+        CREATE INDEX IF NOT EXISTS idx_fleet_events_run ON fleet_events(fleet_run_id, id DESC);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

@@ -14,6 +14,7 @@ import {
   Gauge,
   TerminalSquare,
   History,
+  Network,
 } from "lucide-react";
 import { FLEET_NAV, fleetNavEntry } from "@/components/nav/fleet-nav";
 
@@ -29,6 +30,7 @@ describe("FLEET_NAV", () => {
       "workflows",
       "verdict-inbox",
       "fleet-board",
+      "fleet-management",
       "live-wall",
       "agent-monitor",
       "activity",
@@ -49,6 +51,7 @@ describe("FLEET_NAV", () => {
     expect(icons.workflows).toBe(Workflow);
     expect(icons["verdict-inbox"]).toBe(Inbox);
     expect(icons["fleet-board"]).toBe(Columns3);
+    expect(icons["fleet-management"]).toBe(Network);
     expect(icons["live-wall"]).toBe(LayoutGrid);
     expect(icons["agent-monitor"]).toBe(Gauge);
     expect(icons.activity).toBe(History);
@@ -72,6 +75,9 @@ describe("FLEET_NAV", () => {
     );
     expect(aria["fleet-board"]).toBe(
       "Fleet Board (the fleet by lifecycle stage)"
+    );
+    expect(aria["fleet-management"]).toBe(
+      "Fleet Management (plan and maintain agent fleets)"
     );
     expect(aria["live-wall"]).toBe(
       "Live Wall (read-only grid of agent terminals)"
@@ -99,6 +105,7 @@ describe("FLEET_NAV", () => {
     expect(labels.workflows).toBe("Workflows");
     expect(labels["verdict-inbox"]).toBe("Verdict Inbox");
     expect(labels["fleet-board"]).toBe("Fleet Board");
+    expect(labels["fleet-management"]).toBe("Fleet Management");
     expect(labels["live-wall"]).toBe("Live Wall");
     expect(labels["agent-monitor"]).toBe("Agent Monitor");
     expect(labels.activity).toBe("Activity");

@@ -8,6 +8,7 @@ import {
   Layers,
   Gauge,
   History,
+  Network,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import type { ViewKind } from "@/lib/panes";
@@ -29,6 +30,7 @@ export const VIEW_META: Partial<Record<ViewKind, ViewMeta>> = {
   analytics: { label: "Insight", Icon: BarChart3 },
   dispatch: { label: "Dispatch", Icon: Rocket },
   "verdict-inbox": { label: "Verdict Inbox", Icon: Inbox },
+  "fleet-management": { label: "Fleet Management", Icon: Network },
   ask: { label: "Ask Stoa", Icon: Sparkles },
   "best-of-n": { label: "Best of N", Icon: Layers },
   "agent-monitor": { label: "Agent Monitor", Icon: Gauge },

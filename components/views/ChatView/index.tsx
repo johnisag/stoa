@@ -89,7 +89,7 @@ export function ChatView({
 }: {
   /** Optional close affordance, used on mobile where the tab strip is hidden. */
   onClose?: () => void;
-  /** Navigate to a named view (analytics, dispatch, verdict-inbox, fleet-board).
+  /** Navigate to a named view (analytics, dispatch, verdict-inbox, fleet-board, fleet-management).
    * Called when the user confirms an open_view action. Without this callback the
    * open_view card is still shown but no navigation occurs. */
   onNavigate?: (view: string) => void;
