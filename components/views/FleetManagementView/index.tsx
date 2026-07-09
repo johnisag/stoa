@@ -10,12 +10,16 @@ import {
   Loader2,
   Network,
   Paperclip,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   ShieldCheck,
+  Square,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ConfirmProvider";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -30,9 +34,13 @@ import {
   useApproveFleetPlan,
   useAttachFleetArtifact,
   useCreateFleetRun,
+  useCancelFleetRun,
   useFleetRunQuery,
   useFleetRunsQuery,
   useIngestFleetPlan,
+  usePauseFleetRun,
+  useStartFleetRun,
+  useTickFleetRun,
 } from "@/data/fleet/queries";
 import { useProjectsQuery } from "@/data/projects/queries";
 import type {
@@ -40,6 +48,7 @@ import type {
   FleetReviewPolicy,
   FleetRunDetailDto,
   FleetRunDto,
+  FleetSchedulerSummary,
 } from "@/lib/fleet/types";
 import {
   FLEET_MODEL_MAX,
@@ -53,6 +62,30 @@ const NONE = "__none__";
 
 function labelDate(value: string) {
   return value.replace("T", " ").replace("Z", "");
+}
+
+function eventPayloadPreview(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of [
+    "launched",
+    "recovered",
+    "skipped",
+    "released",
+    "stoppedSessions",
+    "error",
+    "workerId",
+    "taskId",
+    "sessionId",
+    "branchName",
+    "worktreePath",
+  ]) {
+    const value = record[key];
+    if (value === undefined || value === null || value === "") continue;
+    parts.push(`${key}: ${String(value)}`);
+  }
+  return parts.length > 0 ? parts.join(" | ") : null;
 }
 
 function RunRow({
@@ -137,9 +170,14 @@ function ApprovalPreview({ detail }: { detail: FleetRunDetailDto }) {
 }
 
 function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
+  const confirm = useConfirm();
   const ingestPlan = useIngestFleetPlan(detail.run.id);
   const approvePlan = useApproveFleetPlan(detail.run.id);
   const attachArtifact = useAttachFleetArtifact(detail.run.id);
+  const startRun = useStartFleetRun(detail.run.id);
+  const tickRun = useTickFleetRun(detail.run.id);
+  const pauseRun = usePauseFleetRun(detail.run.id);
+  const cancelRun = useCancelFleetRun(detail.run.id);
   const reviewedPlanText = detail.run.planText ?? "";
   const [planText, setPlanText] = useState(
     detail.run.planText ?? detail.run.goal
@@ -149,6 +187,11 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
   const [artifactTaskId, setArtifactTaskId] = useState(NONE);
   const [artifactSeverity, setArtifactSeverity] =
     useState<FleetArtifactSeverity>("warning");
+  const [lifecycleNotice, setLifecycleNotice] = useState<{
+    runId: string;
+    kind: "summary" | "error";
+    value: FleetSchedulerSummary | string;
+  } | null>(null);
 
   useEffect(() => {
     setPlanText(detail.run.planText ?? detail.run.goal);
@@ -156,6 +199,7 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
     setArtifactBody("");
     setArtifactTaskId(NONE);
     setArtifactSeverity("warning");
+    setLifecycleNotice(null);
   }, [detail.run.id, detail.run.goal, detail.run.planText]);
 
   async function handleIngestPlan() {
@@ -203,6 +247,46 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
     }
   }
 
+  async function runLifecycleAction(
+    action: "start" | "tick" | "pause" | "cancel"
+  ) {
+    try {
+      if (action === "cancel") {
+        const confirmed = await confirm({
+          title: "Cancel fleet run?",
+          description:
+            "Canceling this run stops active fleet workers and marks open tasks canceled. This cannot be undone.",
+          confirmLabel: "Cancel run",
+          destructive: true,
+        });
+        if (!confirmed) return;
+      }
+      const result =
+        action === "start"
+          ? await startRun.mutateAsync(undefined)
+          : action === "tick"
+            ? await tickRun.mutateAsync(undefined)
+            : action === "pause"
+              ? await pauseRun.mutateAsync(undefined)
+              : await cancelRun.mutateAsync(undefined);
+      if (result.summary) {
+        setLifecycleNotice({
+          runId: detail.run.id,
+          kind: "summary",
+          value: result.summary,
+        });
+      } else {
+        setLifecycleNotice(null);
+      }
+    } catch (error) {
+      setLifecycleNotice({
+        runId: detail.run.id,
+        kind: "error",
+        value: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   const canApprove =
     detail.run.approvalState === "needs_approval" &&
     !!detail.run.planHash &&
@@ -223,6 +307,31 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
     !!detail.run.planHash &&
     !!reviewedPlanText &&
     planText === reviewedPlanText;
+  const lifecycleError =
+    lifecycleNotice?.runId === detail.run.id && lifecycleNotice.kind === "error"
+      ? (lifecycleNotice.value as string)
+      : null;
+  const schedulerSummary =
+    lifecycleNotice?.runId === detail.run.id &&
+    lifecycleNotice.kind === "summary"
+      ? (lifecycleNotice.value as FleetSchedulerSummary)
+      : null;
+  const canStart =
+    detail.run.approvalState === "approved" &&
+    (detail.run.status === "planned" || detail.run.status === "paused");
+  const canTick =
+    detail.run.approvalState === "approved" &&
+    (detail.run.status === "planned" || detail.run.status === "running");
+  const canPause =
+    detail.run.approvalState === "approved" &&
+    (detail.run.status === "planned" || detail.run.status === "running");
+  const canCancel =
+    detail.run.status !== "completed" && detail.run.status !== "canceled";
+  const lifecycleBusy =
+    startRun.isPending ||
+    tickRun.isPending ||
+    pauseRun.isPending ||
+    cancelRun.isPending;
   const taskTitleById = useMemo(
     () => new Map(detail.tasks.map((task) => [task.id, task.title])),
     [detail.tasks]
@@ -263,6 +372,80 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
           </div>
         </div>
       </section>
+
+      {detail.run.approvalState === "approved" && (
+        <section className="rounded-md border p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              className="gap-2"
+              size="sm"
+              disabled={!canStart || lifecycleBusy}
+              onClick={() => void runLifecycleAction("start")}
+            >
+              {startRun.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+              {detail.run.status === "paused" ? "Resume" : "Start"}
+            </Button>
+            <Button
+              className="gap-2"
+              size="sm"
+              variant="outline"
+              disabled={!canTick || lifecycleBusy}
+              onClick={() => void runLifecycleAction("tick")}
+            >
+              {tickRun.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Tick
+            </Button>
+            <Button
+              className="gap-2"
+              size="sm"
+              variant="outline"
+              disabled={!canPause || lifecycleBusy}
+              onClick={() => void runLifecycleAction("pause")}
+            >
+              {pauseRun.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Pause className="h-4 w-4" />
+              )}
+              Pause Launches
+            </Button>
+            <Button
+              className="gap-2"
+              size="sm"
+              variant="destructive"
+              disabled={!canCancel || lifecycleBusy}
+              onClick={() => void runLifecycleAction("cancel")}
+            >
+              {cancelRun.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Square className="h-4 w-4" />
+              )}
+              Cancel
+            </Button>
+          </div>
+          {lifecycleError && (
+            <div className="text-destructive mt-2 flex items-center gap-2 text-xs">
+              <AlertCircle className="h-3.5 w-3.5" />
+              {lifecycleError}
+            </div>
+          )}
+          {schedulerSummary && (
+            <div className="text-muted-foreground mt-2 text-xs">
+              launched {schedulerSummary.launched} | recovered{" "}
+              {schedulerSummary.recovered} | skipped {schedulerSummary.skipped}
+            </div>
+          )}
+        </section>
+      )}
 
       <ApprovalPreview detail={detail} />
 
@@ -531,14 +714,36 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
               <p className="text-muted-foreground text-sm">No workers</p>
             ) : (
               <div className="grid gap-2">
-                {detail.workers.map((worker) => (
-                  <div key={worker.id} className="rounded border px-3 py-2">
-                    <div className="text-sm font-medium">{worker.status}</div>
-                    <div className="text-muted-foreground text-xs">
-                      attempt {worker.attempt}
+                {detail.workers.map((worker) => {
+                  const taskTitle = worker.taskId
+                    ? (taskTitleById.get(worker.taskId) ?? worker.taskId)
+                    : "No task";
+                  return (
+                    <div key={worker.id} className="rounded border px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <div className="text-sm font-medium">
+                          {worker.status}
+                        </div>
+                        <div className="text-muted-foreground text-xs">
+                          attempt {worker.attempt}
+                        </div>
+                      </div>
+                      <div className="text-muted-foreground mt-1 text-xs break-words">
+                        {taskTitle}
+                      </div>
+                      <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                        <span>{worker.provider ?? detail.run.provider}</span>
+                        {worker.model && <span>{worker.model}</span>}
+                        {worker.sessionId && <span>{worker.sessionId}</span>}
+                      </div>
+                      {worker.spawnError && (
+                        <div className="text-destructive mt-1 text-xs break-words">
+                          {worker.spawnError}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -549,19 +754,29 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
             <h3 className="text-sm font-medium">Events</h3>
           </div>
           <div className="grid gap-2 p-3">
-            {detail.events.map((event) => (
-              <div key={event.id} className="rounded border px-3 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium">{event.eventType}</span>
-                  <span className="text-muted-foreground text-xs">
-                    {labelDate(event.createdAt)}
-                  </span>
+            {detail.events.map((event) => {
+              const preview = eventPayloadPreview(event.payload);
+              return (
+                <div key={event.id} className="rounded border px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium">
+                      {event.eventType}
+                    </span>
+                    <span className="text-muted-foreground text-xs">
+                      {labelDate(event.createdAt)}
+                    </span>
+                  </div>
+                  <div className="text-muted-foreground text-xs">
+                    {event.actor}
+                  </div>
+                  {preview && (
+                    <div className="text-muted-foreground mt-1 text-xs break-words">
+                      {preview}
+                    </div>
+                  )}
                 </div>
-                <div className="text-muted-foreground text-xs">
-                  {event.actor}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>

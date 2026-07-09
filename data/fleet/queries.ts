@@ -10,9 +10,15 @@ import type {
   CreateFleetRunInput,
   FleetRunDetailDto,
   FleetRunDto,
+  FleetSchedulerSummary,
   IngestFleetPlanInput,
 } from "@/lib/fleet/types";
 import { fleetKeys } from "./keys";
+
+export interface FleetRunActionResponse {
+  run: FleetRunDetailDto;
+  summary?: FleetSchedulerSummary;
+}
 
 async function fetchFleetRuns(): Promise<FleetRunDto[]> {
   const res = await fetch("/api/fleet/runs");
@@ -43,6 +49,10 @@ export function useFleetRunQuery(id: string | null, enabled = true) {
     queryKey: fleetKeys.run(id ?? "__disabled__"),
     queryFn: enabled && id ? () => fetchFleetRun(id) : skipToken,
     staleTime: 5000,
+    refetchInterval: (query) => {
+      const detail = query.state.data as FleetRunDetailDto | undefined;
+      return detail?.run.status === "running" ? 5000 : false;
+    },
   });
 }
 
@@ -130,4 +140,44 @@ export function useAttachFleetArtifact(runId: string | null) {
     if (!res.ok) throw new Error(data.error || "Failed to attach finding");
     return data as FleetRunDetailDto;
   });
+}
+
+function useFleetRunAction(runId: string | null, action: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0,
+    mutationFn: async (): Promise<FleetRunActionResponse> => {
+      if (!runId) throw new Error("No fleet run selected");
+      const res = await fetch(
+        `/api/fleet/runs/${encodeURIComponent(runId)}/${action}`,
+        {
+          method: "POST",
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok)
+        throw new Error(data.error || `Failed to ${action} fleet run`);
+      return data as FleetRunActionResponse;
+    },
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: fleetKeys.runs() });
+      qc.setQueryData(fleetKeys.run(result.run.run.id), result.run);
+    },
+  });
+}
+
+export function useStartFleetRun(runId: string | null) {
+  return useFleetRunAction(runId, "start");
+}
+
+export function useTickFleetRun(runId: string | null) {
+  return useFleetRunAction(runId, "tick");
+}
+
+export function usePauseFleetRun(runId: string | null) {
+  return useFleetRunAction(runId, "pause");
+}
+
+export function useCancelFleetRun(runId: string | null) {
+  return useFleetRunAction(runId, "cancel");
 }

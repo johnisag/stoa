@@ -24,6 +24,7 @@ beforeEach(() => {
     DELETE FROM fleet_events;
     DELETE FROM fleet_artifacts;
     DELETE FROM fleet_workers;
+    DELETE FROM sessions;
     DELETE FROM fleet_tasks;
     DELETE FROM fleet_runs;
     DELETE FROM dispatch_repos;
@@ -189,6 +190,67 @@ describe("fleet run queries", () => {
       severity: "blocker",
       actor: "red-team",
       plan_hash: "hash-a",
+    });
+  });
+
+  it("records and transitions scheduler worker leases", () => {
+    createFleetRun("run-1");
+    queries
+      .createFleetTask(db)
+      .run("task-1", "run-1", null, "First", null, "draft", "task", 1, "[]");
+
+    queries
+      .createFleetWorkerLease(db)
+      .run(
+        "worker-1",
+        "run-1",
+        "task-1",
+        "claude",
+        null,
+        1,
+        "lease-1",
+        "2026-07-09T00:00:00.000Z"
+      );
+
+    let worker = queries.getFleetWorker(db).get("worker-1") as FleetWorkerRow;
+    expect(worker).toMatchObject({
+      status: "leasing",
+      lease_token: "lease-1",
+      lease_expires_at: "2026-07-09T00:00:00.000Z",
+      spawn_error: null,
+    });
+
+    expect(
+      queries
+        .markFleetWorkerSpawning(db)
+        .run("2026-07-09T00:10:00.000Z", "worker-1", "lease-1").changes
+    ).toBe(1);
+    queries
+      .createWorkerSession(db)
+      .run(
+        "session-1",
+        "Worker",
+        "tmux-worker",
+        "C:\\repo",
+        null,
+        "First",
+        "sonnet",
+        "sessions",
+        "claude",
+        null
+      );
+    expect(
+      queries.markFleetWorkerRunning(db).run("session-1", "worker-1", "lease-1")
+        .changes
+    ).toBe(1);
+
+    worker = queries.getFleetWorker(db).get("worker-1") as FleetWorkerRow;
+    expect(worker).toMatchObject({
+      session_id: "session-1",
+      status: "running",
+      lease_token: null,
+      lease_expires_at: null,
+      spawn_error: null,
     });
   });
 

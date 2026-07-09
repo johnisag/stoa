@@ -143,6 +143,9 @@ describe("fresh schema fleet management tables", () => {
       "session_id",
       "status",
       "attempt",
+      "lease_token",
+      "lease_expires_at",
+      "spawn_error",
       "last_heartbeat_at",
     ]) {
       expect(hasColumn("fleet_workers", col)).toBe(true);

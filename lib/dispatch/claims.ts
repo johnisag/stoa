@@ -19,21 +19,23 @@
 
 /**
  * Normalize a raw claim into a canonical repo-relative prefix, or null if invalid.
- * Folds `\`→`/`, strips a leading `./` and any leading `/`, collapses duplicate
+ * Folds `\`→`/`, strips a leading `./`, collapses duplicate
  * slashes, strips a trailing `/`. Rejects (→ null) anything that could escape the
- * repo: an empty/blank claim, a `..` segment, a `~` home ref, or a drive-letter /
- * UNC absolute path.
+ * repo: an empty/blank claim, a `..` segment, a `~` home ref, or an absolute
+ * drive-letter / POSIX / UNC path.
  */
 export function normalizeClaim(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   let c = raw.trim();
   if (!c) return null;
   c = c.replace(/\\/g, "/"); // the ONE separator-folding site
-  if (/^[a-z]:\//i.test(c) || c.startsWith("//") || c.startsWith("~")) {
-    return null; // drive-letter / UNC / home absolute — could escape the repo
+  if (/^[a-z]:/i.test(c) || c.startsWith("/") || c.startsWith("~")) {
+    return null; // drive-letter / POSIX / UNC / home absolute — could escape the repo
   }
-  c = c.replace(/^\.\//, "").replace(/^\/+/, ""); // leading ./ and /
+  c = c.replace(/^\.\//, ""); // leading ./
+  if (c.startsWith("/")) return null;
   c = c.replace(/\/{2,}/g, "/").replace(/\/+$/, ""); // dup + trailing slashes
+  if (c.startsWith("/")) return null;
   if (!c) return null;
   if (c.split("/").some((seg) => seg === "..")) return null; // no parent escapes
   return c;

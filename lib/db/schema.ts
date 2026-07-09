@@ -105,6 +105,16 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
       WHERE created_at IS NULL OR created_at = '';
     `);
   }
+
+  if (hasTable(db, "fleet_workers")) {
+    for (const column of [
+      { name: "lease_token", ddl: "lease_token TEXT" },
+      { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+      { name: "spawn_error", ddl: "spawn_error TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_workers", column);
+    }
+  }
 }
 
 export function createSchema(db: Database.Database): void {
@@ -626,6 +636,9 @@ export function createSchema(db: Database.Database): void {
       provider TEXT,
       model TEXT,
       attempt INTEGER NOT NULL DEFAULT 1,
+      lease_token TEXT,
+      lease_expires_at TEXT,
+      spawn_error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_heartbeat_at TEXT,
       ended_at TEXT,

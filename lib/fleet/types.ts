@@ -1,3 +1,5 @@
+import type { DispatchRepo } from "@/lib/dispatch/types";
+
 export type FleetRunStatus =
   "draft" | "planned" | "running" | "paused" | "completed" | "canceled";
 
@@ -8,7 +10,13 @@ export type FleetApprovalState =
   "draft" | "needs_approval" | "approved" | "blocked";
 
 export type FleetTaskStatus =
-  "draft" | "queued" | "needs_inspection" | "blocked" | "completed";
+  | "draft"
+  | "queued"
+  | "running"
+  | "needs_inspection"
+  | "blocked"
+  | "canceled"
+  | "completed";
 
 export type FleetArtifactSeverity = "info" | "warning" | "blocker";
 
@@ -69,6 +77,9 @@ export interface FleetWorkerRow {
   provider: string | null;
   model: string | null;
   attempt: number;
+  lease_token: string | null;
+  lease_expires_at: string | null;
+  spawn_error: string | null;
   created_at: string;
   last_heartbeat_at: string | null;
   ended_at: string | null;
@@ -148,9 +159,32 @@ export interface FleetWorkerDto {
   provider: string | null;
   model: string | null;
   attempt: number;
+  leaseToken: string | null;
+  leaseExpiresAt: string | null;
+  spawnError: string | null;
   createdAt: string;
   lastHeartbeatAt: string | null;
   endedAt: string | null;
+}
+
+export interface FleetSpawnResult {
+  sessionId: string;
+  worktreePath: string;
+  branchName: string;
+}
+
+export interface FleetSpawnInput {
+  run: FleetRunRow;
+  task: FleetTaskRow;
+  repo: DispatchRepo;
+  workerId: string;
+  leaseToken: string;
+}
+
+export interface FleetSchedulerSummary {
+  launched: number;
+  recovered: number;
+  skipped: number;
 }
 
 export interface FleetEventDto {

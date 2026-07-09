@@ -1,6 +1,6 @@
 // Isolated daemon socket (see pty-host.test.ts) so parallel daemon-using files
 // don't collide on the global pipe/socket.
-process.env.STOA_PTY_HOST_NAME = "stoa-pty-host-test-backend";
+process.env.STOA_PTY_HOST_NAME = `stoa-pty-host-test-backend-${process.pid}`;
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { PtyBackend } from "@/lib/session-backend/pty-backend";

@@ -83,6 +83,24 @@ export const fleetQueries = {
   getFleetTaskForRun: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM fleet_tasks WHERE fleet_run_id = ? AND id = ?`),
 
+  updateFleetTaskStatus: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_tasks
+       SET status = ?, updated_at = datetime('now')
+       WHERE id = ?
+         AND fleet_run_id = ?`
+    ),
+
+  cancelOpenFleetTasksForRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_tasks
+       SET status = 'canceled', updated_at = datetime('now')
+       WHERE fleet_run_id = ?
+         AND status IN ('draft', 'queued', 'running', 'blocked')`
+    ),
+
   listFleetWorkersForRun: (db: Database.Database) =>
     getStmt(
       db,
@@ -91,10 +109,206 @@ export const fleetQueries = {
        ORDER BY created_at ASC`
     ),
 
+  getFleetWorker: (db: Database.Database) =>
+    getStmt(db, `SELECT * FROM fleet_workers WHERE id = ?`),
+
   countFleetWorkersForRun: (db: Database.Database) =>
     getStmt(
       db,
       `SELECT COUNT(*) AS n FROM fleet_workers WHERE fleet_run_id = ?`
+    ),
+
+  countActiveFleetWorkersForRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n
+       FROM fleet_workers
+       WHERE fleet_run_id = ?
+          AND status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending')`
+    ),
+
+  countFleetWorkersCreatedTodayForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n
+       FROM fleet_workers w
+       JOIN fleet_runs r ON r.id = w.fleet_run_id
+       WHERE r.repo_id = ?
+         AND date(w.created_at) = date('now')`
+    ),
+
+  countActiveFleetWorkersForRepoExcludingRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n
+       FROM fleet_workers w
+       JOIN fleet_runs r ON r.id = w.fleet_run_id
+       WHERE r.repo_id = ?
+         AND r.id != ?
+          AND w.status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending')`
+    ),
+
+  countActiveFleetWorkersForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COUNT(*) AS n
+       FROM fleet_workers w
+       JOIN fleet_runs r ON r.id = w.fleet_run_id
+       WHERE r.repo_id = ?
+         AND w.status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending')`
+    ),
+
+  listLiveFleetClaimsForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT t.file_claims_json
+       FROM fleet_workers w
+       JOIN fleet_runs r ON r.id = w.fleet_run_id
+       JOIN fleet_tasks t ON t.id = w.task_id
+       WHERE r.repo_id = ?
+         AND w.status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending')`
+    ),
+
+  listLiveFleetClaimsForRepoExcludingRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT t.file_claims_json
+       FROM fleet_workers w
+       JOIN fleet_runs r ON r.id = w.fleet_run_id
+       JOIN fleet_tasks t ON t.id = w.task_id
+       WHERE r.repo_id = ?
+         AND r.id != ?
+         AND w.status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending')`
+    ),
+
+  sumFleetWorkerCostForRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT COALESCE(SUM(COALESCE(c.cost_usd, 0)), 0) AS n
+       FROM fleet_workers w
+       JOIN session_costs c ON c.session_id = w.session_id
+       WHERE w.fleet_run_id = ?`
+    ),
+
+  updateFleetRunStatus: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_runs
+       SET status = ?, settings_json = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ),
+
+  startFleetRunForScheduling: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_runs
+       SET status = 'running', settings_json = ?, updated_at = datetime('now')
+       WHERE id = ?
+         AND status IN ('planned', 'running')
+         AND approval_state = 'approved'`
+    ),
+
+  createFleetWorkerLease: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO fleet_workers (
+        id,
+        fleet_run_id,
+        task_id,
+        session_id,
+        status,
+        provider,
+        model,
+        attempt,
+        lease_token,
+        lease_expires_at,
+        spawn_error
+      ) VALUES (?, ?, ?, NULL, 'leasing', ?, ?, ?, ?, ?, NULL)`
+    ),
+
+  markFleetWorkerSpawning: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_workers
+       SET status = 'spawning',
+           lease_expires_at = ?,
+           last_heartbeat_at = datetime('now')
+       WHERE id = ?
+          AND lease_token = ?
+         AND status = 'leasing'`
+    ),
+
+  markFleetWorkerRunning: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_workers
+       SET status = 'running',
+           session_id = ?,
+           lease_token = NULL,
+           lease_expires_at = NULL,
+           spawn_error = NULL,
+           last_heartbeat_at = datetime('now')
+        WHERE id = ?
+          AND lease_token IS ?
+          AND status IN ('leasing', 'spawning')`
+    ),
+
+  linkFleetWorkerSession: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_workers
+       SET session_id = ?,
+           last_heartbeat_at = datetime('now')
+       WHERE id = ?
+         AND lease_token = ?
+         AND status = 'spawning'`
+    ),
+
+  markFleetWorkerFailed: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_workers
+       SET status = 'failed',
+           lease_token = NULL,
+           lease_expires_at = NULL,
+           spawn_error = ?,
+           ended_at = datetime('now')
+       WHERE id = ?`
+    ),
+
+  markFleetWorkerCanceled: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_workers
+       SET status = 'canceled',
+           lease_token = NULL,
+           lease_expires_at = NULL,
+           spawn_error = ?,
+           ended_at = COALESCE(ended_at, datetime('now'))
+       WHERE id = ?`
+    ),
+
+  markFleetWorkerCanceledForRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_workers
+       SET status = 'canceled',
+           lease_token = NULL,
+            lease_expires_at = NULL,
+            ended_at = COALESCE(ended_at, datetime('now'))
+       WHERE fleet_run_id = ?
+         AND status IN ('leasing', 'spawning', 'running', 'waiting_for_operator')`
+    ),
+
+  markFleetWorkerCleanupPendingForSession: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_workers
+       SET status = 'cleanup_pending',
+           spawn_error = ?,
+           lease_token = NULL,
+           lease_expires_at = NULL
+       WHERE session_id = ?`
     ),
 
   updateFleetRunPlanState: (db: Database.Database) =>

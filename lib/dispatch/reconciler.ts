@@ -29,7 +29,7 @@ import { dispatchSupported } from "./issue-source";
 import { dispatchOne } from "./dispatcher";
 import { autoMergePass, getPrReadiness } from "./auto-merge";
 import { ciFixPass } from "./ci-fix";
-import { parseClaims, claimsConflict } from "./claims";
+import { parseClaims, claimsConflict, normalizeClaim } from "./claims";
 import { captureLessons } from "./lessons";
 import { mergeTrainPass } from "./merge-train";
 import { reconcileStaleDispatches } from "./stale";
@@ -125,6 +125,32 @@ export function pickSchedulable(
     chosen.push(candidate);
   }
   return chosen;
+}
+
+function parseStrictRepoRelativeClaims(
+  json: string | null | undefined
+): string[] {
+  if (!json) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const claims: string[] = [];
+  for (const raw of parsed) {
+    if (typeof raw !== "string") return [];
+    const folded = raw.trim().replace(/\\/g, "/");
+    if (!folded || folded.startsWith("/") || folded.startsWith("~")) {
+      return [];
+    }
+    if (/^[a-z]:/i.test(folded)) return [];
+    const claim = normalizeClaim(raw);
+    if (!claim) return [];
+    if (!claims.includes(claim)) claims.push(claim);
+  }
+  return claims;
 }
 
 /**
@@ -265,12 +291,20 @@ export async function reconcileTick(): Promise<void> {
       if (!dispatchSupported(repo)) continue;
 
       // 2. Headroom (daily cap ∧ concurrency cap).
-      const dailyDone = (
-        queries.countDispatchesToday(db).get(repo.id) as { n: number }
-      ).n;
-      const liveInFlight = (
-        queries.countLiveInFlight(db).get(repo.id) as { n: number }
-      ).n;
+      const dailyDone =
+        (queries.countDispatchesToday(db).get(repo.id) as { n: number }).n +
+        (
+          queries.countFleetWorkersCreatedTodayForRepo(db).get(repo.id) as {
+            n: number;
+          }
+        ).n;
+      const liveInFlight =
+        (queries.countLiveInFlight(db).get(repo.id) as { n: number }).n +
+        (
+          queries.countActiveFleetWorkersForRepo(db).get(repo.id) as {
+            n: number;
+          }
+        ).n;
       const slots = computeSlots({
         dailyQuota: repo.daily_quota,
         dailyDone,
@@ -306,7 +340,22 @@ export async function reconcileTick(): Promise<void> {
           file_claims: string | null;
         }[]
       ).map((r) => parseClaims(r.file_claims));
-      for (const candidate of pickSchedulable(pending, liveClaims, slots)) {
+      let fleetClaimsAreUnknown = false;
+      const liveFleetClaims = (
+        queries.listLiveFleetClaimsForRepo(db).all(repo.id) as {
+          file_claims_json: string | null;
+        }[]
+      ).map((r) => {
+        const claims = parseStrictRepoRelativeClaims(r.file_claims_json);
+        if (claims.length === 0) fleetClaimsAreUnknown = true;
+        return claims;
+      });
+      if (fleetClaimsAreUnknown) continue;
+      for (const candidate of pickSchedulable(
+        pending,
+        [...liveClaims, ...liveFleetClaims],
+        slots
+      )) {
         await dispatchOne(repo, candidate);
       }
     }
