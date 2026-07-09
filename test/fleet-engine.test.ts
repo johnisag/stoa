@@ -9,6 +9,7 @@ import {
   normalizeFleetRunDraft,
 } from "@/lib/fleet/engine";
 import type {
+  FleetArtifactRow,
   FleetEventRow,
   FleetRunRow,
   FleetTaskRow,
@@ -30,6 +31,10 @@ function runRow(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
     max_concurrency: 1,
     review_policy: "four_agent",
     approval_state: "draft",
+    plan_hash: null,
+    approved_plan_hash: null,
+    approved_by: null,
+    approved_at: null,
     settings_json: "{}",
     created_at: now,
     updated_at: now,
@@ -135,7 +140,7 @@ describe("normalizeFleetRunDraft", () => {
 });
 
 describe("buildFleetApprovalPreview", () => {
-  it("is a preview only and cannot approve executable work in phase 1", () => {
+  it("is a preview only and cannot approve executable work in phase 2", () => {
     const preview = buildFleetApprovalPreview();
 
     expect(preview.canApproveExecutableWork).toBe(false);
@@ -143,7 +148,10 @@ describe("buildFleetApprovalPreview", () => {
       "four-agent review with adversarial lane"
     );
     expect(preview.blockedActions).toEqual(
-      expect.arrayContaining(["planner execution", "worker spawning"])
+      expect.arrayContaining([
+        "autonomous planner execution",
+        "worker spawning",
+      ])
     );
   });
 });
@@ -183,11 +191,33 @@ describe("composeFleetRunDetail", () => {
         created_at: now,
       },
     ];
+    const artifacts: FleetArtifactRow[] = [
+      {
+        id: "artifact-1",
+        fleet_run_id: "run-1",
+        task_id: "task-1",
+        plan_hash: "hash-a",
+        artifact_type: "critic_finding",
+        title: "Needs clearer boundary",
+        body: "The implementation path is still too broad.",
+        severity: "warning",
+        actor: "critic",
+        created_at: now,
+      },
+    ];
 
     const detail = composeFleetRunDetail({
-      run: runRow({ budget_usd: 12.5, max_concurrency: 8 }),
+      run: runRow({
+        budget_usd: 12.5,
+        max_concurrency: 8,
+        plan_hash: "hash-a",
+        approved_plan_hash: "hash-a",
+        approved_by: "operator",
+        approved_at: now,
+      }),
       tasks,
       workers: [],
+      artifacts,
       events,
     });
 
@@ -195,11 +225,20 @@ describe("composeFleetRunDetail", () => {
     expect(detail.run.workerCount).toBe(0);
     expect(detail.run.budgetUsd).toBe(12.5);
     expect(detail.run.maxConcurrency).toBe(8);
+    expect(detail.run.planHash).toBe("hash-a");
+    expect(detail.run.planText).toBeNull();
+    expect(detail.run.approvedBy).toBe("operator");
     expect(detail.run.approvalPreview.canApproveExecutableWork).toBe(false);
     expect(detail.tasks[0].fileClaims).toEqual([
       "app/page.tsx",
       "lib/fleet.ts",
     ]);
+    expect(detail.artifacts[0]).toMatchObject({
+      title: "Needs clearer boundary",
+      severity: "warning",
+      taskId: "task-1",
+      planHash: "hash-a",
+    });
     expect(detail.events[0].payload).toEqual({ ok: true });
     expect(detail.events[1].payload).toBeNull();
   });

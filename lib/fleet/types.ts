@@ -10,6 +10,8 @@ export type FleetApprovalState =
 export type FleetTaskStatus =
   "draft" | "queued" | "needs_inspection" | "blocked" | "completed";
 
+export type FleetArtifactSeverity = "info" | "warning" | "blocker";
+
 export type FleetWorkerStatus =
   | "leasing"
   | "spawning"
@@ -35,6 +37,10 @@ export interface FleetRunRow {
   max_concurrency: number;
   review_policy: FleetReviewPolicy;
   approval_state: FleetApprovalState;
+  plan_hash: string | null;
+  approved_plan_hash: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
   settings_json: string;
   created_at: string;
   updated_at: string;
@@ -77,6 +83,19 @@ export interface FleetEventRow {
   created_at: string;
 }
 
+export interface FleetArtifactRow {
+  id: string;
+  fleet_run_id: string;
+  task_id: string | null;
+  plan_hash: string | null;
+  artifact_type: string;
+  title: string;
+  body: string;
+  severity: FleetArtifactSeverity;
+  actor: string;
+  created_at: string;
+}
+
 export interface FleetApprovalPreview {
   requiredGates: string[];
   blockedActions: string[];
@@ -96,6 +115,11 @@ export interface FleetRunDto {
   maxConcurrency: number;
   reviewPolicy: FleetReviewPolicy;
   approvalState: FleetApprovalState;
+  planHash: string | null;
+  planText: string | null;
+  approvedPlanHash: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
   taskCount: number;
   workerCount: number;
   createdAt: string;
@@ -137,10 +161,23 @@ export interface FleetEventDto {
   createdAt: string;
 }
 
+export interface FleetArtifactDto {
+  id: string;
+  taskId: string | null;
+  planHash: string | null;
+  artifactType: string;
+  title: string;
+  body: string;
+  severity: FleetArtifactSeverity;
+  actor: string;
+  createdAt: string;
+}
+
 export interface FleetRunDetailDto {
   run: FleetRunDto;
   tasks: FleetTaskDto[];
   workers: FleetWorkerDto[];
+  artifacts: FleetArtifactDto[];
   events: FleetEventDto[];
 }
 
@@ -154,4 +191,23 @@ export interface CreateFleetRunInput {
   model?: string | null;
   maxConcurrency?: number | null;
   reviewPolicy?: FleetReviewPolicy | null;
+}
+
+export interface IngestFleetPlanInput {
+  planText: string;
+  actor?: string | null;
+}
+
+export interface ApproveFleetPlanInput {
+  expectedPlanHash: string;
+  approvedBy?: string | null;
+}
+
+export interface AttachFleetArtifactInput {
+  taskId?: string | null;
+  expectedPlanHash: string;
+  title: string;
+  body: string;
+  severity?: FleetArtifactSeverity | null;
+  actor?: string | null;
 }

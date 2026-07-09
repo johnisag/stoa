@@ -24,6 +24,54 @@ function hasTable(db: Database.Database, table: string): boolean {
   return rows.length > 0;
 }
 
+function addColumnIfMissing(
+  db: Database.Database,
+  table: string,
+  column: { name: string; ddl: string }
+): void {
+  if (hasTable(db, table) && !hasColumn(db, table, column.name)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column.ddl}`);
+  }
+}
+
+function ensureFleetRunApprovalColumns(db: Database.Database): void {
+  if (!hasTable(db, "fleet_runs")) return;
+  for (const column of [
+    { name: "plan_hash", ddl: "plan_hash TEXT" },
+    { name: "approved_plan_hash", ddl: "approved_plan_hash TEXT" },
+    { name: "approved_by", ddl: "approved_by TEXT" },
+    { name: "approved_at", ddl: "approved_at TEXT" },
+  ]) {
+    addColumnIfMissing(db, "fleet_runs", column);
+  }
+}
+
+function ensureFleetArtifactRuntimeColumns(db: Database.Database): void {
+  if (!hasTable(db, "fleet_artifacts")) return;
+  for (const column of [
+    { name: "id", ddl: "id TEXT" },
+    { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+    { name: "task_id", ddl: "task_id TEXT" },
+    { name: "plan_hash", ddl: "plan_hash TEXT" },
+    {
+      name: "artifact_type",
+      ddl: "artifact_type TEXT NOT NULL DEFAULT 'critic_finding'",
+    },
+    { name: "title", ddl: "title TEXT NOT NULL DEFAULT ''" },
+    { name: "body", ddl: "body TEXT NOT NULL DEFAULT ''" },
+    { name: "severity", ddl: "severity TEXT NOT NULL DEFAULT 'warning'" },
+    { name: "actor", ddl: "actor TEXT NOT NULL DEFAULT 'critic'" },
+    { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+  ]) {
+    addColumnIfMissing(db, "fleet_artifacts", column);
+  }
+  db.exec(`
+    UPDATE fleet_artifacts
+    SET created_at = datetime('now')
+    WHERE created_at IS NULL OR created_at = ''
+  `);
+}
+
 // All migrations in order. Migrations are idempotent (guarded by PRAGMA table_info
 // / IF NOT EXISTS) so a fresh schema or a concurrent-init race never throws a
 // duplicate-column/already-exists error. The runner no longer swallows those
@@ -1410,6 +1458,59 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_fleet_workers_run ON fleet_workers(fleet_run_id);
         CREATE INDEX IF NOT EXISTS idx_fleet_events_run ON fleet_events(fleet_run_id, id DESC);
       `);
+    },
+  },
+  {
+    id: 55,
+    name: "add_fleet_plan_approval_and_artifacts",
+    up: (db) => {
+      ensureFleetRunApprovalColumns(db);
+      ensureFleetArtifactRuntimeColumns(db);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS fleet_artifacts (
+          id TEXT PRIMARY KEY,
+          fleet_run_id TEXT NOT NULL,
+          task_id TEXT,
+          plan_hash TEXT,
+          artifact_type TEXT NOT NULL DEFAULT 'critic_finding',
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          severity TEXT NOT NULL DEFAULT 'warning',
+          actor TEXT NOT NULL DEFAULT 'critic',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_fleet_artifacts_run
+          ON fleet_artifacts(fleet_run_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    id: 56,
+    name: "add_fleet_artifact_plan_hash",
+    up: (db) => {
+      ensureFleetRunApprovalColumns(db);
+      ensureFleetArtifactRuntimeColumns(db);
+      if (hasTable(db, "fleet_artifacts") && hasTable(db, "fleet_runs")) {
+        db.exec(`
+          UPDATE fleet_artifacts
+          SET plan_hash = (
+            SELECT fleet_runs.plan_hash
+            FROM fleet_runs
+            WHERE fleet_runs.id = fleet_artifacts.fleet_run_id
+          )
+          WHERE plan_hash IS NULL
+            AND EXISTS (
+              SELECT 1
+              FROM fleet_runs
+              WHERE fleet_runs.id = fleet_artifacts.fleet_run_id
+                AND fleet_runs.plan_hash IS NOT NULL
+            )
+        `);
+      }
     },
   },
 ];

@@ -5,9 +5,12 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import type {
+  ApproveFleetPlanInput,
+  AttachFleetArtifactInput,
   CreateFleetRunInput,
   FleetRunDetailDto,
   FleetRunDto,
+  IngestFleetPlanInput,
 } from "@/lib/fleet/types";
 import { fleetKeys } from "./keys";
 
@@ -61,5 +64,70 @@ export function useCreateFleetRun() {
       qc.invalidateQueries({ queryKey: fleetKeys.runs() });
       qc.setQueryData(fleetKeys.run(detail.run.id), detail);
     },
+  });
+}
+
+function useFleetRunMutation<TInput>(
+  mutationFn: (input: TInput) => Promise<FleetRunDetailDto>
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0,
+    mutationFn,
+    onSuccess: (detail) => {
+      qc.invalidateQueries({ queryKey: fleetKeys.runs() });
+      qc.setQueryData(fleetKeys.run(detail.run.id), detail);
+    },
+  });
+}
+
+export function useIngestFleetPlan(runId: string | null) {
+  return useFleetRunMutation(async (input: IngestFleetPlanInput) => {
+    if (!runId) throw new Error("No fleet run selected");
+    const res = await fetch(
+      `/api/fleet/runs/${encodeURIComponent(runId)}/plan`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Failed to ingest fleet plan");
+    return data as FleetRunDetailDto;
+  });
+}
+
+export function useApproveFleetPlan(runId: string | null) {
+  return useFleetRunMutation(async (input: ApproveFleetPlanInput) => {
+    if (!runId) throw new Error("No fleet run selected");
+    const res = await fetch(
+      `/api/fleet/runs/${encodeURIComponent(runId)}/approve`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Failed to approve fleet plan");
+    return data as FleetRunDetailDto;
+  });
+}
+
+export function useAttachFleetArtifact(runId: string | null) {
+  return useFleetRunMutation(async (input: AttachFleetArtifactInput) => {
+    if (!runId) throw new Error("No fleet run selected");
+    const res = await fetch(
+      `/api/fleet/runs/${encodeURIComponent(runId)}/artifacts`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Failed to attach finding");
+    return data as FleetRunDetailDto;
   });
 }
