@@ -1,6 +1,115 @@
 import type Database from "better-sqlite3";
 
+interface SchemaColumnRepair {
+  name: string;
+  ddl: string;
+}
+
+function hasTable(db: Database.Database, table: string): boolean {
+  const rows = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name = ?`)
+    .all(table) as { name: string }[];
+  return rows.length > 0;
+}
+
+function hasColumn(
+  db: Database.Database,
+  table: string,
+  column: string
+): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  return cols.some((c) => c.name === column);
+}
+
+function addColumnIfMissing(
+  db: Database.Database,
+  table: string,
+  column: SchemaColumnRepair
+): void {
+  if (!hasColumn(db, table, column.name)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column.ddl}`);
+  }
+}
+
+function repairPartialFleetManagementSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_runs")) {
+    for (const column of [
+      { name: "id", ddl: "id TEXT" },
+      { name: "name", ddl: "name TEXT NOT NULL DEFAULT ''" },
+      { name: "goal", ddl: "goal TEXT NOT NULL DEFAULT ''" },
+      { name: "repo_id", ddl: "repo_id TEXT" },
+      { name: "project_id", ddl: "project_id TEXT" },
+      { name: "status", ddl: "status TEXT NOT NULL DEFAULT 'draft'" },
+      { name: "budget_usd", ddl: "budget_usd REAL" },
+      { name: "provider", ddl: "provider TEXT NOT NULL DEFAULT 'claude'" },
+      { name: "model", ddl: "model TEXT" },
+      {
+        name: "max_concurrency",
+        ddl: "max_concurrency INTEGER NOT NULL DEFAULT 1",
+      },
+      {
+        name: "review_policy",
+        ddl: "review_policy TEXT NOT NULL DEFAULT 'four_agent'",
+      },
+      {
+        name: "approval_state",
+        ddl: "approval_state TEXT NOT NULL DEFAULT 'draft'",
+      },
+      { name: "plan_hash", ddl: "plan_hash TEXT" },
+      { name: "approved_plan_hash", ddl: "approved_plan_hash TEXT" },
+      { name: "approved_by", ddl: "approved_by TEXT" },
+      { name: "approved_at", ddl: "approved_at TEXT" },
+      {
+        name: "settings_json",
+        ddl: "settings_json TEXT NOT NULL DEFAULT '{}'",
+      },
+      { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+      { name: "updated_at", ddl: "updated_at TEXT NOT NULL DEFAULT ''" },
+    ]) {
+      addColumnIfMissing(db, "fleet_runs", column);
+    }
+    db.exec(`
+      UPDATE fleet_runs
+      SET created_at = datetime('now')
+      WHERE created_at IS NULL OR created_at = '';
+
+      UPDATE fleet_runs
+      SET updated_at = created_at
+      WHERE updated_at IS NULL OR updated_at = '';
+    `);
+  }
+
+  if (hasTable(db, "fleet_artifacts")) {
+    for (const column of [
+      { name: "id", ddl: "id TEXT" },
+      { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+      { name: "task_id", ddl: "task_id TEXT" },
+      { name: "plan_hash", ddl: "plan_hash TEXT" },
+      {
+        name: "artifact_type",
+        ddl: "artifact_type TEXT NOT NULL DEFAULT 'critic_finding'",
+      },
+      { name: "title", ddl: "title TEXT NOT NULL DEFAULT ''" },
+      { name: "body", ddl: "body TEXT NOT NULL DEFAULT ''" },
+      { name: "severity", ddl: "severity TEXT NOT NULL DEFAULT 'warning'" },
+      { name: "actor", ddl: "actor TEXT NOT NULL DEFAULT 'critic'" },
+      { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+    ]) {
+      addColumnIfMissing(db, "fleet_artifacts", column);
+    }
+    db.exec(`
+      UPDATE fleet_artifacts
+      SET created_at = datetime('now')
+      WHERE created_at IS NULL OR created_at = '';
+    `);
+  }
+}
+
 export function createSchema(db: Database.Database): void {
+  repairPartialFleetManagementSchema(db);
+
   db.exec(`
     -- Sessions table
     CREATE TABLE IF NOT EXISTS sessions (
@@ -481,6 +590,10 @@ export function createSchema(db: Database.Database): void {
       max_concurrency INTEGER NOT NULL DEFAULT 1,
       review_policy TEXT NOT NULL DEFAULT 'four_agent',
       approval_state TEXT NOT NULL DEFAULT 'draft',
+      plan_hash TEXT,
+      approved_plan_hash TEXT,
+      approved_by TEXT,
+      approved_at TEXT,
       settings_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -531,6 +644,21 @@ export function createSchema(db: Database.Database): void {
       FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS fleet_artifacts (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      task_id TEXT,
+      plan_hash TEXT,
+      artifact_type TEXT NOT NULL DEFAULT 'critic_finding',
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'warning',
+      actor TEXT NOT NULL DEFAULT 'critic',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE SET NULL
+    );
+
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_repo_lessons_repo ON repo_lessons(repo_id);
     CREATE INDEX IF NOT EXISTS idx_saved_workflows_updated ON saved_workflows(updated_at DESC);
@@ -567,6 +695,7 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_fleet_tasks_run ON fleet_tasks(fleet_run_id, sort_order);
     CREATE INDEX IF NOT EXISTS idx_fleet_workers_run ON fleet_workers(fleet_run_id);
     CREATE INDEX IF NOT EXISTS idx_fleet_events_run ON fleet_events(fleet_run_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_fleet_artifacts_run ON fleet_artifacts(fleet_run_id, created_at DESC);
 
     -- Warm worktree pool: one pre-warmed worktree per dispatch repo so dispatchOne()
     -- can claim an already-set-up worktree instead of waiting for git+npm on demand.

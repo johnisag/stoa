@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { FLEET_RUN_JSON_BODY_MAX, readCappedJsonBody } from "@/lib/fleet/http";
 import { createDraftFleetRun, listFleetRuns } from "@/lib/fleet/service";
 
 export async function GET() {
@@ -14,14 +15,12 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const body = await readCappedJsonBody(request, FLEET_RUN_JSON_BODY_MAX);
+  if ("error" in body) {
+    return NextResponse.json({ error: body.error }, { status: body.status });
   }
 
-  const result = createDraftFleetRun(body);
+  const result = createDraftFleetRun(body.body);
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }

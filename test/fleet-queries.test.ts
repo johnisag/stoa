@@ -4,6 +4,7 @@ import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
 import { queries } from "@/lib/db/queries";
 import type {
+  FleetArtifactRow,
   FleetEventRow,
   FleetRunRow,
   FleetTaskRow,
@@ -21,6 +22,7 @@ beforeAll(() => {
 beforeEach(() => {
   db.exec(`
     DELETE FROM fleet_events;
+    DELETE FROM fleet_artifacts;
     DELETE FROM fleet_workers;
     DELETE FROM fleet_tasks;
     DELETE FROM fleet_runs;
@@ -94,6 +96,7 @@ describe("fleet run queries", () => {
       worker_count: 1,
       max_concurrency: 6,
       approval_state: "draft",
+      plan_hash: null,
     });
   });
 
@@ -141,6 +144,52 @@ describe("fleet run queries", () => {
     expect(workers.map((w) => w.id)).toEqual(["worker-1"]);
     expect(events).toHaveLength(1);
     expect(events[0].event_type).toBe("preview_viewed");
+  });
+
+  it("records critic artifacts in newest-first order", () => {
+    createFleetRun("run-1");
+    queries
+      .createFleetTask(db)
+      .run("task-1", "run-1", null, "First", null, "draft", "task", 1, "[]");
+    queries
+      .createFleetArtifact(db)
+      .run(
+        "artifact-1",
+        "run-1",
+        "task-1",
+        "hash-a",
+        "critic_finding",
+        "First finding",
+        "Needs attention",
+        "warning",
+        "critic"
+      );
+    queries
+      .createFleetArtifact(db)
+      .run(
+        "artifact-2",
+        "run-1",
+        null,
+        "hash-a",
+        "critic_finding",
+        "Second finding",
+        "Blocks approval",
+        "blocker",
+        "red-team"
+      );
+
+    const artifacts = queries
+      .listFleetArtifactsForRun(db)
+      .all("run-1", 1) as FleetArtifactRow[];
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({
+      id: "artifact-2",
+      task_id: null,
+      severity: "blocker",
+      actor: "red-team",
+      plan_hash: "hash-a",
+    });
   });
 
   it("bounds the polling list and truncates previews without losing detail rows", () => {

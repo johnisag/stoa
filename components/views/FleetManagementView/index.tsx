@@ -3,9 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
+  BadgeCheck,
+  ClipboardList,
+  FileText,
   GitBranch,
   Loader2,
   Network,
+  Paperclip,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -23,12 +27,16 @@ import {
 } from "@/components/ui/select";
 import { useDispatchReposQuery } from "@/data/dispatch/queries";
 import {
+  useApproveFleetPlan,
+  useAttachFleetArtifact,
   useCreateFleetRun,
   useFleetRunQuery,
   useFleetRunsQuery,
+  useIngestFleetPlan,
 } from "@/data/fleet/queries";
 import { useProjectsQuery } from "@/data/projects/queries";
 import type {
+  FleetArtifactSeverity,
   FleetReviewPolicy,
   FleetRunDetailDto,
   FleetRunDto,
@@ -110,7 +118,7 @@ function ApprovalPreview({ detail }: { detail: FleetRunDetailDto }) {
         </div>
         <div>
           <div className="text-muted-foreground mb-1 text-[10px] font-medium uppercase">
-            Disabled in draft
+            Blocked actions
           </div>
           <div className="flex flex-wrap gap-1.5">
             {preview.blockedActions.map((action) => (
@@ -129,6 +137,97 @@ function ApprovalPreview({ detail }: { detail: FleetRunDetailDto }) {
 }
 
 function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
+  const ingestPlan = useIngestFleetPlan(detail.run.id);
+  const approvePlan = useApproveFleetPlan(detail.run.id);
+  const attachArtifact = useAttachFleetArtifact(detail.run.id);
+  const reviewedPlanText = detail.run.planText ?? "";
+  const [planText, setPlanText] = useState(
+    detail.run.planText ?? detail.run.goal
+  );
+  const [artifactTitle, setArtifactTitle] = useState("");
+  const [artifactBody, setArtifactBody] = useState("");
+  const [artifactTaskId, setArtifactTaskId] = useState(NONE);
+  const [artifactSeverity, setArtifactSeverity] =
+    useState<FleetArtifactSeverity>("warning");
+
+  useEffect(() => {
+    setPlanText(detail.run.planText ?? detail.run.goal);
+    setArtifactTitle("");
+    setArtifactBody("");
+    setArtifactTaskId(NONE);
+    setArtifactSeverity("warning");
+  }, [detail.run.id, detail.run.goal, detail.run.planText]);
+
+  async function handleIngestPlan() {
+    if (!canReplacePlan) return;
+    try {
+      await ingestPlan.mutateAsync({
+        planText,
+        actor: "operator",
+      });
+    } catch {
+      // React Query owns the rendered error state.
+    }
+  }
+
+  async function handleApprovePlan() {
+    if (!detail.run.planHash) return;
+    try {
+      await approvePlan.mutateAsync({
+        expectedPlanHash: detail.run.planHash,
+        approvedBy: "operator",
+      });
+    } catch {
+      // React Query owns the rendered error state.
+    }
+  }
+
+  async function handleAttachArtifact() {
+    const planHash = detail.run.planHash;
+    if (!canAttachArtifact || !planHash) return;
+    try {
+      await attachArtifact.mutateAsync({
+        taskId: artifactTaskId === NONE ? null : artifactTaskId,
+        expectedPlanHash: planHash,
+        title: artifactTitle,
+        body: artifactBody,
+        severity: artifactSeverity,
+        actor: "critic",
+      });
+      setArtifactTitle("");
+      setArtifactBody("");
+      setArtifactTaskId(NONE);
+      setArtifactSeverity("warning");
+    } catch {
+      // React Query owns the rendered error state.
+    }
+  }
+
+  const canApprove =
+    detail.run.approvalState === "needs_approval" &&
+    !!detail.run.planHash &&
+    !!reviewedPlanText &&
+    planText === reviewedPlanText &&
+    !detail.artifacts.some(
+      (artifact) =>
+        artifact.severity === "blocker" &&
+        (artifact.planHash === detail.run.planHash || artifact.planHash == null)
+    );
+  const canReplacePlan =
+    detail.run.status === "draft" &&
+    (detail.run.approvalState === "draft" ||
+      detail.run.approvalState === "needs_approval");
+  const canAttachArtifact =
+    detail.run.status === "draft" &&
+    detail.run.approvalState === "needs_approval" &&
+    !!detail.run.planHash &&
+    !!reviewedPlanText &&
+    planText === reviewedPlanText;
+  const taskTitleById = useMemo(
+    () => new Map(detail.tasks.map((task) => [task.id, task.title])),
+    [detail.tasks]
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-4 pb-4">
       <section className="grid gap-3 rounded-md border p-3 md:grid-cols-4">
@@ -168,6 +267,96 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
       <ApprovalPreview detail={detail} />
 
       <section className="rounded-md border">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+          <span className="flex items-center gap-2">
+            <ClipboardList className="h-4 w-4" />
+            <h3 className="text-sm font-medium">Plan review</h3>
+          </span>
+          <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
+            {detail.run.approvalState}
+          </span>
+        </div>
+        <div className="grid gap-3 p-3">
+          <Textarea
+            aria-label="Fleet plan input"
+            className="min-h-32"
+            value={planText}
+            onChange={(event) => setPlanText(event.target.value)}
+          />
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <div className="min-w-0">
+              <div className="text-muted-foreground text-[10px] font-medium uppercase">
+                Current hash
+              </div>
+              <div className="font-mono text-[11px] break-all">
+                {detail.run.planHash ?? "No plan ingested"}
+              </div>
+              {detail.run.approvedPlanHash && (
+                <div className="text-muted-foreground mt-1 text-[11px]">
+                  Approved by {detail.run.approvedBy ?? "operator"} at{" "}
+                  {detail.run.approvedAt
+                    ? labelDate(detail.run.approvedAt)
+                    : "unknown time"}
+                </div>
+              )}
+              {!!detail.run.planHash &&
+                reviewedPlanText &&
+                planText !== reviewedPlanText && (
+                  <div className="text-muted-foreground mt-1 text-[11px]">
+                    Editor differs from reviewed plan
+                  </div>
+                )}
+            </div>
+            <Button
+              className="gap-2"
+              variant="outline"
+              disabled={
+                !canReplacePlan || !planText.trim() || ingestPlan.isPending
+              }
+              onClick={() => void handleIngestPlan()}
+            >
+              {ingestPlan.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <FileText className="h-4 w-4" />
+              )}
+              Ingest plan
+            </Button>
+            <Button
+              className="gap-2"
+              disabled={!canApprove || approvePlan.isPending}
+              onClick={() => void handleApprovePlan()}
+            >
+              {approvePlan.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <BadgeCheck className="h-4 w-4" />
+              )}
+              Approve
+            </Button>
+          </div>
+          {(ingestPlan.isError || approvePlan.isError) && (
+            <div className="text-destructive flex items-center gap-2 text-xs">
+              <AlertCircle className="h-3.5 w-3.5" />
+              {ingestPlan.error?.message ?? approvePlan.error?.message}
+            </div>
+          )}
+          {!canApprove &&
+            detail.run.approvalState === "needs_approval" &&
+            detail.artifacts.some(
+              (artifact) =>
+                artifact.severity === "blocker" &&
+                (artifact.planHash === detail.run.planHash ||
+                  artifact.planHash == null)
+            ) && (
+              <div className="text-muted-foreground text-xs">
+                Blocker findings must be addressed before approval
+              </div>
+            )}
+        </div>
+      </section>
+
+      <section className="rounded-md border">
         <div className="border-b px-3 py-2">
           <h3 className="text-sm font-medium">Task graph</h3>
         </div>
@@ -189,6 +378,18 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
                       {task.description}
                     </div>
                   )}
+                  {task.fileClaims.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {task.fileClaims.map((claim) => (
+                        <span
+                          key={claim}
+                          className="bg-foreground/10 max-w-full rounded px-1.5 py-0.5 font-mono text-[10px] break-all"
+                        >
+                          {claim}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-start gap-1">
                   <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
@@ -200,6 +401,122 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
                 </div>
               </div>
             ))
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-md border">
+        <div className="flex items-center gap-2 border-b px-3 py-2">
+          <Paperclip className="h-4 w-4" />
+          <h3 className="text-sm font-medium">Critic artifacts</h3>
+        </div>
+        <div className="grid gap-3 p-3">
+          <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_9rem_12rem]">
+            <Input
+              aria-label="Critic finding title"
+              placeholder="Finding title"
+              value={artifactTitle}
+              onChange={(event) => setArtifactTitle(event.target.value)}
+            />
+            <Select
+              value={artifactSeverity}
+              onValueChange={(value) =>
+                setArtifactSeverity(value as FleetArtifactSeverity)
+              }
+            >
+              <SelectTrigger aria-label="Finding severity">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="info">Info</SelectItem>
+                <SelectItem value="warning">Warning</SelectItem>
+                <SelectItem value="blocker">Blocker</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={artifactTaskId} onValueChange={setArtifactTaskId}>
+              <SelectTrigger aria-label="Finding task">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>Run-level</SelectItem>
+                {detail.tasks.map((task) => (
+                  <SelectItem key={task.id} value={task.id}>
+                    {task.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Textarea
+            aria-label="Critic finding body"
+            value={artifactBody}
+            onChange={(event) => setArtifactBody(event.target.value)}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {attachArtifact.isError ? (
+              <div className="text-destructive flex items-center gap-2 text-xs">
+                <AlertCircle className="h-3.5 w-3.5" />
+                {attachArtifact.error.message}
+              </div>
+            ) : (
+              <span className="text-muted-foreground text-xs">
+                {detail.artifacts.length} findings
+              </span>
+            )}
+            <Button
+              className="gap-2"
+              variant="outline"
+              disabled={
+                !artifactTitle.trim() ||
+                !artifactBody.trim() ||
+                !canAttachArtifact ||
+                attachArtifact.isPending
+              }
+              onClick={() => void handleAttachArtifact()}
+            >
+              {attachArtifact.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Paperclip className="h-4 w-4" />
+              )}
+              Attach
+            </Button>
+          </div>
+          {detail.artifacts.length > 0 && (
+            <div className="grid gap-2">
+              {detail.artifacts.map((artifact) => (
+                <div key={artifact.id} className="rounded border px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="max-w-full min-w-0 text-sm font-medium break-words">
+                      {artifact.title}
+                    </span>
+                    <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
+                      {artifact.severity}
+                    </span>
+                  </div>
+                  <div className="text-muted-foreground mt-1 flex flex-wrap gap-2 text-[11px]">
+                    <span className="max-w-full min-w-0 break-words">
+                      {artifact.taskId
+                        ? (taskTitleById.get(artifact.taskId) ??
+                          artifact.taskId)
+                        : "Run-level"}
+                    </span>
+                    <span>
+                      {artifact.planHash &&
+                      artifact.planHash !== detail.run.planHash
+                        ? "Previous plan"
+                        : "Current plan"}
+                    </span>
+                  </div>
+                  <div className="text-muted-foreground mt-2 text-xs break-words whitespace-pre-wrap">
+                    {artifact.body}
+                  </div>
+                  <div className="text-muted-foreground mt-2 text-[11px]">
+                    {artifact.actor} - {labelDate(artifact.createdAt)}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </section>

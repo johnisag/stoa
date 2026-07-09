@@ -96,6 +96,7 @@ describe("fresh schema fleet management tables", () => {
       "fleet_tasks",
       "fleet_workers",
       "fleet_events",
+      "fleet_artifacts",
     ]) {
       expect(hasTable(table)).toBe(true);
     }
@@ -115,6 +116,10 @@ describe("fresh schema fleet management tables", () => {
       "max_concurrency",
       "review_policy",
       "approval_state",
+      "plan_hash",
+      "approved_plan_hash",
+      "approved_by",
+      "approved_at",
       "settings_json",
     ]) {
       expect(hasColumn("fleet_runs", col)).toBe(true);
@@ -151,6 +156,20 @@ describe("fresh schema fleet management tables", () => {
     ]) {
       expect(hasColumn("fleet_events", col)).toBe(true);
     }
+    for (const col of [
+      "id",
+      "fleet_run_id",
+      "task_id",
+      "plan_hash",
+      "artifact_type",
+      "title",
+      "body",
+      "severity",
+      "actor",
+      "created_at",
+    ]) {
+      expect(hasColumn("fleet_artifacts", col)).toBe(true);
+    }
   });
 
   it("has the fleet management query indexes", () => {
@@ -159,5 +178,6 @@ describe("fresh schema fleet management tables", () => {
     expect(hasIndex("idx_fleet_tasks_run")).toBe(true);
     expect(hasIndex("idx_fleet_workers_run")).toBe(true);
     expect(hasIndex("idx_fleet_events_run")).toBe(true);
+    expect(hasIndex("idx_fleet_artifacts_run")).toBe(true);
   });
 });

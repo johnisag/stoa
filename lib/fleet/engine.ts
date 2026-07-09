@@ -1,5 +1,7 @@
 import type {
   CreateFleetRunInput,
+  FleetArtifactDto,
+  FleetArtifactRow,
   FleetApprovalPreview,
   FleetEventDto,
   FleetEventRow,
@@ -109,7 +111,7 @@ export function buildFleetApprovalPreview(): FleetApprovalPreview {
       "authorized head-SHA-pinned merge",
     ],
     blockedActions: [
-      "planner execution",
+      "autonomous planner execution",
       "worker spawning",
       "resume or tick execution",
       "merge or cleanup",
@@ -134,6 +136,13 @@ function parseStringArray(value: string): string[] {
     : [];
 }
 
+function parseSettingsPlanText(value: string): string | null {
+  const parsed = parseJson(value);
+  if (!parsed || typeof parsed !== "object") return null;
+  const planText = (parsed as { planText?: unknown }).planText;
+  return typeof planText === "string" && planText.trim() ? planText : null;
+}
+
 export function toFleetRunDto(
   row: FleetRunRow,
   counts: { taskCount: number; workerCount: number }
@@ -151,6 +160,11 @@ export function toFleetRunDto(
     maxConcurrency: row.max_concurrency,
     reviewPolicy: row.review_policy,
     approvalState: row.approval_state,
+    planHash: row.plan_hash,
+    planText: parseSettingsPlanText(row.settings_json),
+    approvedPlanHash: row.approved_plan_hash,
+    approvedBy: row.approved_by,
+    approvedAt: row.approved_at,
     taskCount: counts.taskCount,
     workerCount: counts.workerCount,
     createdAt: row.created_at,
@@ -199,10 +213,25 @@ export function toFleetEventDto(row: FleetEventRow): FleetEventDto {
   };
 }
 
+export function toFleetArtifactDto(row: FleetArtifactRow): FleetArtifactDto {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    planHash: row.plan_hash,
+    artifactType: row.artifact_type,
+    title: row.title,
+    body: row.body,
+    severity: row.severity,
+    actor: row.actor,
+    createdAt: row.created_at,
+  };
+}
+
 export function composeFleetRunDetail(input: {
   run: FleetRunRow;
   tasks: FleetTaskRow[];
   workers: FleetWorkerRow[];
+  artifacts: FleetArtifactRow[];
   events: FleetEventRow[];
 }): FleetRunDetailDto {
   return {
@@ -212,6 +241,7 @@ export function composeFleetRunDetail(input: {
     }),
     tasks: input.tasks.map(toFleetTaskDto),
     workers: input.workers.map(toFleetWorkerDto),
+    artifacts: input.artifacts.map(toFleetArtifactDto),
     events: input.events.map(toFleetEventDto),
   };
 }
