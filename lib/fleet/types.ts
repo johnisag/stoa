@@ -213,6 +213,7 @@ export interface FleetRunDetailDto {
   workers: FleetWorkerDto[];
   artifacts: FleetArtifactDto[];
   events: FleetEventDto[];
+  pendingLaunches: number;
 }
 
 export interface CreateFleetRunInput {

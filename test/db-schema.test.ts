@@ -180,6 +180,7 @@ describe("fresh schema fleet management tables", () => {
     expect(hasIndex("idx_fleet_runs_updated")).toBe(true);
     expect(hasIndex("idx_fleet_tasks_run")).toBe(true);
     expect(hasIndex("idx_fleet_workers_run")).toBe(true);
+    expect(hasIndex("idx_fleet_workers_session")).toBe(true);
     expect(hasIndex("idx_fleet_events_run")).toBe(true);
     expect(hasIndex("idx_fleet_artifacts_run")).toBe(true);
   });

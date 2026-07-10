@@ -208,6 +208,51 @@ function task(): FleetTaskRow {
 }
 
 describe("spawnFleetWorkerSession", () => {
+  it("delivers the prompt after recovery promotes a backend being created", async () => {
+    expect(
+      db
+        .prepare(
+          `UPDATE fleet_workers
+         SET session_id = NULL,
+             status = 'spawning',
+             lease_token = 'lease-1',
+             lease_expires_at = '2020-01-01T00:00:00.000Z',
+             spawn_error = NULL
+         WHERE id = ?`
+        )
+        .run("worker-1").changes
+    ).toBe(1);
+    mocks.createWorktree.mockResolvedValueOnce({
+      worktreePath: "C:\\worktrees\\task-1-create-race",
+      branchName: "fleet/task-1-create-race",
+    });
+    mocks.create.mockImplementationOnce(async () => {
+      const linked = worker();
+      expect(linked.session_id).toBeTruthy();
+      queries
+        .markFleetWorkerRunning(db)
+        .run(linked.session_id, "worker-1", "lease-1");
+    });
+
+    const result = await spawnFleetWorkerSession({
+      run: { ...run(), project_id: "uncategorized" },
+      task: task(),
+      repo: { ...repo(), project_id: "uncategorized" },
+      workerId: "worker-1",
+      leaseToken: "lease-1",
+    });
+
+    expect(result.worktreePath).toBe("C:\\worktrees\\task-1-create-race");
+    expect(worker()).toMatchObject({
+      status: "running",
+      session_id: result.sessionId,
+      lease_token: null,
+    });
+    expect(mocks.pasteText).toHaveBeenCalledTimes(1);
+    expect(mocks.kill).not.toHaveBeenCalled();
+    expect(deleteWorktree).not.toHaveBeenCalled();
+  });
+
   it("does not clean up a linked session already promoted by recovery", async () => {
     expect(
       db

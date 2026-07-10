@@ -22,8 +22,7 @@ export interface FleetRunActionResponse {
 
 export function fleetRunShouldPoll(detail: FleetRunDetailDto | undefined) {
   if (!detail) return false;
-  // An in-flight spawn can finish after cancellation and expose a cleanup error.
-  if (detail.run.status === "canceled") return true;
+  if (detail.run.status === "canceled") return detail.pendingLaunches > 0;
   if (detail.workers.some((worker) => worker.status === "cleanup_pending")) {
     return true;
   }

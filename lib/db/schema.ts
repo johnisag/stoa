@@ -707,6 +707,9 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_fleet_runs_updated ON fleet_runs(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_fleet_tasks_run ON fleet_tasks(fleet_run_id, sort_order);
     CREATE INDEX IF NOT EXISTS idx_fleet_workers_run ON fleet_workers(fleet_run_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_session
+      ON fleet_workers(session_id)
+      WHERE session_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_fleet_events_run ON fleet_events(fleet_run_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_fleet_artifacts_run ON fleet_artifacts(fleet_run_id, created_at DESC);
 

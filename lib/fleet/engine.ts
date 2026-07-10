@@ -236,6 +236,7 @@ export function composeFleetRunDetail(input: {
   workers: FleetWorkerRow[];
   artifacts: FleetArtifactRow[];
   events: FleetEventRow[];
+  pendingLaunches?: number;
 }): FleetRunDetailDto {
   return {
     run: toFleetRunDto(input.run, {
@@ -246,5 +247,6 @@ export function composeFleetRunDetail(input: {
     workers: input.workers.map(toFleetWorkerDto),
     artifacts: input.artifacts.map(toFleetArtifactDto),
     events: input.events.map(toFleetEventDto),
+    pendingLaunches: input.pendingLaunches ?? 0,
   };
 }

@@ -12,6 +12,7 @@ import {
   hashParsedFleetPlanTasks,
   validateFleetTaskRowsForApproval,
 } from "./hash";
+import { pendingFleetLaunchCount } from "./launch-tracker";
 import { parseFleetPlanText } from "./plan";
 import type {
   FleetArtifactRow,
@@ -128,7 +129,14 @@ export function getFleetRunDetail(id: string): FleetRunDetailDto | null {
   const events = queries
     .listFleetEventsForRun(db)
     .all(id, 50) as FleetEventRow[];
-  return composeFleetRunDetail({ run, tasks, workers, artifacts, events });
+  return composeFleetRunDetail({
+    run,
+    tasks,
+    workers,
+    artifacts,
+    events,
+    pendingLaunches: pendingFleetLaunchCount(id),
+  });
 }
 
 export function createDraftFleetRun(

@@ -391,6 +391,82 @@ describe("fleet run queries", () => {
     expect(spent.n).toBeCloseTo(0.09);
   });
 
+  it("defensively counts a malformed duplicate session link once", () => {
+    createFleetRun("run-1");
+    queries
+      .createFleetTask(db)
+      .run("task-1", "run-1", null, "First", null, "running", "task", 1, "[]");
+    queries
+      .createWorkerSession(db)
+      .run(
+        "session-1",
+        "Worker",
+        "tmux-worker",
+        "C:\\repo",
+        null,
+        "First",
+        "opus",
+        "sessions",
+        "claude",
+        null
+      );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "tmux-worker",
+        "2026-07-09",
+        "session-1",
+        "claude",
+        "opus",
+        30,
+        40,
+        0,
+        0,
+        0.09
+      );
+    db.exec("DROP INDEX IF EXISTS idx_fleet_workers_session");
+    try {
+      const insert = db.prepare(
+        `INSERT INTO fleet_workers (id, fleet_run_id, task_id, session_id, status, provider, model, attempt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      insert.run(
+        "worker-1",
+        "run-1",
+        "task-1",
+        "session-1",
+        "running",
+        "claude",
+        "opus",
+        1
+      );
+      insert.run(
+        "worker-2",
+        "run-1",
+        "task-1",
+        "session-1",
+        "running",
+        "claude",
+        "opus",
+        2
+      );
+
+      const spent = queries.sumFleetWorkerCostForRun(db).get("run-1") as {
+        n: number;
+      };
+      expect(spent.n).toBeCloseTo(0.09);
+    } finally {
+      db.prepare("DELETE FROM fleet_workers WHERE fleet_run_id = ?").run(
+        "run-1"
+      );
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_session
+          ON fleet_workers(session_id)
+          WHERE session_id IS NOT NULL
+      `);
+    }
+  });
+
   it("bounds the polling list and truncates previews without losing detail rows", () => {
     const longGoal = "g".repeat(800);
     const longProvider = "p".repeat(80);

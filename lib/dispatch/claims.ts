@@ -80,8 +80,12 @@ export function serializeClaims(claims: string[]): string {
  * falsely overlapping `lib/dispatchX`. Pure.
  */
 export function claimsOverlap(a: string, b: string): boolean {
-  if (a === b) return true;
-  return (b + "/").startsWith(a + "/") || (a + "/").startsWith(b + "/");
+  const left = a.toLowerCase();
+  const right = b.toLowerCase();
+  if (left === right) return true;
+  return (
+    (right + "/").startsWith(left + "/") || (left + "/").startsWith(right + "/")
+  );
 }
 
 /** Do two claim SETS conflict? True iff any claim on one side overlaps any on the

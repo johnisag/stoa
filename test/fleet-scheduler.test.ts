@@ -12,6 +12,7 @@ import {
   startFleetRun,
   type FleetSpawnAdapter,
 } from "@/lib/fleet/scheduler";
+import { pendingFleetLaunchCount } from "@/lib/fleet/launch-tracker";
 import { buildFleetWorkerPrompt } from "@/lib/fleet/spawn";
 import type {
   FleetEventRow,
@@ -1245,6 +1246,7 @@ describe("fleet lifecycle controls", () => {
     expect(result).toHaveProperty("run");
     if ("error" in result) throw new Error(result.error);
     expect(result.summary.launched).toBe(1);
+    expect(result.run.pendingLaunches).toBe(1);
     expect(workers()[0].status).toBe("spawning");
 
     gate.resolve({
@@ -1253,6 +1255,7 @@ describe("fleet lifecycle controls", () => {
       branchName: "feature/task-a",
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pendingFleetLaunchCount("run-1")).toBe(0);
   });
 
   it("does not clean up a linked spawn already promoted by recovery", async () => {
@@ -1429,6 +1432,7 @@ describe("fleet lifecycle controls", () => {
     expect(canceled).toHaveProperty("run");
     if ("error" in canceled) throw new Error(canceled.error);
     expect(canceled.run.workers[0].status).toBe("canceled");
+    expect(canceled.run.pendingLaunches).toBe(1);
 
     gate.resolve({
       sessionId,
@@ -1436,6 +1440,7 @@ describe("fleet lifecycle controls", () => {
       branchName: "feature/task-a",
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pendingFleetLaunchCount("run-1")).toBe(0);
 
     expect(workers()[0]).toMatchObject({
       status: "cleanup_pending",

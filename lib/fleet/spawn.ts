@@ -447,7 +447,8 @@ export async function spawnFleetWorkerSession(input: {
       db,
       input.workerId,
       input.leaseToken,
-      "prompt delivery"
+      "prompt delivery",
+      sessionId
     );
     await sendFleetWorkerPrompt({
       sessionName: tmuxName,

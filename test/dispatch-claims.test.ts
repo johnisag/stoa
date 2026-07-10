@@ -51,6 +51,11 @@ describe("claimsOverlap (segment boundary)", () => {
     expect(claimsOverlap("lib", "lib/db/schema.ts")).toBe(true);
   });
 
+  it("treats case-only path differences as conflicts", () => {
+    expect(claimsOverlap("App/Page.tsx", "app/page.tsx")).toBe(true);
+    expect(claimsOverlap("SRC", "src/components/Button.tsx")).toBe(true);
+  });
+
   it("does NOT falsely overlap a shared string prefix that isn't a path boundary", () => {
     expect(claimsOverlap("lib/dispatch", "lib/dispatchX")).toBe(false);
     expect(claimsOverlap("lib/db", "lib/dbx/y.ts")).toBe(false);

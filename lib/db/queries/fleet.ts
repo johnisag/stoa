@@ -185,7 +185,12 @@ export const fleetQueries = {
     getStmt(
       db,
       `SELECT COALESCE(SUM(COALESCE(c.cost_usd, 0)), 0) AS n
-       FROM fleet_workers w
+       FROM (
+         SELECT DISTINCT session_id
+         FROM fleet_workers
+         WHERE fleet_run_id = ?
+           AND session_id IS NOT NULL
+       ) w
        JOIN (
          SELECT session_id, cost_usd
          FROM (
@@ -198,8 +203,7 @@ export const fleetQueries = {
            FROM session_costs c
          ) ranked_costs
          WHERE sample_rank = 1
-       ) c ON c.session_id = w.session_id
-       WHERE w.fleet_run_id = ?`
+       ) c ON c.session_id = w.session_id`
     ),
 
   updateFleetRunStatus: (db: Database.Database) =>

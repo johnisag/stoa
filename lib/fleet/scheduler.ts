@@ -6,6 +6,7 @@ import type { DispatchRepo } from "@/lib/dispatch/types";
 import { getSessionBackend } from "@/lib/session-backend";
 import { retryFleetCleanupForRepo } from "./cleanup";
 import { composeFleetRunDetail } from "./engine";
+import { pendingFleetLaunchCount, trackFleetLaunch } from "./launch-tracker";
 import {
   cleanupFleetWorkerSpawn,
   spawnFleetWorkerSession,
@@ -106,7 +107,14 @@ function detailFromDb(
   const events = queries
     .listFleetEventsForRun(db)
     .all(id, 50) as FleetEventRow[];
-  return composeFleetRunDetail({ run, tasks, workers, artifacts, events });
+  return composeFleetRunDetail({
+    run,
+    tasks,
+    workers,
+    artifacts,
+    events,
+    pendingLaunches: pendingFleetLaunchCount(id),
+  });
 }
 
 function parseSettings(row: FleetRunRow): Record<string, unknown> {
@@ -909,14 +917,17 @@ export async function reconcileFleetRun(
   const spawn = options.spawn ?? spawnFleetWorkerSession;
   const cleanupSpawn = options.cleanupSpawn ?? cleanupFleetWorkerSpawn;
   const launchPromises = resolvedClaim.leases.map((lease) =>
-    launchLease({
-      db,
-      runId: id,
-      spawn,
-      cleanupSpawn,
-      spawnLeaseMs: options.spawnLeaseMs ?? DEFAULT_SPAWN_LEASE_MS,
-      ...lease,
-    })
+    trackFleetLaunch(
+      id,
+      launchLease({
+        db,
+        runId: id,
+        spawn,
+        cleanupSpawn,
+        spawnLeaseMs: options.spawnLeaseMs ?? DEFAULT_SPAWN_LEASE_MS,
+        ...lease,
+      })
+    )
   );
   if (options.awaitLaunches === false) {
     for (const promise of launchPromises) {

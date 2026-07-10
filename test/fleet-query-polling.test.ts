@@ -8,7 +8,8 @@ import type {
 
 function detail(
   status: FleetRunStatus,
-  workerStatuses: FleetWorkerStatus[] = []
+  workerStatuses: FleetWorkerStatus[] = [],
+  pendingLaunches = 0
 ): FleetRunDetailDto {
   return {
     run: { status },
@@ -19,6 +20,7 @@ function detail(
     tasks: [],
     artifacts: [],
     events: [],
+    pendingLaunches,
   } as unknown as FleetRunDetailDto;
 }
 
@@ -35,17 +37,21 @@ describe("fleetRunShouldPoll", () => {
     );
   });
 
-  it("keeps polling canceled runs so late cleanup failures become visible", () => {
-    expect(fleetRunShouldPoll(detail("canceled", ["cleanup_pending"]))).toBe(
+  it("polls canceled runs only while a launch can still settle", () => {
+    expect(fleetRunShouldPoll(detail("canceled", ["canceled"], 1))).toBe(true);
+    expect(fleetRunShouldPoll(detail("canceled", ["cleanup_pending"], 1))).toBe(
       true
     );
-    expect(fleetRunShouldPoll(detail("canceled", ["canceled"]))).toBe(true);
   });
 
   it("stops polling terminal or inactive views", () => {
     expect(fleetRunShouldPoll(undefined)).toBe(false);
     expect(fleetRunShouldPoll(detail("paused", ["completed"]))).toBe(false);
     expect(fleetRunShouldPoll(detail("planned", ["running"]))).toBe(false);
+    expect(fleetRunShouldPoll(detail("canceled", ["canceled"]))).toBe(false);
+    expect(fleetRunShouldPoll(detail("canceled", ["cleanup_pending"]))).toBe(
+      false
+    );
     expect(fleetRunShouldPoll(detail("completed", ["completed"]))).toBe(false);
   });
 });

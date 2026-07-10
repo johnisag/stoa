@@ -191,4 +191,24 @@ describe("fleet migrations", () => {
       "spawn_error",
     ]);
   });
+
+  it("migration 58 enforces one fleet worker per session", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 57);
+    db.exec(`
+      CREATE TABLE fleet_workers (
+        id TEXT PRIMARY KEY,
+        session_id TEXT
+      );
+    `);
+
+    runMigrations(db);
+
+    const insert = db.prepare(
+      "INSERT INTO fleet_workers (id, session_id) VALUES (?, ?)"
+    );
+    insert.run("worker-1", "session-1");
+    expect(() => insert.run("worker-2", "session-1")).toThrow(/UNIQUE/);
+    expect(() => insert.run("worker-3", null)).not.toThrow();
+  });
 });
