@@ -14,6 +14,12 @@ const row = (id: string, claims: string[] | null): IssueDispatch =>
     file_claims: claims ? JSON.stringify(claims) : null,
   }) as IssueDispatch;
 
+const rawRow = (id: string, fileClaims: string): IssueDispatch =>
+  ({
+    id,
+    file_claims: fileClaims,
+  }) as IssueDispatch;
+
 describe("pickSchedulable", () => {
   it("no-claims rows behave exactly like pickCandidates (regression guard)", () => {
     const pending = [row("a", null), row("b", null), row("c", null)];
@@ -44,6 +50,16 @@ describe("pickSchedulable", () => {
     const pending = [row("a", ["lib/x/y.ts"]), row("b", ["lib/z"])];
     const live = [["lib/x"]]; // a dispatched/pr_open row holds lib/x
     expect(pickSchedulable(pending, live, 5).map((r) => r.id)).toEqual(["b"]);
+  });
+
+  it("skips unsafe pending claims instead of treating them as unclaimed", () => {
+    const pending = [
+      row("absolute", ["/repo/app/page.tsx"]),
+      rawRow("junk", "not json"),
+      row("valid", ["lib/free.ts"]),
+    ];
+
+    expect(pickSchedulable(pending, [], 3).map((r) => r.id)).toEqual(["valid"]);
   });
 
   it("disjoint claims all schedule (parallelism preserved); never exceeds slots", () => {

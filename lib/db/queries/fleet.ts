@@ -186,7 +186,16 @@ export const fleetQueries = {
       db,
       `SELECT COALESCE(SUM(COALESCE(c.cost_usd, 0)), 0) AS n
        FROM fleet_workers w
-       JOIN session_costs c ON c.session_id = w.session_id
+       JOIN (
+         SELECT c.session_id, c.cost_usd
+         FROM session_costs c
+         JOIN (
+           SELECT session_id, MAX(day) AS day
+           FROM session_costs
+           GROUP BY session_id
+         ) latest ON latest.session_id = c.session_id
+                 AND latest.day = c.day
+       ) c ON c.session_id = w.session_id
        WHERE w.fleet_run_id = ?`
     ),
 
@@ -309,6 +318,29 @@ export const fleetQueries = {
            lease_token = NULL,
            lease_expires_at = NULL
        WHERE session_id = ?`
+    ),
+
+  markFleetWorkerCleanupCompleteForSession: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_workers
+       SET status = 'cleanup_complete',
+           spawn_error = NULL,
+           lease_token = NULL,
+           lease_expires_at = NULL,
+           ended_at = COALESCE(ended_at, datetime('now'))
+       WHERE session_id = ?`
+    ),
+
+  listCleanupPendingFleetWorkersForRepo: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT w.*
+       FROM fleet_workers w
+       JOIN fleet_runs r ON r.id = w.fleet_run_id
+       WHERE r.repo_id = ?
+         AND w.status = 'cleanup_pending'
+       ORDER BY w.created_at ASC`
     ),
 
   updateFleetRunPlanState: (db: Database.Database) =>

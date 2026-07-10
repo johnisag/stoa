@@ -405,6 +405,73 @@ describe("reconcileFleetRun", () => {
     expect(result.summary.launched).toBe(0);
   });
 
+  it("unpins cleanup-pending workers from other runs before admission", async () => {
+    createRun(1);
+    db.prepare(
+      "UPDATE dispatch_repos SET daily_quota = 10, max_concurrency = 1 WHERE id = ?"
+    ).run("repo-fleet");
+    queries
+      .createFleetRun(db)
+      .run(
+        "run-other",
+        "Other run",
+        "Cleanup is stale",
+        "repo-fleet",
+        "proj-fleet",
+        null,
+        "claude",
+        null,
+        1,
+        "four_agent",
+        "{}"
+      );
+    queries
+      .createFleetTask(db)
+      .run(
+        "task-other",
+        "run-other",
+        null,
+        "Other",
+        null,
+        "running",
+        "task",
+        1,
+        JSON.stringify(["other/file.ts"])
+      );
+    db.prepare(
+      `INSERT INTO fleet_workers (
+        id, fleet_run_id, task_id, session_id, status, provider, model, attempt,
+        spawn_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "worker-other",
+      "run-other",
+      "task-other",
+      null,
+      "cleanup_pending",
+      "claude",
+      null,
+      1,
+      "backend down"
+    );
+    createTask("task-a", 1, ["app/a.ts"]);
+
+    const result = await reconcileFleetRun("run-1", {
+      db,
+      spawn: fakeSpawn(),
+    });
+
+    expect(result).toHaveProperty("run");
+    if ("error" in result) throw new Error(result.error);
+    expect(result.summary.launched).toBe(1);
+    expect(
+      queries.getFleetWorker(db).get("worker-other") as FleetWorkerRow
+    ).toMatchObject({
+      status: "failed",
+      spawn_error: "cleanup ownership missing; unpinned by recovery",
+    });
+  });
+
   it("serializes claims held by active workers in other fleet runs", async () => {
     createRun(3);
     db.prepare(
@@ -1046,6 +1113,78 @@ describe("fleet lifecycle controls", () => {
       branchName: "feature/task-a",
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("does not clean up a linked spawn already promoted by recovery", async () => {
+    createRun(1);
+    createTask("task-a", 1, ["app/a.ts"]);
+    const gate = deferred<{
+      sessionId: string;
+      worktreePath: string;
+      branchName: string;
+    }>();
+    const started = deferred<{ sessionId: string; tmuxName: string }>();
+    const cleaned: string[] = [];
+    let sessionId = "";
+
+    await reconcileFleetRun("run-1", {
+      db,
+      awaitLaunches: false,
+      cleanupSpawn: async ({ result }) => {
+        cleaned.push(result.sessionId);
+      },
+      spawn: async ({ task, workerId, leaseToken }) => {
+        sessionId = `session-${workerId}`;
+        const tmuxName = `tmux-${workerId}`;
+        queries
+          .createWorkerSession(db)
+          .run(
+            sessionId,
+            `Worker ${task.id}`,
+            tmuxName,
+            `C:\\worktrees\\${task.id}`,
+            null,
+            task.title,
+            "sonnet",
+            "sessions",
+            "claude",
+            "proj-fleet"
+          );
+        queries.linkFleetWorkerSession(db).run(sessionId, workerId, leaseToken);
+        started.resolve({ sessionId, tmuxName });
+        return gate.promise;
+      },
+    });
+    const linked = await started.promise;
+    expect(workers()[0]).toMatchObject({
+      status: "spawning",
+      session_id: linked.sessionId,
+    });
+
+    const recovered = await reconcileFleetRun("run-1", {
+      db,
+      now: new Date("2999-01-01T00:00:00.000Z"),
+      liveSessionNames: new Set([linked.tmuxName]),
+      spawn: fakeSpawn(),
+    });
+
+    expect(recovered).toHaveProperty("run");
+    if ("error" in recovered) throw new Error(recovered.error);
+    expect(recovered.summary).toMatchObject({ recovered: 1, launched: 0 });
+
+    gate.resolve({
+      sessionId,
+      worktreePath: "C:\\worktrees\\task-a",
+      branchName: "feature/task-a",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(cleaned).toEqual([]);
+    expect(workers()[0]).toMatchObject({
+      status: "running",
+      session_id: linked.sessionId,
+    });
+    expect(queries.getSession(db).get(linked.sessionId)).toBeTruthy();
   });
 
   it("cleans up a worker that finishes spawning after cancel wins the race", async () => {

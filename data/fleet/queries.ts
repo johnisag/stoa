@@ -20,6 +20,19 @@ export interface FleetRunActionResponse {
   summary?: FleetSchedulerSummary;
 }
 
+export function fleetRunShouldPoll(detail: FleetRunDetailDto | undefined) {
+  if (!detail) return false;
+  if (detail.run.status === "running") return true;
+  if (detail.run.status === "paused") {
+    return detail.workers.some((worker) =>
+      ["leasing", "spawning", "running", "waiting_for_operator"].includes(
+        worker.status
+      )
+    );
+  }
+  return false;
+}
+
 async function fetchFleetRuns(): Promise<FleetRunDto[]> {
   const res = await fetch("/api/fleet/runs");
   const data = await res.json().catch(() => ({}));
@@ -51,7 +64,7 @@ export function useFleetRunQuery(id: string | null, enabled = true) {
     staleTime: 5000,
     refetchInterval: (query) => {
       const detail = query.state.data as FleetRunDetailDto | undefined;
-      return detail?.run.status === "running" ? 5000 : false;
+      return fleetRunShouldPoll(detail) ? 5000 : false;
     },
   });
 }

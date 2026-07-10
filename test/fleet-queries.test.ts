@@ -254,6 +254,74 @@ describe("fleet run queries", () => {
     });
   });
 
+  it("sums only the latest cumulative cost sample per worker session", () => {
+    createFleetRun("run-1");
+    queries
+      .createFleetTask(db)
+      .run("task-1", "run-1", null, "First", null, "running", "task", 1, "[]");
+    queries
+      .createWorkerSession(db)
+      .run(
+        "session-1",
+        "Worker",
+        "tmux-worker",
+        "C:\\repo",
+        null,
+        "First",
+        "opus",
+        "sessions",
+        "claude",
+        null
+      );
+    db.prepare(
+      `INSERT INTO fleet_workers (id, fleet_run_id, task_id, session_id, status, provider, model, attempt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "worker-1",
+      "run-1",
+      "task-1",
+      "session-1",
+      "running",
+      "claude",
+      "opus",
+      1
+    );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "session-key-1",
+        "2026-07-08",
+        "session-1",
+        "claude",
+        "opus",
+        10,
+        20,
+        0,
+        0,
+        0.05
+      );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "session-key-1",
+        "2026-07-09",
+        "session-1",
+        "claude",
+        "opus",
+        30,
+        40,
+        0,
+        0,
+        0.09
+      );
+
+    const spent = queries.sumFleetWorkerCostForRun(db).get("run-1") as {
+      n: number;
+    };
+
+    expect(spent.n).toBeCloseTo(0.09);
+  });
+
   it("bounds the polling list and truncates previews without losing detail rows", () => {
     const longGoal = "g".repeat(800);
     const longProvider = "p".repeat(80);

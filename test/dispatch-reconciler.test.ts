@@ -350,6 +350,43 @@ describe("reconcileTick", () => {
     expect(dispatched.id).toBe(allowed);
   });
 
+  it("skips pending candidates with unsafe file claims", async () => {
+    const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 3 });
+    const unsafe = addPending(repo, 1);
+    const allowed = addPending(repo, 2);
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["/repo/app/page.tsx"]), unsafe);
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["lib/free.ts"]), allowed);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).toHaveBeenCalledTimes(1);
+    const dispatched = vi.mocked(dispatchOne).mock.calls[0][1] as IssueDispatch;
+    expect(dispatched.id).toBe(allowed);
+  });
+
+  it("fails closed when a live dispatch claim is absolute or invalid", async () => {
+    const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 3 });
+    const live = addDispatchedWithSession(repo, 1, {
+      tmuxName: "claude-live",
+    });
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["/repo/app/page.tsx"]), live);
+    const candidate = addPending(repo, 2);
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["lib/free.ts"]), candidate);
+    backendList.mockResolvedValue(["claude-live"]);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).not.toHaveBeenCalled();
+  });
+
   it("fails closed when a live fleet claim is absolute or invalid", async () => {
     const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 3 });
     addActiveFleetWorker(repo, { claims: ["/repo/app/page.tsx"] });

@@ -198,6 +198,7 @@ describe("cleanupFleetWorkerSpawn", () => {
       "C:\\repo",
       true
     );
+    expect(worker().status).toBe("cleanup_complete");
     expect(queries.getSession(db).get("session-1")).toBeUndefined();
   });
 

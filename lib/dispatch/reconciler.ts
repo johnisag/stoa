@@ -23,6 +23,7 @@ import {
 } from "../rate-limit-window";
 import { readRateLimitWindow } from "../rate-limit-window-source";
 import { sqliteTimeToMs } from "../sqlite-time";
+import { retryFleetCleanupForRepo } from "../fleet/cleanup";
 import { getPRForBranchAnyState } from "./issues";
 import { resolveIssueSource } from "./sources";
 import { dispatchSupported } from "./issue-source";
@@ -115,7 +116,9 @@ export function pickSchedulable(
   const chosen: IssueDispatch[] = [];
   for (const candidate of pending) {
     if (chosen.length >= slots) break;
-    const claims = parseClaims(candidate.file_claims);
+    const parsed = parseSchedulingClaims(candidate.file_claims);
+    if (parsed.unsafe) continue;
+    const claims = parsed.claims;
     if (claims.length === 0) {
       chosen.push(candidate); // legacy / unclaimed row — unaffected
       continue;
@@ -127,30 +130,31 @@ export function pickSchedulable(
   return chosen;
 }
 
-function parseStrictRepoRelativeClaims(
-  json: string | null | undefined
-): string[] {
-  if (!json) return [];
+function parseSchedulingClaims(json: string | null | undefined): {
+  claims: string[];
+  unsafe: boolean;
+} {
+  if (!json) return { claims: [], unsafe: false };
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch {
-    return [];
+    return { claims: [], unsafe: true };
   }
-  if (!Array.isArray(parsed)) return [];
+  if (!Array.isArray(parsed)) return { claims: [], unsafe: true };
   const claims: string[] = [];
   for (const raw of parsed) {
-    if (typeof raw !== "string") return [];
+    if (typeof raw !== "string") return { claims: [], unsafe: true };
     const folded = raw.trim().replace(/\\/g, "/");
     if (!folded || folded.startsWith("/") || folded.startsWith("~")) {
-      return [];
+      return { claims: [], unsafe: true };
     }
-    if (/^[a-z]:/i.test(folded)) return [];
+    if (/^[a-z]:/i.test(folded)) return { claims: [], unsafe: true };
     const claim = normalizeClaim(raw);
-    if (!claim) return [];
+    if (!claim) return { claims: [], unsafe: true };
     if (!claims.includes(claim)) claims.push(claim);
   }
-  return claims;
+  return { claims, unsafe: false };
 }
 
 /**
@@ -289,6 +293,7 @@ export async function reconcileTick(): Promise<void> {
       // downstream is GitHub-hardcoded (gh issue view / PR-linking). Skip the
       // whole dispatch path for it until that path is made source-aware.
       if (!dispatchSupported(repo)) continue;
+      await retryFleetCleanupForRepo(db, repo);
 
       // 2. Headroom (daily cap ∧ concurrency cap).
       const dailyDone =
@@ -335,22 +340,29 @@ export async function reconcileTick(): Promise<void> {
       // Conflict-aware: skip pending rows whose claims overlap a LIVE claim
       // (dispatched/pr_open — file custody held until merge) or another row chosen
       // this tick. No-op for unclaimed rows. Replaces the bare pickCandidates.
+      let liveDispatchClaimsAreUnknown = false;
       const liveClaims = (
         queries.listLiveClaims(db).all(repo.id) as {
           file_claims: string | null;
         }[]
-      ).map((r) => parseClaims(r.file_claims));
+      ).map((r) => {
+        const claims = parseSchedulingClaims(r.file_claims);
+        if (claims.unsafe) liveDispatchClaimsAreUnknown = true;
+        return claims.claims;
+      });
       let fleetClaimsAreUnknown = false;
       const liveFleetClaims = (
         queries.listLiveFleetClaimsForRepo(db).all(repo.id) as {
           file_claims_json: string | null;
         }[]
       ).map((r) => {
-        const claims = parseStrictRepoRelativeClaims(r.file_claims_json);
-        if (claims.length === 0) fleetClaimsAreUnknown = true;
-        return claims;
+        const claims = parseSchedulingClaims(r.file_claims_json);
+        if (claims.unsafe || claims.claims.length === 0) {
+          fleetClaimsAreUnknown = true;
+        }
+        return claims.claims;
       });
-      if (fleetClaimsAreUnknown) continue;
+      if (liveDispatchClaimsAreUnknown || fleetClaimsAreUnknown) continue;
       for (const candidate of pickSchedulable(
         pending,
         [...liveClaims, ...liveFleetClaims],

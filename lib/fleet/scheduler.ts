@@ -4,6 +4,7 @@ import type Database from "better-sqlite3";
 import { getDb, queries, type Session } from "@/lib/db";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 import { getSessionBackend } from "@/lib/session-backend";
+import { retryFleetCleanupForRepo } from "./cleanup";
 import { composeFleetRunDetail } from "./engine";
 import {
   cleanupFleetWorkerSpawn,
@@ -518,6 +519,15 @@ async function claimLaunches(input: {
       status?: number;
     }
 > {
+  const runForCleanup = queries.getFleetRun(input.db).get(input.runId) as
+    FleetRunRow | undefined;
+  const repoForCleanup = runForCleanup
+    ? getRepoForRun(input.db, runForCleanup)
+    : null;
+  if (repoForCleanup) {
+    await retryFleetCleanupForRepo(input.db, repoForCleanup);
+  }
+
   const liveSessionNames = await liveSessionNamesForRecovery({
     db: input.db,
     runId: input.runId,
@@ -738,6 +748,14 @@ async function launchLease(input: {
           FleetWorkerRow | undefined;
         const run = queries.getFleetRun(input.db).get(input.runId) as
           FleetRunRow | undefined;
+        if (
+          worker &&
+          run?.status === "running" &&
+          worker.status === "running" &&
+          worker.session_id === result.sessionId
+        ) {
+          return true;
+        }
         if (
           !worker ||
           !run ||

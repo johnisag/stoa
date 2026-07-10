@@ -165,6 +165,13 @@ export async function cleanupFleetWorkerSpawn(input: {
     }
   }
   try {
+    queries
+      .markFleetWorkerCleanupCompleteForSession(db)
+      .run(input.result.sessionId);
+  } catch {
+    // A cleanup may be racing a row transition; the stopped session is still safe.
+  }
+  try {
     queries.deleteSession(db).run(input.result.sessionId);
   } catch {
     // Session deletion is best effort; a stopped orphan is no longer spending.
