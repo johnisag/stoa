@@ -190,13 +190,14 @@ describe("fleet scheduler admission", () => {
     createRun(3);
     createTask("task-a", 1, ["./app//"]);
     createTask("task-b", 2, ["app/page.tsx"]);
-    createTask("task-c", 3, ["lib/../src/x.ts"]);
+    createTask("task-c", 3, ["src/./x.ts"]);
     createTask("task-d", 4, ["src/x.ts"]);
     createTask("task-e", 5, ["C:\\repo\\src\\x.ts"]);
     createTask("task-f", 6, ["/repo/src/x.ts"]);
     createTask("task-g", 7, ["\\\\server\\share\\repo\\src\\x.ts"]);
     createTask("task-h", 8, ["~/repo/src/x.ts"]);
     createTask("task-i", 9, ["C:repo\\src\\x.ts"]);
+    createTask("task-j", 10, ["lib/../src/x.ts"]);
 
     const decision = selectReadyFleetTasks({
       tasks: tasks(),
@@ -208,7 +209,7 @@ describe("fleet scheduler admission", () => {
       "task-a",
       "task-c",
     ]);
-    expect(decision.skipped).toBe(7);
+    expect(decision.skipped).toBe(8);
   });
 
   it("serializes write tasks with unknown file claims", () => {
@@ -225,6 +226,22 @@ describe("fleet scheduler admission", () => {
 
     expect(decision.selected.map((task) => task.id)).toEqual(["task-a"]);
     expect(decision.skipped).toBe(2);
+  });
+
+  it("does not schedule unsafe file claims as unknown claims", () => {
+    createRun(3);
+    createTask("task-a", 1, ["C:\\repo\\src\\x.ts"]);
+    createTask("task-b", 2, ["~/repo/src/y.ts"]);
+    createTask("task-c", 3, ["lib/../src/z.ts"]);
+
+    const decision = selectReadyFleetTasks({
+      tasks: tasks(),
+      workers: [],
+      maxConcurrency: 3,
+    });
+
+    expect(decision.selected).toEqual([]);
+    expect(decision.skipped).toBe(3);
   });
 
   it("selects ready tasks under concurrency and parent constraints", () => {

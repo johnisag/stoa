@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
-import { posix as pathPosix, win32 as pathWin32 } from "path";
 import type Database from "better-sqlite3";
 import { getDb, queries, type Session } from "@/lib/db";
+import { claimsConflict, normalizeClaim } from "@/lib/dispatch/claims";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 import { getSessionBackend } from "@/lib/session-backend";
 import { retryFleetCleanupForRepo } from "./cleanup";
@@ -62,6 +62,7 @@ interface ClaimedWorkerLease {
 
 interface TaskWithClaims extends FleetTaskRow {
   fileClaims: string[];
+  unsafeClaims: boolean;
 }
 
 const ACTIVE_WORKER_STATUSES = new Set<FleetWorkerStatus>([
@@ -129,28 +130,6 @@ function settingsJson(
   });
 }
 
-function claimPath(value: string): string {
-  const raw = value.trim();
-  const slashed = raw.replace(/\\/g, "/");
-  if (
-    raw.startsWith("~") ||
-    /^[a-z]:/i.test(raw) ||
-    pathWin32.isAbsolute(raw) ||
-    pathPosix.isAbsolute(slashed)
-  ) {
-    return "";
-  }
-  const normalized = pathPosix.normalize(slashed);
-  if (
-    normalized === "." ||
-    normalized === ".." ||
-    normalized.startsWith("../")
-  ) {
-    return "";
-  }
-  return normalized.replace(/\/+$/, "").toLowerCase();
-}
-
 function workerLeaseExpired(worker: FleetWorkerRow, now: Date): boolean {
   return (
     !worker.lease_expires_at ||
@@ -158,37 +137,40 @@ function workerLeaseExpired(worker: FleetWorkerRow, now: Date): boolean {
   );
 }
 
-function parseStoredRepoClaims(json: string | null | undefined): string[] {
+function parseStoredRepoClaims(json: string | null | undefined): {
+  claims: string[];
+  unsafe: boolean;
+} {
   try {
-    if (!json) return [];
+    if (!json) return { claims: [], unsafe: false };
     const parsed = JSON.parse(json);
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) return { claims: [], unsafe: true };
     const rawClaims = parsed.filter(
       (claim): claim is string => typeof claim === "string"
     );
-    if (rawClaims.length !== parsed.length) return [];
-    const claims = rawClaims.map(claimPath).filter(Boolean);
-    if (claims.length !== rawClaims.length) return [];
-    return claims;
+    if (rawClaims.length !== parsed.length) return { claims: [], unsafe: true };
+    const claims: string[] = [];
+    for (const raw of rawClaims) {
+      const claim = normalizeClaim(raw);
+      if (!claim) return { claims: [], unsafe: true };
+      if (!claims.includes(claim)) claims.push(claim);
+    }
+    return { claims, unsafe: false };
   } catch {
-    return [];
+    return { claims: [], unsafe: true };
   }
 }
 
-function parseFileClaims(row: FleetTaskRow): string[] {
+function parseFileClaims(row: FleetTaskRow): {
+  claims: string[];
+  unsafe: boolean;
+} {
   return parseStoredRepoClaims(row.file_claims_json);
 }
 
 export function fleetClaimsConflict(left: string[], right: string[]): boolean {
   if (left.length === 0 || right.length === 0) return false;
-  for (const a of left) {
-    for (const b of right) {
-      if (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return claimsConflict(left, right);
 }
 
 function schedulingClaimsConflict(left: string[], right: string[]): boolean {
@@ -222,7 +204,12 @@ export function selectReadyFleetTasks(input: {
       .map((task) => task.id)
   );
   const tasks = input.tasks.map((task): TaskWithClaims => {
-    return { ...task, fileClaims: parseFileClaims(task) };
+    const parsed = parseFileClaims(task);
+    return {
+      ...task,
+      fileClaims: parsed.claims,
+      unsafeClaims: parsed.unsafe,
+    };
   });
   const taskById = new Map(tasks.map((task) => [task.id, task]));
   const activeClaims = tasks
@@ -240,6 +227,10 @@ export function selectReadyFleetTasks(input: {
       continue;
     }
     if (task.parent_task_id && !completedTaskIds.has(task.parent_task_id)) {
+      skipped++;
+      continue;
+    }
+    if (task.unsafeClaims) {
       skipped++;
       continue;
     }
@@ -438,7 +429,7 @@ function liveDispatchClaimsForRepo(
     }[]
   ).map((row) => {
     const claims = parseStoredRepoClaims(row.file_claims);
-    return claims.length > 0 ? claims : [];
+    return claims.unsafe ? [] : claims.claims;
   });
 }
 
@@ -453,7 +444,7 @@ function liveFleetClaimsForRepoExcludingRun(
     }[]
   ).map((row) => {
     const claims = parseStoredRepoClaims(row.file_claims_json);
-    return claims.length > 0 ? claims : [];
+    return claims.unsafe ? [] : claims.claims;
   });
 }
 
