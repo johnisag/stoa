@@ -1380,6 +1380,69 @@ describe("fleet lifecycle controls", () => {
     expect(cleaned).toEqual([sessionId]);
   });
 
+  it("surfaces cleanup failure that lands after the cancel response", async () => {
+    createRun(1);
+    createTask("task-a", 1, ["app/a.ts"]);
+    const gate = deferred<{
+      sessionId: string;
+      worktreePath: string;
+      branchName: string;
+    }>();
+    const started = deferred<string>();
+    let sessionId = "";
+
+    await reconcileFleetRun("run-1", {
+      db,
+      awaitLaunches: false,
+      cleanupSpawn: async ({ result }) => {
+        queries
+          .markFleetWorkerCleanupPendingForSession(db)
+          .run("late cleanup failed", result.sessionId);
+      },
+      spawn: async ({ task, workerId, leaseToken }) => {
+        sessionId = `session-${workerId}`;
+        queries
+          .createWorkerSession(db)
+          .run(
+            sessionId,
+            `Worker ${task.id}`,
+            `tmux-${workerId}`,
+            `C:\\worktrees\\${task.id}`,
+            null,
+            task.title,
+            "sonnet",
+            "sessions",
+            "claude",
+            "proj-fleet"
+          );
+        queries.linkFleetWorkerSession(db).run(sessionId, workerId, leaseToken);
+        started.resolve(sessionId);
+        return gate.promise;
+      },
+    });
+    await started.promise;
+
+    const canceled = await cancelFleetRun("run-1", {
+      db,
+      stopSession: async () => ({ ok: true }),
+    });
+    expect(canceled).toHaveProperty("run");
+    if ("error" in canceled) throw new Error(canceled.error);
+    expect(canceled.run.workers[0].status).toBe("canceled");
+
+    gate.resolve({
+      sessionId,
+      worktreePath: "C:\\worktrees\\task-a",
+      branchName: "feature/task-a",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(workers()[0]).toMatchObject({
+      status: "cleanup_pending",
+      spawn_error: "late cleanup failed",
+    });
+  });
+
   it("cancel stops a worker session linked during an in-flight spawn", async () => {
     createRun(1);
     createTask("task-a", 1, ["app/a.ts"]);

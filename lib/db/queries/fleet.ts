@@ -187,14 +187,17 @@ export const fleetQueries = {
       `SELECT COALESCE(SUM(COALESCE(c.cost_usd, 0)), 0) AS n
        FROM fleet_workers w
        JOIN (
-         SELECT c.session_id, c.cost_usd
-         FROM session_costs c
-         JOIN (
-           SELECT session_id, MAX(day) AS day
-           FROM session_costs
-           GROUP BY session_id
-         ) latest ON latest.session_id = c.session_id
-                 AND latest.day = c.day
+         SELECT session_id, cost_usd
+         FROM (
+           SELECT c.session_id,
+                  c.cost_usd,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY c.session_id
+                    ORDER BY c.day DESC, c.updated_at DESC, c.rowid DESC
+                  ) AS sample_rank
+           FROM session_costs c
+         ) ranked_costs
+         WHERE sample_rank = 1
        ) c ON c.session_id = w.session_id
        WHERE w.fleet_run_id = ?`
     ),

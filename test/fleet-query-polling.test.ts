@@ -35,16 +35,17 @@ describe("fleetRunShouldPoll", () => {
     );
   });
 
-  it("keeps polling terminal runs while cleanup is pending", () => {
+  it("keeps polling canceled runs so late cleanup failures become visible", () => {
     expect(fleetRunShouldPoll(detail("canceled", ["cleanup_pending"]))).toBe(
       true
     );
+    expect(fleetRunShouldPoll(detail("canceled", ["canceled"]))).toBe(true);
   });
 
   it("stops polling terminal or inactive views", () => {
     expect(fleetRunShouldPoll(undefined)).toBe(false);
     expect(fleetRunShouldPoll(detail("paused", ["completed"]))).toBe(false);
     expect(fleetRunShouldPoll(detail("planned", ["running"]))).toBe(false);
-    expect(fleetRunShouldPoll(detail("canceled", ["canceled"]))).toBe(false);
+    expect(fleetRunShouldPoll(detail("completed", ["completed"]))).toBe(false);
   });
 });

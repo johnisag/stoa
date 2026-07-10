@@ -24,6 +24,7 @@ beforeEach(() => {
     DELETE FROM fleet_events;
     DELETE FROM fleet_artifacts;
     DELETE FROM fleet_workers;
+    DELETE FROM session_costs;
     DELETE FROM sessions;
     DELETE FROM fleet_tasks;
     DELETE FROM fleet_runs;
@@ -304,6 +305,74 @@ describe("fleet run queries", () => {
       .upsertCostSample(db)
       .run(
         "session-key-1",
+        "2026-07-09",
+        "session-1",
+        "claude",
+        "opus",
+        30,
+        40,
+        0,
+        0,
+        0.09
+      );
+
+    const spent = queries.sumFleetWorkerCostForRun(db).get("run-1") as {
+      n: number;
+    };
+
+    expect(spent.n).toBeCloseTo(0.09);
+  });
+
+  it("does not double-count same-day cost samples after a session rename", () => {
+    createFleetRun("run-1");
+    queries
+      .createFleetTask(db)
+      .run("task-1", "run-1", null, "First", null, "running", "task", 1, "[]");
+    queries
+      .createWorkerSession(db)
+      .run(
+        "session-1",
+        "Worker",
+        "renamed-worker",
+        "C:\\repo",
+        null,
+        "First",
+        "opus",
+        "sessions",
+        "claude",
+        null
+      );
+    db.prepare(
+      `INSERT INTO fleet_workers (id, fleet_run_id, task_id, session_id, status, provider, model, attempt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "worker-1",
+      "run-1",
+      "task-1",
+      "session-1",
+      "running",
+      "claude",
+      "opus",
+      1
+    );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "original-worker",
+        "2026-07-09",
+        "session-1",
+        "claude",
+        "opus",
+        10,
+        20,
+        0,
+        0,
+        0.05
+      );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "renamed-worker",
         "2026-07-09",
         "session-1",
         "claude",
