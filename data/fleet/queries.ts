@@ -25,9 +25,13 @@ export function fleetRunShouldPoll(detail: FleetRunDetailDto | undefined) {
   if (detail.run.status === "running") return true;
   if (detail.run.status === "paused") {
     return detail.workers.some((worker) =>
-      ["leasing", "spawning", "running", "waiting_for_operator"].includes(
-        worker.status
-      )
+      [
+        "leasing",
+        "spawning",
+        "running",
+        "waiting_for_operator",
+        "cleanup_pending",
+      ].includes(worker.status)
     );
   }
   return false;

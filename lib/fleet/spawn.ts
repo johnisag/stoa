@@ -254,22 +254,40 @@ async function sendFleetWorkerPrompt(input: {
 function workerStillLaunching(
   db: Database.Database,
   workerId: string,
-  leaseToken: string
+  leaseToken: string,
+  sessionId: string | null = null
 ): boolean {
   const worker = queries.getFleetWorker(db).get(workerId) as
     FleetWorkerRow | undefined;
-  return worker?.status === "spawning" && worker.lease_token === leaseToken;
+  if (!worker) return false;
+  if (worker.status === "spawning" && worker.lease_token === leaseToken) {
+    return true;
+  }
+  return Boolean(
+    sessionId && worker.status === "running" && worker.session_id === sessionId
+  );
 }
 
 function assertWorkerStillLaunching(
   db: Database.Database,
   workerId: string,
   leaseToken: string,
-  checkpoint: string
+  checkpoint: string,
+  sessionId: string | null = null
 ): void {
-  if (!workerStillLaunching(db, workerId, leaseToken)) {
+  if (!workerStillLaunching(db, workerId, leaseToken, sessionId)) {
     throw new Error(`fleet worker launch superseded before ${checkpoint}`);
   }
+}
+
+function workerRecoveredRunning(
+  db: Database.Database,
+  workerId: string,
+  sessionId: string
+): boolean {
+  const worker = queries.getFleetWorker(db).get(workerId) as
+    FleetWorkerRow | undefined;
+  return worker?.status === "running" && worker.session_id === sessionId;
 }
 
 export async function spawnFleetWorkerSession(input: {
@@ -358,7 +376,8 @@ export async function spawnFleetWorkerSession(input: {
       db,
       input.workerId,
       input.leaseToken,
-      "backend create"
+      "backend create",
+      sessionId
     );
 
     const prompt = buildFleetWorkerPrompt({
@@ -435,13 +454,14 @@ export async function spawnFleetWorkerSession(input: {
       provider,
       prompt,
       shouldContinue: () =>
-        workerStillLaunching(db, input.workerId, input.leaseToken),
+        workerStillLaunching(db, input.workerId, input.leaseToken, sessionId),
     });
     assertWorkerStillLaunching(
       db,
       input.workerId,
       input.leaseToken,
-      "session status update"
+      "session status update",
+      sessionId
     );
     queries.updateWorkerStatus(db).run("running", sessionId);
 
@@ -451,6 +471,13 @@ export async function spawnFleetWorkerSession(input: {
       branchName,
     };
   } catch (error) {
+    if (sessionId && workerRecoveredRunning(db, input.workerId, sessionId)) {
+      return {
+        sessionId,
+        worktreePath: worktreePath ?? "",
+        branchName: branchName ?? "",
+      };
+    }
     if (sessionId && backendCreated) {
       await cleanupFleetWorkerSpawn({
         db,

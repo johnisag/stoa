@@ -30,6 +30,9 @@ describe("fleetRunShouldPoll", () => {
   it("keeps polling paused runs while workers can still change", () => {
     expect(fleetRunShouldPoll(detail("paused", ["running"]))).toBe(true);
     expect(fleetRunShouldPoll(detail("paused", ["spawning"]))).toBe(true);
+    expect(fleetRunShouldPoll(detail("paused", ["cleanup_pending"]))).toBe(
+      true
+    );
   });
 
   it("stops polling terminal or inactive views", () => {
