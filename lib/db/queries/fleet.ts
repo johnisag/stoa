@@ -320,6 +320,18 @@ export const fleetQueries = {
        WHERE session_id = ?`
     ),
 
+  markFleetWorkerCleanupPendingById: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_workers
+       SET session_id = COALESCE(session_id, ?),
+           status = 'cleanup_pending',
+           spawn_error = ?,
+           lease_token = NULL,
+           lease_expires_at = NULL
+       WHERE id = ?`
+    ),
+
   markFleetWorkerCleanupCompleteForSession: (db: Database.Database) =>
     getStmt(
       db,

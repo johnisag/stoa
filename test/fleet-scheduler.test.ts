@@ -1033,6 +1033,58 @@ describe("fleet lifecycle controls", () => {
     expect(resumed.run.run.status).toBe("running");
   });
 
+  it("recovers dead workers while paused without launching new work", async () => {
+    createRun(1);
+    createTask("task-a", 1, ["app/a.ts"], "running");
+    queries
+      .createWorkerSession(db)
+      .run(
+        "session-a",
+        "Worker task-a",
+        "tmux-task-a",
+        "C:\\worktrees\\task-a",
+        null,
+        "Task task-a",
+        "sonnet",
+        "sessions",
+        "claude",
+        "proj-fleet"
+      );
+    db.prepare(
+      `INSERT INTO fleet_workers (
+        id, fleet_run_id, task_id, session_id, status, provider, model, attempt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "worker-a",
+      "run-1",
+      "task-a",
+      "session-a",
+      "running",
+      "claude",
+      null,
+      1
+    );
+    db.prepare("UPDATE fleet_runs SET status = 'paused' WHERE id = ?").run(
+      "run-1"
+    );
+
+    const result = await reconcileFleetRun("run-1", {
+      db,
+      liveSessionNames: new Set(),
+      spawn: fakeSpawn(),
+    });
+
+    expect(result).toHaveProperty("run");
+    if ("error" in result) throw new Error(result.error);
+    expect(result.summary).toMatchObject({ recovered: 1, launched: 0 });
+    expect(result.run.run.status).toBe("paused");
+    expect(tasks()[0].status).toBe("queued");
+    expect(workers()[0]).toMatchObject({
+      status: "failed",
+      spawn_error: "recovered missing backend session for running worker",
+    });
+  });
+
   it("start refuses runs without a repository before mutating state", async () => {
     createRun(1);
     createTask("task-a", 1);

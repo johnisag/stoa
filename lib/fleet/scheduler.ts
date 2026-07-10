@@ -541,8 +541,17 @@ async function claimLaunches(input: {
       FleetRunRow | undefined;
     if (!run) return { error: "Fleet run not found", status: 404 };
 
-    if (run.status === "paused" || run.status === "canceled") {
+    if (run.status === "canceled") {
       return { leases: [], recovered: 0, skipped: 0 };
+    }
+    if (run.status === "paused") {
+      const recovered = recoverBeforeLaunch(
+        input.db,
+        input.runId,
+        input.now,
+        liveSessionNames
+      );
+      return { leases: [], recovered, skipped: 0 };
     }
     if (run.status !== "planned" && run.status !== "running") {
       return { error: "run is not ready for scheduling", status: 409 };
@@ -919,6 +928,41 @@ export async function startFleetRun(
 > {
   const db = options.db ?? getDb();
   const actor = options.actor ?? "operator";
+  const preflight = immediateTransaction<
+    { ok: true } | { error: string; status?: number }
+  >(db, () => {
+    const run = queries.getFleetRun(db).get(id) as FleetRunRow | undefined;
+    if (!run) return { error: "Fleet run not found", status: 404 };
+    if (run.approval_state !== "approved") {
+      return { error: "run plan is not approved", status: 409 };
+    }
+    if (
+      run.status !== "planned" &&
+      run.status !== "paused" &&
+      run.status !== "running"
+    ) {
+      return {
+        error: "run cannot be started from its current state",
+        status: 409,
+      };
+    }
+    if (!getRepoForRun(db, run)) {
+      return {
+        error: "fleet run needs a repository before launch",
+        status: 409,
+      };
+    }
+    return { ok: true };
+  });
+  if ("error" in preflight) return preflight;
+  const liveSessionNames = await liveSessionNamesForRecovery({
+    db,
+    runId: id,
+    override: options.liveSessionNames,
+  });
+  if (liveSessionNames && "error" in liveSessionNames) {
+    return { error: liveSessionNames.error, status: 409 };
+  }
   const started = immediateTransaction<
     { ok: true } | { error: string; status?: number }
   >(db, () => {
@@ -954,7 +998,7 @@ export async function startFleetRun(
     return { ok: true };
   });
   if ("error" in started) return started;
-  return reconcileFleetRun(id, { ...options, db });
+  return reconcileFleetRun(id, { ...options, db, liveSessionNames });
 }
 
 export async function pauseFleetRun(

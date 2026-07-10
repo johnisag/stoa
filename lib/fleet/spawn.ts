@@ -494,14 +494,13 @@ export async function spawnFleetWorkerSession(input: {
         try {
           await deleteWorktree(worktreePath, sourcePath, true);
         } catch (cleanupErr) {
+          const cleanupText =
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr);
           queries
-            .markFleetWorkerCleanupPendingForSession(db)
-            .run(
-              cleanupErr instanceof Error
-                ? cleanupErr.message
-                : String(cleanupErr),
-              sessionId
-            );
+            .markFleetWorkerCleanupPendingById(db)
+            .run(sessionId, cleanupText, input.workerId);
           console.error("[fleet] worker worktree cleanup failed:", cleanupErr);
           throw error;
         }

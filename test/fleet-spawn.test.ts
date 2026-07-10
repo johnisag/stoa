@@ -263,6 +263,52 @@ describe("spawnFleetWorkerSession", () => {
     expect(deleteWorktree).not.toHaveBeenCalled();
     expect(queries.getSession(db).get(result.sessionId)).toBeTruthy();
   });
+
+  it("records cleanup ownership when cancel wins before session link", async () => {
+    expect(
+      db
+        .prepare(
+          `UPDATE fleet_workers
+         SET session_id = NULL,
+             status = 'canceled',
+             lease_token = NULL,
+             lease_expires_at = NULL,
+             spawn_error = 'run canceled before worker launch'
+         WHERE id = ?`
+        )
+        .run("worker-1").changes
+    ).toBe(1);
+    mocks.createWorktree.mockResolvedValueOnce({
+      worktreePath: "C:\\worktrees\\task-1-orphan",
+      branchName: "fleet/task-1-orphan",
+    });
+    mocks.deleteWorktree.mockRejectedValueOnce(new Error("worktree locked"));
+
+    await expect(
+      spawnFleetWorkerSession({
+        run: { ...run(), project_id: "uncategorized" },
+        task: task(),
+        repo: { ...repo(), project_id: "uncategorized" },
+        workerId: "worker-1",
+        leaseToken: "lease-1",
+      })
+    ).rejects.toThrow("fleet worker launch lease changed before session link");
+
+    const updated = worker();
+    expect(updated).toMatchObject({
+      status: "cleanup_pending",
+      spawn_error: "worktree locked",
+    });
+    expect(updated.session_id).toBeTruthy();
+    expect(
+      queries.getSession(db).get(updated.session_id as string)
+    ).toBeTruthy();
+    expect(deleteWorktree).toHaveBeenCalledWith(
+      "C:\\worktrees\\task-1-orphan",
+      "C:\\repo",
+      true
+    );
+  });
 });
 
 describe("cleanupFleetWorkerSpawn", () => {
