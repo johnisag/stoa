@@ -1056,6 +1056,7 @@ describe("fleet lifecycle controls", () => {
     createRun(2);
     createTask("task-a", 1);
     createTask("task-b", 2);
+    createTask("task-c", 3, [], "needs_inspection");
     expect(await cancelFleetRun("run-1", { db })).toHaveProperty("run");
 
     const tick = await reconcileFleetRun("run-1", { db, spawn: fakeSpawn() });
@@ -1064,6 +1065,7 @@ describe("fleet lifecycle controls", () => {
     expect(tick.summary.launched).toBe(0);
     expect(tick.run.run.status).toBe("canceled");
     expect(tick.run.tasks.map((task) => task.status)).toEqual([
+      "canceled",
       "canceled",
       "canceled",
     ]);

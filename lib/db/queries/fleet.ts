@@ -98,7 +98,7 @@ export const fleetQueries = {
       `UPDATE fleet_tasks
        SET status = 'canceled', updated_at = datetime('now')
        WHERE fleet_run_id = ?
-         AND status IN ('draft', 'queued', 'running', 'blocked')`
+         AND status IN ('draft', 'queued', 'running', 'needs_inspection', 'blocked')`
     ),
 
   listFleetWorkersForRun: (db: Database.Database) =>
