@@ -105,6 +105,16 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
       WHERE created_at IS NULL OR created_at = '';
     `);
   }
+
+  if (hasTable(db, "fleet_workers")) {
+    for (const column of [
+      { name: "lease_token", ddl: "lease_token TEXT" },
+      { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+      { name: "spawn_error", ddl: "spawn_error TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_workers", column);
+    }
+  }
 }
 
 export function createSchema(db: Database.Database): void {
@@ -626,6 +636,9 @@ export function createSchema(db: Database.Database): void {
       provider TEXT,
       model TEXT,
       attempt INTEGER NOT NULL DEFAULT 1,
+      lease_token TEXT,
+      lease_expires_at TEXT,
+      spawn_error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_heartbeat_at TEXT,
       ended_at TEXT,
@@ -694,6 +707,9 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_fleet_runs_updated ON fleet_runs(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_fleet_tasks_run ON fleet_tasks(fleet_run_id, sort_order);
     CREATE INDEX IF NOT EXISTS idx_fleet_workers_run ON fleet_workers(fleet_run_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_session
+      ON fleet_workers(session_id)
+      WHERE session_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_fleet_events_run ON fleet_events(fleet_run_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_fleet_artifacts_run ON fleet_artifacts(fleet_run_id, created_at DESC);
 

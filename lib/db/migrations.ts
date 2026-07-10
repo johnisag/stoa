@@ -72,6 +72,17 @@ function ensureFleetArtifactRuntimeColumns(db: Database.Database): void {
   `);
 }
 
+function ensureFleetWorkerLeaseColumns(db: Database.Database): void {
+  if (!hasTable(db, "fleet_workers")) return;
+  for (const column of [
+    { name: "lease_token", ddl: "lease_token TEXT" },
+    { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+    { name: "spawn_error", ddl: "spawn_error TEXT" },
+  ]) {
+    addColumnIfMissing(db, "fleet_workers", column);
+  }
+}
+
 // All migrations in order. Migrations are idempotent (guarded by PRAGMA table_info
 // / IF NOT EXISTS) so a fresh schema or a concurrent-init race never throws a
 // duplicate-column/already-exists error. The runner no longer swallows those
@@ -1511,6 +1522,25 @@ const migrations: Migration[] = [
             )
         `);
       }
+    },
+  },
+  {
+    id: 57,
+    name: "add_fleet_worker_leases",
+    up: (db) => {
+      ensureFleetWorkerLeaseColumns(db);
+    },
+  },
+  {
+    id: 58,
+    name: "enforce_unique_fleet_worker_sessions",
+    up: (db) => {
+      if (!hasTable(db, "fleet_workers")) return;
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_session
+          ON fleet_workers(session_id)
+          WHERE session_id IS NOT NULL
+      `);
     },
   },
 ];

@@ -19,24 +19,29 @@
 
 /**
  * Normalize a raw claim into a canonical repo-relative prefix, or null if invalid.
- * Folds `\`→`/`, strips a leading `./` and any leading `/`, collapses duplicate
- * slashes, strips a trailing `/`. Rejects (→ null) anything that could escape the
- * repo: an empty/blank claim, a `..` segment, a `~` home ref, or a drive-letter /
- * UNC absolute path.
+ * Folds `\`→`/`, collapses duplicate slashes, strips trailing slashes, and
+ * canonicalizes `.` segments. Rejects (→ null) anything that could escape the
+ * repo: an empty/blank claim, a `..` segment, a `~` home ref, or an absolute
+ * drive-letter / POSIX / UNC path.
  */
 export function normalizeClaim(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   let c = raw.trim();
   if (!c) return null;
   c = c.replace(/\\/g, "/"); // the ONE separator-folding site
-  if (/^[a-z]:\//i.test(c) || c.startsWith("//") || c.startsWith("~")) {
-    return null; // drive-letter / UNC / home absolute — could escape the repo
+  if (/^[a-z]:/i.test(c) || c.startsWith("/") || c.startsWith("~")) {
+    return null; // drive-letter / POSIX / UNC / home absolute — could escape the repo
   }
-  c = c.replace(/^\.\//, "").replace(/^\/+/, ""); // leading ./ and /
   c = c.replace(/\/{2,}/g, "/").replace(/\/+$/, ""); // dup + trailing slashes
+  if (c.startsWith("/")) return null;
   if (!c) return null;
-  if (c.split("/").some((seg) => seg === "..")) return null; // no parent escapes
-  return c;
+  const segments: string[] = [];
+  for (const seg of c.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") return null; // no parent escapes
+    segments.push(seg);
+  }
+  return segments.length > 0 ? segments.join("/") : null;
 }
 
 /** Parse a stored file_claims JSON string into normalized, de-duped claims. Defensive
@@ -75,8 +80,12 @@ export function serializeClaims(claims: string[]): string {
  * falsely overlapping `lib/dispatchX`. Pure.
  */
 export function claimsOverlap(a: string, b: string): boolean {
-  if (a === b) return true;
-  return (b + "/").startsWith(a + "/") || (a + "/").startsWith(b + "/");
+  const left = a.toLowerCase();
+  const right = b.toLowerCase();
+  if (left === right) return true;
+  return (
+    (right + "/").startsWith(left + "/") || (left + "/").startsWith(right + "/")
+  );
 }
 
 /** Do two claim SETS conflict? True iff any claim on one side overlaps any on the

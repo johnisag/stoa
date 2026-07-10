@@ -1,6 +1,6 @@
 // Isolated daemon socket so this file's daemon doesn't collide with other
 // daemon-using test files running in parallel workers (global pipe/socket).
-process.env.STOA_PTY_HOST_NAME = "stoa-pty-host-test-host";
+process.env.STOA_PTY_HOST_NAME = `stoa-pty-host-test-host-${process.pid}`;
 // Force the pty backend so the Tier-2→Tier-1 fallback contract below resolves a
 // pty backend on the POSIX CI runners too (default is tmux on macOS/Linux).
 process.env.STOA_BACKEND = "pty";

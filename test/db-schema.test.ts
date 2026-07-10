@@ -143,6 +143,9 @@ describe("fresh schema fleet management tables", () => {
       "session_id",
       "status",
       "attempt",
+      "lease_token",
+      "lease_expires_at",
+      "spawn_error",
       "last_heartbeat_at",
     ]) {
       expect(hasColumn("fleet_workers", col)).toBe(true);
@@ -177,6 +180,7 @@ describe("fresh schema fleet management tables", () => {
     expect(hasIndex("idx_fleet_runs_updated")).toBe(true);
     expect(hasIndex("idx_fleet_tasks_run")).toBe(true);
     expect(hasIndex("idx_fleet_workers_run")).toBe(true);
+    expect(hasIndex("idx_fleet_workers_session")).toBe(true);
     expect(hasIndex("idx_fleet_events_run")).toBe(true);
     expect(hasIndex("idx_fleet_artifacts_run")).toBe(true);
   });

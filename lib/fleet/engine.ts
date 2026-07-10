@@ -197,6 +197,9 @@ export function toFleetWorkerDto(row: FleetWorkerRow): FleetWorkerDto {
     provider: row.provider,
     model: row.model,
     attempt: row.attempt,
+    leaseToken: row.lease_token,
+    leaseExpiresAt: row.lease_expires_at,
+    spawnError: row.spawn_error,
     createdAt: row.created_at,
     lastHeartbeatAt: row.last_heartbeat_at,
     endedAt: row.ended_at,
@@ -233,6 +236,7 @@ export function composeFleetRunDetail(input: {
   workers: FleetWorkerRow[];
   artifacts: FleetArtifactRow[];
   events: FleetEventRow[];
+  pendingLaunches?: number;
 }): FleetRunDetailDto {
   return {
     run: toFleetRunDto(input.run, {
@@ -243,5 +247,6 @@ export function composeFleetRunDetail(input: {
     workers: input.workers.map(toFleetWorkerDto),
     artifacts: input.artifacts.map(toFleetArtifactDto),
     events: input.events.map(toFleetEventDto),
+    pendingLaunches: input.pendingLaunches ?? 0,
   };
 }

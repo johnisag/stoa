@@ -163,4 +163,52 @@ describe("fleet migrations", () => {
     expect(artifact.created_at).toEqual(expect.any(String));
     expect(artifact.created_at.length).toBeGreaterThan(0);
   });
+
+  it("migration 57 adds fleet worker lease columns to existing worker tables", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 56);
+    db.exec(`
+      CREATE TABLE fleet_workers (
+        id TEXT PRIMARY KEY,
+        fleet_run_id TEXT NOT NULL,
+        task_id TEXT,
+        session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'waiting_for_operator',
+        provider TEXT,
+        model TEXT,
+        attempt INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_heartbeat_at TEXT,
+        ended_at TEXT
+      );
+    `);
+
+    runMigrations(db);
+
+    expectColumns(db, "fleet_workers", [
+      "lease_token",
+      "lease_expires_at",
+      "spawn_error",
+    ]);
+  });
+
+  it("migration 58 enforces one fleet worker per session", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 57);
+    db.exec(`
+      CREATE TABLE fleet_workers (
+        id TEXT PRIMARY KEY,
+        session_id TEXT
+      );
+    `);
+
+    runMigrations(db);
+
+    const insert = db.prepare(
+      "INSERT INTO fleet_workers (id, session_id) VALUES (?, ?)"
+    );
+    insert.run("worker-1", "session-1");
+    expect(() => insert.run("worker-2", "session-1")).toThrow(/UNIQUE/);
+    expect(() => insert.run("worker-3", null)).not.toThrow();
+  });
 });

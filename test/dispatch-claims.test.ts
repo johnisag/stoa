@@ -16,7 +16,10 @@ describe("normalizeClaim", () => {
   it("folds separators + strips ./ leading/trailing/dup slashes (Windows == POSIX)", () => {
     expect(normalizeClaim("lib\\dispatch\\")).toBe("lib/dispatch");
     expect(normalizeClaim("./lib/dispatch/")).toBe("lib/dispatch");
-    expect(normalizeClaim("/lib//dispatch//")).toBe("lib/dispatch");
+    expect(normalizeClaim("././lib/./dispatch/")).toBe("lib/dispatch");
+    expect(normalizeClaim(".//lib/dispatch")).toBe("lib/dispatch");
+    expect(normalizeClaim("lib//dispatch//")).toBe("lib/dispatch");
+    expect(normalizeClaim("lib/./dispatch")).toBe("lib/dispatch");
     expect(normalizeClaim("  lib/db/schema.ts  ")).toBe("lib/db/schema.ts");
   });
 
@@ -29,7 +32,10 @@ describe("normalizeClaim", () => {
       "lib/../../etc",
       "~/x",
       "C:\\Users\\x",
+      "C:Users\\x",
+      "/lib/dispatch",
       "//unc/share",
+      "\\\\server\\share",
       42,
       null,
     ]) {
@@ -43,6 +49,11 @@ describe("claimsOverlap (segment boundary)", () => {
     expect(claimsOverlap("lib/dispatch", "lib/dispatch")).toBe(true);
     expect(claimsOverlap("lib/dispatch", "lib/dispatch/foo.ts")).toBe(true);
     expect(claimsOverlap("lib", "lib/db/schema.ts")).toBe(true);
+  });
+
+  it("treats case-only path differences as conflicts", () => {
+    expect(claimsOverlap("App/Page.tsx", "app/page.tsx")).toBe(true);
+    expect(claimsOverlap("SRC", "src/components/Button.tsx")).toBe(true);
   });
 
   it("does NOT falsely overlap a shared string prefix that isn't a path boundary", () => {
@@ -71,7 +82,7 @@ describe("claimsConflict (sets)", () => {
 
 describe("parseClaims / serializeClaims", () => {
   it("round-trips normalized + de-duped claims", () => {
-    const json = serializeClaims(["./lib/a/", "lib/a", "src\\b.ts"]);
+    const json = serializeClaims(["./lib/a/", "lib/./a", "lib/a", "src\\b.ts"]);
     expect(parseClaims(json)).toEqual(["lib/a", "src/b.ts"]);
   });
 

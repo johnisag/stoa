@@ -24,6 +24,8 @@ beforeEach(() => {
     DELETE FROM fleet_events;
     DELETE FROM fleet_artifacts;
     DELETE FROM fleet_workers;
+    DELETE FROM session_costs;
+    DELETE FROM sessions;
     DELETE FROM fleet_tasks;
     DELETE FROM fleet_runs;
     DELETE FROM dispatch_repos;
@@ -190,6 +192,279 @@ describe("fleet run queries", () => {
       actor: "red-team",
       plan_hash: "hash-a",
     });
+  });
+
+  it("records and transitions scheduler worker leases", () => {
+    createFleetRun("run-1");
+    queries
+      .createFleetTask(db)
+      .run("task-1", "run-1", null, "First", null, "draft", "task", 1, "[]");
+
+    queries
+      .createFleetWorkerLease(db)
+      .run(
+        "worker-1",
+        "run-1",
+        "task-1",
+        "claude",
+        null,
+        1,
+        "lease-1",
+        "2026-07-09T00:00:00.000Z"
+      );
+
+    let worker = queries.getFleetWorker(db).get("worker-1") as FleetWorkerRow;
+    expect(worker).toMatchObject({
+      status: "leasing",
+      lease_token: "lease-1",
+      lease_expires_at: "2026-07-09T00:00:00.000Z",
+      spawn_error: null,
+    });
+
+    expect(
+      queries
+        .markFleetWorkerSpawning(db)
+        .run("2026-07-09T00:10:00.000Z", "worker-1", "lease-1").changes
+    ).toBe(1);
+    queries
+      .createWorkerSession(db)
+      .run(
+        "session-1",
+        "Worker",
+        "tmux-worker",
+        "C:\\repo",
+        null,
+        "First",
+        "sonnet",
+        "sessions",
+        "claude",
+        null
+      );
+    expect(
+      queries.markFleetWorkerRunning(db).run("session-1", "worker-1", "lease-1")
+        .changes
+    ).toBe(1);
+
+    worker = queries.getFleetWorker(db).get("worker-1") as FleetWorkerRow;
+    expect(worker).toMatchObject({
+      session_id: "session-1",
+      status: "running",
+      lease_token: null,
+      lease_expires_at: null,
+      spawn_error: null,
+    });
+  });
+
+  it("sums only the latest cumulative cost sample per worker session", () => {
+    createFleetRun("run-1");
+    queries
+      .createFleetTask(db)
+      .run("task-1", "run-1", null, "First", null, "running", "task", 1, "[]");
+    queries
+      .createWorkerSession(db)
+      .run(
+        "session-1",
+        "Worker",
+        "tmux-worker",
+        "C:\\repo",
+        null,
+        "First",
+        "opus",
+        "sessions",
+        "claude",
+        null
+      );
+    db.prepare(
+      `INSERT INTO fleet_workers (id, fleet_run_id, task_id, session_id, status, provider, model, attempt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "worker-1",
+      "run-1",
+      "task-1",
+      "session-1",
+      "running",
+      "claude",
+      "opus",
+      1
+    );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "session-key-1",
+        "2026-07-08",
+        "session-1",
+        "claude",
+        "opus",
+        10,
+        20,
+        0,
+        0,
+        0.05
+      );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "session-key-1",
+        "2026-07-09",
+        "session-1",
+        "claude",
+        "opus",
+        30,
+        40,
+        0,
+        0,
+        0.09
+      );
+
+    const spent = queries.sumFleetWorkerCostForRun(db).get("run-1") as {
+      n: number;
+    };
+
+    expect(spent.n).toBeCloseTo(0.09);
+  });
+
+  it("does not double-count same-day cost samples after a session rename", () => {
+    createFleetRun("run-1");
+    queries
+      .createFleetTask(db)
+      .run("task-1", "run-1", null, "First", null, "running", "task", 1, "[]");
+    queries
+      .createWorkerSession(db)
+      .run(
+        "session-1",
+        "Worker",
+        "renamed-worker",
+        "C:\\repo",
+        null,
+        "First",
+        "opus",
+        "sessions",
+        "claude",
+        null
+      );
+    db.prepare(
+      `INSERT INTO fleet_workers (id, fleet_run_id, task_id, session_id, status, provider, model, attempt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "worker-1",
+      "run-1",
+      "task-1",
+      "session-1",
+      "running",
+      "claude",
+      "opus",
+      1
+    );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "original-worker",
+        "2026-07-09",
+        "session-1",
+        "claude",
+        "opus",
+        10,
+        20,
+        0,
+        0,
+        0.05
+      );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "renamed-worker",
+        "2026-07-09",
+        "session-1",
+        "claude",
+        "opus",
+        30,
+        40,
+        0,
+        0,
+        0.09
+      );
+
+    const spent = queries.sumFleetWorkerCostForRun(db).get("run-1") as {
+      n: number;
+    };
+
+    expect(spent.n).toBeCloseTo(0.09);
+  });
+
+  it("defensively counts a malformed duplicate session link once", () => {
+    createFleetRun("run-1");
+    queries
+      .createFleetTask(db)
+      .run("task-1", "run-1", null, "First", null, "running", "task", 1, "[]");
+    queries
+      .createWorkerSession(db)
+      .run(
+        "session-1",
+        "Worker",
+        "tmux-worker",
+        "C:\\repo",
+        null,
+        "First",
+        "opus",
+        "sessions",
+        "claude",
+        null
+      );
+    queries
+      .upsertCostSample(db)
+      .run(
+        "tmux-worker",
+        "2026-07-09",
+        "session-1",
+        "claude",
+        "opus",
+        30,
+        40,
+        0,
+        0,
+        0.09
+      );
+    db.exec("DROP INDEX IF EXISTS idx_fleet_workers_session");
+    try {
+      const insert = db.prepare(
+        `INSERT INTO fleet_workers (id, fleet_run_id, task_id, session_id, status, provider, model, attempt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      insert.run(
+        "worker-1",
+        "run-1",
+        "task-1",
+        "session-1",
+        "running",
+        "claude",
+        "opus",
+        1
+      );
+      insert.run(
+        "worker-2",
+        "run-1",
+        "task-1",
+        "session-1",
+        "running",
+        "claude",
+        "opus",
+        2
+      );
+
+      const spent = queries.sumFleetWorkerCostForRun(db).get("run-1") as {
+        n: number;
+      };
+      expect(spent.n).toBeCloseTo(0.09);
+    } finally {
+      db.prepare("DELETE FROM fleet_workers WHERE fleet_run_id = ?").run(
+        "run-1"
+      );
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_session
+          ON fleet_workers(session_id)
+          WHERE session_id IS NOT NULL
+      `);
+    }
   });
 
   it("bounds the polling list and truncates previews without losing detail rows", () => {

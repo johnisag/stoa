@@ -84,17 +84,19 @@ function addRepo(over: Partial<Record<string, unknown>> = {}): string {
 }
 
 let candSeq = 0;
-function addPending(repoId: string, issueNumber: number) {
+function addPending(repoId: string, issueNumber: number): string {
+  const id = `cand-${candSeq++}`;
   queries
     .upsertDispatchCandidate(db())
     .run(
-      `cand-${candSeq++}`,
+      id,
       repoId,
       issueNumber,
       `Issue ${issueNumber}`,
       `https://x/${issueNumber}`,
       "2026-06-01T00:00:00Z"
     );
+  return id;
 }
 
 const issue = (n: number): EligibleIssue => ({
@@ -114,7 +116,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   db().exec(
-    "DELETE FROM issue_dispatches; DELETE FROM dispatch_repos; DELETE FROM sessions;"
+    "DELETE FROM fleet_workers; DELETE FROM fleet_tasks; DELETE FROM fleet_runs; DELETE FROM issue_dispatches; DELETE FROM dispatch_repos; DELETE FROM sessions;"
   );
   vi.clearAllMocks();
   vi.mocked(listEligibleIssues).mockResolvedValue([]);
@@ -161,6 +163,55 @@ function addDispatchedWithSession(
       opts.branch ?? "feature/x"
     );
   return dispatchId;
+}
+
+function addActiveFleetWorker(
+  repoId: string,
+  opts: { claims?: string[]; runId?: string; workerId?: string } = {}
+) {
+  const runId = opts.runId ?? `fleet-run-${candSeq++}`;
+  const taskId = `${runId}-task`;
+  const workerId = opts.workerId ?? `${runId}-worker`;
+  queries
+    .createFleetRun(db())
+    .run(
+      runId,
+      "Fleet run",
+      "Fleet goal",
+      repoId,
+      null,
+      null,
+      "claude",
+      null,
+      1,
+      "four_agent",
+      "{}"
+    );
+  queries
+    .createFleetTask(db())
+    .run(
+      taskId,
+      runId,
+      null,
+      "Fleet task",
+      null,
+      "running",
+      "task",
+      0,
+      JSON.stringify(opts.claims ?? ["fleet/file.ts"])
+    );
+  queries
+    .createFleetWorkerLease(db())
+    .run(
+      workerId,
+      runId,
+      taskId,
+      "claude",
+      null,
+      1,
+      `${workerId}-lease`,
+      "2026-07-09T00:10:00.000Z"
+    );
 }
 
 // Backdate a worker's dispatched_at so the age reaper sees it as hung.
@@ -268,6 +319,85 @@ describe("reconcileTick", () => {
     await reconcileTick();
 
     expect(vi.mocked(dispatchOne)).not.toHaveBeenCalled(); // 2/2 used today
+  });
+
+  it("counts active fleet workers against dispatch repo concurrency", async () => {
+    const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 1 });
+    addActiveFleetWorker(repo);
+    addPending(repo, 1);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).not.toHaveBeenCalled();
+  });
+
+  it("serializes dispatch candidates against live fleet file claims", async () => {
+    const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 3 });
+    addActiveFleetWorker(repo, { claims: ["app/./page.tsx"] });
+    const blocked = addPending(repo, 1);
+    const allowed = addPending(repo, 2);
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["app/page.tsx"]), blocked);
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["lib/free.ts"]), allowed);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).toHaveBeenCalledTimes(1);
+    const dispatched = vi.mocked(dispatchOne).mock.calls[0][1] as IssueDispatch;
+    expect(dispatched.id).toBe(allowed);
+  });
+
+  it("skips pending candidates with unsafe file claims", async () => {
+    const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 3 });
+    const unsafe = addPending(repo, 1);
+    const allowed = addPending(repo, 2);
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["/repo/app/page.tsx"]), unsafe);
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["lib/free.ts"]), allowed);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).toHaveBeenCalledTimes(1);
+    const dispatched = vi.mocked(dispatchOne).mock.calls[0][1] as IssueDispatch;
+    expect(dispatched.id).toBe(allowed);
+  });
+
+  it("fails closed when a live dispatch claim is absolute or invalid", async () => {
+    const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 3 });
+    const live = addDispatchedWithSession(repo, 1, {
+      tmuxName: "claude-live",
+    });
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["/repo/app/page.tsx"]), live);
+    const candidate = addPending(repo, 2);
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["lib/free.ts"]), candidate);
+    backendList.mockResolvedValue(["claude-live"]);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a live fleet claim is absolute or invalid", async () => {
+    const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 3 });
+    addActiveFleetWorker(repo, { claims: ["/repo/app/page.tsx"] });
+    const candidate = addPending(repo, 1);
+    queries
+      .setDispatchClaims(db())
+      .run(JSON.stringify(["lib/free.ts"]), candidate);
+
+    await reconcileTick();
+
+    expect(vi.mocked(dispatchOne)).not.toHaveBeenCalled();
   });
 });
 
