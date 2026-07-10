@@ -34,6 +34,12 @@ describe("pickSchedulable", () => {
     expect(picked).toEqual(["a"]); // b skipped — overlaps a
   });
 
+  it("serializes dot-segment equivalent claims", () => {
+    const pending = [row("a", ["lib/./x.ts"]), row("b", ["lib/x.ts"])];
+    const picked = pickSchedulable(pending, [], 2).map((r) => r.id);
+    expect(picked).toEqual(["a"]);
+  });
+
   it("a skip is not a hard stop — a later DISJOINT row is still picked", () => {
     const pending = [
       row("a", ["lib/x"]),

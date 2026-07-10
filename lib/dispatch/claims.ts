@@ -19,8 +19,8 @@
 
 /**
  * Normalize a raw claim into a canonical repo-relative prefix, or null if invalid.
- * Folds `\`→`/`, strips a leading `./`, collapses duplicate
- * slashes, strips a trailing `/`. Rejects (→ null) anything that could escape the
+ * Folds `\`→`/`, collapses duplicate slashes, strips trailing slashes, and
+ * canonicalizes `.` segments. Rejects (→ null) anything that could escape the
  * repo: an empty/blank claim, a `..` segment, a `~` home ref, or an absolute
  * drive-letter / POSIX / UNC path.
  */
@@ -32,13 +32,16 @@ export function normalizeClaim(raw: unknown): string | null {
   if (/^[a-z]:/i.test(c) || c.startsWith("/") || c.startsWith("~")) {
     return null; // drive-letter / POSIX / UNC / home absolute — could escape the repo
   }
-  c = c.replace(/^\.\//, ""); // leading ./
-  if (c.startsWith("/")) return null;
   c = c.replace(/\/{2,}/g, "/").replace(/\/+$/, ""); // dup + trailing slashes
   if (c.startsWith("/")) return null;
   if (!c) return null;
-  if (c.split("/").some((seg) => seg === "..")) return null; // no parent escapes
-  return c;
+  const segments: string[] = [];
+  for (const seg of c.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") return null; // no parent escapes
+    segments.push(seg);
+  }
+  return segments.length > 0 ? segments.join("/") : null;
 }
 
 /** Parse a stored file_claims JSON string into normalized, de-duped claims. Defensive

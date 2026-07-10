@@ -16,7 +16,10 @@ describe("normalizeClaim", () => {
   it("folds separators + strips ./ leading/trailing/dup slashes (Windows == POSIX)", () => {
     expect(normalizeClaim("lib\\dispatch\\")).toBe("lib/dispatch");
     expect(normalizeClaim("./lib/dispatch/")).toBe("lib/dispatch");
+    expect(normalizeClaim("././lib/./dispatch/")).toBe("lib/dispatch");
+    expect(normalizeClaim(".//lib/dispatch")).toBe("lib/dispatch");
     expect(normalizeClaim("lib//dispatch//")).toBe("lib/dispatch");
+    expect(normalizeClaim("lib/./dispatch")).toBe("lib/dispatch");
     expect(normalizeClaim("  lib/db/schema.ts  ")).toBe("lib/db/schema.ts");
   });
 
@@ -31,7 +34,6 @@ describe("normalizeClaim", () => {
       "C:\\Users\\x",
       "C:Users\\x",
       "/lib/dispatch",
-      ".//lib/dispatch",
       "//unc/share",
       "\\\\server\\share",
       42,
@@ -75,7 +77,7 @@ describe("claimsConflict (sets)", () => {
 
 describe("parseClaims / serializeClaims", () => {
   it("round-trips normalized + de-duped claims", () => {
-    const json = serializeClaims(["./lib/a/", "lib/a", "src\\b.ts"]);
+    const json = serializeClaims(["./lib/a/", "lib/./a", "lib/a", "src\\b.ts"]);
     expect(parseClaims(json)).toEqual(["lib/a", "src/b.ts"]);
   });
 

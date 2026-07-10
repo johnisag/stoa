@@ -333,7 +333,7 @@ describe("reconcileTick", () => {
 
   it("serializes dispatch candidates against live fleet file claims", async () => {
     const repo = addRepo({ mode: "auto", daily_quota: 5, max_concurrency: 3 });
-    addActiveFleetWorker(repo, { claims: ["app"] });
+    addActiveFleetWorker(repo, { claims: ["app/./page.tsx"] });
     const blocked = addPending(repo, 1);
     const allowed = addPending(repo, 2);
     queries
