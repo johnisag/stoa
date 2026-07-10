@@ -769,6 +769,75 @@ describe("reconcileFleetRun", () => {
     expect(tasks()[0].status).toBe("running");
   });
 
+  it("recovers malformed launch lease timestamps as stale", async () => {
+    createRun(1);
+    createTask("task-a", 1, [], "running");
+    db.prepare(
+      `INSERT INTO fleet_workers (
+        id, fleet_run_id, task_id, status, provider, model, attempt,
+        lease_token, lease_expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "malformed-worker",
+      "run-1",
+      "task-a",
+      "leasing",
+      "claude",
+      null,
+      1,
+      "stale-token",
+      "not-a-date"
+    );
+
+    const result = await reconcileFleetRun("run-1", {
+      db,
+      now: new Date("2026-07-09T00:00:00.000Z"),
+      spawn: fakeSpawn(),
+    });
+
+    expect(result).toHaveProperty("run");
+    if ("error" in result) throw new Error(result.error);
+    expect(result.summary).toMatchObject({ recovered: 1, launched: 1 });
+    expect(workers()[0]).toMatchObject({
+      status: "failed",
+      spawn_error: "recovered stale launch lease before scheduler tick",
+    });
+    expect(workers()[1].status).toBe("running");
+  });
+
+  it("recovers waiting workers without session ownership", async () => {
+    createRun(1);
+    createTask("task-a", 1, [], "running");
+    db.prepare(
+      `INSERT INTO fleet_workers (
+        id, fleet_run_id, task_id, status, provider, model, attempt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "waiting-worker",
+      "run-1",
+      "task-a",
+      "waiting_for_operator",
+      "claude",
+      null,
+      1
+    );
+
+    const result = await reconcileFleetRun("run-1", {
+      db,
+      spawn: fakeSpawn(),
+    });
+
+    expect(result).toHaveProperty("run");
+    if ("error" in result) throw new Error(result.error);
+    expect(result.summary).toMatchObject({ recovered: 1, launched: 1 });
+    expect(workers()[0]).toMatchObject({
+      status: "failed",
+      spawn_error:
+        "recovered waiting worker without session before scheduler tick",
+    });
+    expect(workers()[1].status).toBe("running");
+  });
+
   it("recovers linked spawning workers without duplicating them", async () => {
     createRun(1);
     createTask("task-a", 1, [], "running");

@@ -420,6 +420,23 @@ describe("Phase 2 plan ingestion and approval", () => {
       })
     ).toEqual({ error: "plan graph has invalid file claims", status: 409 });
 
+    const unsafeClaimsPlan = ingestFleetRunPlan(runId, {
+      planText: "- Build parser\n- Add approval",
+    });
+    expect(unsafeClaimsPlan).toHaveProperty("run");
+    if ("error" in unsafeClaimsPlan) return;
+    db()
+      .prepare(
+        "UPDATE fleet_tasks SET file_claims_json = ? WHERE fleet_run_id = ? AND sort_order = 0"
+      )
+      .run(JSON.stringify(["C:\\repo\\src\\x.ts"]), runId);
+    expect(
+      approveFleetRunPlan(runId, {
+        expectedPlanHash: unsafeClaimsPlan.run.run.planHash,
+        approvedBy: "operator",
+      })
+    ).toEqual({ error: "plan graph has invalid file claims", status: 409 });
+
     const finalPlan = ingestFleetRunPlan(runId, {
       planText: "- Build parser\n- Add approval",
     });

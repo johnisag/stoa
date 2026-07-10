@@ -131,10 +131,9 @@ function settingsJson(
 }
 
 function workerLeaseExpired(worker: FleetWorkerRow, now: Date): boolean {
-  return (
-    !worker.lease_expires_at ||
-    new Date(worker.lease_expires_at).getTime() <= now.getTime()
-  );
+  if (!worker.lease_expires_at) return true;
+  const expiresAt = new Date(worker.lease_expires_at).getTime();
+  return Number.isNaN(expiresAt) || expiresAt <= now.getTime();
 }
 
 function parseStoredRepoClaims(json: string | null | undefined): {
@@ -268,7 +267,8 @@ function recoverBeforeLaunch(
     if (
       (worker.status === "leasing" ||
         worker.status === "spawning" ||
-        worker.status === "running") &&
+        worker.status === "running" ||
+        worker.status === "waiting_for_operator") &&
       worker.session_id
     ) {
       const session = queries.getSession(db).get(worker.session_id) as
@@ -280,7 +280,11 @@ function recoverBeforeLaunch(
         continue;
       }
       if (sessionName && liveSessionNames.has(sessionName)) {
-        if (worker.status === "running" || !leaseExpired) {
+        if (
+          worker.status === "running" ||
+          worker.status === "waiting_for_operator" ||
+          !leaseExpired
+        ) {
           if (worker.task_id) activeTaskIds.add(worker.task_id);
           continue;
         }
@@ -312,6 +316,18 @@ function recoverBeforeLaunch(
             .updateFleetTaskStatus(db)
             .run("queued", worker.task_id, runId);
         }
+      } else if (worker.status === "waiting_for_operator") {
+        queries
+          .markFleetWorkerFailed(db)
+          .run(
+            "recovered missing backend session for waiting worker",
+            worker.id
+          );
+        if (worker.task_id) {
+          queries
+            .updateFleetTaskStatus(db)
+            .run("queued", worker.task_id, runId);
+        }
       } else {
         queries
           .markFleetWorkerFailed(db)
@@ -330,6 +346,19 @@ function recoverBeforeLaunch(
     }
 
     const leaseExpired = workerLeaseExpired(worker, now);
+    if (worker.status === "waiting_for_operator" && !worker.session_id) {
+      queries
+        .markFleetWorkerFailed(db)
+        .run(
+          "recovered waiting worker without session before scheduler tick",
+          worker.id
+        );
+      if (worker.task_id) {
+        queries.updateFleetTaskStatus(db).run("queued", worker.task_id, runId);
+      }
+      recovered++;
+      continue;
+    }
     if (
       (worker.status === "leasing" || worker.status === "spawning") &&
       !worker.session_id &&
@@ -382,7 +411,8 @@ function needsBackendSessionCheck(
     (worker) =>
       (worker.status === "leasing" ||
         worker.status === "spawning" ||
-        worker.status === "running") &&
+        worker.status === "running" ||
+        worker.status === "waiting_for_operator") &&
       Boolean(worker.session_id)
   );
 }

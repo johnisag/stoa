@@ -320,14 +320,13 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
     detail.run.approvalState === "approved" &&
     (detail.run.status === "planned" || detail.run.status === "paused");
   const canTick =
-    detail.run.approvalState === "approved" &&
-    (detail.run.status === "planned" || detail.run.status === "running");
+    detail.run.approvalState === "approved" && detail.run.status === "running";
   const canPause =
     detail.run.approvalState === "approved" &&
     (detail.run.status === "planned" || detail.run.status === "running");
   const canCancel =
     detail.run.status !== "completed" && detail.run.status !== "canceled";
-  const canShowSchedulerControls = detail.run.approvalState === "approved";
+  const canShowSchedulerControls = canStart || canTick || canPause;
   const canShowLifecycleControls = canShowSchedulerControls || canCancel;
   const lifecycleBusy =
     startRun.isPending ||
@@ -380,47 +379,53 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
           <div className="flex flex-wrap items-center gap-2">
             {canShowSchedulerControls && (
               <>
-                <Button
-                  className="gap-2"
-                  size="sm"
-                  disabled={!canStart || lifecycleBusy}
-                  onClick={() => void runLifecycleAction("start")}
-                >
-                  {startRun.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Play className="h-4 w-4" />
-                  )}
-                  {detail.run.status === "paused" ? "Resume" : "Start"}
-                </Button>
-                <Button
-                  className="gap-2"
-                  size="sm"
-                  variant="outline"
-                  disabled={!canTick || lifecycleBusy}
-                  onClick={() => void runLifecycleAction("tick")}
-                >
-                  {tickRun.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4" />
-                  )}
-                  Tick
-                </Button>
-                <Button
-                  className="gap-2"
-                  size="sm"
-                  variant="outline"
-                  disabled={!canPause || lifecycleBusy}
-                  onClick={() => void runLifecycleAction("pause")}
-                >
-                  {pauseRun.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Pause className="h-4 w-4" />
-                  )}
-                  Pause Launches
-                </Button>
+                {canStart && (
+                  <Button
+                    className="gap-2"
+                    size="sm"
+                    disabled={lifecycleBusy}
+                    onClick={() => void runLifecycleAction("start")}
+                  >
+                    {startRun.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Play className="h-4 w-4" />
+                    )}
+                    {detail.run.status === "paused" ? "Resume" : "Start"}
+                  </Button>
+                )}
+                {canTick && (
+                  <Button
+                    className="gap-2"
+                    size="sm"
+                    variant="outline"
+                    disabled={lifecycleBusy}
+                    onClick={() => void runLifecycleAction("tick")}
+                  >
+                    {tickRun.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                    Tick
+                  </Button>
+                )}
+                {canPause && (
+                  <Button
+                    className="gap-2"
+                    size="sm"
+                    variant="outline"
+                    disabled={lifecycleBusy}
+                    onClick={() => void runLifecycleAction("pause")}
+                  >
+                    {pauseRun.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Pause className="h-4 w-4" />
+                    )}
+                    Pause Launches
+                  </Button>
+                )}
               </>
             )}
             {canCancel && (

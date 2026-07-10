@@ -1,13 +1,18 @@
 import { createHash } from "crypto";
+import { normalizeClaim } from "@/lib/dispatch/claims";
 import type { FleetTaskRow } from "./types";
 import { canonicalFleetPlanTasks, type ParsedFleetPlanTask } from "./plan";
 
 function parseFileClaims(value: string): string[] {
   try {
     const parsed = JSON.parse(value);
-    return Array.isArray(parsed)
-      ? parsed.filter((entry): entry is string => typeof entry === "string")
-      : [];
+    if (!Array.isArray(parsed)) return [];
+    const out: string[] = [];
+    for (const entry of parsed) {
+      const claim = normalizeClaim(entry);
+      if (claim && !out.includes(claim)) out.push(claim);
+    }
+    return out;
   } catch {
     return [];
   }
@@ -24,7 +29,13 @@ function parseFileClaimsStrict(
     ) {
       return { error: "plan graph has invalid file claims" };
     }
-    return { claims: parsed };
+    const claims: string[] = [];
+    for (const entry of parsed) {
+      const claim = normalizeClaim(entry);
+      if (!claim) return { error: "plan graph has invalid file claims" };
+      if (!claims.includes(claim)) claims.push(claim);
+    }
+    return { claims };
   } catch {
     return { error: "plan graph has invalid file claims" };
   }
@@ -35,7 +46,15 @@ function stableHash(value: unknown): string {
 }
 
 export function hashParsedFleetPlanTasks(tasks: ParsedFleetPlanTask[]): string {
-  return stableHash(canonicalFleetPlanTasks(tasks));
+  return stableHash(
+    canonicalFleetPlanTasks(tasks).map((task) => ({
+      ...task,
+      fileClaims: task.fileClaims
+        .map((claim) => normalizeClaim(claim))
+        .filter((claim): claim is string => Boolean(claim))
+        .sort(),
+    }))
+  );
 }
 
 export function hashFleetTaskRows(rows: FleetTaskRow[]): string {
