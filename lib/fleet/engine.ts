@@ -6,6 +6,7 @@ import type {
   FleetEventDto,
   FleetEventRow,
   FleetReviewPolicy,
+  FleetPlannerState,
   FleetRunDetailDto,
   FleetRunDto,
   FleetRunRow,
@@ -114,12 +115,7 @@ export function buildFleetApprovalPreview(
     ],
     blockedActions: canApproveExecutableWork
       ? ["merge or cleanup"]
-      : [
-          "autonomous planner execution",
-          "worker spawning",
-          "resume or tick execution",
-          "merge or cleanup",
-        ],
+      : ["worker spawning", "resume or tick execution", "merge or cleanup"],
     canApproveExecutableWork,
   };
 }
@@ -147,10 +143,45 @@ function parseSettingsPlanText(value: string): string | null {
   return typeof planText === "string" && planText.trim() ? planText : null;
 }
 
+function parsePlannerSettings(value: string): {
+  state: FleetPlannerState;
+  error: string | null;
+  provider: string | null;
+  sessionId: string | null;
+} {
+  const parsed = parseJson(value);
+  const planner =
+    parsed && typeof parsed === "object"
+      ? (parsed as { planner?: unknown }).planner
+      : null;
+  if (!planner || typeof planner !== "object") {
+    return { state: "idle", error: null, provider: null, sessionId: null };
+  }
+  const record = planner as Record<string, unknown>;
+  const states: FleetPlannerState[] = [
+    "idle",
+    "starting",
+    "running",
+    "finalizing",
+    "cleanup_pending",
+    "ready",
+    "failed",
+  ];
+  return {
+    state: states.includes(record.state as FleetPlannerState)
+      ? (record.state as FleetPlannerState)
+      : "idle",
+    error: typeof record.error === "string" ? record.error : null,
+    provider: typeof record.provider === "string" ? record.provider : null,
+    sessionId: typeof record.sessionId === "string" ? record.sessionId : null,
+  };
+}
+
 export function toFleetRunDto(
   row: FleetRunRow,
   counts: { taskCount: number; workerCount: number }
 ): FleetRunDto {
+  const planner = parsePlannerSettings(row.settings_json);
   return {
     id: row.id,
     name: row.name,
@@ -185,13 +216,21 @@ export function toFleetRunDto(
         row.approved_plan_hash != null &&
         row.approved_plan_hash === row.plan_hash
     ),
+    plannerState: planner.state,
+    plannerError: planner.error,
+    plannerProvider: planner.provider,
+    plannerSessionId: planner.sessionId,
   };
 }
 
-export function toFleetTaskDto(row: FleetTaskRow): FleetTaskDto {
+export function toFleetTaskDto(
+  row: FleetTaskRow,
+  dependsOnTaskIds: string[] = []
+): FleetTaskDto {
   return {
     id: row.id,
     parentTaskId: row.parent_task_id,
+    dependsOnTaskIds,
     title: row.title,
     description: row.description,
     status: row.status,
@@ -207,6 +246,7 @@ export function toFleetTaskDto(row: FleetTaskRow): FleetTaskDto {
     maxAttempts: row.max_attempts ?? 2,
     currentAttempt: row.current_attempt ?? 0,
     acceptanceCriteria: row.acceptance_criteria ?? null,
+    verifyCommand: row.verify_command ?? null,
     failureCode: row.failure_code ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -260,6 +300,7 @@ export function toFleetArtifactDto(row: FleetArtifactRow): FleetArtifactDto {
 export function composeFleetRunDetail(input: {
   run: FleetRunRow;
   tasks: FleetTaskRow[];
+  dependencies?: import("./types").FleetTaskDependencyRow[];
   workers: FleetWorkerRow[];
   artifacts: FleetArtifactRow[];
   events: FleetEventRow[];
@@ -269,7 +310,14 @@ export function composeFleetRunDetail(input: {
       taskCount: input.tasks.length,
       workerCount: input.workers.length,
     }),
-    tasks: input.tasks.map(toFleetTaskDto),
+    tasks: input.tasks.map((task) =>
+      toFleetTaskDto(
+        task,
+        (input.dependencies ?? [])
+          .filter((dependency) => dependency.task_id === task.id)
+          .map((dependency) => dependency.depends_on_task_id)
+      )
+    ),
     workers: input.workers.map(toFleetWorkerDto),
     artifacts: input.artifacts.map(toFleetArtifactDto),
     events: input.events.map(toFleetEventDto),

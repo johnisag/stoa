@@ -37,6 +37,9 @@ import {
   useFleetRunQuery,
   useFleetRunsQuery,
   useIngestFleetPlan,
+  useStartFleetPlan,
+  useFleetPlanPoll,
+  useCancelFleetPlan,
   useResumeFleetRun,
   usePauseFleetRun,
   useCancelFleetRun,
@@ -95,6 +98,12 @@ function RunRow({
       <span className="text-muted-foreground flex items-center gap-2 text-[11px]">
         <span>{run.taskCount} tasks</span>
         <span>{run.workerCount} workers</span>
+        {!["idle", "ready", "failed"].includes(run.plannerState) && (
+          <span className="text-primary flex items-center gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            planner {run.plannerState.replaceAll("_", " ")}
+          </span>
+        )}
       </span>
     </button>
   );
@@ -152,6 +161,19 @@ function RunDetail({
   onBack: () => void;
 }) {
   const ingestPlan = useIngestFleetPlan(detail.run.id);
+  const startPlanner = useStartFleetPlan();
+  const plannerActive = [
+    "starting",
+    "running",
+    "finalizing",
+    "cleanup_pending",
+  ].includes(detail.run.plannerState);
+  const plannerCancelable = ["starting", "running", "finalizing"].includes(
+    detail.run.plannerState
+  );
+  const plannerCleaning = detail.run.plannerState === "cleanup_pending";
+  const plannerPoll = useFleetPlanPoll(detail.run.id, plannerActive);
+  const cancelPlanner = useCancelFleetPlan(detail.run.id);
   const approvePlan = useApproveFleetPlan(detail.run.id);
   const attachArtifact = useAttachFleetArtifact(detail.run.id);
   const resumeRun = useResumeFleetRun(detail.run.id);
@@ -222,6 +244,7 @@ function RunDetail({
   }
 
   const canApprove =
+    !plannerActive &&
     detail.run.approvalState === "needs_approval" &&
     !!detail.run.planHash &&
     !!reviewedPlanText &&
@@ -236,6 +259,7 @@ function RunDetail({
     (detail.run.approvalState === "draft" ||
       detail.run.approvalState === "needs_approval");
   const canAttachArtifact =
+    !plannerActive &&
     detail.run.status === "draft" &&
     detail.run.approvalState === "needs_approval" &&
     !!detail.run.planHash &&
@@ -281,12 +305,33 @@ function RunDetail({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-4 pb-4">
-      <section className="grid gap-3 rounded-md border p-3 md:grid-cols-4">
+      <section className="grid gap-3 rounded-md border p-3 md:grid-cols-5">
         <div>
           <div className="text-muted-foreground text-[10px] font-medium uppercase">
             Status
           </div>
           <div className="text-sm font-medium">{detail.run.status}</div>
+          <div className="text-muted-foreground mt-1 font-mono text-[10px] break-all">
+            ID {detail.run.id}
+          </div>
+        </div>
+        <div>
+          <div className="text-muted-foreground text-[10px] font-medium uppercase">
+            Planner
+          </div>
+          <div className="flex items-center gap-1 text-sm">
+            {plannerActive && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {detail.run.plannerState.replaceAll("_", " ")}
+            {detail.run.plannerProvider
+              ? ` / ${detail.run.plannerProvider}`
+              : ""}
+          </div>
+          {detail.run.plannerSessionId && plannerActive && (
+            <div className="text-muted-foreground mt-1 text-[10px] break-all">
+              Session {detail.run.plannerSessionId}. Open it from Sessions if
+              the provider requests permission to write PLAN.md.
+            </div>
+          )}
         </div>
         <div>
           <div className="text-muted-foreground text-[10px] font-medium uppercase">
@@ -362,6 +407,7 @@ function RunDetail({
           variant="destructive"
           disabled={
             ["completed", "failed", "canceled"].includes(detail.run.status) ||
+            plannerActive ||
             cancelRun.isPending
           }
           onClick={() => {
@@ -382,6 +428,11 @@ function RunDetail({
         >
           <Square className="h-4 w-4" /> Cancel
         </Button>
+        {plannerActive && (
+          <span className="text-xs text-amber-700 dark:text-amber-300">
+            Cancel the planner and wait for cleanup before canceling the run.
+          </span>
+        )}
         {detail.run.recoveryRequired && (
           <span className="text-xs text-amber-700 dark:text-amber-300">
             Recovery must finish before new workers launch.
@@ -432,7 +483,7 @@ function RunDetail({
             value={planText}
             onChange={(event) => setPlanText(event.target.value)}
           />
-          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
             <div className="min-w-0">
               <div className="text-muted-foreground text-[10px] font-medium uppercase">
                 Current hash
@@ -460,7 +511,42 @@ function RunDetail({
               className="gap-2"
               variant="outline"
               disabled={
-                !canReplacePlan || !planText.trim() || ingestPlan.isPending
+                !canReplacePlan ||
+                plannerCleaning ||
+                startPlanner.isPending ||
+                cancelPlanner.isPending
+              }
+              onClick={() => {
+                if (plannerCancelable) {
+                  void cancelPlanner
+                    .mutateAsync(undefined)
+                    .catch(() => undefined);
+                } else {
+                  void startPlanner
+                    .mutateAsync({ runId: detail.run.id })
+                    .catch(() => undefined);
+                }
+              }}
+            >
+              {startPlanner.isPending || cancelPlanner.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Network className="h-4 w-4" />
+              )}
+              {plannerCleaning
+                ? "Cleaning up planner"
+                : plannerCancelable
+                  ? "Cancel planner"
+                  : "Plan automatically"}
+            </Button>
+            <Button
+              className="gap-2"
+              variant="outline"
+              disabled={
+                !canReplacePlan ||
+                plannerActive ||
+                !planText.trim() ||
+                ingestPlan.isPending
               }
               onClick={() => void handleIngestPlan()}
             >
@@ -484,10 +570,20 @@ function RunDetail({
               Approve
             </Button>
           </div>
-          {(ingestPlan.isError || approvePlan.isError) && (
+          {(ingestPlan.isError ||
+            approvePlan.isError ||
+            startPlanner.isError ||
+            cancelPlanner.isError ||
+            plannerPoll.isError ||
+            detail.run.plannerState === "failed") && (
             <div className="text-destructive flex items-center gap-2 text-xs">
               <AlertCircle className="h-3.5 w-3.5" />
-              {ingestPlan.error?.message ?? approvePlan.error?.message}
+              {ingestPlan.error?.message ??
+                approvePlan.error?.message ??
+                startPlanner.error?.message ??
+                cancelPlanner.error?.message ??
+                plannerPoll.error?.message ??
+                detail.run.plannerError}
             </div>
           )}
           {!canApprove &&
@@ -539,6 +635,24 @@ function RunDetail({
                       ))}
                     </div>
                   )}
+                  {task.dependsOnTaskIds.length > 0 && (
+                    <div className="text-muted-foreground mt-1 text-[11px]">
+                      Depends on:{" "}
+                      {task.dependsOnTaskIds
+                        .map((id) => taskTitleById.get(id) ?? id)
+                        .join(", ")}
+                    </div>
+                  )}
+                  {task.acceptanceCriteria && (
+                    <div className="text-muted-foreground mt-1 text-[11px] break-words">
+                      Acceptance: {task.acceptanceCriteria}
+                    </div>
+                  )}
+                  {task.verifyCommand && (
+                    <div className="text-muted-foreground mt-1 font-mono text-[11px] break-all">
+                      Verify: {task.verifyCommand}
+                    </div>
+                  )}
                   {task.failureCode && (
                     <div className="text-destructive mt-1 text-xs break-words">
                       {task.failureCode}
@@ -552,6 +666,12 @@ function RunDetail({
                   <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
                     {task.taskType}
                   </span>
+                  {task.agentType && (
+                    <span className="bg-primary/10 text-primary rounded px-1.5 py-0.5 text-[10px] uppercase">
+                      {task.agentType}
+                      {task.model ? ` / ${task.model}` : ""}
+                    </span>
+                  )}
                 </div>
               </div>
             ))
@@ -789,7 +909,11 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
   const repos = useDispatchReposQuery(true);
   const projects = useProjectsQuery();
   const createRun = useCreateFleetRun();
+  const startCreatedPlanner = useStartFleetPlan();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [createPlannerErrorRunId, setCreatePlannerErrorRunId] = useState<
+    string | null
+  >(null);
   const [name, setName] = useState("");
   const [goal, setGoal] = useState("");
   const [repoId, setRepoId] = useState(NONE);
@@ -798,6 +922,8 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
   const [provider, setProvider] = useState("claude");
   const [model, setModel] = useState("");
   const [maxConcurrency, setMaxConcurrency] = useState(4);
+  const [autoPlan, setAutoPlan] = useState(true);
+  const [plannerTaskCap, setPlannerTaskCap] = useState(8);
   const [reviewPolicy, setReviewPolicy] =
     useState<FleetReviewPolicy>("four_agent");
   const detailRef = useRef<HTMLElement>(null);
@@ -809,6 +935,10 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
   const detail = useFleetRunQuery(selectedRunId, selectedRunId != null);
 
   function selectRun(id: string) {
+    if (createPlannerErrorRunId && createPlannerErrorRunId !== id) {
+      startCreatedPlanner.reset();
+      setCreatePlannerErrorRunId(null);
+    }
     setSelectedRunId(id);
     if (window.innerWidth < 1024) {
       requestAnimationFrame(() =>
@@ -824,7 +954,32 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
     if (!selectedRunId && runs.data?.[0]) setSelectedRunId(runs.data[0].id);
   }, [runs.data, selectedRunId]);
 
+  useEffect(() => {
+    if (
+      createPlannerErrorRunId &&
+      detail.data?.run.id === createPlannerErrorRunId &&
+      [
+        "starting",
+        "running",
+        "finalizing",
+        "cleanup_pending",
+        "ready",
+      ].includes(detail.data.run.plannerState)
+    ) {
+      startCreatedPlanner.reset();
+      setCreatePlannerErrorRunId(null);
+    }
+  }, [
+    createPlannerErrorRunId,
+    detail.data?.run.id,
+    detail.data?.run.plannerState,
+    startCreatedPlanner,
+  ]);
+
   async function handleCreateRun() {
+    createRun.reset();
+    startCreatedPlanner.reset();
+    setCreatePlannerErrorRunId(null);
     try {
       const created = await createRun.mutateAsync({
         name,
@@ -841,10 +996,23 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
       setName("");
       setGoal("");
       setBudgetUsd("");
+      if (autoPlan) {
+        try {
+          await startCreatedPlanner.mutateAsync({
+            runId: created.run.id,
+            taskCap: plannerTaskCap,
+          });
+        } catch {
+          setCreatePlannerErrorRunId(created.run.id);
+        }
+      }
     } catch {
       // React Query owns the rendered error state.
     }
   }
+
+  const automaticPlanNeedsTarget =
+    autoPlan && repoId === NONE && projectId === NONE;
 
   return (
     <div className="bg-background flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -906,7 +1074,13 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                 value={goal}
                 onChange={(event) => setGoal(event.target.value)}
               />
-              <Select value={repoId} onValueChange={setRepoId}>
+              <Select
+                value={repoId}
+                onValueChange={(value) => {
+                  setRepoId(value);
+                  if (value !== NONE) setProjectId(NONE);
+                }}
+              >
                 <SelectTrigger aria-label="Repository">
                   <SelectValue placeholder="Repository" />
                 </SelectTrigger>
@@ -919,7 +1093,13 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                   ))}
                 </SelectContent>
               </Select>
-              <Select value={projectId} onValueChange={setProjectId}>
+              <Select
+                value={projectId}
+                onValueChange={(value) => {
+                  setProjectId(value);
+                  if (value !== NONE) setRepoId(NONE);
+                }}
+              >
                 <SelectTrigger aria-label="Project">
                   <SelectValue placeholder="Project" />
                 </SelectTrigger>
@@ -951,6 +1131,38 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                   }
                 />
               </div>
+              <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs">
+                <span>
+                  Plan automatically after creating the run
+                  <span className="text-muted-foreground mt-0.5 block">
+                    Generates and allocates tasks, then waits for approval.
+                  </span>
+                </span>
+                <input
+                  aria-label="Plan automatically"
+                  type="checkbox"
+                  checked={autoPlan}
+                  onChange={(event) => setAutoPlan(event.target.checked)}
+                />
+              </label>
+              {autoPlan && (
+                <label className="grid gap-1 text-xs">
+                  <span>Planner task cap (1-40)</span>
+                  <Input
+                    aria-label="Planner task cap"
+                    type="number"
+                    min={1}
+                    max={40}
+                    value={plannerTaskCap}
+                    onChange={(event) =>
+                      setPlannerTaskCap(Number(event.target.value))
+                    }
+                  />
+                  <span className="text-muted-foreground">
+                    Maximum tasks the generated plan may contain.
+                  </span>
+                </label>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <Input
                   aria-label="Provider"
@@ -986,20 +1198,38 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
               </Select>
               <Button
                 className="gap-2"
-                disabled={!name.trim() || !goal.trim() || createRun.isPending}
+                disabled={
+                  !name.trim() ||
+                  !goal.trim() ||
+                  automaticPlanNeedsTarget ||
+                  createRun.isPending ||
+                  startCreatedPlanner.isPending
+                }
                 onClick={() => void handleCreateRun()}
               >
-                {createRun.isPending ? (
+                {createRun.isPending || startCreatedPlanner.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Plus className="h-4 w-4" />
                 )}
-                Create draft
+                {autoPlan ? "Create and plan" : "Create draft"}
               </Button>
-              {createRun.isError && (
+              {(createRun.isError ||
+                (startCreatedPlanner.isError &&
+                  createPlannerErrorRunId === selectedRunId)) && (
                 <div className="text-destructive flex items-center gap-2 text-xs">
                   <AlertCircle className="h-3.5 w-3.5" />
-                  {createRun.error.message}
+                  {createRun.error?.message ??
+                    (startCreatedPlanner.error
+                      ? `Draft created and selected; planning failed: ${startCreatedPlanner.error.message}. Retry from Plan review.`
+                      : null)}
+                </div>
+              )}
+              {automaticPlanNeedsTarget && (
+                <div className="text-muted-foreground text-xs">
+                  Select a repository or project to create and plan
+                  automatically. Turn automatic planning off to save a goal-only
+                  draft.
                 </div>
               )}
             </div>

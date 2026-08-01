@@ -30,6 +30,7 @@ import { detectSandboxTool } from "./sandbox/detect";
 import { wrapSpawnForSandbox } from "./sandbox/wrap";
 import { computeRwRoots } from "./sandbox/policy";
 import { decideWorkerSandbox, effectiveSandboxActive } from "./sandbox/worker";
+import type { ApprovalMode } from "./sandbox/types";
 import { join } from "path";
 
 const execFileAsync = promisify(execFile);
@@ -45,6 +46,10 @@ export interface SpawnWorkerOptions {
   requireWorktree?: boolean;
   /** Treat backend start or task delivery failure as a rejected launch. */
   requireTaskDelivery?: boolean;
+  /** Skip dependency/env setup for short-lived metadata-only worktrees. */
+  skipSetup?: boolean;
+  /** Override the default worker approval policy (planners use prompt mode). */
+  approvalMode?: ApprovalMode;
   model?: string;
   agentType?: AgentType;
 }
@@ -171,6 +176,7 @@ export async function spawnWorker(
     useWorktree = true,
     requireWorktree = false,
     requireTaskDelivery = false,
+    skipSetup = false,
     agentType = "claude",
   } = options;
   const model = resolveModelForAgent(agentType, options.model);
@@ -187,8 +193,7 @@ export async function spawnWorker(
   // foreign key cannot leave an orphan directory behind.
   if (conductorSessionId) {
     const conductor = queries.getSession(db).get(conductorSessionId) as
-      | Session
-      | undefined;
+      Session | undefined;
     if (!conductor) {
       throw new Error(
         `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing Stoa session.`
@@ -217,18 +222,20 @@ export async function spawnWorker(
       // Set up environment in background (copy .env files, install deps)
       const capturedWorktreePath = worktreePath;
       const capturedSourcePath = workingDirectory;
-      runInBackground(async () => {
-        const result = await setupWorktree({
-          worktreePath: capturedWorktreePath,
-          sourcePath: capturedSourcePath,
-        });
-        console.log("Worker worktree setup completed:", {
-          worktreePath: capturedWorktreePath,
-          envFilesCopied: result.envFilesCopied,
-          stepsRun: result.steps.length,
-          success: result.success,
-        });
-      }, `setup-worker-worktree-${sessionId}`);
+      if (!skipSetup) {
+        runInBackground(async () => {
+          const result = await setupWorktree({
+            worktreePath: capturedWorktreePath,
+            sourcePath: capturedSourcePath,
+          });
+          console.log("Worker worktree setup completed:", {
+            worktreePath: capturedWorktreePath,
+            envFilesCopied: result.envFilesCopied,
+            stepsRun: result.steps.length,
+            success: result.success,
+          });
+        }, `setup-worker-worktree-${sessionId}`);
+      }
     } catch (error) {
       console.error("Failed to create worktree:", error);
       if (requireWorktree) {
@@ -287,16 +294,18 @@ export async function spawnWorker(
     // fail-open).
     const sandboxEnabled = process.env.STOA_SANDBOX === "1";
     const detected = sandboxEnabled ? detectSandboxTool() : null;
-    if (sandboxEnabled && !detected) {
+    if (sandboxEnabled && !detected && !options.approvalMode) {
       console.warn(
         "[sandbox] STOA_SANDBOX=1 but no Linux/bwrap primitive found; running unconfined with full-bypass"
       );
     }
-    const { approvalMode, sandboxActive: tentativeActive } =
-      decideWorkerSandbox({
-        sandboxEnabled,
-        detected: detected !== null,
-      });
+    const sandboxDecision = decideWorkerSandbox({
+      sandboxEnabled,
+      detected: detected !== null,
+    });
+    const approvalMode = options.approvalMode ?? sandboxDecision.approvalMode;
+    const tentativeActive =
+      approvalMode === "sandboxed-auto" && sandboxDecision.sandboxActive;
 
     // Resolve the ACTUAL wrap BEFORE building argv, so the bypass flag is pushed
     // ONLY when the sandbox truly confines: a downgrade withdraws the flag (the

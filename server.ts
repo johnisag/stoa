@@ -113,6 +113,7 @@ import {
   initializeFleetScheduler,
   reconcileFleetRuns,
 } from "./lib/fleet/scheduler";
+import { reconcileFleetPlanners } from "./lib/fleet/planner";
 import { evictStale as evictStaleWarmPool } from "./lib/dispatch/warm-pool";
 import {
   getBudgetConfig,
@@ -673,8 +674,7 @@ app.prepare().then(() => {
               s.status === "error")
           ) {
             const row = queries.getSession(getDb()).get(s.id) as
-              | Session
-              | undefined;
+              Session | undefined;
             if (row?.working_directory)
               void captureSnapshot(
                 row.working_directory,
@@ -1493,6 +1493,14 @@ app.prepare().then(() => {
         err
       );
     }
+    makeGuardedInterval({
+      intervalMs: 5000,
+      enabled: true,
+      onError: (err) => console.error("fleet planner tick failed:", err),
+      tick: async () => {
+        await reconcileFleetPlanners();
+      },
+    });
     makeGuardedInterval({
       intervalMs: 5000,
       enabled: fleetSchedulerReady,

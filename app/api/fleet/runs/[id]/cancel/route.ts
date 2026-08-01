@@ -4,6 +4,7 @@ import {
   readCappedJsonBody,
 } from "@/lib/fleet/http";
 import { cancelFleetRun } from "@/lib/fleet/service";
+import { cancelFleetPlanner } from "@/lib/fleet/planner";
 
 export async function POST(
   request: NextRequest,
@@ -14,6 +15,22 @@ export async function POST(
   if ("error" in body)
     return NextResponse.json({ error: body.error }, { status: body.status });
   try {
+    const planner = await cancelFleetPlanner(id, "operator");
+    if ("error" in planner) {
+      return NextResponse.json(
+        { error: planner.error },
+        { status: planner.status ?? 400 }
+      );
+    }
+    if (planner.run.run.plannerState === "cleanup_pending") {
+      return NextResponse.json(
+        {
+          error:
+            "Planner cancellation is queued; retry Fleet cancellation after cleanup completes",
+        },
+        { status: 409 }
+      );
+    }
     const result = await cancelFleetRun(id, body.body);
     if ("error" in result)
       return NextResponse.json(

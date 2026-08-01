@@ -41,8 +41,10 @@ import {
   createDraftFleetRun,
   getFleetRunDetail,
   ingestFleetRunPlan,
+  ingestGeneratedFleetRunPlan,
   listFleetRuns,
 } from "@/lib/fleet/service";
+import { cancelFleetPlanner } from "@/lib/fleet/planner";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
@@ -244,6 +246,198 @@ describe("Phase 3 worker completion", () => {
         )
         .get()
     ).toEqual({ n: 0 });
+  });
+});
+
+describe("generated Fleet plans", () => {
+  function generatedTask(
+    title: string,
+    sortOrder: number,
+    overrides: Record<string, unknown> = {}
+  ) {
+    return {
+      title,
+      description: `${title} description`,
+      taskType: "implementation",
+      parentIndex: null,
+      sortOrder,
+      fileClaims: [`lib/${title.toLowerCase()}.ts`],
+      agentType: "codex",
+      model: null,
+      acceptanceCriteria: `${title} passes`,
+      verifyCommand: "npm test",
+      ...overrides,
+    };
+  }
+
+  it("persists automatic allocations and dependencies into the approved contract", () => {
+    const created = createDraftFleetRun({
+      name: "Generated plan",
+      goal: "Split this goal",
+      repoId: "repo-fleet",
+      provider: "claude",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    db()
+      .prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`)
+      .run(
+        JSON.stringify({
+          phase: "planning",
+          canSpawnWorkers: false,
+          planner: { state: "finalizing", requestId: "planner-1" },
+        }),
+        runId
+      );
+
+    const planned = ingestGeneratedFleetRunPlan(runId, {
+      planText: "1. API\n2. UI",
+      tasks: [
+        generatedTask("API", 0),
+        generatedTask("UI", 1, {
+          agentType: "kimi",
+          taskType: "review",
+          fileClaims: [],
+        }),
+      ],
+      dependencies: [[], [0]],
+      expectedPlannerRequestId: "planner-1",
+      source: "planner",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    expect(planned.run.run.plannerState).toBe("cleanup_pending");
+    expect(
+      approveFleetRunPlan(runId, {
+        expectedPlanHash: planned.run.run.planHash!,
+      })
+    ).toEqual({
+      error: "planner finalization and cleanup must finish before approval",
+      status: 409,
+    });
+    expect(planned.run.tasks.map((task) => task.agentType)).toEqual([
+      "codex",
+      "kimi",
+    ]);
+    expect(planned.run.tasks[0].acceptanceCriteria).toBe("API passes");
+    const dependency = db()
+      .prepare(
+        `SELECT task_id, depends_on_task_id FROM fleet_task_dependencies WHERE fleet_run_id = ?`
+      )
+      .get(runId) as { task_id: string; depends_on_task_id: string };
+    expect(dependency).toEqual({
+      task_id: planned.run.tasks[1].id,
+      depends_on_task_id: planned.run.tasks[0].id,
+    });
+    const readOnlyClaims = db()
+      .prepare(`SELECT COUNT(*) AS n FROM fleet_task_claims WHERE task_id = ?`)
+      .get(planned.run.tasks[1].id) as { n: number };
+    expect(readOnlyClaims.n).toBe(0);
+
+    expect(
+      ingestGeneratedFleetRunPlan(runId, {
+        planText: "1. Duplicate poll",
+        tasks: [generatedTask("Duplicate", 0)],
+        expectedPlannerRequestId: "planner-1",
+        source: "planner",
+      })
+    ).toMatchObject({
+      error: "planner result was superseded",
+      status: 409,
+    });
+
+    const row = db()
+      .prepare(`SELECT settings_json FROM fleet_runs WHERE id = ?`)
+      .get(runId) as { settings_json: string };
+    const settings = JSON.parse(row.settings_json);
+    settings.planner = { state: "ready", requestId: "planner-1" };
+    db()
+      .prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`)
+      .run(JSON.stringify(settings), runId);
+
+    const approved = approveFleetRunPlan(runId, {
+      expectedPlanHash: planned.run.run.planHash,
+    });
+    expect(approved).not.toHaveProperty("error");
+  });
+
+  it("rejects a late planner result after its request was superseded", () => {
+    const created = createDraftFleetRun({
+      name: "Superseded planner",
+      goal: "Do not overwrite the new plan",
+      repoId: "repo-fleet",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const result = ingestGeneratedFleetRunPlan(created.run.run.id, {
+      planText: "1. Old",
+      tasks: [generatedTask("Old", 0)],
+      expectedPlannerRequestId: "old-request",
+      source: "planner",
+    });
+    expect(result).toMatchObject({
+      error: "planner result was superseded",
+      status: 409,
+    });
+  });
+
+  it("requires an active planner to be canceled before manual replacement", async () => {
+    const created = createDraftFleetRun({
+      name: "Planner cancellation",
+      goal: "Keep one plan writer",
+      repoId: "repo-fleet",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    db()
+      .prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`)
+      .run(
+        JSON.stringify({
+          phase: "planning",
+          canSpawnWorkers: false,
+          planner: { state: "starting", requestId: "planner-active" },
+        }),
+        runId
+      );
+    expect(
+      ingestFleetRunPlan(runId, { planText: "- Manual [files: lib/x.ts]" })
+    ).toMatchObject({
+      error: "cancel the active planner before ingesting a manual plan",
+      status: 409,
+    });
+
+    const canceled = await cancelFleetPlanner(runId);
+    if ("error" in canceled) throw new Error(canceled.error);
+    expect(canceled.run.run.plannerState).toBe("idle");
+    expect(
+      ingestFleetRunPlan(runId, { planText: "- Manual [files: lib/x.ts]" })
+    ).not.toHaveProperty("error");
+  });
+
+  it("refuses run cancellation while planner cleanup is still owned", async () => {
+    const created = createDraftFleetRun({
+      name: "Planner-owned cancel",
+      goal: "Do not orphan the planner",
+      repoId: "repo-fleet",
+    });
+    if ("error" in created) throw new Error(created.error);
+    db()
+      .prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`)
+      .run(
+        JSON.stringify({
+          phase: "planning",
+          canSpawnWorkers: false,
+          planner: {
+            state: "cleanup_pending",
+            requestId: "planner-cleanup",
+          },
+        }),
+        created.run.run.id
+      );
+    await expect(
+      cancelFleetRun(created.run.run.id, { actor: "operator" })
+    ).resolves.toMatchObject({
+      error: "cancel the active planner and finish its cleanup first",
+      status: 409,
+    });
   });
 });
 
@@ -502,6 +696,47 @@ describe("Phase 2 plan ingestion and approval", () => {
       approvedBy: "operator",
     });
     expect(approved).toHaveProperty("run");
+  });
+
+  it("rejects approval when persisted claim rows were weakened", () => {
+    const runId = createRun();
+    const planned = ingestFleetRunPlan(runId, {
+      planText: "- Build parser [files: lib/fleet/plan.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    db()
+      .prepare(`DELETE FROM fleet_task_claims WHERE fleet_run_id = ?`)
+      .run(runId);
+    expect(
+      approveFleetRunPlan(runId, {
+        expectedPlanHash: planned.run.run.planHash!,
+      })
+    ).toEqual({
+      error: "plan graph claims do not match the reviewed task claims",
+      status: 409,
+    });
+  });
+
+  it("rejects approval when dependency semantics were changed", () => {
+    const runId = createRun();
+    const planned = ingestFleetRunPlan(runId, {
+      planText:
+        "- Foundation [files: lib/a.ts]\n  - Dependent [files: lib/b.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    db()
+      .prepare(
+        `UPDATE fleet_task_dependencies SET dependency_type = 'informs' WHERE fleet_run_id = ?`
+      )
+      .run(runId);
+    expect(
+      approveFleetRunPlan(runId, {
+        expectedPlanHash: planned.run.run.planHash!,
+      })
+    ).toEqual({
+      error: "plan graph has unsupported dependency semantics",
+      status: 409,
+    });
   });
 
   it("rejects lifecycle replay after a plan has been approved", () => {

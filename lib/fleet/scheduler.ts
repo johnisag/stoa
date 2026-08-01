@@ -97,6 +97,21 @@ function activePlaceholders(): string {
   return ACTIVE_WORKER_STATUSES.map(() => "?").join(", ");
 }
 
+function activePlannerCount(db: Database.Database, provider?: string): number {
+  const providerClause = provider
+    ? ` AND json_extract(settings_json, '$.planner.provider') = ?`
+    : "";
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM fleet_runs
+       WHERE status = 'draft' AND json_valid(settings_json)
+         AND json_extract(settings_json, '$.planner.state') IN
+           ('starting', 'running', 'finalizing', 'cleanup_pending')${providerClause}`
+    )
+    .get(...(provider ? [provider] : [])) as { n: number };
+  return row.n;
+}
+
 function reserveWorkerResources(
   db: Database.Database,
   input: {
@@ -188,8 +203,7 @@ function dependencySummaries(
   );
   return dependencies.map((dependency) => {
     const task = getTask.get(dependency.depends_on_task_id) as
-      | { title: string; status: string }
-      | undefined;
+      { title: string; status: string } | undefined;
     return task
       ? `${dependency.depends_on_task_id}: ${task.title} (${task.status})`
       : dependency.depends_on_task_id;
@@ -205,8 +219,7 @@ function dependenciesSatisfied(
   return dependencies.every((dependency) => {
     if (dependency.dependency_type !== "blocks") return true;
     const upstream = getStatus.get(dependency.depends_on_task_id) as
-      | { status: string }
-      | undefined;
+      { status: string } | undefined;
     return !!upstream && TERMINAL_TASK_STATUSES.includes(upstream.status);
   });
 }
@@ -219,8 +232,7 @@ function failedBlockingDependency(
   for (const dependency of dependencies) {
     if (dependency.dependency_type !== "blocks") continue;
     const upstream = getStatus.get(dependency.depends_on_task_id) as
-      | { status: string }
-      | undefined;
+      { status: string } | undefined;
     if (
       !upstream ||
       ["failed", "canceled", "blocked"].includes(upstream.status)
@@ -260,14 +272,12 @@ function resolveWorkingDirectory(
   if (task.working_directory) return task.working_directory;
   if (run.repo_id) {
     const repo = queries.getDispatchRepo(db).get(run.repo_id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (repo?.repo_path) return repo.repo_path;
   }
   if (run.project_id) {
     const project = queries.getProject(db).get(run.project_id) as
-      | Project
-      | undefined;
+      Project | undefined;
     if (project?.working_directory) return project.working_directory;
   }
   return null;
@@ -281,8 +291,7 @@ function resolveBaseBranch(
   if (task.base_branch) return task.base_branch;
   if (run.repo_id) {
     const repo = queries.getDispatchRepo(db).get(run.repo_id) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (repo?.base_branch) return repo.base_branch;
   }
   return "main";
@@ -320,7 +329,8 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
     const executionHash = approvedExecutionHash(run);
     if (
       !run.approved_plan_hash ||
-      hashFleetTaskRows(approvedTasks) !== run.approved_plan_hash ||
+      hashFleetTaskRows(approvedTasks, approvedDependencies) !==
+        run.approved_plan_hash ||
       !executionHash ||
       hashFleetExecutionContract({
         run,
@@ -354,10 +364,11 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
         `SELECT COUNT(*) AS n FROM fleet_workers WHERE status IN (${activePlaceholders()})`
       )
       .get(...ACTIVE_WORKER_STATUSES) as { n: number };
+    const plannersActive = activePlannerCount(db);
     if (
       runActive.n >= run.max_concurrency ||
-      localActive.n >= FLEET_DEFAULT_PARALLEL_WORKERS ||
-      totalActive.n >= FLEET_MAX_TOTAL_WORKERS
+      localActive.n + plannersActive >= FLEET_DEFAULT_PARALLEL_WORKERS ||
+      totalActive.n + plannersActive >= FLEET_MAX_TOTAL_WORKERS
     )
       return null;
     if (
@@ -435,7 +446,10 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
           `SELECT COUNT(*) AS n FROM fleet_workers WHERE provider = ? AND status IN (${activePlaceholders()})`
         )
         .get(candidateProvider, ...ACTIVE_WORKER_STATUSES) as { n: number };
-      return providerActive.n < providerConcurrencyCap(candidateProvider);
+      return (
+        providerActive.n + activePlannerCount(db, candidateProvider) <
+        providerConcurrencyCap(candidateProvider)
+      );
     });
     if (!task) return null;
     const effectiveProvider = task.agent_type ?? run.provider;
@@ -444,13 +458,14 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
         `SELECT COUNT(*) AS n FROM fleet_workers WHERE provider = ? AND status IN (${activePlaceholders()})`
       )
       .get(effectiveProvider, ...ACTIVE_WORKER_STATUSES) as { n: number };
+    const providerPlannersActive = activePlannerCount(db, effectiveProvider);
     if (
       availableFleetSlots({
         requestedConcurrency: run.max_concurrency,
         runActiveWorkers: runActive.n,
-        localActiveWorkers: localActive.n,
-        providerActiveWorkers: providerActive.n,
-        totalWorkers: totalActive.n,
+        localActiveWorkers: localActive.n + plannersActive,
+        providerActiveWorkers: providerActive.n + providerPlannersActive,
+        totalWorkers: totalActive.n + plannersActive,
         provider: effectiveProvider,
       }) < 1
     )
@@ -646,8 +661,7 @@ async function launchLease(
         transaction(deps.db, () => {
           const nowIso = deps.now().toISOString();
           const run = queries.getFleetRun(deps.db).get(lease.run.id) as
-            | FleetRunRow
-            | undefined;
+            FleetRunRow | undefined;
           const canceled = run?.status === "canceled";
           const changed = deps.db
             .prepare(
@@ -693,8 +707,7 @@ async function launchLease(
       } catch (stopError) {
         transaction(deps.db, () => {
           const run = queries.getFleetRun(deps.db).get(lease.run.id) as
-            | FleetRunRow
-            | undefined;
+            FleetRunRow | undefined;
           const canceled = run?.status === "canceled";
           const changed = deps.db
             .prepare(
@@ -831,8 +844,7 @@ async function pollActiveWorkers(
   for (const worker of workers) {
     const session = worker.session_id
       ? (queries.getSession(deps.db).get(worker.session_id) as
-          | Session
-          | undefined)
+          Session | undefined)
       : undefined;
     let terminalStatus: "completed" | "failed" | "dead" | null = null;
     let terminalCause: string | null = null;
@@ -966,8 +978,7 @@ async function reconcilePendingCleanup(
       worker.terminal_cause?.startsWith("session_completed") === true;
     let session = worker.session_id
       ? (queries.getSession(deps.db).get(worker.session_id) as
-          | Session
-          | undefined)
+          Session | undefined)
       : undefined;
     if (!session && worker.spawn_request_id) {
       session = deps.db
@@ -1162,8 +1173,7 @@ export async function recoverFleetRuns(
     for (const worker of workers) {
       let session = worker.session_id
         ? (queries.getSession(deps.db).get(worker.session_id) as
-            | Session
-            | undefined)
+            Session | undefined)
         : undefined;
       if (!session && worker.spawn_request_id) {
         session = deps.db

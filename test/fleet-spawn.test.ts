@@ -48,5 +48,31 @@ describe("fleet spawn wrapper", () => {
       "develop",
     ]);
     expect(options.every((value) => value.requireTaskDelivery)).toBe(true);
+    expect(options.every((value) => value.useWorktree)).toBe(true);
+    expect(options.every((value) => value.requireWorktree)).toBe(true);
+  });
+
+  it("isolates review tasks instead of using the source checkout", async () => {
+    spawnWorker.mockResolvedValue({
+      id: "review-session",
+      worker_status: "running",
+      worktree_path: "C:\\wt\\review",
+    });
+    await spawnFleetWorker({
+      run: { id: "run-1", provider: "codex" } as FleetRunRow,
+      task: {
+        id: "review-1",
+        title: "Review",
+        task_type: "review",
+      } as FleetTaskRow,
+      workingDirectory: "C:\\repo",
+      claims: [],
+      dependencies: [],
+      attempt: 1,
+      spawnRequestId: "request-1",
+    });
+    expect(spawnWorker).toHaveBeenLastCalledWith(
+      expect.objectContaining({ useWorktree: true, requireWorktree: true })
+    );
   });
 });

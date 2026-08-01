@@ -39,11 +39,32 @@ function stableHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-export function hashParsedFleetPlanTasks(tasks: ParsedFleetPlanTask[]): string {
-  return stableHash(canonicalFleetPlanTasks(tasks));
+export function hashParsedFleetPlanTasks(
+  tasks: ParsedFleetPlanTask[],
+  dependencies: number[][] = []
+): string {
+  return stableHash(
+    canonicalFleetPlanTasks(tasks).map((task, index) => ({
+      ...task,
+      dependencies: [
+        ...new Set([
+          ...(dependencies[index] ?? []),
+          ...(task.parentIndex == null ? [] : [task.parentIndex]),
+        ]),
+      ]
+        .sort((a, b) => a - b)
+        .map((dependencyIndex) => ({
+          dependencyIndex,
+          dependencyType: "blocks" as const,
+        })),
+    }))
+  );
 }
 
-export function hashFleetTaskRows(rows: FleetTaskRow[]): string {
+export function hashFleetTaskRows(
+  rows: FleetTaskRow[],
+  dependencies: FleetTaskDependencyRow[] = []
+): string {
   const ordered = [...rows].sort((a, b) => a.sort_order - b.sort_order);
   const indexById = new Map(ordered.map((task, index) => [task.id, index]));
   const canonical = ordered.map((task, index) => ({
@@ -56,6 +77,23 @@ export function hashFleetTaskRows(rows: FleetTaskRow[]): string {
         : (indexById.get(task.parent_task_id) ?? null),
     sortOrder: index,
     fileClaims: parseFileClaims(task.file_claims_json).sort(),
+    agentType: task.agent_type ?? null,
+    model: task.model ?? null,
+    acceptanceCriteria: task.acceptance_criteria ?? null,
+    verifyCommand: task.verify_command ?? null,
+    dependencies: dependencies
+      .filter((dependency) => dependency.task_id === task.id)
+      .flatMap((dependency) => {
+        const dependencyIndex = indexById.get(dependency.depends_on_task_id);
+        return dependencyIndex == null
+          ? []
+          : [{ dependencyIndex, dependencyType: dependency.dependency_type }];
+      })
+      .sort(
+        (a, b) =>
+          a.dependencyIndex - b.dependencyIndex ||
+          a.dependencyType.localeCompare(b.dependencyType)
+      ),
   }));
   return stableHash(canonical);
 }
@@ -123,7 +161,8 @@ export function hashFleetExecutionContract(input: {
 }
 
 export function validateFleetTaskRowsForApproval(
-  rows: FleetTaskRow[]
+  rows: FleetTaskRow[],
+  dependencies: FleetTaskDependencyRow[] = []
 ): { hash: string } | { error: string } {
   const ordered = [...rows].sort((a, b) => a.sort_order - b.sort_order);
   const indexById = new Map(ordered.map((task, index) => [task.id, index]));
@@ -141,6 +180,19 @@ export function validateFleetTaskRowsForApproval(
     }
     const claims = parseFileClaimsStrict(task.file_claims_json);
     if ("error" in claims) return claims;
+    const dependencyIndexes: number[] = [];
+    for (const dependency of dependencies.filter(
+      (entry) => entry.task_id === task.id
+    )) {
+      if (dependency.dependency_type !== "blocks") {
+        return { error: "plan graph has unsupported dependency semantics" };
+      }
+      const dependencyIndex = indexById.get(dependency.depends_on_task_id);
+      if (dependencyIndex == null || dependencyIndex >= index) {
+        return { error: "plan graph has invalid dependencies" };
+      }
+      dependencyIndexes.push(dependencyIndex);
+    }
 
     canonical.push({
       title: task.title,
@@ -149,6 +201,16 @@ export function validateFleetTaskRowsForApproval(
       parentIndex,
       sortOrder: index,
       fileClaims: claims.claims.sort(),
+      agentType: task.agent_type ?? null,
+      model: task.model ?? null,
+      acceptanceCriteria: task.acceptance_criteria ?? null,
+      verifyCommand: task.verify_command ?? null,
+      dependencies: [...new Set(dependencyIndexes)]
+        .sort((a, b) => a - b)
+        .map((dependencyIndex) => ({
+          dependencyIndex,
+          dependencyType: "blocks" as const,
+        })),
     });
   }
 

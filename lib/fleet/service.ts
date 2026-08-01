@@ -15,7 +15,7 @@ import {
   hashFleetExecutionContract,
   validateFleetTaskRowsForApproval,
 } from "./hash";
-import { parseFleetPlanText } from "./plan";
+import { parseFleetPlanText, type ParsedFleetPlanTask } from "./plan";
 import { normalizeFleetClaims, UNKNOWN_FLEET_CLAIM } from "./conflicts";
 import {
   isFleetSchedulerReady,
@@ -46,6 +46,57 @@ const FLEET_ARTIFACT_LIST_LIMIT = 100;
 const FLEET_ACTOR_MAX = 80;
 const FLEET_ARTIFACT_TITLE_MAX = 160;
 const FLEET_ARTIFACT_BODY_MAX = 8000;
+
+function validateFleetClaimRowsForApproval(
+  tasks: FleetTaskRow[],
+  claims: FleetTaskClaimRow[]
+): { error: string } | { ok: true } {
+  const expected = tasks.flatMap((task) => {
+    const normalized = normalizeFleetClaims(
+      (() => {
+        try {
+          const parsed = JSON.parse(task.file_claims_json);
+          return Array.isArray(parsed)
+            ? parsed.filter(
+                (value): value is string => typeof value === "string"
+              )
+            : [];
+        } catch {
+          return [];
+        }
+      })()
+    );
+    const effective = ["milestone", "review", "explore"].includes(
+      task.task_type
+    )
+      ? []
+      : normalized.length > 0
+        ? normalized
+        : [UNKNOWN_FLEET_CLAIM];
+    return effective.map((path) =>
+      JSON.stringify({
+        taskId: task.id,
+        path,
+        claimType: path === UNKNOWN_FLEET_CLAIM ? "unknown" : "exclusive",
+        confidence: path === UNKNOWN_FLEET_CLAIM ? 0 : 1,
+      })
+    );
+  });
+  const actual = claims.map((claim) =>
+    JSON.stringify({
+      taskId: claim.task_id,
+      path: claim.path,
+      claimType: claim.claim_type,
+      confidence: claim.confidence,
+    })
+  );
+  expected.sort();
+  actual.sort();
+  return expected.length === actual.length &&
+    expected.every((value, index) => value === actual[index])
+    ? { ok: true }
+    : { error: "plan graph claims do not match the reviewed task claims" };
+}
 
 function payloadObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object"
@@ -131,6 +182,9 @@ export function getFleetRunDetail(id: string): FleetRunDetailDto | null {
   const run = queries.getFleetRun(db).get(id) as FleetRunRow | undefined;
   if (!run) return null;
   const tasks = queries.listFleetTasksForRun(db).all(id) as FleetTaskRow[];
+  const dependencies = db
+    .prepare(`SELECT * FROM fleet_task_dependencies WHERE fleet_run_id = ?`)
+    .all(id) as FleetTaskDependencyRow[];
   const workers = queries
     .listFleetWorkersForRun(db)
     .all(id) as FleetWorkerRow[];
@@ -140,7 +194,14 @@ export function getFleetRunDetail(id: string): FleetRunDetailDto | null {
   const events = queries
     .listFleetEventsForRun(db)
     .all(id, 50) as FleetEventRow[];
-  return composeFleetRunDetail({ run, tasks, workers, artifacts, events });
+  return composeFleetRunDetail({
+    run,
+    tasks,
+    dependencies,
+    workers,
+    artifacts,
+    events,
+  });
 }
 
 export function createDraftFleetRun(
@@ -153,15 +214,13 @@ export function createDraftFleetRun(
 
   if (draft.repoId) {
     const repo = queries.getDispatchRepo(db).get(draft.repoId) as
-      | DispatchRepo
-      | undefined;
+      DispatchRepo | undefined;
     if (!repo) return { error: "unknown repoId" };
   }
 
   if (draft.projectId) {
     const project = queries.getProject(db).get(draft.projectId) as
-      | Project
-      | undefined;
+      Project | undefined;
     if (!project) return { error: "unknown projectId" };
   }
 
@@ -218,22 +277,31 @@ export function createDraftFleetRun(
   return { run: detail };
 }
 
-export function ingestFleetRunPlan(
-  id: string,
-  input: unknown
-): { run: FleetRunDetailDto } | { error: string; status?: number } {
-  const payload = payloadObject(input);
-  const parsed = parseFleetPlanText(payload.planText);
-  if ("error" in parsed) return parsed;
+interface FleetPlanReplacement {
+  tasks: ParsedFleetPlanTask[];
+  planText: string;
+  dependencies?: number[][];
+  expectedPlannerRequestId?: string;
+  plannerProvider?: string;
+  source?: "operator" | "planner";
+}
 
+function replaceFleetRunPlan(
+  id: string,
+  parsed: FleetPlanReplacement,
+  actor: string
+): { run: FleetRunDetailDto } | { error: string; status?: number } {
   const db = getDb();
-  const actor = actorValue(payload.actor, "operator");
   const taskIds = parsed.tasks.map(() => randomUUID());
-  const planHash = hashParsedFleetPlanTasks(parsed.tasks);
+  const planHash = hashParsedFleetPlanTasks(
+    parsed.tasks,
+    parsed.dependencies ?? []
+  );
   const eventPayload = JSON.stringify({
     taskCount: parsed.tasks.length,
     planHash,
     actor,
+    source: parsed.source ?? "operator",
   });
 
   const updated = immediateTransaction<
@@ -246,6 +314,39 @@ export function ingestFleetRunPlan(
         error: "cannot replace a plan for the current run state",
         status: 409,
       };
+    }
+    if (!parsed.expectedPlannerRequestId) {
+      try {
+        const currentSettings = payloadObject(JSON.parse(run.settings_json));
+        const currentPlanner = payloadObject(currentSettings.planner);
+        if (
+          ["starting", "running", "finalizing", "cleanup_pending"].includes(
+            String(currentPlanner.state)
+          )
+        ) {
+          return {
+            error: "cancel the active planner before ingesting a manual plan",
+            status: 409,
+          };
+        }
+      } catch {
+        return { error: "run settings are invalid", status: 409 };
+      }
+    }
+    if (parsed.expectedPlannerRequestId) {
+      let settings: Record<string, unknown> = {};
+      try {
+        settings = payloadObject(JSON.parse(run.settings_json));
+      } catch {
+        return { error: "run settings are invalid", status: 409 };
+      }
+      const planner = payloadObject(settings.planner);
+      if (
+        planner.requestId !== parsed.expectedPlannerRequestId ||
+        planner.state !== "finalizing"
+      ) {
+        return { error: "planner result was superseded", status: 409 };
+      }
     }
 
     const workerCount = queries.countFleetWorkersForRun(db).get(id) as {
@@ -263,6 +364,18 @@ export function ingestFleetRunPlan(
       planHash,
       planText: parsed.planText,
       taskCount: parsed.tasks.length,
+      planner: parsed.expectedPlannerRequestId
+        ? {
+            ...payloadObject(
+              payloadObject(JSON.parse(run.settings_json)).planner
+            ),
+            state: "cleanup_pending",
+            finalState: "ready",
+            requestId: parsed.expectedPlannerRequestId,
+            provider: parsed.plannerProvider ?? null,
+            completedAt: new Date().toISOString(),
+          }
+        : { state: "idle" },
     });
     const state = queries
       .updateFleetRunPlanState(db)
@@ -295,18 +408,36 @@ export function ingestFleetRunPlan(
           task.sortOrder,
           JSON.stringify(task.fileClaims)
         );
-      if (parentTaskId) {
+      db.prepare(
+        `UPDATE fleet_tasks SET agent_type = ?, model = ?, acceptance_criteria = ?,
+         verify_command = ? WHERE id = ? AND fleet_run_id = ?`
+      ).run(
+        task.agentType,
+        task.model,
+        task.acceptanceCriteria,
+        task.verifyCommand,
+        taskId,
+        id
+      );
+      const dependencyIndexes = new Set(parsed.dependencies?.[index] ?? []);
+      if (task.parentIndex != null) dependencyIndexes.add(task.parentIndex);
+      for (const dependencyIndex of dependencyIndexes) {
+        const dependsOnTaskId = taskIds[dependencyIndex];
+        if (!dependsOnTaskId || dependsOnTaskId === taskId) {
+          throw new Error("missing generated dependency task id");
+        }
         queries
           .createFleetTaskDependency(db)
-          .run(randomUUID(), id, taskId, parentTaskId, "blocks");
+          .run(randomUUID(), id, taskId, dependsOnTaskId, "blocks");
       }
       const claims = normalizeFleetClaims(task.fileClaims);
-      const effectiveClaims =
-        task.taskType === "milestone"
-          ? []
-          : claims.length > 0
-            ? claims
-            : [UNKNOWN_FLEET_CLAIM];
+      const effectiveClaims = ["milestone", "review", "explore"].includes(
+        task.taskType
+      )
+        ? []
+        : claims.length > 0
+          ? claims
+          : [UNKNOWN_FLEET_CLAIM];
       for (const claim of effectiveClaims) {
         queries
           .createFleetTaskClaim(db)
@@ -330,6 +461,27 @@ export function ingestFleetRunPlan(
   const detail = getFleetRunDetail(id);
   if (!detail) return { error: "failed to read updated run" };
   return { run: detail };
+}
+
+export function ingestFleetRunPlan(
+  id: string,
+  input: unknown
+): { run: FleetRunDetailDto } | { error: string; status?: number } {
+  const payload = payloadObject(input);
+  const parsed = parseFleetPlanText(payload.planText);
+  if ("error" in parsed) return parsed;
+  return replaceFleetRunPlan(
+    id,
+    { ...parsed, source: "operator" },
+    actorValue(payload.actor, "operator")
+  );
+}
+
+export function ingestGeneratedFleetRunPlan(
+  id: string,
+  input: FleetPlanReplacement & { actor?: string }
+): { run: FleetRunDetailDto } | { error: string; status?: number } {
+  return replaceFleetRunPlan(id, input, actorValue(input.actor, "planner"));
 }
 
 export function approveFleetRunPlan(
@@ -365,10 +517,30 @@ export function approveFleetRunPlan(
     if (run.plan_hash !== expectedPlanHash) {
       return { error: "plan hash changed", status: 409 };
     }
+    let plannerState = "idle";
+    try {
+      const settings = payloadObject(JSON.parse(run.settings_json));
+      plannerState = String(payloadObject(settings.planner).state ?? "idle");
+    } catch {
+      return { error: "run settings are invalid", status: 409 };
+    }
+    if (
+      ["starting", "running", "finalizing", "cleanup_pending"].includes(
+        plannerState
+      )
+    ) {
+      return {
+        error: "planner finalization and cleanup must finish before approval",
+        status: 409,
+      };
+    }
 
     const tasks = queries.listFleetTasksForRun(db).all(id) as FleetTaskRow[];
     if (tasks.length === 0) return { error: "plan has no tasks", status: 400 };
-    const validation = validateFleetTaskRowsForApproval(tasks);
+    const dependencies = db
+      .prepare(`SELECT * FROM fleet_task_dependencies WHERE fleet_run_id = ?`)
+      .all(id) as FleetTaskDependencyRow[];
+    const validation = validateFleetTaskRowsForApproval(tasks, dependencies);
     if ("error" in validation) return { error: validation.error, status: 409 };
     if (validation.hash !== run.plan_hash) {
       return { error: "plan hash changed", status: 409 };
@@ -398,14 +570,12 @@ export function approveFleetRunPlan(
     let defaultBaseBranch = "main";
     if (run.repo_id) {
       const repo = queries.getDispatchRepo(db).get(run.repo_id) as
-        | DispatchRepo
-        | undefined;
+        DispatchRepo | undefined;
       defaultWorkingDirectory = repo?.repo_path ?? null;
       defaultBaseBranch = repo?.base_branch ?? "main";
     } else if (run.project_id) {
       const project = queries.getProject(db).get(run.project_id) as
-        | Project
-        | undefined;
+        Project | undefined;
       defaultWorkingDirectory = project?.working_directory ?? null;
       if (defaultWorkingDirectory) {
         defaultBaseBranch = getDefaultBranch(defaultWorkingDirectory);
@@ -464,9 +634,13 @@ export function approveFleetRunPlan(
     const claims = db
       .prepare(`SELECT * FROM fleet_task_claims WHERE fleet_run_id = ?`)
       .all(id) as FleetTaskClaimRow[];
-    const dependencies = db
-      .prepare(`SELECT * FROM fleet_task_dependencies WHERE fleet_run_id = ?`)
-      .all(id) as FleetTaskDependencyRow[];
+    const claimValidation = validateFleetClaimRowsForApproval(
+      executionTasks,
+      claims
+    );
+    if ("error" in claimValidation) {
+      return { error: claimValidation.error, status: 409 };
+    }
     const approvedExecutionHash = hashFleetExecutionContract({
       run,
       tasks: executionTasks,
@@ -550,8 +724,7 @@ export function attachFleetPlanCriticArtifact(
 
     if (taskId) {
       const task = queries.getFleetTaskForRun(db).get(id, taskId) as
-        | FleetTaskRow
-        | undefined;
+        FleetTaskRow | undefined;
       if (!task) return { error: "unknown taskId", status: 400 };
     }
 
@@ -706,6 +879,23 @@ export async function cancelFleetRun(
     if (!run) return { error: "Fleet run not found", status: 404 };
     if (["completed", "failed", "canceled"].includes(run.status)) {
       return { error: "run is already terminal", status: 409 };
+    }
+    let plannerState = "idle";
+    try {
+      const settings = payloadObject(JSON.parse(run.settings_json));
+      plannerState = String(payloadObject(settings.planner).state ?? "idle");
+    } catch {
+      return { error: "run settings are invalid", status: 409 };
+    }
+    if (
+      ["starting", "running", "finalizing", "cleanup_pending"].includes(
+        plannerState
+      )
+    ) {
+      return {
+        error: "cancel the active planner and finish its cleanup first",
+        status: 409,
+      };
     }
     db.prepare(
       `UPDATE fleet_runs SET status = 'canceled', cancel_mode = ?, recovery_required = 0,

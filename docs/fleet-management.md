@@ -1,14 +1,17 @@
 # Fleet Management Plan
 
-Last updated: 2026-07-08
+Last updated: 2026-08-01
 
 ## Executive summary
 
-Stoa already has the ingredients for multi-agent work: MCP orchestration tools,
+Stoa has both the original ingredients for multi-agent work and the first
+implemented Fleet control-plane slices: MCP orchestration tools,
 worker sessions in isolated worktrees, declarative DAG pipelines, dispatch
 planning, a fleet board, fleet memory, review/verify/merge helpers, cost
-tracking, and status detection. What it does not yet have is a durable
-"manage 40 agents against one project plan" control plane.
+tracking, status detection, durable run/task state, automatic planning and
+allocation, and a restart-aware scheduler. Completion reporting, durable review
+gates, and merge integration remain later phases; the status ledger below is
+the source of truth.
 
 The right architecture is not "ask one Claude or Codex conductor to remember
 40 workers in its context." The conductor pattern is valuable, but at 40 agents
@@ -184,6 +187,18 @@ Stoa exposes an MCP orchestration server with tools for:
 - Running DAG pipelines: `run_pipeline` / `get_pipeline`.
 - Summarizing a worker set: `get_workers_summary`.
 - Shared memory, notes, channels, schedules, and operator input.
+- Durable Fleet Management in the authenticated UI/API: create/list/get runs,
+  generate and allocate a plan, inspect the full dependency graph, attach
+  artifacts, approve, pause, resume, and cancel.
+- A request-only Fleet MCP bridge: `fleet_request_action` can notify an operator
+  about a requested lifecycle action, but cannot read or mutate Fleet state.
+
+The server now uses the stable MCP TypeScript SDK v2 split package
+(`@modelcontextprotocol/server` 2.x) and the 2026-07-28 protocol surface. Its
+stdio entry uses `serveStdio`, negotiating modern clients while preserving the
+2025-era compatibility path for existing Claude, Codex, Hermes, Kilo, and Kimi
+configurations. There are no remaining imports from the monolithic v1
+`@modelcontextprotocol/sdk` package.
 
 The code comment in the MCP server is directionally right: any Claude session can
 act as a conductor, and workers get their own git worktrees. That is already a
@@ -237,29 +252,55 @@ Stoa already has:
 
 These pieces should become the fleet manager's substrate.
 
-### Gap analysis
+### Current implementation snapshot (2026-08-01)
 
-Stoa does not yet provide a durable 40-agent fleet plan capability because:
+Implemented on the Phase 3 and stacked automatic-planning branches:
 
-- There is no first-class `fleet_run` object.
-- There is no durable `fleet_task` graph persisted in SQLite.
-- Pipeline run state is in memory and lost on restart.
-- Existing pipelines default to four parallel workers and do not model cost,
-  provider budgets, merge queues, review gates, or operator approvals.
-- Existing dispatch planning caps at eight tasks.
-- Existing Best-of-N is for selecting one winner from up to three attempts, not
-  coordinating a project fleet.
-- Worker status polling is per-session and can become expensive/noisy at 40
-  workers if every view/action captures terminal output.
-- A conductor agent's context is not a reliable source of truth for 40 active
-  write-heavy tasks.
-- There is no fleet-level artifact contract: workers can finish a terminal turn
-  without producing a structured completion report, test evidence, risk notes,
-  or merge readiness.
-- There is no server-side reconciliation loop that survives page reloads,
-  process restart, or a conductor thread being closed.
-- There is no plan-level pause/resume/cancel/backoff policy.
-- There is no merge queue that understands all active worktrees in a fleet run.
+- First-class durable `fleet_runs`, `fleet_tasks`, dependencies, claims,
+  workers, artifacts, events, approvals, leases, reservations, and recovery
+  state in SQLite.
+- A restart-aware server-side scheduler with a startup barrier, transactional
+  leases, idempotent spawn requests, dependency and file-claim admission,
+  provider/run/local concurrency caps, conservative budget reservations, and
+  pause/cancel/recovery behavior.
+- A goal-first create flow. “Plan automatically” is on by default: one planner
+  agent inspects an isolated worktree, emits a bounded structured plan, and Stoa
+  persists it for review. No worker launches until the exact plan is approved.
+- Deterministic automatic allocation across installed agent CLIs. Valid planner
+  provider suggestions are honored; unspecified or unavailable suggestions are
+  balanced across installed providers. A run model is only inherited by tasks
+  allocated to that same provider, preventing foreign-model leakage.
+- MCP SDK v2 across the orchestration server, with modern/legacy stdio
+  negotiation. Fleet is intentionally request-only over MCP: an agent may queue
+  `fleet_request_action`, but cannot enumerate runs, create drafts, approve,
+  start, pause, cancel, attach artifacts, call scheduler ticks, or clean up.
+  Direct lifecycle wrappers remain pending a server-issued, action-bound,
+  one-use capability design.
+- Planner hardening: prompt approval mode (no unconfined full-bypass), no
+  dependency/env setup race, bounded same-handle regular-file reads, exact
+  created-branch cleanup, transactional global/provider admission caps, durable
+  `finalizing`/`cleanup_pending` recovery, background reconciliation, and
+  isolated worktrees for read-only as well as write Fleet tasks.
+  Prompt mode means a provider may pause for permission to write `PLAN.md`;
+  Fleet shows the planner state/provider/session so the operator can open that
+  session. Fully unattended planning requires an OS-confined narrow write path
+  and is not claimed by this slice.
+
+Still pending in later phases:
+
+- Fleet-owned, nonce-bound completion reports and bounded artifact/status
+  aggregation from worker worktrees.
+- Automated per-task verification plus the four independent review lanes as
+  durable runtime gates (the repository development gate already requires them
+  for this implementation).
+- Dispatch merge-train integration, head-SHA pinning, merge-batch approval, and
+  destructive cleanup/retention policy.
+- Optional MCP sampling and protocol-native Tasks/subscriptions. SDK v2 and
+  modern/legacy negotiation are implemented; Fleet’s long-running planner uses
+  its durable HTTP/SQLite run state rather than advertising those optional MCP
+  capabilities yet.
+- An optional AI supervisor over durable summaries. The scheduler and database,
+  not a conductor’s context, remain authoritative.
 
 ## Non-negotiable invariants
 
@@ -680,6 +721,10 @@ Dependency types:
 - `informs`: downstream may run but should include upstream output if available.
 - `review_of`: reviewer task evaluates another task.
 - `fixes`: follow-up task addresses findings from another task.
+
+The current automatic planner and approval hash accept only `blocks` edges.
+The other edge types remain design vocabulary for later runtime phases and must
+not enter an approved Phase 3A execution graph.
 
 ### File claims
 
@@ -1213,6 +1258,19 @@ can generate `fleet_tasks` as well as dispatch rows. The current default task ca
 of 8 should remain for dispatch, but Fleet Management should accept a configured
 cap with a hard safety ceiling.
 
+Current implementation: Fleet Management launches a dedicated planner session
+in an isolated worktree. The default cap is 8 and the hard ceiling is 40. The
+planner writes a marker-delimited JSON contract to `PLAN.md`; Stoa opens one
+non-blocking/no-follow handle, requires a regular file, and reads at most 128
+KiB. It validates unique task keys, backward-only dependencies, bounded
+non-glob claims, criteria, verification hints, and installed-provider
+suggestions, then stores a readable plan plus the durable graph. A concurrent
+manual plan cannot overwrite an active planner; the operator must cancel it
+first. A bounded server reconciler advances headless planners. Durable
+`finalizing` and `cleanup_pending` states retain exact session, worktree,
+project, and created-branch identity until cleanup succeeds after a valid
+result, cancellation, failure, or the 15-minute runtime limit.
+
 ### Step 3: Adversarial plan review
 
 Before approval, run plan critics:
@@ -1378,7 +1436,8 @@ Add routes:
 - `POST /api/fleet/workers/[id]/message`
 - `POST /api/fleet/workers/[id]/kill`
 
-MCP tools can wrap these routes:
+Future MCP tools may wrap these routes only after the scoped capability backend
+exists:
 
 - `fleet_create_run`
 - `fleet_plan_run`
@@ -1393,10 +1452,23 @@ MCP tools can wrap these routes:
 - `fleet_submit_artifact`
 - `fleet_request_operator_input`
 
-State-changing MCP wrappers are request-capable by default. They can attach a
-human approval token gathered through the UI, but they cannot self-authorize a
-resume, cancel, worker kill, cleanup, or merge. `/tick` is not an MCP tool; it is
-the scheduler's idempotent reconciler entrypoint.
+The current SDK v2 Fleet surface implements only `fleet_request_action`. It
+creates a bounded operator-attention request and returns immediately; accepting
+or answering that request never executes the requested action. The operator
+must inspect and act in Fleet Management. Undiscovered direct Fleet tool names
+are explicitly rejected as defense in depth. The existing structured
+`request_operator_input` tool remains available for general questions, but its
+answers are not Fleet authorization capabilities. `/tick`, run/task reads,
+draft creation, artifact submission, approval, resume, cancel, worker kill,
+merge, and destructive cleanup are not Fleet MCP tools.
+
+This is an MCP tool-policy boundary, not an OS sandbox against arbitrary local
+processes. A fully trusted, unconfined agent with shell/filesystem access can
+reach the same localhost admin APIs as its operator. Remote deployments must
+enable Stoa authentication, and host-level separation of local agent processes
+remains necessary for a strong human-only authority guarantee. The planned
+scoped capability backend must be paired with that process isolation; UI-only
+headers or forgeable elicitation IDs are not treated as security controls.
 
 ## UI plan
 
@@ -1687,17 +1759,18 @@ phase/slice branch before commit. Update post-merge fields only after the merge
 truth exists; if that requires a bookkeeping PR, that PR is gated but does not
 itself need another bookkeeping PR.
 
-| Phase                                             | Status                  | Active branch/slice  | Pre-merge evidence                                                                                                                                                                                                                                                                                                                                                                              | Post-merge reconciliation                                                                                                             | Current next action                                                                                              | Notes                                                                                                                                                                                                                                                                |
-| ------------------------------------------------- | ----------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Phase 0: Plan and loop                            | Completed               | Merged via PR #391   | Local gate green on branch head: `npx prettier --check .`, `npx tsc --noEmit`, `npm test` (306 files, 3539 tests), and `npm run build` pass with existing Turbopack warning; four-agent review clean after adversarial fixes; PR #391 final head `68efb34` had all CI checks green                                                                                                              | Merged 2026-07-08 as `97aed5f`; final CI run `28982835413` green on `68efb34`; bookkeeping recorded by gated PR path                  | Phase 1 completed via PR #393                                                                                    | Creates the durable plan, framework evaluation, visible execution contract, state ledger, and phase loop.                                                                                                                                                            |
-| Phase 1: Durable model and read-only UI           | Completed               | Merged via PR #393   | Local gate green on branch head: `npx tsc --noEmit`, `npx prettier --check .`, `npm test` (310 files, 3558 tests), and `npm run build` pass with existing Turbopack warning; Chrome smoke test passed; final four-agent review clean; PR #393 final head `1643f51` had PR-head CI run `28985939366` green                                                                                       | Merged 2026-07-09 as `3c5cecd`; merged-state main push CI run `28986123466` green on `3c5cecd`; bookkeeping recorded by gated PR path | Phase 2 completed via PR #395                                                                                    | Delivered durable draft-run model, read-only Fleet Management UI, approval preview, bounded draft payloads, no worker spawning, and client import tests.                                                                                                             |
-| Phase 2: Plan ingestion and decomposition         | Completed               | Merged via PR #395   | Local gate green on branch head: `npx tsc --noEmit`, `npx prettier --check .`, `npm test` (313 files, 3582 tests), and `npm run build` pass with existing Turbopack warning; browser smoke passed; final four-agent review clean; PR #395 final head `0efe58b` had PR-head CI run `29002393867` green                                                                                           | Merged 2026-07-09 as `983d123`; merged-state main push CI run `29002655048` green on `983d123`; bookkeeping recorded by gated PR path | Start Phase 3 branch after this bookkeeping PR is merged and operator phase-start authorization is granted       | Delivered durable plan ingestion, stable plan hashes, approval, critic artifacts, blocker gates, route body caps, and partial-schema repair.                                                                                                                         |
-| Phase 3: Scheduler and worker launch              | Implemented (pre-merge) | `feat/fleet-phase-3` | Local gate on the uncommitted branch diff: `npx tsc --noEmit`; `npm test` (319 files, 3625 tests); isolated unit project (311 files, 3563 tests); isolated PTY project (8 files, 62 tests); and `npm run build` all green with the existing Turbopack trace warning. Focused Fleet regressions green; final correctness/security, adversarial, cross-platform, and simplicity/UX reviews clean. | Pending commit, PR-head CI, merge, and merged-state reconciliation.                                                                   | Commit/push/open PR only with operator authorization; start Phase 4 only after Phase 3 is merged and authorized. | Delivers durable leases, idempotent/recoverable spawn, admission caps, conflict avoidance, restart-safe lifecycle controls, and the 40-task fake-worker test. An approved Markdown plan launches workers automatically; goal-only AI decomposition is still pending. |
-| Phase 4: Artifact contract and status aggregation | Not started             | TBD                  | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                                                                                              | Pending future phase merge                                                                                                            | Pending Phase 3                                                                                                  | Fleet-owned reports, actual claims, bounded polling.                                                                                                                                                                                                                 |
-| Phase 5: Verify and review gates                  | Not started             | TBD                  | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                                                                                              | Pending future phase merge                                                                                                            | Pending Phase 4                                                                                                  | Dispatch verifier reuse and mandatory independent reviews.                                                                                                                                                                                                           |
-| Phase 6: Merge integration                        | Not started             | TBD                  | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                                                                                              | Pending future phase merge                                                                                                            | Pending Phase 5                                                                                                  | Reuse dispatch auto-merge/merge-train and SHA pinning.                                                                                                                                                                                                               |
-| Phase 7: Lifecycle hardening                      | Not started             | TBD                  | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                                                                                              | Pending future phase merge                                                                                                            | Pending Phase 6                                                                                                  | Cleanup, archival, retention, analytics, optional cloud hooks.                                                                                                                                                                                                       |
-| Phase 8: AI supervisor layer                      | Not started             | TBD                  | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                                                                                              | Pending future phase merge                                                                                                            | Pending Phase 7                                                                                                  | Optional supervisor over durable summaries, not source of truth.                                                                                                                                                                                                     |
+| Phase                                               | Status                               | Active branch/slice               | Pre-merge evidence                                                                                                                                                                                                                                                                                                  | Post-merge reconciliation                                                                                                             | Current next action                                                                                        | Notes                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------- | ------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 0: Plan and loop                              | Completed                            | Merged via PR #391                | Local gate green on branch head: `npx prettier --check .`, `npx tsc --noEmit`, `npm test` (306 files, 3539 tests), and `npm run build` pass with existing Turbopack warning; four-agent review clean after adversarial fixes; PR #391 final head `68efb34` had all CI checks green                                  | Merged 2026-07-08 as `97aed5f`; final CI run `28982835413` green on `68efb34`; bookkeeping recorded by gated PR path                  | Phase 1 completed via PR #393                                                                              | Creates the durable plan, framework evaluation, visible execution contract, state ledger, and phase loop.                                                                                                                                                                                                     |
+| Phase 1: Durable model and read-only UI             | Completed                            | Merged via PR #393                | Local gate green on branch head: `npx tsc --noEmit`, `npx prettier --check .`, `npm test` (310 files, 3558 tests), and `npm run build` pass with existing Turbopack warning; Chrome smoke test passed; final four-agent review clean; PR #393 final head `1643f51` had PR-head CI run `28985939366` green           | Merged 2026-07-09 as `3c5cecd`; merged-state main push CI run `28986123466` green on `3c5cecd`; bookkeeping recorded by gated PR path | Phase 2 completed via PR #395                                                                              | Delivered durable draft-run model, read-only Fleet Management UI, approval preview, bounded draft payloads, no worker spawning, and client import tests.                                                                                                                                                      |
+| Phase 2: Plan ingestion and decomposition           | Completed                            | Merged via PR #395                | Local gate green on branch head: `npx tsc --noEmit`, `npx prettier --check .`, `npm test` (313 files, 3582 tests), and `npm run build` pass with existing Turbopack warning; browser smoke passed; final four-agent review clean; PR #395 final head `0efe58b` had PR-head CI run `29002393867` green               | Merged 2026-07-09 as `983d123`; merged-state main push CI run `29002655048` green on `983d123`; bookkeeping recorded by gated PR path | Start Phase 3 branch after this bookkeeping PR is merged and operator phase-start authorization is granted | Delivered durable plan ingestion, stable plan hashes, approval, critic artifacts, blocker gates, route body caps, and partial-schema repair.                                                                                                                                                                  |
+| Phase 3: Scheduler and worker launch                | Implemented and pushed (pre-merge)   | `feat/fleet-phase-3` at `fa68387` | `npx tsc --noEmit`; `npm test` (319 files, 3625 tests); isolated unit project (311 files, 3563 tests); isolated PTY project (8 files, 62 tests); and `npm run build` all green with the existing Turbopack trace warning. Final correctness/security, adversarial, cross-platform, and simplicity/UX reviews clean. | Pending PR-head CI, merge, and merged-state reconciliation.                                                                           | Phase 3 is pushed to origin; no PR/merge was authorized.                                                   | Delivers durable leases, idempotent/recoverable spawn, admission caps, conflict avoidance, restart-safe lifecycle controls, and the 40-task fake-worker test. An approved plan launches workers automatically.                                                                                                |
+| Phase 3A: Automatic planner, allocation, MCP SDK v2 | Implemented and verified (pre-merge) | `feat/fleet-auto-planner-mcp2`    | `npx tsc --noEmit`; `npm test` (324 files, 3657 tests); and `npm run build` green with the existing Turbopack trace warning. Focused Fleet/MCP suites green; final correctness/security, adversarial, cross-platform, and simplicity/UX reviews clean after fixes.                                                  | Pending PR-head CI, merge, and merged-state reconciliation.                                                                           | Publish and maintain the authorized verified checkpoint on origin; no PR/merge was authorized.             | Default create-and-plan UI, durable isolated planner lifecycle, shared planner/worker admission, 40-task hard cap, installed-provider balancing, exact claim/dependency/execution hash binding, MCP SDK v2 migration with legacy negotiation, and request-only Fleet MCP pending scoped one-use capabilities. |
+| Phase 4: Artifact contract and status aggregation   | Not started                          | TBD                               | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                  | Pending future phase merge                                                                                                            | Pending Phase 3                                                                                            | Fleet-owned reports, actual claims, bounded polling.                                                                                                                                                                                                                                                          |
+| Phase 5: Verify and review gates                    | Not started                          | TBD                               | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                  | Pending future phase merge                                                                                                            | Pending Phase 4                                                                                            | Dispatch verifier reuse and mandatory independent reviews.                                                                                                                                                                                                                                                    |
+| Phase 6: Merge integration                          | Not started                          | TBD                               | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                  | Pending future phase merge                                                                                                            | Pending Phase 5                                                                                            | Reuse dispatch auto-merge/merge-train and SHA pinning.                                                                                                                                                                                                                                                        |
+| Phase 7: Lifecycle hardening                        | Not started                          | TBD                               | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                  | Pending future phase merge                                                                                                            | Pending Phase 6                                                                                            | Cleanup, archival, retention, analytics, optional cloud hooks.                                                                                                                                                                                                                                                |
+| Phase 8: AI supervisor layer                        | Not started                          | TBD                               | Required: full local gate + four-agent review + CI                                                                                                                                                                                                                                                                  | Pending future phase merge                                                                                                            | Pending Phase 7                                                                                            | Optional supervisor over durable summaries, not source of truth.                                                                                                                                                                                                                                              |
 
 ### UI, create, and orchestration emphasis
 
@@ -1898,18 +1971,19 @@ Fleet Board:
 MCP:
 
 - Keep current orchestration tools.
-- Add fleet tools that operate on durable run ids instead of session-only worker
-  sets.
+- Keep Fleet MCP request-only until server-issued, action-bound, one-use
+  capabilities can scope durable run operations safely.
 
 ## Answer to the 40-agent question
 
 Can Claude or Codex MCP conductor pattern manage 40 agents working on a plan?
 
-It can help coordinate them, but it should not be the only mechanism. With the
-current Stoa implementation, a conductor can spawn/list/message workers and run
-pipelines, but the durable truth is incomplete for 40-agent work. Current Codex
-subagent docs also default to far fewer concurrent threads and caution against
-write-heavy parallelism.
+It can help coordinate them, but it is not the source of truth. Stoa now accepts
+a goal, runs one bounded isolated planner, persists and displays the full task
+DAG and installed-provider allocation, waits for exact-plan approval, and then
+uses the durable scheduler to launch approved work in admission-controlled
+waves. The scheduler, leases, recovery state, and Fleet UI survive the
+conductor's context and process lifetime.
 
 The reliable design is:
 
@@ -1919,20 +1993,24 @@ The reliable design is:
 - Operator UI for approval and intervention.
 - Git worktrees/branches/PRs for audit and merge safety.
 
-That is the product Stoa is missing.
+What remains before a complete 40-agent delivery loop is Fleet-owned completion
+artifacts, durable per-task verification and independent runtime review gates,
+and dispatch merge-train/SHA-pinned landing. MCP Fleet lifecycle control also
+remains request-only pending scoped capability tokens.
 
 ## Open questions
 
 - Should Fleet Management default to local workers or support cloud/offloaded
   workers in v1?
 - Should the first merge integration be local-only, GitHub PR-based, or both?
-- Should planner output be JSON-only, markdown-plus-frontmatter, or a typed
-  tool call?
 - What is the safe default max parallelism on Windows with Tier 2 pty-host?
 - Should tasks be allowed to share a worktree at all, or should shared worktrees
   remain pipeline-only?
 
-## First PR checklist
+## Historical first PR checklist (completed)
+
+This checklist describes the completed durable-spine slice; the phase ledger is
+the current status source.
 
 - Add `lib/fleet/types.ts`.
 - Add pure `lib/fleet/engine.ts`.

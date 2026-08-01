@@ -23,31 +23,29 @@
  */
 
 import "../lib/als-global";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Server, type Tool } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { SPAWNABLE_AGENTS, handleToolCall } from "./orchestration-tools";
 import { emitGenAiEvent } from "../lib/telemetry/otel";
 
-const server = new Server(
-  {
-    name: "stoa-orchestration",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
+export function createOrchestrationServer(): Server {
+  const server = new Server(
+    {
+      name: "stoa-orchestration",
+      version: "2.0.0",
     },
-  }
-);
+    {
+      capabilities: {
+        tools: {},
+      },
+    }
+  );
 
-// List available tools
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
+  // List available tools
+  server.setRequestHandler("tools/list", async () => {
+    const tools: Tool[] = [
       {
         name: "spawn_worker",
         description:
@@ -500,69 +498,106 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["message", "fields"],
         },
       },
-    ],
-  };
-});
+    ];
+    return {
+      tools: [
+        ...tools,
+        {
+          name: "fleet_request_action",
+          description:
+            "Queue an informational Fleet lifecycle request for an operator. This never reads Fleet state, approves a plan, launches an agent, or changes a run; the operator must review and execute it in Fleet Management.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              conductorId: { type: "string" },
+              runId: { type: "string" },
+              action: {
+                type: "string",
+                enum: ["plan", "approve", "start_or_resume", "pause", "cancel"],
+              },
+              expectedPlanHash: { type: "string" },
+              message: { type: "string" },
+            },
+            required: ["runId", "action"],
+          },
+        },
+      ],
+    };
+  });
 
-// Resolve the conductor ID for a tool call. The Stoa-baked id is authoritative;
-// an agent-supplied `conductorId` is only used when there's no baked id (some
-// agents pass their own provider session id, which would break the worker FK).
+  // Resolve the conductor ID for a tool call. The Stoa-baked id is authoritative;
+  // an agent-supplied `conductorId` is only used when there's no baked id (some
+  // agents pass their own provider session id, which would break the worker FK).
 
-// handleToolCall catches its OWN errors and RETURNS an "Error: …" text result
-// (it rarely throws), so a plain try/catch would tag almost every failed tool as
-// an OK span and under-report error rates. Read the result: an `isError` flag or
-// a leading "Error:" in the first text part means the call failed.
-function toolResultStatus(result: unknown): { code: 1 | 2; message?: string } {
-  const r = result as { isError?: boolean; content?: Array<{ text?: string }> };
-  const firstText = r?.content?.[0]?.text;
-  const failed =
-    r?.isError === true ||
-    (typeof firstText === "string" && firstText.startsWith("Error:"));
-  return failed ? { code: 2, message: firstText } : { code: 1 };
-}
-
-// Wrap the tool handler with a GenAI "tool" span at the natural tool boundary.
-// No-op unless STOA_OTEL_ENDPOINT is set, and best-effort — the span emit can
-// never change the tool's result or throw (emitGenAiEvent swallows its errors).
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const startMs = Date.now();
-  const toolName = request.params.name;
-  try {
-    const result = await handleToolCall(request);
-    const status = toolResultStatus(result);
-    void emitGenAiEvent({
-      operation: "tool",
-      // The conductor MCP surface runs under Claude Code (anthropic); the tool
-      // itself is provider-agnostic, so system is the harness, tool is the name.
-      provider: "claude",
-      startMs,
-      endMs: Date.now(),
-      toolName,
-      statusCode: status.code,
-      statusMessage: status.message,
-      extra: { "stoa.mcp.tool": toolName },
-    });
-    return result;
-  } catch (error) {
-    void emitGenAiEvent({
-      operation: "tool",
-      provider: "claude",
-      startMs,
-      endMs: Date.now(),
-      toolName,
-      statusCode: 2, // ERROR
-      statusMessage: error instanceof Error ? error.message : "tool failed",
-      extra: { "stoa.mcp.tool": toolName },
-    });
-    throw error;
+  // handleToolCall catches its OWN errors and RETURNS an "Error: …" text result
+  // (it rarely throws), so a plain try/catch would tag almost every failed tool as
+  // an OK span and under-report error rates. Read the result: an `isError` flag or
+  // a leading "Error:" in the first text part means the call failed.
+  function toolResultStatus(result: unknown): {
+    code: 1 | 2;
+    message?: string;
+  } {
+    const r = result as {
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+    };
+    const firstText = r?.content?.[0]?.text;
+    const failed =
+      r?.isError === true ||
+      (typeof firstText === "string" && firstText.startsWith("Error:"));
+    return failed ? { code: 2, message: firstText } : { code: 1 };
   }
-});
+
+  // Wrap the tool handler with a GenAI "tool" span at the natural tool boundary.
+  // No-op unless STOA_OTEL_ENDPOINT is set, and best-effort — the span emit can
+  // never change the tool's result or throw (emitGenAiEvent swallows its errors).
+  server.setRequestHandler("tools/call", async (request) => {
+    const startMs = Date.now();
+    const toolName = request.params.name;
+    try {
+      const result = await handleToolCall(request);
+      const status = toolResultStatus(result);
+      void emitGenAiEvent({
+        operation: "tool",
+        // The conductor MCP surface runs under Claude Code (anthropic); the tool
+        // itself is provider-agnostic, so system is the harness, tool is the name.
+        provider: "claude",
+        startMs,
+        endMs: Date.now(),
+        toolName,
+        statusCode: status.code,
+        statusMessage: status.message,
+        extra: { "stoa.mcp.tool": toolName },
+      });
+      return result;
+    } catch (error) {
+      void emitGenAiEvent({
+        operation: "tool",
+        provider: "claude",
+        startMs,
+        endMs: Date.now(),
+        toolName,
+        statusCode: 2, // ERROR
+        statusMessage: error instanceof Error ? error.message : "tool failed",
+        extra: { "stoa.mcp.tool": toolName },
+      });
+      throw error;
+    }
+  });
+
+  return server;
+}
 
 // Start the server
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  serveStdio(() => createOrchestrationServer(), {
+    legacy: "serve",
+    onerror: (error) => console.error("Stoa MCP transport error:", error),
+  });
   console.error("Stoa Orchestration MCP Server started");
 }
 
-main().catch(console.error);
+const entryPath = process.argv[1] ? resolve(process.argv[1]) : null;
+if (entryPath === resolve(fileURLToPath(import.meta.url))) {
+  main().catch(console.error);
+}

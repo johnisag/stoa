@@ -10,15 +10,10 @@ export type FleetRunStatus =
   | "canceled";
 
 export type FleetReviewPolicy =
-  | "four_agent"
-  | "four_agent_plus_red_team"
-  | "manual";
+  "four_agent" | "four_agent_plus_red_team" | "manual";
 
 export type FleetApprovalState =
-  | "draft"
-  | "needs_approval"
-  | "approved"
-  | "blocked";
+  "draft" | "needs_approval" | "approved" | "blocked";
 
 export type FleetTaskStatus =
   | "draft"
@@ -44,11 +39,18 @@ export type FleetTaskStatus =
 
 export type FleetPauseMode = "pause-new" | "pause-and-interrupt";
 export type FleetCancelMode =
-  | "cancel-preserve-worktrees"
-  | "cancel-and-clean-owned-worktrees";
+  "cancel-preserve-worktrees" | "cancel-and-clean-owned-worktrees";
 export type FleetClaimType = "unknown" | "exclusive";
 
 export type FleetArtifactSeverity = "info" | "warning" | "blocker";
+export type FleetPlannerState =
+  | "idle"
+  | "starting"
+  | "running"
+  | "finalizing"
+  | "cleanup_pending"
+  | "ready"
+  | "failed";
 
 export type FleetWorkerStatus =
   | "leasing"
@@ -207,11 +209,16 @@ export interface FleetRunDto {
   createdAt: string;
   updatedAt: string;
   approvalPreview: FleetApprovalPreview;
+  plannerState: FleetPlannerState;
+  plannerError: string | null;
+  plannerProvider: string | null;
+  plannerSessionId: string | null;
 }
 
 export interface FleetTaskDto {
   id: string;
   parentTaskId: string | null;
+  dependsOnTaskIds: string[];
   title: string;
   description: string | null;
   status: FleetTaskStatus;
@@ -227,6 +234,7 @@ export interface FleetTaskDto {
   maxAttempts: number;
   currentAttempt: number;
   acceptanceCriteria: string | null;
+  verifyCommand: string | null;
   failureCode: string | null;
   createdAt: string;
   updatedAt: string;

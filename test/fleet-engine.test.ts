@@ -148,10 +148,7 @@ describe("buildFleetApprovalPreview", () => {
       "four-agent review with adversarial lane"
     );
     expect(preview.blockedActions).toEqual(
-      expect.arrayContaining([
-        "autonomous planner execution",
-        "worker spawning",
-      ])
+      expect.arrayContaining(["worker spawning"])
     );
   });
 });

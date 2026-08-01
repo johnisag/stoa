@@ -101,7 +101,7 @@ function schedulerDeps(
     db.prepare(
       `UPDATE fleet_runs SET approved_plan_hash = ?, settings_json = ? WHERE id = ?`
     ).run(
-      hashFleetTaskRows(tasks),
+      hashFleetTaskRows(tasks, dependencies),
       JSON.stringify({ approvedExecutionHash: executionHash }),
       run.id
     );
@@ -616,6 +616,23 @@ describe("fleet scheduler", () => {
     }
     const spawn = vi.fn(async ({ task }) => fakeSpawnResult(task.id));
     expect(await reconcileFleetRun(runId, schedulerDeps(spawn))).toBe(2);
+  });
+
+  it("counts active planners against worker provider capacity", async () => {
+    const runId = addRun({ concurrency: 6, provider: "hermes" });
+    addTask(runId, "lib/a.ts", 1);
+    const spawn = vi.fn(async ({ task }) => fakeSpawnResult(task.id));
+    const deps = schedulerDeps(spawn);
+    for (let index = 0; index < 2; index++) {
+      const plannerRunId = addRun({ status: "draft", provider: "hermes" });
+      db.prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`).run(
+        JSON.stringify({ planner: { state: "running", provider: "hermes" } }),
+        plannerRunId
+      );
+    }
+
+    expect(await reconcileFleetRun(runId, deps)).toBe(0);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("releases a terminal wave and admits later work", async () => {

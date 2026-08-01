@@ -32,8 +32,6 @@ export async function spawnFleetWorker(input: {
   if (!PROVIDER_IDS.includes(provider as ProviderId) || provider === "shell") {
     throw new Error(`Unsupported fleet provider: ${provider}`);
   }
-  const writeTask =
-    input.task.task_type !== "review" && input.task.task_type !== "explore";
   let session;
   try {
     session = await spawnWorker({
@@ -44,8 +42,8 @@ export async function spawnFleetWorker(input: {
         input.task.branch_name ??
         `fleet-${input.run.id.slice(0, 8)}-${input.task.id.slice(0, 8)}-${input.attempt}`,
       baseBranch: input.task.base_branch ?? "main",
-      useWorktree: writeTask,
-      requireWorktree: writeTask,
+      useWorktree: true,
+      requireWorktree: true,
       requireTaskDelivery: true,
       model: input.task.model ?? input.run.model ?? undefined,
       agentType: provider as ProviderId,
@@ -67,9 +65,9 @@ export async function spawnFleetWorker(input: {
       session.worktree_path
     );
   }
-  if (writeTask && !session.worktree_path) {
+  if (!session.worktree_path) {
     throw new FleetSpawnError(
-      "Fleet write task started without an isolated worktree",
+      "Fleet task started without an isolated worktree",
       session.id,
       session.worktree_path
     );

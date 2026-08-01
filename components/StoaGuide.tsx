@@ -128,7 +128,8 @@ const COCKPIT: Item[] = [
   {
     icon: Network,
     title: "Session orchestration",
-    blurb: "Coordinate conductor/worker agent fleets over MCP.",
+    blurb:
+      "Coordinate conductor/worker agents over MCP SDK v2. Fleet lifecycle stays in the authenticated UI; MCP agents can queue an operator request but cannot read or mutate Fleet runs.",
   },
   {
     icon: BrainCircuit,
@@ -224,6 +225,12 @@ const COCKPIT: Item[] = [
 
 // The autonomous fleet — what runs itself. Each is opt-in per repo.
 const FLEET: Item[] = [
+  {
+    icon: Network,
+    title: "Fleet Management",
+    blurb:
+      "Give Stoa a goal: an isolated planner builds a reviewable task graph, allocates installed agent CLIs, then the durable scheduler launches approved work in safe waves.",
+  },
   {
     icon: Rocket,
     title: "Dispatch",
