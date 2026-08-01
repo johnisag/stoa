@@ -44,4 +44,16 @@ describe("Fleet Management browser boundary", () => {
       /import type \{[\s\S]*\} from "@\/lib\/fleet\/types";/
     );
   });
+
+  it("creates durable automation intent without chaining a planner request", () => {
+    const source = read("components/views/FleetManagementView/index.tsx");
+    expect(source).toContain("const automationPolicy = {");
+    expect(source).toContain("automationPolicy,");
+    expect(source).toContain("allowUnconfinedAgents");
+    expect(source).toContain(
+      "I explicitly allow unattended agents without OS confinement."
+    );
+    expect(source).not.toContain("startCreatedPlanner");
+    expect(source).not.toContain("createPlannerErrorRunId");
+  });
 });

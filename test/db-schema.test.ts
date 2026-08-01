@@ -97,6 +97,10 @@ describe("fresh schema fleet management tables", () => {
       "fleet_workers",
       "fleet_events",
       "fleet_artifacts",
+      "fleet_action_authorizations",
+      "fleet_reviews",
+      "fleet_capabilities",
+      "fleet_capability_audit",
     ]) {
       expect(hasTable(table)).toBe(true);
     }
@@ -120,6 +124,14 @@ describe("fresh schema fleet management tables", () => {
       "approved_plan_hash",
       "approved_by",
       "approved_at",
+      "desired_state",
+      "automation_policy_version",
+      "automation_policy_json",
+      "automation_policy_hash",
+      "automation_base_sha",
+      "source_kind",
+      "source_id",
+      "source_name",
       "settings_json",
     ]) {
       expect(hasColumn("fleet_runs", col)).toBe(true);
@@ -133,6 +145,10 @@ describe("fresh schema fleet management tables", () => {
       "task_type",
       "sort_order",
       "file_claims_json",
+      "source_ref",
+      "source_step_id",
+      "source_issue_id",
+      "source_issue_number",
     ]) {
       expect(hasColumn("fleet_tasks", col)).toBe(true);
     }
@@ -175,9 +191,16 @@ describe("fresh schema fleet management tables", () => {
   it("has the fleet management query indexes", () => {
     expect(hasIndex("idx_fleet_runs_status")).toBe(true);
     expect(hasIndex("idx_fleet_runs_updated")).toBe(true);
+    expect(hasIndex("idx_fleet_runs_source")).toBe(true);
     expect(hasIndex("idx_fleet_tasks_run")).toBe(true);
+    expect(hasIndex("idx_fleet_tasks_source")).toBe(true);
+    expect(hasIndex("idx_fleet_tasks_source_issue")).toBe(true);
     expect(hasIndex("idx_fleet_workers_run")).toBe(true);
     expect(hasIndex("idx_fleet_events_run")).toBe(true);
     expect(hasIndex("idx_fleet_artifacts_run")).toBe(true);
+    expect(hasIndex("idx_fleet_action_authorizations_run")).toBe(true);
+    expect(hasIndex("idx_fleet_reviews_subject")).toBe(true);
+    expect(hasIndex("idx_fleet_capabilities_token_hash")).toBe(true);
+    expect(hasIndex("idx_fleet_capability_audit_capability")).toBe(true);
   });
 });

@@ -14,7 +14,15 @@ import type {
   FleetTaskRow,
   FleetWorkerDto,
   FleetWorkerRow,
+  FleetVerificationDto,
+  FleetVerificationRow,
 } from "./types";
+import {
+  fleetDesiredStateForPolicy,
+  parseFleetAutomationPolicy,
+  normalizeFleetAutomationPolicy,
+} from "./automation-policy";
+import type { FleetAutomationPolicy, FleetDesiredState } from "./types";
 
 export interface NormalizedFleetRunDraft {
   name: string;
@@ -26,6 +34,8 @@ export interface NormalizedFleetRunDraft {
   model: string | null;
   maxConcurrency: number;
   reviewPolicy: FleetReviewPolicy;
+  desiredState: FleetDesiredState;
+  automationPolicy: FleetAutomationPolicy;
 }
 
 export const FLEET_RUN_NAME_MAX = 120;
@@ -85,6 +95,12 @@ export function normalizeFleetRunDraft(
     rawBudgetUsd == null || !Number.isFinite(rawBudgetUsd)
       ? null
       : Math.max(0, rawBudgetUsd);
+  const reviewPolicy = reviewPolicyValue(payload.reviewPolicy);
+  const automation = normalizeFleetAutomationPolicy(
+    payload.automationPolicy,
+    reviewPolicy
+  );
+  if ("error" in automation) return automation;
 
   return {
     draft: {
@@ -97,7 +113,9 @@ export function normalizeFleetRunDraft(
         cappedTextValue(payload.provider, FLEET_PROVIDER_MAX) || "claude",
       model: cappedTextValue(payload.model, FLEET_MODEL_MAX) || null,
       maxConcurrency,
-      reviewPolicy: reviewPolicyValue(payload.reviewPolicy),
+      reviewPolicy,
+      desiredState: fleetDesiredStateForPolicy(automation.policy),
+      automationPolicy: automation.policy,
     },
   };
 }
@@ -182,12 +200,28 @@ export function toFleetRunDto(
   counts: { taskCount: number; workerCount: number }
 ): FleetRunDto {
   const planner = parsePlannerSettings(row.settings_json);
+  const automation = parseFleetAutomationPolicy(row.automation_policy_json);
+  const desiredStates: FleetDesiredState[] = [
+    "draft",
+    "planned",
+    "running",
+    "paused",
+    "canceled",
+  ];
+  const desiredState = desiredStates.includes(
+    row.desired_state as FleetDesiredState
+  )
+    ? (row.desired_state as FleetDesiredState)
+    : "draft";
   return {
     id: row.id,
     name: row.name,
     goal: row.goal,
     repoId: row.repo_id,
     projectId: row.project_id,
+    sourceKind: row.source_kind ?? null,
+    sourceId: row.source_id ?? null,
+    sourceName: row.source_name ?? null,
     status: row.status,
     budgetUsd: row.budget_usd,
     provider: row.provider,
@@ -200,6 +234,31 @@ export function toFleetRunDto(
     approvedPlanHash: row.approved_plan_hash,
     approvedBy: row.approved_by,
     approvedAt: row.approved_at,
+    desiredState,
+    automationPolicy: automation.policy,
+    automationPolicyHash: row.automation_policy_hash ?? null,
+    automationGrantedBy: row.automation_granted_by ?? null,
+    automationGrantedAt: row.automation_granted_at ?? null,
+    automationBaseSha: row.automation_base_sha ?? null,
+    automationLastError: row.automation_last_error ?? null,
+    mergeRequestedAt: row.merge_requested_at ?? null,
+    mergeRequestedBy: row.merge_requested_by ?? null,
+    mergeRequestKind: row.merge_request_kind ?? null,
+    mergeTarget: row.merge_target ?? null,
+    integrationState: row.integration_state ?? "idle",
+    integrationBranch: row.integration_branch ?? null,
+    integrationWorktree: row.integration_worktree ?? null,
+    integrationBaseSha: row.integration_base_sha ?? null,
+    integrationHeadSha: row.integration_head_sha ?? null,
+    integrationPrNumber: row.integration_pr_number ?? null,
+    integrationPrUrl: row.integration_pr_url ?? null,
+    integrationPrHeadSha: row.integration_pr_head_sha ?? null,
+    integrationMergeSha: row.integration_merge_sha ?? null,
+    integrationError: row.integration_error ?? null,
+    integrationUpdatedAt: row.integration_updated_at ?? null,
+    archivedAt: row.archived_at ?? null,
+    archivedBy: row.archived_by ?? null,
+    retentionDays: row.retention_days ?? null,
     schedulerEpoch: row.scheduler_epoch ?? 0,
     recoveryRequired: row.recovery_required === 1,
     reservedBudgetUsd: row.reserved_budget_usd ?? 0,
@@ -241,8 +300,41 @@ export function toFleetTaskDto(
     agentType: row.agent_type ?? null,
     model: row.model ?? null,
     workingDirectory: row.working_directory ?? null,
+    baseBranch: row.base_branch ?? null,
+    sourceRef: row.source_ref ?? null,
+    sourceStepId: row.source_step_id ?? null,
+    sourceIssueId: row.source_issue_id ?? null,
+    sourceIssueNumber: row.source_issue_number ?? null,
     branchName: row.branch_name ?? null,
     worktreePath: row.worktree_path ?? null,
+    baseSha: row.base_sha ?? null,
+    headSha: row.head_sha ?? null,
+    actualFileClaims: parseStringArray(row.actual_file_claims_json ?? "[]"),
+    reportArtifactId: row.report_artifact_id ?? null,
+    diffArtifactId: row.diff_artifact_id ?? null,
+    verificationId: row.verification_id ?? null,
+    verificationStatus: row.verification_status ?? null,
+    verificationSpecHash: row.verification_spec_hash ?? null,
+    verifiedHeadSha: row.verified_head_sha ?? null,
+    verificationArtifactId: row.verification_artifact_id ?? null,
+    verificationStartedAt: row.verification_started_at ?? null,
+    verificationCompletedAt: row.verification_completed_at ?? null,
+    reviewStatus: row.review_status ?? null,
+    reviewHeadSha: row.review_head_sha ?? null,
+    reviewVerificationHash: row.review_verification_hash ?? null,
+    reviewCompletedAt: row.review_completed_at ?? null,
+    fixRounds: row.fix_rounds ?? 0,
+    activeFixId: row.active_fix_id ?? null,
+    fixerSessionId: row.fixer_session_id ?? null,
+    fixError: row.fix_error ?? null,
+    retryNotBefore: row.retry_not_before ?? null,
+    providerFailureCount: row.provider_failure_count ?? 0,
+    providerState: row.provider_state ?? "ready",
+    providerLastError: row.provider_last_error ?? null,
+    integrationState: row.integration_state ?? "pending",
+    integrationOperationId: row.integration_operation_id ?? null,
+    integratedHeadSha: row.integrated_head_sha ?? null,
+    integratedAt: row.integrated_at ?? null,
     maxAttempts: row.max_attempts ?? 2,
     currentAttempt: row.current_attempt ?? 0,
     acceptanceCriteria: row.acceptance_criteria ?? null,
@@ -264,6 +356,20 @@ export function toFleetWorkerDto(row: FleetWorkerRow): FleetWorkerDto {
     attempt: row.attempt,
     spawnRequestId: row.spawn_request_id ?? null,
     worktreePath: row.worktree_path ?? null,
+    branchName: row.branch_name ?? null,
+    baseSha: row.base_sha ?? null,
+    headSha: row.head_sha ?? null,
+    reportState: row.report_state ?? "legacy",
+    reportStatus: row.report_status ?? null,
+    reportSubmittedAt: row.report_submitted_at ?? null,
+    reportCollectedAt: row.report_collected_at ?? null,
+    reportBytes: row.report_bytes ?? 0,
+    actualClaims: parseStringArray(row.actual_claims_json ?? "[]"),
+    diffSummary: parseJson(row.diff_summary_json ?? null),
+    reportPollCount: row.report_poll_count ?? 0,
+    reportLastPolledAt: row.report_last_polled_at ?? null,
+    reportNextPollAt: row.report_next_poll_at ?? null,
+    reportError: row.report_error ?? null,
     reservationUsd: row.reservation_usd ?? 0,
     terminalCause: row.terminal_cause ?? null,
     failureCode: row.failure_code ?? null,
@@ -283,14 +389,46 @@ export function toFleetEventDto(row: FleetEventRow): FleetEventDto {
   };
 }
 
+export function toFleetVerificationDto(
+  row: FleetVerificationRow
+): FleetVerificationDto {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    workerId: row.worker_id,
+    attempt: row.attempt,
+    baseSha: row.base_sha,
+    headSha: row.head_sha,
+    specHash: row.spec_hash,
+    command: row.command,
+    status: row.status,
+    runCount: row.run_count,
+    outputArtifactId: row.output_artifact_id,
+    outputHash: row.output_hash,
+    error: row.error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+  };
+}
+
 export function toFleetArtifactDto(row: FleetArtifactRow): FleetArtifactDto {
   return {
     id: row.id,
     taskId: row.task_id,
+    workerId: row.worker_id ?? null,
+    attempt: row.attempt ?? null,
     planHash: row.plan_hash,
+    baseSha: row.base_sha ?? null,
+    headSha: row.head_sha ?? null,
+    contentHash: row.content_hash ?? null,
+    metadata: parseJson(row.metadata_json ?? null),
+    byteCount: row.byte_count ?? 0,
     artifactType: row.artifact_type,
     title: row.title,
     body: row.body,
+    bodyPrunedAt: row.body_pruned_at ?? null,
     severity: row.severity,
     actor: row.actor,
     createdAt: row.created_at,
@@ -303,6 +441,7 @@ export function composeFleetRunDetail(input: {
   dependencies?: import("./types").FleetTaskDependencyRow[];
   workers: FleetWorkerRow[];
   artifacts: FleetArtifactRow[];
+  verifications?: FleetVerificationRow[];
   events: FleetEventRow[];
 }): FleetRunDetailDto {
   return {
@@ -320,6 +459,7 @@ export function composeFleetRunDetail(input: {
     ),
     workers: input.workers.map(toFleetWorkerDto),
     artifacts: input.artifacts.map(toFleetArtifactDto),
+    verifications: (input.verifications ?? []).map(toFleetVerificationDto),
     events: input.events.map(toFleetEventDto),
   };
 }

@@ -75,4 +75,48 @@ describe("fleet spawn wrapper", () => {
       expect.objectContaining({ useWorktree: true, requireWorktree: true })
     );
   });
+
+  it("delivers the report nonce ephemerally without persisting it in the task", async () => {
+    spawnWorker.mockResolvedValue({
+      id: "runtime-session",
+      worker_status: "running",
+      worktree_path: "C:\\wt\\runtime",
+      branch_name: "feature/runtime",
+    });
+    const nonce = "secret-nonce-value-that-must-not-be-persisted";
+    const result = await spawnFleetWorker({
+      run: {
+        id: "run-1",
+        name: "Fleet",
+        goal: "Ship",
+        provider: "codex",
+      } as FleetRunRow,
+      task: {
+        id: "task-1",
+        title: "Runtime",
+        task_type: "task",
+        base_branch: "a".repeat(40),
+      } as FleetTaskRow,
+      workingDirectory: "C:\\repo",
+      claims: ["lib"],
+      dependencies: [],
+      attempt: 1,
+      spawnRequestId: "run-1:task-1:1",
+      reportContract: {
+        attemptDirectory: "C:\\fleet\\run-1\\task-1\\1",
+        reportPath: "C:\\fleet\\run-1\\task-1\\1\\report.json",
+        nonce,
+        nonceHash: "f".repeat(64),
+        baseSha: "a".repeat(40),
+        workerId: "worker-1",
+      },
+    });
+
+    const options = spawnWorker.mock.calls.at(-1)?.[0];
+    expect(options.task).not.toContain(nonce);
+    expect(options.task).toContain("[redacted ephemeral nonce]");
+    expect(options.deliveryTask).toContain(nonce);
+    expect(options.deliveryTask).toContain("Worker ID: worker-1");
+    expect(result.branchName).toBe("feature/runtime");
+  });
 });

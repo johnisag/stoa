@@ -14,6 +14,7 @@ import {
 } from "@/lib/providers/registry";
 import { detectAgentBinaries } from "@/lib/readiness-server";
 import { getSessionBackend } from "@/lib/session-backend";
+import type { ApprovalMode } from "@/lib/sandbox/types";
 import { deleteWorktree } from "@/lib/worktrees";
 import {
   FLEET_DEFAULT_PARALLEL_WORKERS,
@@ -23,6 +24,8 @@ import {
 import { allocateFleetAgents } from "./allocation";
 import { getFleetRunDetail, ingestGeneratedFleetRunPlan } from "./service";
 import { stopFleetSession } from "./stop";
+import { parseFleetAutomationPolicy } from "./automation-policy";
+import { hashFleetAutomationPolicy } from "./hash";
 import type { FleetRunDetailDto, FleetRunRow } from "./types";
 import {
   buildFleetPlannerPrompt,
@@ -258,11 +261,37 @@ function plannerAdmissionAvailable(provider: string, db = getDb()): boolean {
 
 export async function startFleetPlanner(
   runId: string,
-  input: { taskCap?: unknown; provider?: unknown } = {}
+  input: { taskCap?: unknown; provider?: unknown } = {},
+  actor: "operator" | "fleet-automation" = "operator"
 ): Promise<{ run: FleetRunDetailDto } | { error: string; status?: number }> {
   const db = getDb();
   const run = queries.getFleetRun(db).get(runId) as FleetRunRow | undefined;
   if (!run) return { error: "Fleet run not found", status: 404 };
+  let approvalMode: ApprovalMode = "prompt";
+  if (actor === "fleet-automation") {
+    const parsed = parseFleetAutomationPolicy(run.automation_policy_json);
+    if (
+      !parsed.valid ||
+      !run.automation_policy_hash ||
+      hashFleetAutomationPolicy(parsed.policy) !== run.automation_policy_hash ||
+      !parsed.policy.automaticPlanning
+    ) {
+      return { error: "automatic planning authorization changed", status: 409 };
+    }
+    const authorization = db
+      .prepare(
+        `SELECT status FROM fleet_action_authorizations
+         WHERE fleet_run_id = ? AND action = 'planning' AND policy_hash = ?`
+      )
+      .get(run.id, run.automation_policy_hash) as
+      { status: string } | undefined;
+    if (authorization?.status !== "authorized") {
+      return { error: "automatic planning is not authorized", status: 409 };
+    }
+    approvalMode = parsed.policy.allowUnconfinedAgents
+      ? "full-bypass"
+      : "sandboxed-auto";
+  }
   if (
     run.status !== "draft" ||
     !["draft", "needs_approval"].includes(run.approval_state)
@@ -345,7 +374,7 @@ export async function startFleetPlanner(
   queries.createFleetEvent(db).run(
     runId,
     "planner_requested",
-    "operator",
+    actor,
     JSON.stringify({
       requestId,
       provider,
@@ -369,7 +398,7 @@ export async function startFleetPlanner(
       requireWorktree: true,
       requireTaskDelivery: true,
       skipSetup: true,
-      approvalMode: "prompt",
+      approvalMode,
       agentType: provider,
       model: provider === run.provider ? (run.model ?? undefined) : undefined,
     });

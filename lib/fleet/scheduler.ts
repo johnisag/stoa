@@ -18,8 +18,19 @@ import {
   spawnFleetWorker,
   type FleetSpawnResult,
 } from "./spawn";
+import { executeFleetWorker } from "./executor";
+import { fleetProviderRetryNotBefore } from "./backoff";
 import { hashFleetExecutionContract, hashFleetTaskRows } from "./hash";
 import { stopFleetSession } from "./stop";
+import { parseFleetAutomationPolicy } from "./automation-policy";
+import {
+  boundedFleetArtifactJson,
+  collectFleetWorkerReport,
+  nextFleetReportPollAt,
+  prepareFleetWorkerAttempt,
+  type FleetWorkerAttemptContract,
+  type FleetWorkerReportCollectionResult,
+} from "./report-runtime";
 import type {
   FleetRunRow,
   FleetTaskClaimRow,
@@ -59,6 +70,8 @@ export interface FleetSchedulerDeps {
     sessionId: string,
     finalStatus?: "completed" | "failed"
   ) => Promise<void>;
+  prepareAttempt: typeof prepareFleetWorkerAttempt;
+  collectReport: typeof collectFleetWorkerReport;
 }
 
 function schedulerDeps(
@@ -67,7 +80,7 @@ function schedulerDeps(
   return {
     db: overrides.db ?? getDb(),
     now: overrides.now ?? (() => new Date()),
-    spawn: overrides.spawn ?? spawnFleetWorker,
+    spawn: overrides.spawn ?? executeFleetWorker,
     sessionExists:
       overrides.sessionExists ??
       (async (session) => getSessionBackend().exists(session.tmux_name)),
@@ -78,6 +91,8 @@ function schedulerDeps(
           throw new Error("worker session remained alive after stop");
         }
       }),
+    prepareAttempt: overrides.prepareAttempt ?? prepareFleetWorkerAttempt,
+    collectReport: overrides.collectReport ?? collectFleetWorkerReport,
   };
 }
 
@@ -403,13 +418,15 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
       return null;
     }
 
+    const admissionNowIso = now().toISOString();
     const candidates = db
       .prepare(
         `SELECT * FROM fleet_tasks WHERE fleet_run_id = ? AND status = 'ready'
          AND approval_state = 'approved' AND current_attempt < max_attempts
+         AND (retry_not_before IS NULL OR retry_not_before <= ?)
          ORDER BY priority DESC, sort_order ASC`
       )
-      .all(runId) as FleetTaskRow[];
+      .all(runId, admissionNowIso) as FleetTaskRow[];
     const task = candidates.find((candidate) => {
       const dependencies = taskDependencies(db, runId, candidate.id);
       const failedDependency = failedBlockingDependency(db, dependencies);
@@ -488,8 +505,10 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
     const claimed = db
       .prepare(
         `UPDATE fleet_tasks SET status = 'leasing', current_attempt = ?, lease_owner = ?,
-       lease_expires_at = ?, scheduler_epoch = ?, spawn_request_id = ?, started_at = COALESCE(started_at, ?), updated_at = ?
-       WHERE id = ? AND status = 'ready'`
+         lease_expires_at = ?, scheduler_epoch = ?, spawn_request_id = ?,
+         started_at = COALESCE(started_at, ?), updated_at = ?,
+         retry_not_before = NULL, provider_state = 'spawning'
+         WHERE id = ? AND status = 'ready'`
       )
       .run(
         attempt,
@@ -565,30 +584,82 @@ async function launchLease(
 ): Promise<void> {
   try {
     launchingWorkers.add(lease.workerId);
-    const result: FleetSpawnResult = await Promise.resolve()
-      .then(() =>
-        deps.spawn({
-          run: lease.run,
-          task: lease.task,
-          workingDirectory: lease.workingDirectory,
-          claims: lease.claims,
-          dependencies: lease.dependencies,
-          attempt: lease.attempt,
-          spawnRequestId: lease.spawnRequestId,
-        })
-      )
-      .finally(() => launchingWorkers.delete(lease.workerId));
+    let attemptContract: FleetWorkerAttemptContract;
+    let result: FleetSpawnResult;
+    try {
+      attemptContract = await deps.prepareAttempt({
+        runId: lease.run.id,
+        taskId: lease.task.id,
+        attempt: lease.attempt,
+        workingDirectory: lease.workingDirectory,
+        // A dependency integration pins the exact combined head in base_sha.
+        // Prefer it over the moving human-readable integration branch so a later
+        // independent merge cannot silently change this task's execution base.
+        baseRef: lease.task.base_sha ?? lease.task.base_branch ?? "main",
+      });
+      const prepared = transaction(deps.db, () => {
+        const nowIso = deps.now().toISOString();
+        const workerUpdate = deps.db
+          .prepare(
+            `UPDATE fleet_workers SET base_sha = ?, report_path = ?, report_nonce_hash = ?,
+             report_state = 'pending', report_poll_count = 0, report_next_poll_at = ?,
+             report_error = NULL
+             WHERE id = ? AND spawn_request_id = ? AND status = 'spawning'`
+          )
+          .run(
+            attemptContract.baseSha,
+            attemptContract.reportPath,
+            attemptContract.nonceHash,
+            nowIso,
+            lease.workerId,
+            lease.spawnRequestId
+          );
+        if (workerUpdate.changes !== 1) return false;
+        deps.db
+          .prepare(`UPDATE fleet_tasks SET base_sha = ? WHERE id = ?`)
+          .run(attemptContract.baseSha, lease.task.id);
+        return true;
+      });
+      if (!prepared) {
+        throw new Error(
+          "Fleet worker state changed before attempt preparation"
+        );
+      }
+      result = await deps.spawn({
+        run: lease.run,
+        task: {
+          ...lease.task,
+          base_branch: attemptContract.baseSha,
+          base_sha: attemptContract.baseSha,
+        },
+        workingDirectory: lease.workingDirectory,
+        claims: lease.claims,
+        dependencies: lease.dependencies,
+        attempt: lease.attempt,
+        spawnRequestId: lease.spawnRequestId,
+        reportContract: {
+          ...attemptContract,
+          workerId: lease.workerId,
+        },
+      });
+    } finally {
+      launchingWorkers.delete(lease.workerId);
+    }
     const launchOutcome = transaction<"accepted" | "idempotent" | "cleanup">(
       deps.db,
       () => {
         const nowIso = deps.now().toISOString();
         const workerUpdate = deps.db
           .prepare(
-            `UPDATE fleet_workers SET status = 'running', session_id = ?, worktree_path = ?, lease_owner = NULL, lease_expires_at = NULL, last_heartbeat_at = ? WHERE id = ? AND spawn_request_id = ? AND status = 'spawning'`
+            `UPDATE fleet_workers SET status = 'running', session_id = ?, worktree_path = ?,
+             branch_name = ?, base_sha = ?, lease_owner = NULL, lease_expires_at = NULL,
+             last_heartbeat_at = ? WHERE id = ? AND spawn_request_id = ? AND status = 'spawning'`
           )
           .run(
             result.sessionId,
             result.worktreePath,
+            result.branchName ?? lease.task.branch_name ?? null,
+            attemptContract.baseSha,
             nowIso,
             lease.workerId,
             lease.spawnRequestId
@@ -607,9 +678,17 @@ async function launchLease(
             | undefined;
           deps.db
             .prepare(
-              `UPDATE fleet_workers SET session_id = COALESCE(session_id, ?), worktree_path = COALESCE(worktree_path, ?) WHERE id = ?`
+              `UPDATE fleet_workers SET session_id = COALESCE(session_id, ?),
+               worktree_path = COALESCE(worktree_path, ?), branch_name = COALESCE(branch_name, ?),
+               base_sha = COALESCE(base_sha, ?) WHERE id = ?`
             )
-            .run(result.sessionId, result.worktreePath, lease.workerId);
+            .run(
+              result.sessionId,
+              result.worktreePath,
+              result.branchName ?? lease.task.branch_name ?? null,
+              attemptContract.baseSha,
+              lease.workerId
+            );
           if (
             current?.status === "running" &&
             current.spawn_request_id === lease.spawnRequestId &&
@@ -634,14 +713,28 @@ async function launchLease(
         );
         deps.db
           .prepare(
-            `UPDATE fleet_tasks SET status = 'running', worktree_path = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ? AND spawn_request_id = ? AND status = 'leasing'`
+            `UPDATE fleet_tasks SET status = 'running', worktree_path = ?, branch_name = ?,
+             base_sha = ?, lease_owner = NULL, lease_expires_at = NULL,
+             retry_not_before = NULL, provider_failure_count = 0,
+             provider_state = 'running', provider_last_error = NULL,
+             provider_backoff_event_at = NULL, updated_at = ?
+             WHERE id = ? AND spawn_request_id = ? AND status = 'leasing'`
           )
           .run(
             result.worktreePath,
+            result.branchName ?? lease.task.branch_name ?? null,
+            attemptContract.baseSha,
             nowIso,
             lease.task.id,
             lease.spawnRequestId
           );
+        deps.db
+          .prepare(
+            `UPDATE fleet_resource_leases SET resource_key = ?
+             WHERE worker_id = ? AND resource_type = 'worktree'
+               AND status = 'reserved'`
+          )
+          .run(result.worktreePath, lease.workerId);
         queries.createFleetEvent(deps.db).run(
           lease.run.id,
           "worker_started",
@@ -746,6 +839,13 @@ async function launchLease(
     const failedWorktreePath =
       error instanceof FleetSpawnError ? error.worktreePath : null;
     const preserved = failedSessionId != null || failedWorktreePath != null;
+    const failureCount = (lease.task.provider_failure_count ?? 0) + 1;
+    const retry = !preserved && lease.attempt < (lease.task.max_attempts ?? 2);
+    const retryNotBefore = retry
+      ? fleetProviderRetryNotBefore(deps.now(), failureCount)
+      : null;
+    const errorText =
+      error instanceof Error ? error.message.slice(0, 500) : "spawn failed";
     let stopFailed = false;
     if (failedSessionId) {
       try {
@@ -760,8 +860,6 @@ async function launchLease(
         .prepare(`SELECT status FROM fleet_workers WHERE id = ?`)
         .get(lease.workerId) as { status: string } | undefined;
       if (current?.status !== "spawning") return;
-      const retry =
-        !preserved && lease.attempt < (lease.task.max_attempts ?? 2);
       deps.db
         .prepare(
           `UPDATE fleet_workers SET status = ?, terminal_cause = ?, failure_code = ?,
@@ -775,13 +873,22 @@ async function launchLease(
             : preserved
               ? "spawn_failed_preserved"
               : "spawn_failed",
-          error instanceof Error ? error.message.slice(0, 500) : "spawn failed",
+          errorText,
           failedSessionId,
           failedWorktreePath,
           stopFailed ? null : nowIso,
           lease.workerId
         );
       if (preserved) {
+        if (failedWorktreePath) {
+          deps.db
+            .prepare(
+              `UPDATE fleet_resource_leases SET resource_key = ?
+               WHERE worker_id = ? AND resource_type = 'worktree'
+                 AND status = 'reserved'`
+            )
+            .run(failedWorktreePath, lease.workerId);
+        }
         deps.db
           .prepare(
             `UPDATE fleet_resource_leases SET status = 'released', released_at = ?
@@ -794,10 +901,19 @@ async function launchLease(
       }
       deps.db
         .prepare(
-          `UPDATE fleet_tasks SET status = ?, failure_code = 'spawn_failed', lease_owner = NULL, lease_expires_at = NULL, spawn_request_id = NULL, ended_at = CASE WHEN ? THEN NULL ELSE ? END, updated_at = ? WHERE id = ?`
+          `UPDATE fleet_tasks SET status = ?, failure_code = 'spawn_failed',
+           lease_owner = NULL, lease_expires_at = NULL, spawn_request_id = NULL,
+           retry_not_before = ?, provider_failure_count = ?, provider_state = ?,
+           provider_last_error = ?, provider_backoff_event_at = ?,
+           ended_at = CASE WHEN ? THEN NULL ELSE ? END, updated_at = ? WHERE id = ?`
         )
         .run(
           preserved ? "needs_inspection" : retry ? "ready" : "failed",
+          retryNotBefore,
+          failureCount,
+          retry ? "backoff" : "failed",
+          errorText,
+          retry ? nowIso : null,
           retry ? 1 : 0,
           nowIso,
           nowIso,
@@ -816,25 +932,357 @@ async function launchLease(
         );
       queries.createFleetEvent(deps.db).run(
         lease.run.id,
-        "worker_spawn_failed",
+        retry ? "provider_spawn_backoff_scheduled" : "worker_spawn_failed",
         "scheduler",
         JSON.stringify({
           taskId: lease.task.id,
           workerId: lease.workerId,
           retry,
+          retryNotBefore,
+          providerFailureCount: failureCount,
           preserved,
           stopFailed,
-          message: error instanceof Error ? error.message : "spawn failed",
+          message: errorText,
         })
       );
     });
   }
 }
 
+function reportEvidence(
+  collection: Exclude<FleetWorkerReportCollectionResult, { kind: "missing" }>
+) {
+  const gitState = collection.gitState;
+  const diff = gitState
+    ? {
+        baseSha: gitState.baseSha,
+        headSha: gitState.headSha,
+        branchName: gitState.currentBranch,
+        committedChanges: gitState.committedChanges,
+        stagedChanges: gitState.stagedChanges,
+        unstagedChanges: gitState.unstagedChanges,
+        untrackedPaths: gitState.untrackedPaths,
+        sensitivePaths: gitState.sensitivePaths,
+        summary: gitState.summary,
+      }
+    : { unavailable: true };
+  return {
+    report: boundedFleetArtifactJson(
+      collection.kind === "collected"
+        ? collection.report
+        : { rejected: true, error: collection.error }
+    ),
+    diff: boundedFleetArtifactJson(diff),
+    actualClaims: boundedFleetArtifactJson(gitState?.allTouchedPaths ?? []),
+  };
+}
+
+function finalizeFleetReportCleanup(
+  deps: FleetSchedulerDeps,
+  input: {
+    worker: FleetWorkerRow;
+    finalWorkerStatus: "completed" | "failed";
+    terminalCause: string;
+    nowIso: string;
+  }
+): boolean {
+  return transaction(deps.db, () => {
+    const changed = deps.db
+      .prepare(
+        `UPDATE fleet_workers SET status = ?, terminal_cause = ?, ended_at = ?,
+         lease_owner = NULL, lease_expires_at = NULL
+         WHERE id = ? AND status = 'cleanup_pending'
+           AND terminal_cause = 'report_collection_pending'`
+      )
+      .run(
+        input.finalWorkerStatus,
+        input.terminalCause,
+        input.nowIso,
+        input.worker.id
+      );
+    if (changed.changes !== 1) return false;
+    deps.db
+      .prepare(
+        `UPDATE fleet_resource_leases SET status = 'released', released_at = ?
+         WHERE worker_id = ? AND status = 'reserved' AND resource_type <> 'worktree'`
+      )
+      .run(input.nowIso, input.worker.id);
+    deps.db
+      .prepare(
+        `UPDATE fleet_runs SET reserved_budget_usd = MAX(0, reserved_budget_usd - ?),
+         spent_budget_usd = spent_budget_usd + ?, updated_at = ? WHERE id = ?`
+      )
+      .run(
+        input.worker.reservation_usd ?? 0,
+        input.worker.reservation_usd ?? 0,
+        input.nowIso,
+        input.worker.fleet_run_id
+      );
+    queries.createFleetEvent(deps.db).run(
+      input.worker.fleet_run_id,
+      "worker_report_cleanup_completed",
+      "scheduler",
+      JSON.stringify({
+        workerId: input.worker.id,
+        status: input.finalWorkerStatus,
+        terminalCause: input.terminalCause,
+      })
+    );
+    return true;
+  });
+}
+
+async function pollFleetWorkerReport(
+  deps: FleetSchedulerDeps,
+  run: FleetRunRow,
+  task: FleetTaskRow,
+  worker: FleetWorkerRow,
+  session: Session | undefined,
+  force = false
+): Promise<boolean> {
+  if (
+    worker.report_state !== "pending" ||
+    !worker.report_path ||
+    !worker.report_nonce_hash ||
+    !worker.base_sha ||
+    !worker.spawn_request_id ||
+    !worker.worktree_path
+  ) {
+    return false;
+  }
+  const now = deps.now();
+  const nowIso = now.toISOString();
+  if (
+    !force &&
+    worker.report_next_poll_at &&
+    worker.report_next_poll_at > nowIso
+  ) {
+    return false;
+  }
+
+  const collection = await deps.collectReport({
+    reportPath: worker.report_path,
+    worktreePath: worker.worktree_path,
+    expected: {
+      runId: run.id,
+      taskId: task.id,
+      workerId: worker.id,
+      attempt: worker.attempt,
+      spawnRequestId: worker.spawn_request_id,
+      nonceHash: worker.report_nonce_hash,
+      baseSha: worker.base_sha,
+      spawnedAt: worker.created_at,
+    },
+    plannedClaims: taskClaims(deps.db, run.id, task.id),
+    allowSensitivePaths: parseFleetAutomationPolicy(run.automation_policy_json)
+      .policy.allowSensitivePaths,
+    nowMs: now.getTime(),
+  });
+  if (collection.kind === "missing") {
+    deps.db
+      .prepare(
+        `UPDATE fleet_workers SET report_poll_count = report_poll_count + 1,
+         report_last_polled_at = ?, report_next_poll_at = ?, last_heartbeat_at = ?
+         WHERE id = ? AND status IN ('running', 'waiting_for_operator')
+           AND report_state = 'pending'`
+      )
+      .run(
+        nowIso,
+        nextFleetReportPollAt(worker.report_poll_count ?? 0, now.getTime()),
+        nowIso,
+        worker.id
+      );
+    return false;
+  }
+
+  let evidence: ReturnType<typeof reportEvidence>;
+  try {
+    evidence = reportEvidence(collection);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "report evidence is too large";
+    evidence = {
+      report: boundedFleetArtifactJson({ rejected: true, error: message }),
+      diff: boundedFleetArtifactJson({ unavailable: true, error: message }),
+      actualClaims: boundedFleetArtifactJson([]),
+    };
+  }
+  const taskStatus =
+    collection.kind === "collected"
+      ? collection.taskStatus
+      : "needs_inspection";
+  const failureCode =
+    collection.kind === "collected" ? collection.failureCode : "report_invalid";
+  const gitState = collection.gitState;
+  const reportArtifactId = `${worker.id}:${worker.attempt}:report`;
+  const diffArtifactId = `${worker.id}:${worker.attempt}:diff`;
+  const accepted = collection.kind === "collected";
+  const reportStatus = accepted ? collection.report.status : null;
+  const reportSubmittedAt = accepted ? collection.report.submittedAt : null;
+  const terminalCause = accepted
+    ? taskStatus === "verifying" || taskStatus === "completed"
+      ? "report_collected"
+      : `report_attention_${failureCode ?? taskStatus}`
+    : "report_invalid";
+  const finalWorkerStatus =
+    accepted && collection.report.status === "succeeded"
+      ? "completed"
+      : "failed";
+  const claimed = transaction(deps.db, () => {
+    const workerUpdate = deps.db
+      .prepare(
+        `UPDATE fleet_workers SET status = 'cleanup_pending',
+         terminal_cause = 'report_collection_pending', report_state = ?,
+         report_status = ?, report_submitted_at = ?, report_collected_at = ?,
+         report_bytes = ?, head_sha = ?, actual_claims_json = ?,
+         diff_summary_json = ?, report_poll_count = report_poll_count + 1,
+         report_last_polled_at = ?, report_next_poll_at = NULL, report_error = ?
+         WHERE id = ? AND status IN ('running', 'waiting_for_operator')
+           AND report_state = 'pending'`
+      )
+      .run(
+        accepted ? "accepted" : "invalid",
+        reportStatus,
+        reportSubmittedAt,
+        nowIso,
+        collection.reportBytes,
+        gitState?.headSha ?? null,
+        evidence.actualClaims.body,
+        JSON.stringify(gitState?.summary ?? null),
+        nowIso,
+        accepted ? null : collection.error.slice(0, 500),
+        worker.id
+      );
+    if (workerUpdate.changes !== 1) return false;
+
+    const severity =
+      taskStatus === "verifying" || taskStatus === "completed"
+        ? "info"
+        : "blocker";
+    const insertArtifact = deps.db.prepare(
+      `INSERT OR IGNORE INTO fleet_artifacts
+       (id, fleet_run_id, task_id, worker_id, attempt, plan_hash, base_sha,
+        head_sha, content_hash, metadata_json, byte_count, artifact_type,
+        title, body, severity, actor, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    insertArtifact.run(
+      reportArtifactId,
+      run.id,
+      task.id,
+      worker.id,
+      worker.attempt,
+      run.approved_plan_hash,
+      worker.base_sha,
+      gitState?.headSha ?? null,
+      evidence.report.contentHash,
+      JSON.stringify({ accepted, status: reportStatus, failureCode }),
+      evidence.report.bytes,
+      accepted ? "worker_report" : "worker_report_rejected",
+      accepted ? "Worker completion report" : "Rejected worker report",
+      evidence.report.body,
+      severity,
+      accepted ? "worker" : "scheduler",
+      nowIso
+    );
+    insertArtifact.run(
+      diffArtifactId,
+      run.id,
+      task.id,
+      worker.id,
+      worker.attempt,
+      run.approved_plan_hash,
+      worker.base_sha,
+      gitState?.headSha ?? null,
+      evidence.diff.contentHash,
+      JSON.stringify({
+        claimDrift:
+          collection.kind === "collected" ? collection.claimDrift : null,
+      }),
+      evidence.diff.bytes,
+      "worker_git_state",
+      "Authoritative worker Git state",
+      evidence.diff.body,
+      severity,
+      "scheduler",
+      nowIso
+    );
+    deps.db
+      .prepare(
+        `UPDATE fleet_tasks SET status = ?, failure_code = ?, head_sha = ?,
+         branch_name = COALESCE(branch_name, ?), actual_file_claims_json = ?,
+         report_artifact_id = ?, diff_artifact_id = ?,
+         ended_at = CASE WHEN ? IN ('verifying') THEN NULL ELSE ? END,
+         updated_at = ?
+         WHERE id = ? AND status IN ('running', 'waiting_for_operator')`
+      )
+      .run(
+        taskStatus,
+        failureCode,
+        gitState?.headSha ?? null,
+        gitState?.currentBranch ?? worker.branch_name ?? null,
+        evidence.actualClaims.body,
+        reportArtifactId,
+        diffArtifactId,
+        taskStatus,
+        nowIso,
+        nowIso,
+        task.id
+      );
+    queries.createFleetEvent(deps.db).run(
+      run.id,
+      accepted ? "worker_report_collected" : "worker_report_rejected",
+      "scheduler",
+      JSON.stringify({
+        taskId: task.id,
+        workerId: worker.id,
+        attempt: worker.attempt,
+        taskStatus,
+        failureCode,
+        baseSha: worker.base_sha,
+        headSha: gitState?.headSha ?? null,
+      })
+    );
+    return true;
+  });
+  if (!claimed) return true;
+
+  let stopped = session == null;
+  if (session) {
+    try {
+      await deps.stopSession(session.id, finalWorkerStatus);
+      stopped = true;
+    } catch {
+      stopped = false;
+    }
+  }
+  if (stopped) {
+    finalizeFleetReportCleanup(deps, {
+      worker,
+      finalWorkerStatus,
+      terminalCause,
+      nowIso,
+    });
+  } else {
+    queries
+      .createFleetEvent(deps.db)
+      .run(
+        run.id,
+        "worker_report_cleanup_pending",
+        "scheduler",
+        JSON.stringify({ workerId: worker.id, sessionId: session?.id ?? null })
+      );
+  }
+  return true;
+}
+
 async function pollActiveWorkers(
   deps: FleetSchedulerDeps,
   runId: string
 ): Promise<void> {
+  const run = queries.getFleetRun(deps.db).get(runId) as
+    FleetRunRow | undefined;
+  if (!run) return;
   const workers = deps.db
     .prepare(
       `SELECT * FROM fleet_workers
@@ -846,6 +1294,19 @@ async function pollActiveWorkers(
       ? (queries.getSession(deps.db).get(worker.session_id) as
           Session | undefined)
       : undefined;
+    const task = worker.task_id
+      ? (deps.db
+          .prepare(
+            `SELECT * FROM fleet_tasks WHERE id = ? AND fleet_run_id = ?`
+          )
+          .get(worker.task_id, runId) as FleetTaskRow | undefined)
+      : undefined;
+    if (
+      task &&
+      (await pollFleetWorkerReport(deps, run, task, worker, session))
+    ) {
+      continue;
+    }
     let terminalStatus: "completed" | "failed" | "dead" | null = null;
     let terminalCause: string | null = null;
     let claimedForCleanup = false;
@@ -973,9 +1434,14 @@ async function reconcilePendingCleanup(
     )
     .all() as (FleetWorkerRow & { run_status: string })[];
   for (const worker of workers) {
+    const reportCleanup = worker.terminal_cause === "report_collection_pending";
+    const successfulReport =
+      worker.report_state === "accepted" &&
+      worker.report_status === "succeeded";
     const completionCleanup =
       worker.terminal_cause?.startsWith("operator_completion") === true ||
-      worker.terminal_cause?.startsWith("session_completed") === true;
+      worker.terminal_cause?.startsWith("session_completed") === true ||
+      (reportCleanup && successfulReport);
     let session = worker.session_id
       ? (queries.getSession(deps.db).get(worker.session_id) as
           Session | undefined)
@@ -1007,21 +1473,32 @@ async function reconcilePendingCleanup(
       if (!stopped) return;
       const terminalSessionCleanup =
         completionCleanup ||
+        reportCleanup ||
         worker.terminal_cause?.startsWith("session_failed") === true;
       const finalStatus =
         worker.run_status === "canceled"
           ? "cleanup_complete"
-          : completionCleanup
-            ? "completed"
-            : "failed";
+          : reportCleanup
+            ? successfulReport
+              ? "completed"
+              : "failed"
+            : completionCleanup
+              ? "completed"
+              : "failed";
       const finalCause =
         worker.run_status === "canceled"
           ? "operator_cancel"
-          : completionCleanup
-            ? "session_completed"
-            : terminalSessionCleanup
-              ? "session_failed"
-              : "spawn_failed_preserved";
+          : reportCleanup
+            ? successfulReport
+              ? "report_collected"
+              : worker.report_state === "invalid"
+                ? "report_invalid"
+                : `report_attention_${worker.report_status ?? "unknown"}`
+            : completionCleanup
+              ? "session_completed"
+              : terminalSessionCleanup
+                ? "session_failed"
+                : "spawn_failed_preserved";
       const cleanupUpdate = deps.db
         .prepare(
           `UPDATE fleet_workers SET status = ?, terminal_cause = ?,
@@ -1060,18 +1537,20 @@ async function reconcilePendingCleanup(
             nowIso,
             worker.fleet_run_id
           );
-        deps.db
-          .prepare(
-            `UPDATE fleet_tasks SET status = ?, failure_code = ?, ended_at = ?, updated_at = ?
-             WHERE id = ? AND status IN ('running', 'waiting_for_operator')`
-          )
-          .run(
-            completionCleanup ? "needs_inspection" : "failed",
-            finalCause,
-            nowIso,
-            nowIso,
-            worker.task_id
-          );
+        if (!reportCleanup) {
+          deps.db
+            .prepare(
+              `UPDATE fleet_tasks SET status = ?, failure_code = ?, ended_at = ?, updated_at = ?
+               WHERE id = ? AND status IN ('running', 'waiting_for_operator')`
+            )
+            .run(
+              completionCleanup ? "needs_inspection" : "failed",
+              finalCause,
+              nowIso,
+              nowIso,
+              worker.task_id
+            );
+        }
       }
       queries.createFleetEvent(deps.db).run(
         worker.fleet_run_id,
@@ -1087,6 +1566,42 @@ async function reconcilePendingCleanup(
         })
       );
     });
+  }
+}
+
+/** Collect one worker's authenticated report without leasing additional work. */
+export async function reconcileFleetWorkerReport(
+  runId: string,
+  workerId: string,
+  overrides: Partial<FleetSchedulerDeps> = {}
+): Promise<boolean> {
+  if (Object.keys(overrides).length === 0 && !isFleetSchedulerReady()) {
+    throw new Error("fleet scheduler recovery has not completed");
+  }
+  if (runLocks.has(runId)) return false;
+  runLocks.add(runId);
+  const deps = schedulerDeps(overrides);
+  try {
+    const run = queries.getFleetRun(deps.db).get(runId) as
+      FleetRunRow | undefined;
+    const worker = deps.db
+      .prepare(`SELECT * FROM fleet_workers WHERE id = ? AND fleet_run_id = ?`)
+      .get(workerId, runId) as FleetWorkerRow | undefined;
+    const task = worker?.task_id
+      ? (deps.db
+          .prepare(
+            `SELECT * FROM fleet_tasks WHERE id = ? AND fleet_run_id = ?`
+          )
+          .get(worker.task_id, runId) as FleetTaskRow | undefined)
+      : undefined;
+    if (!run || !worker || !task) return false;
+    const session = worker.session_id
+      ? (queries.getSession(deps.db).get(worker.session_id) as
+          Session | undefined)
+      : undefined;
+    return pollFleetWorkerReport(deps, run, task, worker, session, true);
+  } finally {
+    runLocks.delete(runId);
   }
 }
 
@@ -1186,15 +1701,44 @@ export async function recoverFleetRuns(
         transaction(deps.db, () => {
           const workerUpdate = deps.db
             .prepare(
-              `UPDATE fleet_workers SET status = 'running', session_id = ?, worktree_path = ?, lease_owner = NULL, lease_expires_at = NULL, last_heartbeat_at = ? WHERE id = ? AND status IN ('leasing', 'spawning')`
+              `UPDATE fleet_workers SET status = 'running', session_id = ?, worktree_path = ?,
+               branch_name = COALESCE(branch_name, ?), lease_owner = NULL,
+               lease_expires_at = NULL, last_heartbeat_at = ?
+               WHERE id = ? AND status IN ('leasing', 'spawning')`
             )
-            .run(session.id, session.worktree_path, nowIso, worker.id);
+            .run(
+              session.id,
+              session.worktree_path,
+              session.branch_name,
+              nowIso,
+              worker.id
+            );
           if (workerUpdate.changes !== 1) return;
           deps.db
             .prepare(
-              `UPDATE fleet_tasks SET status = 'running', worktree_path = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ? AND status IN ('leasing', 'spawning')`
+              `UPDATE fleet_tasks SET status = 'running', worktree_path = ?,
+               branch_name = COALESCE(branch_name, ?), lease_owner = NULL,
+               lease_expires_at = NULL, retry_not_before = NULL,
+               provider_failure_count = 0, provider_state = 'running',
+               provider_last_error = NULL, provider_backoff_event_at = NULL,
+               updated_at = ?
+               WHERE id = ? AND status IN ('leasing', 'spawning')`
             )
-            .run(session.worktree_path, nowIso, worker.task_id);
+            .run(
+              session.worktree_path,
+              session.branch_name,
+              nowIso,
+              worker.task_id
+            );
+          if (session.worktree_path) {
+            deps.db
+              .prepare(
+                `UPDATE fleet_resource_leases SET resource_key = ?
+                 WHERE worker_id = ? AND resource_type = 'worktree'
+                   AND status = 'reserved'`
+              )
+              .run(session.worktree_path, worker.id);
+          }
           releaseWorkerResources(deps.db, worker.id, nowIso, "git_operation");
         });
         continue;
@@ -1213,6 +1757,10 @@ export async function recoverFleetRuns(
         !committed &&
         !!task &&
         (task.current_attempt ?? worker.attempt) < (task.max_attempts ?? 2);
+      const providerFailureCount = (task?.provider_failure_count ?? 0) + 1;
+      const retryNotBefore = retry
+        ? fleetProviderRetryNotBefore(new Date(nowIso), providerFailureCount)
+        : null;
       transaction(deps.db, () => {
         const workerUpdate = deps.db
           .prepare(
@@ -1242,12 +1790,19 @@ export async function recoverFleetRuns(
           .prepare(
             `UPDATE fleet_tasks SET status = ?, lease_owner = NULL, lease_expires_at = NULL,
              spawn_request_id = CASE WHEN ? THEN NULL ELSE spawn_request_id END,
+             retry_not_before = ?, provider_failure_count = ?, provider_state = ?,
+             provider_last_error = 'spawn lease expired during recovery',
+             provider_backoff_event_at = ?,
              failure_code = 'recovery_expired', ended_at = CASE WHEN ? THEN NULL ELSE ? END,
              updated_at = ? WHERE id = ? AND status IN ('leasing', 'spawning')`
           )
           .run(
             committed ? "needs_inspection" : retry ? "ready" : "failed",
             retry ? 1 : 0,
+            retryNotBefore,
+            providerFailureCount,
+            retry ? "backoff" : "failed",
+            retry ? nowIso : null,
             retry ? 1 : 0,
             nowIso,
             nowIso,
@@ -1274,14 +1829,18 @@ export async function recoverFleetRuns(
             nowIso,
             run.id
           );
-        queries
-          .createFleetEvent(deps.db)
-          .run(
-            run.id,
-            "recovery_expired",
-            "recovery",
-            JSON.stringify({ workerId: worker.id, retry, committed })
-          );
+        queries.createFleetEvent(deps.db).run(
+          run.id,
+          "recovery_expired",
+          "recovery",
+          JSON.stringify({
+            workerId: worker.id,
+            retry,
+            retryNotBefore,
+            providerFailureCount,
+            committed,
+          })
+        );
       });
     }
     await pollActiveWorkers(deps, run.id);

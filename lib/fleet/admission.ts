@@ -2,9 +2,17 @@ export const FLEET_MAX_TOTAL_WORKERS = 40;
 export const FLEET_DEFAULT_PARALLEL_WORKERS = 6;
 export const FLEET_WORKER_RESERVATION_USD = 0.25;
 
-export function providerConcurrencyCap(provider: string): number {
-  if (provider === "claude") return 4;
-  if (provider === "codex") return 6;
+export function providerConcurrencyCap(
+  provider: string,
+  configured: Readonly<Record<string, number>> = {}
+): number {
+  const normalized = provider.trim().toLowerCase();
+  const override = configured[normalized];
+  if (Number.isSafeInteger(override) && override > 0) {
+    return Math.min(override, FLEET_MAX_TOTAL_WORKERS);
+  }
+  if (normalized === "claude") return 4;
+  if (normalized === "codex") return 6;
   return 2;
 }
 
@@ -15,14 +23,19 @@ export function availableFleetSlots(input: {
   providerActiveWorkers: number;
   totalWorkers: number;
   provider: string;
+  providerCaps?: Readonly<Record<string, number>>;
+  localCapacity?: number;
+  totalCapacity?: number;
 }): number {
   return Math.max(
     0,
     Math.min(
       Math.max(1, input.requestedConcurrency) - input.runActiveWorkers,
-      FLEET_DEFAULT_PARALLEL_WORKERS - input.localActiveWorkers,
-      providerConcurrencyCap(input.provider) - input.providerActiveWorkers,
-      FLEET_MAX_TOTAL_WORKERS - input.totalWorkers
+      (input.localCapacity ?? FLEET_DEFAULT_PARALLEL_WORKERS) -
+        input.localActiveWorkers,
+      providerConcurrencyCap(input.provider, input.providerCaps) -
+        input.providerActiveWorkers,
+      (input.totalCapacity ?? FLEET_MAX_TOTAL_WORKERS) - input.totalWorkers
     )
   );
 }

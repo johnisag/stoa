@@ -1,5 +1,6 @@
 import { normalizeFleetClaims } from "./conflicts";
 import { FLEET_PLAN_FILE_CLAIM_MAX, FLEET_PLAN_FILE_CLAIMS_MAX } from "./plan";
+import { parseVerifySteps } from "../verification/runner";
 
 const PLAN_BEGIN = "STOA_FLEET_PLAN_BEGIN";
 const PLAN_END = "STOA_FLEET_PLAN_END";
@@ -53,6 +54,9 @@ export function buildFleetPlannerPrompt(input: {
     `Keep write claims disjoint. Use taskType "explore" or "review" for read-only`,
     `work; otherwise use "implementation", "test", or "docs". Do not invent a`,
     `model. A suggestedProvider is optional and must come from the installed list.`,
+    `Every write task must include a non-empty verifyCommand. Commands execute as`,
+    `direct argv steps: use && only to separate steps and never use shell pipes,`,
+    `redirects, substitutions, single quotes, or environment assignments.`,
     "",
     `Write exactly one JSON object between these marker lines in PLAN.md:`,
     PLAN_BEGIN,
@@ -146,6 +150,19 @@ export function parseFleetPlannerOutput(
     if (!readOnly && fileClaims.length === 0) {
       return { ok: false, error: `write task ${key} has no valid file claims` };
     }
+    const verifyCommand = trimmed(record.verifyCommand, 500) || null;
+    if (!readOnly && !verifyCommand) {
+      return {
+        ok: false,
+        error: `write task ${key} has no verification command`,
+      };
+    }
+    if (verifyCommand && !("steps" in parseVerifySteps(verifyCommand))) {
+      return {
+        ok: false,
+        error: `planner task ${key} has an unsafe verification command`,
+      };
+    }
     knownKeys.add(key);
     tasks.push({
       key,
@@ -155,7 +172,7 @@ export function parseFleetPlannerOutput(
       fileClaims,
       dependsOn,
       acceptanceCriteria: trimmed(record.acceptanceCriteria, 2000) || null,
-      verifyCommand: trimmed(record.verifyCommand, 500) || null,
+      verifyCommand,
       suggestedProvider: trimmed(record.suggestedProvider, 40) || null,
     });
   }

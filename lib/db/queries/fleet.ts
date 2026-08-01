@@ -29,6 +29,9 @@ export const fleetQueries = {
         substr(r.goal, 1, 600) AS goal,
         r.repo_id,
         r.project_id,
+        r.source_kind,
+        r.source_id,
+        r.source_name,
         r.status,
         r.budget_usd,
         substr(r.provider, 1, 40) AS provider,
@@ -40,6 +43,29 @@ export const fleetQueries = {
         r.approved_plan_hash,
         r.approved_by,
         r.approved_at,
+        r.desired_state,
+        r.automation_policy_version,
+        r.automation_policy_json,
+        r.automation_policy_hash,
+        r.automation_granted_by,
+        r.automation_granted_at,
+        r.automation_base_sha,
+        r.automation_last_error,
+        r.merge_requested_at,
+        r.merge_requested_by,
+        r.merge_request_kind,
+        r.merge_target,
+        r.integration_state,
+        r.integration_branch,
+        r.integration_worktree,
+        r.integration_base_sha,
+        r.integration_head_sha,
+        r.integration_pr_number,
+        r.integration_pr_url,
+        r.integration_pr_head_sha,
+        r.integration_merge_sha,
+        r.integration_error,
+        r.integration_updated_at,
         r.scheduler_epoch,
         r.recovery_required,
         r.reserved_budget_usd,
@@ -59,6 +85,64 @@ export const fleetQueries = {
 
   getFleetRun: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM fleet_runs WHERE id = ?`),
+
+  setFleetRunAutomationIntent: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_runs
+       SET desired_state = ?,
+           automation_policy_version = ?,
+           automation_policy_json = ?,
+           automation_policy_hash = ?,
+           automation_granted_by = ?,
+           automation_granted_at = ?,
+           automation_last_error = NULL,
+           updated_at = ?
+       WHERE id = ? AND automation_policy_hash IS NULL`
+    ),
+
+  createFleetActionAuthorization: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT OR IGNORE INTO fleet_action_authorizations (
+        id,
+        fleet_run_id,
+        action,
+        status,
+        policy_hash,
+        granted_by,
+        granted_at,
+        updated_at
+      ) VALUES (?, ?, ?, 'authorized', ?, ?, ?, ?)`
+    ),
+
+  listFleetAutomationCandidates: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM fleet_runs
+       WHERE automation_policy_hash IS NOT NULL
+         AND desired_state IN ('planned', 'running')
+         AND status NOT IN ('completed', 'failed', 'canceled')
+       ORDER BY updated_at ASC, id ASC
+       LIMIT ?`
+    ),
+
+  listFleetReviewsForContract: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM fleet_reviews
+       WHERE fleet_run_id = ?
+         AND subject_type = 'plan'
+         AND subject_hash = ?
+         AND policy_hash = ?
+         AND execution_hash = ?
+         AND base_sha = ?
+         AND (
+           (state = 'clean' AND verdict = 'clean') OR
+           (state = 'changes_requested' AND verdict = 'changes_requested')
+         )
+       ORDER BY created_at ASC, id ASC`
+    ),
 
   createFleetTask: (db: Database.Database) =>
     getStmt(
@@ -127,6 +211,69 @@ export const fleetQueries = {
       `SELECT * FROM fleet_workers
        WHERE fleet_run_id = ?
        ORDER BY created_at ASC`
+    ),
+
+  listFleetVerificationsForRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM fleet_verifications
+       WHERE fleet_run_id = ?
+       ORDER BY created_at ASC, id ASC`
+    ),
+
+  listFleetVerificationCandidates: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT
+         t.id AS task_id,
+         t.fleet_run_id,
+         t.current_attempt,
+         t.verify_command,
+         t.base_sha AS task_base_sha,
+         t.head_sha AS task_head_sha,
+         t.worktree_path AS task_worktree_path,
+         t.actual_file_claims_json,
+         t.report_artifact_id,
+         t.approved_task_hash,
+         r.approved_plan_hash,
+         w.id AS worker_id,
+         w.attempt AS worker_attempt,
+         w.base_sha AS worker_base_sha,
+         w.head_sha AS worker_head_sha,
+         w.worktree_path AS worker_worktree_path,
+         w.report_state,
+         w.report_status
+       FROM fleet_tasks t
+       JOIN fleet_runs r ON r.id = t.fleet_run_id
+       LEFT JOIN fleet_workers w ON w.id = (
+         SELECT candidate.id
+         FROM fleet_workers candidate
+         WHERE candidate.fleet_run_id = t.fleet_run_id
+           AND candidate.task_id = t.id
+           AND candidate.attempt = t.current_attempt
+         ORDER BY candidate.report_collected_at DESC, candidate.created_at DESC,
+                  candidate.id DESC
+         LIMIT 1
+       )
+       WHERE t.status = 'verifying'
+       ORDER BY t.updated_at ASC, t.sort_order ASC, t.id ASC
+       LIMIT ?`
+    ),
+
+  createFleetVerification: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT OR IGNORE INTO fleet_verifications
+       (id, fleet_run_id, task_id, worker_id, attempt, base_sha, head_sha,
+        spec_hash, command, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+    ),
+
+  getFleetVerificationByIdentity: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM fleet_verifications
+       WHERE task_id = ? AND attempt = ? AND head_sha = ? AND spec_hash = ?`
     ),
 
   countFleetWorkersForRun: (db: Database.Database) =>

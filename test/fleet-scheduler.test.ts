@@ -110,6 +110,13 @@ function schedulerDeps(
     db,
     now: () => new Date("2026-08-01T12:00:00.000Z"),
     spawn,
+    prepareAttempt: vi.fn(async ({ runId, taskId, attempt }) => ({
+      attemptDirectory: `C:\\fleet\\${runId}\\${taskId}\\${attempt}`,
+      reportPath: `C:\\fleet\\${runId}\\${taskId}\\${attempt}\\report.json`,
+      nonce: "n".repeat(43),
+      nonceHash: "a".repeat(64),
+      baseSha: "b".repeat(40),
+    })),
     sessionExists: async () => false,
     stopSession: async () => {},
   };
@@ -350,14 +357,15 @@ describe("fleet scheduler", () => {
     ).toEqual({ status: "running" });
   });
 
-  it("retries a failed spawn with a new deterministic attempt id", async () => {
+  it("retries a failed spawn after its durable provider backoff", async () => {
     const runId = addRun();
     addTask(runId, "lib/a.ts", 1);
     const spawn = vi
       .fn()
       .mockRejectedValueOnce(new Error("worktree failed"))
       .mockImplementationOnce(async ({ task }) => fakeSpawnResult(task.id));
-    expect(await reconcileFleetRun(runId, schedulerDeps(spawn))).toBe(1);
+    const deps = schedulerDeps(spawn);
+    expect(await reconcileFleetRun(runId, deps)).toBe(1);
     expect(
       (
         db
@@ -367,7 +375,33 @@ describe("fleet scheduler", () => {
           .get(runId) as { n: number }
       ).n
     ).toBe(0);
-    expect(await reconcileFleetRun(runId, schedulerDeps(spawn))).toBe(1);
+    expect(await reconcileFleetRun(runId, deps)).toBe(0);
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_events
+           WHERE fleet_run_id = ? AND event_type = 'provider_spawn_backoff_scheduled'`
+        )
+        .get(runId)
+    ).toEqual({ n: 1 });
+    expect(
+      db
+        .prepare(
+          `SELECT retry_not_before, provider_state, provider_failure_count
+           FROM fleet_tasks WHERE fleet_run_id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      retry_not_before: "2026-08-01T12:00:05.000Z",
+      provider_state: "backoff",
+      provider_failure_count: 1,
+    });
+    expect(
+      await reconcileFleetRun(runId, {
+        ...deps,
+        now: () => new Date("2026-08-01T12:00:05.000Z"),
+      })
+    ).toBe(1);
     const requests = db
       .prepare(
         `SELECT spawn_request_id FROM fleet_workers WHERE fleet_run_id = ? ORDER BY attempt`
@@ -464,13 +498,20 @@ describe("fleet scheduler", () => {
       VALUES ('stale-worker', ?, ?, 'spawning', 'codex', 1, 'stale-request', '2026-07-31T00:00:00.000Z', 0.25)`
     ).run(runId, taskId);
     const spawn = vi.fn(async ({ task }) => fakeSpawnResult(task.id));
-    expect(await reconcileFleetRun(runId, schedulerDeps(spawn))).toBe(0);
-    await recoverFleetRuns(schedulerDeps(spawn));
+    const deps = schedulerDeps(spawn);
+    expect(await reconcileFleetRun(runId, deps)).toBe(0);
+    await recoverFleetRuns(deps);
     const recovered = db
       .prepare(`SELECT recovery_required FROM fleet_runs WHERE id = ?`)
       .get(runId) as { recovery_required: number };
     expect(recovered.recovery_required).toBe(0);
-    expect(await reconcileFleetRun(runId, schedulerDeps(spawn))).toBe(1);
+    expect(await reconcileFleetRun(runId, deps)).toBe(0);
+    expect(
+      await reconcileFleetRun(runId, {
+        ...deps,
+        now: () => new Date("2026-08-01T12:00:05.000Z"),
+      })
+    ).toBe(1);
   });
 
   it("does not retry an expired final attempt and accounts committed budget", async () => {

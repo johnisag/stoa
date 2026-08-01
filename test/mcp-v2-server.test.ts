@@ -77,6 +77,8 @@ describe("MCP SDK v2 orchestration server", () => {
       result: {
         resultType: "complete",
         tools: expect.arrayContaining([
+          expect.objectContaining({ name: "fleet_get_capabilities" }),
+          expect.objectContaining({ name: "fleet_supervisor_snapshot" }),
           expect.objectContaining({ name: "fleet_request_action" }),
         ]),
       },
@@ -97,7 +99,7 @@ describe("MCP SDK v2 orchestration server", () => {
         resultType: "complete",
         content: [
           expect.objectContaining({
-            text: expect.stringContaining("direct Fleet access is not exposed"),
+            text: expect.stringContaining("capabilityToken is required"),
           }),
         ],
       },
@@ -157,9 +159,14 @@ describe("MCP SDK v2 orchestration server", () => {
     };
     const names = listed.result?.tools?.map((tool) => tool.name) ?? [];
     expect(names).toContain("fleet_request_action");
-    expect(names).not.toContain("fleet_create_run");
-    expect(names).not.toContain("fleet_plan_run");
-    expect(names).not.toContain("fleet_approve_run");
+    expect(names).toContain("fleet_get_capabilities");
+    expect(names).toContain("fleet_list_runs");
+    expect(names).toContain("fleet_get_run");
+    expect(names).toContain("fleet_supervisor_snapshot");
+    expect(names).toContain("fleet_create_run");
+    expect(names).toContain("fleet_plan_run");
+    expect(names).toContain("fleet_approve_run");
+    expect(names).toContain("fleet_merge_run");
     expect(names).not.toContain("fleet_tick_run");
     expect(names).not.toContain("fleet_cleanup_run");
   });

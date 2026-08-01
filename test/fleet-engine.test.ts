@@ -88,6 +88,87 @@ describe("normalizeFleetRunDraft", () => {
     expect(res.draft.model).toBeNull();
     expect(res.draft.maxConcurrency).toBe(1);
     expect(res.draft.reviewPolicy).toBe("four_agent");
+    expect(res.draft.desiredState).toBe("draft");
+    expect(res.draft.automationPolicy).toMatchObject({
+      version: 1,
+      automaticPlanning: false,
+      automaticPlanApproval: false,
+      automaticStart: false,
+      automaticMerge: false,
+    });
+  });
+
+  it("normalizes a chained automatic intent and derives its desired state", () => {
+    const res = normalizeFleetRunDraft({
+      name: "Autonomous run",
+      goal: "Plan, review, and execute",
+      automationPolicy: {
+        automaticPlanning: true,
+        automaticPlanApproval: true,
+        automaticStart: true,
+        allowUnconfinedAgents: true,
+        plannerTaskCap: 99,
+      },
+    });
+
+    expect(res).toHaveProperty("draft");
+    if ("error" in res) return;
+    expect(res.draft.desiredState).toBe("running");
+    expect(res.draft.automationPolicy).toMatchObject({
+      version: 1,
+      automaticPlanning: true,
+      automaticPlanApproval: true,
+      automaticStart: true,
+      allowUnconfinedAgents: true,
+      plannerTaskCap: 40,
+    });
+  });
+
+  it("rejects incomplete approval chains and unavailable automatic merge", () => {
+    expect(
+      normalizeFleetRunDraft({
+        name: "Run",
+        goal: "Goal",
+        automationPolicy: { automaticStart: true },
+      })
+    ).toEqual({ error: "automatic start requires automatic plan approval" });
+    expect(
+      normalizeFleetRunDraft({
+        name: "Run",
+        goal: "Goal",
+        reviewPolicy: "manual",
+        automationPolicy: {
+          automaticPlanning: true,
+          automaticPlanApproval: true,
+        },
+      })
+    ).toEqual({
+      error: "automatic plan approval requires a four-agent review policy",
+    });
+    expect(
+      normalizeFleetRunDraft({
+        name: "Run",
+        goal: "Goal",
+        automationPolicy: { automaticMerge: true },
+      })
+    ).toEqual({
+      error:
+        "automatic merge requires automatic start and at least one automatic fix round",
+    });
+    expect(
+      normalizeFleetRunDraft({
+        name: "Run",
+        goal: "Goal",
+        automationPolicy: {
+          automaticPlanning: true,
+          automaticPlanApproval: true,
+          automaticStart: true,
+          automaticFixes: true,
+          maxAutomaticFixRounds: 1,
+          automaticMerge: true,
+        },
+      })
+    ).toMatchObject({ draft: { desiredState: "running" } });
   });
 
   it("normalizes malformed runtime payload fields defensively", () => {
@@ -166,6 +247,10 @@ describe("composeFleetRunDetail", () => {
         task_type: "scope",
         sort_order: 0,
         file_claims_json: JSON.stringify(["app/page.tsx", 123, "lib/fleet.ts"]),
+        integration_state: "merged",
+        integration_operation_id: "merge-op-1",
+        integrated_head_sha: "c".repeat(40),
+        integrated_at: now,
         created_at: now,
         updated_at: now,
       },
@@ -211,6 +296,16 @@ describe("composeFleetRunDetail", () => {
         approved_plan_hash: "hash-a",
         approved_by: "operator",
         approved_at: now,
+        merge_requested_at: now,
+        merge_requested_by: "fleet-automation",
+        merge_request_kind: "automatic",
+        merge_target: "github_pr",
+        integration_state: "waiting_ci",
+        integration_branch: "stoa/fleet/integration-run",
+        integration_head_sha: "c".repeat(40),
+        integration_pr_number: 42,
+        integration_pr_url: "https://github.com/o/r/pull/42",
+        integration_pr_head_sha: "c".repeat(40),
       }),
       tasks,
       workers: [],
@@ -225,11 +320,25 @@ describe("composeFleetRunDetail", () => {
     expect(detail.run.planHash).toBe("hash-a");
     expect(detail.run.planText).toBeNull();
     expect(detail.run.approvedBy).toBe("operator");
+    expect(detail.run).toMatchObject({
+      mergeRequestKind: "automatic",
+      mergeTarget: "github_pr",
+      integrationState: "waiting_ci",
+      integrationPrNumber: 42,
+      integrationPrUrl: "https://github.com/o/r/pull/42",
+      integrationPrHeadSha: "c".repeat(40),
+    });
     expect(detail.run.approvalPreview.canApproveExecutableWork).toBe(false);
     expect(detail.tasks[0].fileClaims).toEqual([
       "app/page.tsx",
       "lib/fleet.ts",
     ]);
+    expect(detail.tasks[0]).toMatchObject({
+      integrationState: "merged",
+      integrationOperationId: "merge-op-1",
+      integratedHeadSha: "c".repeat(40),
+      integratedAt: now,
+    });
     expect(detail.artifacts[0]).toMatchObject({
       title: "Needs clearer boundary",
       severity: "warning",

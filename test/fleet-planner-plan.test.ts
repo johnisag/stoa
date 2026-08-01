@@ -98,6 +98,27 @@ describe("Fleet planner plan contract", () => {
     });
   });
 
+  it("rejects missing or unsafe write-task verification commands", () => {
+    expect(
+      parseFleetPlannerOutput(
+        validPlan.replace('"verifyCommand":"npm test",', ""),
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "write task api has no verification command",
+    });
+    expect(
+      parseFleetPlannerOutput(
+        validPlan.replace('"npm test"', '"npm test | tee result.txt"'),
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "planner task api has an unsafe verification command",
+    });
+  });
+
   it("clamps operator task caps to the hard safety ceiling", () => {
     expect(normalizeFleetPlannerTaskCap(undefined)).toBe(8);
     expect(normalizeFleetPlannerTaskCap(0)).toBe(1);

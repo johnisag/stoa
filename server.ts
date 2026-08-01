@@ -114,6 +114,11 @@ import {
   reconcileFleetRuns,
 } from "./lib/fleet/scheduler";
 import { reconcileFleetPlanners } from "./lib/fleet/planner";
+import { reconcileFleetAutomation } from "./lib/fleet/automation";
+import { reconcileFleetVerifications } from "./lib/fleet/verification";
+import { reconcileFleetTaskReviews } from "./lib/fleet/task-review";
+import { reconcileFleetMerges } from "./lib/fleet/merge-runtime";
+import { reconcileFleetLifecycle } from "./lib/fleet/lifecycle";
 import { evictStale as evictStaleWarmPool } from "./lib/dispatch/warm-pool";
 import {
   getBudgetConfig,
@@ -200,7 +205,14 @@ app.prepare().then(() => {
       // admin-only route can trust it (like the remote-addr header above).
       delete req.headers[SCOPE_HEADER];
       req.headers[SCOPE_HEADER] = "admin";
-      if (AUTH_ENABLED) {
+      // This single endpoint authenticates with a narrowly-scoped, one-use Fleet
+      // capability in its JSON body. Requiring the broad Stoa admin credential
+      // first would defeat that delegation model. Every other endpoint keeps the
+      // normal HTTP auth gate, including capability issuance and revocation.
+      const isFleetCapabilityAction =
+        (req.method || "GET").toUpperCase() === "POST" &&
+        parsedUrl.pathname === "/api/fleet/capabilities/action";
+      if (AUTH_ENABLED && !isFleetCapabilityAction) {
         const decision = decideHttpAuth({
           serverToken: SERVER_TOKEN,
           remoteAddr: req.socket.remoteAddress,
@@ -1493,12 +1505,26 @@ app.prepare().then(() => {
         err
       );
     }
+    try {
+      await reconcileFleetAutomation();
+    } catch (err) {
+      console.error("> Fleet automation startup reconcile failed:", err);
+    }
+    try {
+      await reconcileFleetVerifications();
+      await reconcileFleetTaskReviews();
+      await reconcileFleetMerges();
+      await reconcileFleetLifecycle();
+    } catch (err) {
+      console.error("> Fleet task runtime startup reconcile failed:", err);
+    }
     makeGuardedInterval({
       intervalMs: 5000,
       enabled: true,
       onError: (err) => console.error("fleet planner tick failed:", err),
       tick: async () => {
         await reconcileFleetPlanners();
+        await reconcileFleetAutomation();
       },
     });
     makeGuardedInterval({
@@ -1507,6 +1533,10 @@ app.prepare().then(() => {
       onError: (err) => console.error("fleet scheduler tick failed:", err),
       tick: async () => {
         await reconcileFleetRuns();
+        await reconcileFleetVerifications();
+        await reconcileFleetTaskReviews();
+        await reconcileFleetMerges();
+        await reconcileFleetLifecycle();
       },
     });
     // Dispatch startup catch-up: free slots held by workers that didn't survive

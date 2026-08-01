@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { FLEET_RUN_JSON_BODY_MAX, readCappedJsonBody } from "@/lib/fleet/http";
 import { createDraftFleetRun, listFleetRuns } from "@/lib/fleet/service";
+import { requireAdmin } from "@/lib/api-security";
 
 export async function GET() {
   try {
@@ -15,12 +16,14 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
   const body = await readCappedJsonBody(request, FLEET_RUN_JSON_BODY_MAX);
   if ("error" in body) {
     return NextResponse.json({ error: body.error }, { status: body.status });
   }
 
-  const result = createDraftFleetRun(body.body);
+  const result = createDraftFleetRun(body.body, "operator");
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }

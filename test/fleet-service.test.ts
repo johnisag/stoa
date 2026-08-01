@@ -442,6 +442,65 @@ describe("generated Fleet plans", () => {
 });
 
 describe("createDraftFleetRun", () => {
+  it("persists one-request automation intent and per-action grants", () => {
+    const res = createDraftFleetRun(
+      {
+        name: "Autonomous run",
+        goal: "Plan, review, and execute",
+        repoId: "repo-fleet",
+        provider: "codex",
+        automationPolicy: {
+          automaticPlanning: true,
+          automaticPlanApproval: true,
+          automaticStart: true,
+          allowUnconfinedAgents: true,
+          plannerTaskCap: 10,
+        },
+      },
+      "authenticated-admin"
+    );
+    if ("error" in res) throw new Error(res.error);
+
+    expect(res.run.run).toMatchObject({
+      desiredState: "running",
+      automationGrantedBy: "authenticated-admin",
+      automationPolicy: {
+        version: 1,
+        automaticPlanning: true,
+        automaticPlanApproval: true,
+        automaticStart: true,
+        automaticMerge: false,
+        plannerTaskCap: 10,
+      },
+    });
+    expect(res.run.run.automationPolicyHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(
+      db()
+        .prepare(
+          `SELECT action, status, granted_by
+           FROM fleet_action_authorizations WHERE fleet_run_id = ?
+           ORDER BY action`
+        )
+        .all(res.run.run.id)
+    ).toEqual([
+      {
+        action: "plan_approval",
+        status: "authorized",
+        granted_by: "authenticated-admin",
+      },
+      {
+        action: "planning",
+        status: "authorized",
+        granted_by: "authenticated-admin",
+      },
+      {
+        action: "start",
+        status: "authorized",
+        granted_by: "authenticated-admin",
+      },
+    ]);
+  });
+
   it("persists a draft run, one root task, and an audit event without spawning workers", () => {
     const res = createDraftFleetRun({
       name: "  Phase 1  ",
@@ -597,7 +656,7 @@ describe("Phase 2 plan ingestion and approval", () => {
 
     const approved = approveFleetRunPlan(runId, {
       expectedPlanHash: planned.run.run.planHash,
-      approvedBy: "operator",
+      approvedBy: "spoofed-client-identity",
     });
 
     expect(approved).toHaveProperty("run");

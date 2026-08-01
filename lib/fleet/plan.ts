@@ -9,6 +9,10 @@ export interface ParsedFleetPlanTask {
   model: string | null;
   acceptanceCriteria: string | null;
   verifyCommand: string | null;
+  /** Canonical registered execution target; never accept an arbitrary path. */
+  workingDirectory?: string | null;
+  /** Canonical registered execution base for this task. */
+  baseBranch?: string | null;
 }
 
 export const FLEET_PLAN_TEXT_MAX = 24000;

@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  Archive,
   ArrowLeft,
   BadgeCheck,
+  BarChart3,
   ClipboardList,
   FileText,
   GitBranch,
@@ -17,6 +19,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Square,
+  Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -44,6 +47,19 @@ import {
   usePauseFleetRun,
   useCancelFleetRun,
   useCompleteFleetWorker,
+  useImportFleetRun,
+  useArchiveFleetRun,
+  useFleetAnalyticsQuery,
+  useFleetCleanupPreview,
+  useRequestFleetCleanup,
+  useFleetMergeStatus,
+  useRequestFleetMerge,
+  useFleetSupervisorSnapshot,
+  useRetryFleetTask,
+  useReconcileFleetTaskVerification,
+  useReconcileFleetTaskReview,
+  useMessageFleetWorker,
+  useKillFleetWorker,
 } from "@/data/fleet/queries";
 import { useProjectsQuery } from "@/data/projects/queries";
 import type {
@@ -51,6 +67,9 @@ import type {
   FleetReviewPolicy,
   FleetRunDetailDto,
   FleetRunDto,
+  FleetTaskDto,
+  FleetVerificationDto,
+  FleetWorkerDto,
 } from "@/lib/fleet/types";
 import {
   FLEET_MODEL_MAX,
@@ -61,6 +80,198 @@ import {
 import { cn } from "@/lib/utils";
 
 const NONE = "__none__";
+
+function operatorRequestId(action: string) {
+  return `${action}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
+function TaskOperatorActions({
+  runId,
+  planHash,
+  task,
+  verification,
+}: {
+  runId: string;
+  planHash: string | null;
+  task: FleetTaskDto;
+  verification: FleetVerificationDto | undefined;
+}) {
+  const retryTask = useRetryFleetTask(runId, task.id);
+  const verifyTask = useReconcileFleetTaskVerification(runId, task.id);
+  const reviewTask = useReconcileFleetTaskReview(runId, task.id);
+  const pending =
+    retryTask.isPending || verifyTask.isPending || reviewTask.isPending;
+  const retryable = [
+    "failed",
+    "blocked",
+    "needs_inspection",
+    "needs_followup",
+  ].includes(task.status);
+  const headSha = task.headSha;
+  const verificationEvidenceHash = verification?.outputHash ?? null;
+  const canVerify = task.status === "verifying" && !!headSha;
+  const canReview =
+    task.status === "reviewing" && !!headSha && !!verificationEvidenceHash;
+  const error =
+    retryTask.error?.message ??
+    verifyTask.error?.message ??
+    reviewTask.error?.message;
+
+  if (!planHash || (!retryable && !canVerify && !canReview && !error)) {
+    return null;
+  }
+
+  return (
+    <div className="flex max-w-72 flex-col items-end gap-1">
+      <div className="flex flex-wrap justify-end gap-1">
+        {retryable && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pending || task.currentAttempt >= task.maxAttempts}
+            onClick={() => {
+              if (
+                !window.confirm(
+                  "Queue a new exact-plan-bound attempt? Existing evidence and worktrees remain preserved for audit."
+                )
+              )
+                return;
+              void retryTask
+                .mutateAsync({
+                  requestId: operatorRequestId("task-retry"),
+                  expectedPlanHash: planHash,
+                  expectedAttempt: task.currentAttempt,
+                  expectedHeadSha: task.headSha,
+                })
+                .catch(() => undefined);
+            }}
+          >
+            Retry
+          </Button>
+        )}
+        {canVerify && headSha && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() => {
+              void verifyTask
+                .mutateAsync({
+                  requestId: operatorRequestId("task-verification"),
+                  expectedPlanHash: planHash,
+                  expectedAttempt: task.currentAttempt,
+                  expectedHeadSha: headSha,
+                })
+                .catch(() => undefined);
+            }}
+          >
+            Reconcile verify
+          </Button>
+        )}
+        {canReview && headSha && verificationEvidenceHash && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() => {
+              void reviewTask
+                .mutateAsync({
+                  requestId: operatorRequestId("task-review"),
+                  expectedPlanHash: planHash,
+                  expectedAttempt: task.currentAttempt,
+                  expectedHeadSha: headSha,
+                  expectedVerificationEvidenceHash: verificationEvidenceHash,
+                })
+                .catch(() => undefined);
+            }}
+          >
+            Reconcile review
+          </Button>
+        )}
+      </div>
+      {error && (
+        <span className="text-destructive text-right text-[10px] break-words">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function WorkerOperatorActions({
+  runId,
+  worker,
+}: {
+  runId: string;
+  worker: FleetWorkerDto;
+}) {
+  const messageWorker = useMessageFleetWorker(runId, worker.id);
+  const killWorker = useKillFleetWorker(runId, worker.id);
+  const active =
+    !!worker.sessionId &&
+    ["running", "waiting_for_operator"].includes(worker.status);
+  const sessionId = worker.sessionId;
+  const error = messageWorker.error?.message ?? killWorker.error?.message;
+  if (!active && !error) return null;
+
+  return (
+    <div className="mt-2 grid gap-1">
+      {active && sessionId && (
+        <div className="flex flex-wrap gap-1">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={messageWorker.isPending || killWorker.isPending}
+            onClick={() => {
+              const message = window.prompt(
+                "Message this exact Fleet worker attempt:"
+              );
+              if (!message?.trim()) return;
+              void messageWorker
+                .mutateAsync({
+                  requestId: operatorRequestId("worker-message"),
+                  expectedAttempt: worker.attempt,
+                  expectedSessionId: sessionId,
+                  message: message.trim(),
+                })
+                .catch(() => undefined);
+            }}
+          >
+            Message
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={messageWorker.isPending || killWorker.isPending}
+            onClick={() => {
+              if (
+                !window.confirm(
+                  "Stop this exact worker attempt? Its worktree and evidence will be preserved for inspection."
+                )
+              )
+                return;
+              void killWorker
+                .mutateAsync({
+                  requestId: operatorRequestId("worker-kill"),
+                  expectedAttempt: worker.attempt,
+                  expectedSessionId: sessionId,
+                  preserveWorktree: true,
+                })
+                .catch(() => undefined);
+            }}
+          >
+            Stop worker
+          </Button>
+        </div>
+      )}
+      {error && (
+        <span className="text-destructive text-[10px] break-words">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function labelDate(value: string) {
   return value.replace("T", " ").replace("Z", "");
@@ -180,6 +391,21 @@ function RunDetail({
   const pauseRun = usePauseFleetRun(detail.run.id);
   const cancelRun = useCancelFleetRun(detail.run.id);
   const completeWorker = useCompleteFleetWorker(detail.run.id);
+  const archiveRun = useArchiveFleetRun(detail.run.id);
+  const cleanupRun = useRequestFleetCleanup(detail.run.id);
+  const cleanupPreview = useFleetCleanupPreview(
+    detail.run.id,
+    detail.run.archivedAt != null
+  );
+  const mergeStatus = useFleetMergeStatus(
+    detail.run.id,
+    detail.tasks.length > 0 && detail.run.approvalState === "approved"
+  );
+  const requestMerge = useRequestFleetMerge(detail.run.id);
+  const supervisor = useFleetSupervisorSnapshot(
+    detail.run.id,
+    detail.tasks.length > 0
+  );
   const reviewedPlanText = detail.run.planText ?? "";
   const [planText, setPlanText] = useState(
     detail.run.planText ?? detail.run.goal
@@ -215,7 +441,6 @@ function RunDetail({
     try {
       await approvePlan.mutateAsync({
         expectedPlanHash: detail.run.planHash,
-        approvedBy: "operator",
       });
     } catch {
       // React Query owns the rendered error state.
@@ -272,12 +497,20 @@ function RunDetail({
   const lifecycleError =
     resumeRun.error?.message ??
     pauseRun.error?.message ??
-    cancelRun.error?.message;
+    cancelRun.error?.message ??
+    archiveRun.error?.message ??
+    cleanupRun.error?.message ??
+    cleanupPreview.error?.message ??
+    mergeStatus.error?.message ??
+    requestMerge.error?.message;
   const resetLifecycleErrors = () => {
     resumeRun.reset();
     pauseRun.reset();
     cancelRun.reset();
     completeWorker.reset();
+    archiveRun.reset();
+    cleanupRun.reset();
+    requestMerge.reset();
   };
   const attentionWorkers = detail.workers.filter((worker) =>
     ["failed", "dead", "waiting_for_operator", "cleanup_pending"].includes(
@@ -428,6 +661,63 @@ function RunDetail({
         >
           <Square className="h-4 w-4" /> Cancel
         </Button>
+        {["completed", "failed", "canceled"].includes(detail.run.status) &&
+          !detail.run.archivedAt && (
+            <Button
+              className="gap-2"
+              variant="outline"
+              disabled={archiveRun.isPending}
+              onClick={() => {
+                resetLifecycleErrors();
+                const retentionDays =
+                  detail.run.automationPolicy.retentionDays ?? 30;
+                if (
+                  !window.confirm(
+                    `Archive this run and retain its audit artifact bodies for ${retentionDays} days? The audit trail remains durable.`
+                  )
+                )
+                  return;
+                void archiveRun
+                  .mutateAsync({ retentionDays })
+                  .catch(() => undefined);
+              }}
+            >
+              {archiveRun.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Archive className="h-4 w-4" />
+              )}
+              Archive
+            </Button>
+          )}
+        {detail.run.archivedAt &&
+          cleanupPreview.data &&
+          cleanupPreview.data.eligible.length > 0 && (
+            <Button
+              className="gap-2"
+              variant="destructive"
+              disabled={cleanupRun.isPending}
+              onClick={() => {
+                resetLifecycleErrors();
+                const count = cleanupPreview.data?.eligible.length ?? 0;
+                if (
+                  !window.confirm(
+                    `Permanently remove ${count} verified Fleet-owned worktree${count === 1 ? "" : "s"}? Branches and the archived audit trail are preserved.`
+                  )
+                )
+                  return;
+                void cleanupRun.mutateAsync().catch(() => undefined);
+              }}
+            >
+              {cleanupRun.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              Clean {cleanupPreview.data.eligible.length} worktree
+              {cleanupPreview.data.eligible.length === 1 ? "" : "s"}
+            </Button>
+          )}
         {plannerActive && (
           <span className="text-xs text-amber-700 dark:text-amber-300">
             Cancel the planner and wait for cleanup before canceling the run.
@@ -455,6 +745,11 @@ function RunDetail({
             {attentionTasks.length} task{attentionTasks.length === 1 ? "" : "s"}{" "}
             need attention.
           </span>
+        )}
+        {detail.run.automationLastError && (
+          <div className="border-destructive/40 bg-destructive/5 text-destructive rounded border px-3 py-2 text-xs break-words">
+            Automation paused: {detail.run.automationLastError}
+          </div>
         )}
         {lifecycleError && (
           <span className="text-destructive flex items-center gap-1 text-xs">
@@ -658,26 +953,242 @@ function RunDetail({
                       {task.failureCode}
                     </div>
                   )}
-                </div>
-                <div className="flex items-start gap-1">
-                  <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
-                    {task.status}
-                  </span>
-                  <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
-                    {task.taskType}
-                  </span>
-                  {task.agentType && (
-                    <span className="bg-primary/10 text-primary rounded px-1.5 py-0.5 text-[10px] uppercase">
-                      {task.agentType}
-                      {task.model ? ` / ${task.model}` : ""}
+                  <div className="text-muted-foreground mt-2 flex flex-wrap gap-1 text-[10px] uppercase">
+                    <span className="bg-foreground/10 rounded px-1.5 py-0.5">
+                      verify {task.verificationStatus ?? "pending"}
                     </span>
-                  )}
+                    <span className="bg-foreground/10 rounded px-1.5 py-0.5">
+                      review {task.reviewStatus ?? "pending"}
+                    </span>
+                    <span className="bg-foreground/10 rounded px-1.5 py-0.5">
+                      merge {task.integrationState}
+                    </span>
+                    {task.fixRounds > 0 && (
+                      <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
+                        {task.fixRounds} fix round
+                        {task.fixRounds === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <div className="flex flex-wrap justify-end gap-1">
+                    <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
+                      {task.status}
+                    </span>
+                    <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
+                      {task.taskType}
+                    </span>
+                    {task.agentType && (
+                      <span className="bg-primary/10 text-primary rounded px-1.5 py-0.5 text-[10px] uppercase">
+                        {task.agentType}
+                        {task.model ? ` / ${task.model}` : ""}
+                      </span>
+                    )}
+                  </div>
+                  <TaskOperatorActions
+                    runId={detail.run.id}
+                    planHash={detail.run.planHash}
+                    task={task}
+                    verification={detail.verifications.find(
+                      (verification) => verification.id === task.verificationId
+                    )}
+                  />
                 </div>
               </div>
             ))
           )}
         </div>
       </section>
+
+      {supervisor.data && (
+        <section className="rounded-md border">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+            <span className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              <h3 className="text-sm font-medium">Advisory supervisor</h3>
+            </span>
+            <span className="text-muted-foreground max-w-48 truncate font-mono text-[10px]">
+              {supervisor.data.snapshotHash}
+            </span>
+          </div>
+          <div className="grid gap-3 p-3 md:grid-cols-2">
+            <div>
+              <div className="text-muted-foreground mb-1 text-[10px] font-medium uppercase">
+                Attention
+              </div>
+              {supervisor.data.attention.length === 0 ? (
+                <p className="text-muted-foreground text-xs">
+                  No advisory attention items.
+                </p>
+              ) : (
+                <ul className="grid gap-1 text-xs">
+                  {supervisor.data.attention.map((item) => (
+                    <li
+                      key={`${item.rank}:${item.code}:${item.taskId ?? "run"}:${item.workerId ?? "none"}`}
+                      className="rounded border px-2 py-1"
+                    >
+                      <span className="font-medium uppercase">
+                        {item.severity}
+                      </span>{" "}
+                      {item.code.replaceAll("_", " ")}
+                      {item.taskId
+                        ? ` · ${taskTitleById.get(item.taskId) ?? item.taskId}`
+                        : ""}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <div className="text-muted-foreground mb-1 text-[10px] font-medium uppercase">
+                Recommended next actions
+              </div>
+              {supervisor.data.recommendations.length === 0 ? (
+                <p className="text-muted-foreground text-xs">
+                  No action recommended.
+                </p>
+              ) : (
+                <ul className="grid gap-1 text-xs">
+                  {supervisor.data.recommendations.map((recommendation) => (
+                    <li
+                      key={recommendation.id}
+                      className="rounded border px-2 py-1"
+                    >
+                      <span className="font-medium">
+                        {recommendation.kind.replaceAll("_", " ")}
+                      </span>{" "}
+                      · {recommendation.reasonCode.replaceAll("_", " ")}
+                      {recommendation.taskId
+                        ? ` · ${taskTitleById.get(recommendation.taskId) ?? recommendation.taskId}`
+                        : ""}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <p className="text-muted-foreground text-[11px] md:col-span-2">
+              Recommendations are hash-bound evidence only. They cannot execute
+              work, approve a plan, or authorize a merge.
+            </p>
+          </div>
+        </section>
+      )}
+      {supervisor.error && (
+        <div className="text-destructive rounded-md border px-3 py-2 text-xs">
+          {supervisor.error.message}
+        </div>
+      )}
+
+      {detail.tasks.length > 0 && detail.run.approvalState === "approved" && (
+        <section className="rounded-md border">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+            <span className="flex items-center gap-2">
+              <GitBranch className="h-4 w-4" />
+              <h3 className="text-sm font-medium">Merge queue</h3>
+            </span>
+            <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
+              {detail.run.integrationState.replaceAll("_", " ")}
+            </span>
+          </div>
+          <div className="grid gap-3 p-3">
+            <div className="grid gap-2 text-xs md:grid-cols-3">
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase">
+                  Target
+                </span>
+                {detail.run.mergeTarget ??
+                  (detail.run.automationPolicy.automaticMerge
+                    ? detail.run.automationPolicy.mergeTarget
+                    : "Not requested")}
+              </div>
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase">
+                  Integrated head
+                </span>
+                <span className="font-mono break-all">
+                  {detail.run.integrationHeadSha ?? "Pending"}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block text-[10px] uppercase">
+                  Tasks
+                </span>
+                {mergeStatus.data
+                  ? `${mergeStatus.data.readiness.mergedTaskIds.length} merged · ${mergeStatus.data.readiness.readyTaskIds.length} ready · ${mergeStatus.data.readiness.waitingTaskIds.length} waiting`
+                  : "Loading readiness"}
+              </div>
+            </div>
+            {detail.run.integrationPrUrl && (
+              <a
+                className="text-primary w-fit text-xs underline underline-offset-2"
+                href={detail.run.integrationPrUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open PR #{detail.run.integrationPrNumber ?? ""}
+              </a>
+            )}
+            {(detail.run.integrationError ||
+              mergeStatus.data?.integration.error) && (
+              <div className="text-destructive text-xs break-words">
+                {detail.run.integrationError ??
+                  mergeStatus.data?.integration.error}
+              </div>
+            )}
+            {(mergeStatus.data?.readiness.blockers.length ?? 0) > 0 && (
+              <div className="rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs">
+                <div className="font-medium">Waiting on exact-head gates</div>
+                <ul className="text-muted-foreground mt-1 list-inside list-disc">
+                  {mergeStatus.data?.readiness.blockers.map((blocker) => (
+                    <li key={blocker}>{blocker}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!detail.run.mergeRequestedAt && (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  disabled={requestMerge.isPending}
+                  onClick={() => {
+                    resetLifecycleErrors();
+                    if (
+                      !window.confirm(
+                        "Queue a GitHub PR merge? Fleet will pin the exact reviewed head, wait for required CI, and refuse stale results."
+                      )
+                    )
+                      return;
+                    void requestMerge
+                      .mutateAsync("github_pr")
+                      .catch(() => undefined);
+                  }}
+                >
+                  Queue GitHub PR
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={requestMerge.isPending}
+                  onClick={() => {
+                    resetLifecycleErrors();
+                    if (
+                      !window.confirm(
+                        "Queue a local fast-forward merge? Fleet will refuse a dirty or moved checkout and will run final verification first."
+                      )
+                    )
+                      return;
+                    void requestMerge
+                      .mutateAsync("local")
+                      .catch(() => undefined);
+                  }}
+                >
+                  Queue local fast-forward
+                </Button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="rounded-md border">
         <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -834,6 +1345,10 @@ function RunDetail({
                           {worker.failureCode ?? worker.terminalCause}
                         </div>
                       )}
+                      <WorkerOperatorActions
+                        runId={detail.run.id}
+                        worker={worker}
+                      />
                       {worker.sessionId &&
                         ["running", "waiting_for_operator"].includes(
                           worker.status
@@ -906,16 +1421,16 @@ function RunDetail({
 
 export function FleetManagementView({ onClose }: { onClose?: () => void }) {
   const runs = useFleetRunsQuery(true);
+  const analytics = useFleetAnalyticsQuery(true);
   const repos = useDispatchReposQuery(true);
   const projects = useProjectsQuery();
   const createRun = useCreateFleetRun();
-  const startCreatedPlanner = useStartFleetPlan();
+  const importRun = useImportFleetRun();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [createPlannerErrorRunId, setCreatePlannerErrorRunId] = useState<
-    string | null
-  >(null);
   const [name, setName] = useState("");
   const [goal, setGoal] = useState("");
+  const [inputMode, setInputMode] = useState<"epic" | "plan">("epic");
+  const [importVerifyCommand, setImportVerifyCommand] = useState("npm test");
   const [repoId, setRepoId] = useState(NONE);
   const [projectId, setProjectId] = useState(NONE);
   const [budgetUsd, setBudgetUsd] = useState("");
@@ -923,6 +1438,17 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
   const [model, setModel] = useState("");
   const [maxConcurrency, setMaxConcurrency] = useState(4);
   const [autoPlan, setAutoPlan] = useState(true);
+  const [autoApprove, setAutoApprove] = useState(false);
+  const [autoStart, setAutoStart] = useState(false);
+  const [autoFix, setAutoFix] = useState(false);
+  const [maxAutomaticFixRounds, setMaxAutomaticFixRounds] = useState(2);
+  const [autoMerge, setAutoMerge] = useState(false);
+  const [mergeTarget, setMergeTarget] = useState<"github_pr" | "local">(
+    "github_pr"
+  );
+  const [retentionDays, setRetentionDays] = useState(30);
+  const [allowSensitivePaths, setAllowSensitivePaths] = useState(false);
+  const [allowUnconfinedAgents, setAllowUnconfinedAgents] = useState(false);
   const [plannerTaskCap, setPlannerTaskCap] = useState(8);
   const [reviewPolicy, setReviewPolicy] =
     useState<FleetReviewPolicy>("four_agent");
@@ -935,10 +1461,6 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
   const detail = useFleetRunQuery(selectedRunId, selectedRunId != null);
 
   function selectRun(id: string) {
-    if (createPlannerErrorRunId && createPlannerErrorRunId !== id) {
-      startCreatedPlanner.reset();
-      setCreatePlannerErrorRunId(null);
-    }
     setSelectedRunId(id);
     if (window.innerWidth < 1024) {
       requestAnimationFrame(() =>
@@ -954,58 +1476,58 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
     if (!selectedRunId && runs.data?.[0]) setSelectedRunId(runs.data[0].id);
   }, [runs.data, selectedRunId]);
 
-  useEffect(() => {
-    if (
-      createPlannerErrorRunId &&
-      detail.data?.run.id === createPlannerErrorRunId &&
-      [
-        "starting",
-        "running",
-        "finalizing",
-        "cleanup_pending",
-        "ready",
-      ].includes(detail.data.run.plannerState)
-    ) {
-      startCreatedPlanner.reset();
-      setCreatePlannerErrorRunId(null);
-    }
-  }, [
-    createPlannerErrorRunId,
-    detail.data?.run.id,
-    detail.data?.run.plannerState,
-    startCreatedPlanner,
-  ]);
-
   async function handleCreateRun() {
     createRun.reset();
-    startCreatedPlanner.reset();
-    setCreatePlannerErrorRunId(null);
+    importRun.reset();
+    const automationPolicy = {
+      version: 1 as const,
+      automaticPlanning: autoPlan,
+      automaticPlanApproval: autoApprove,
+      automaticStart: autoStart,
+      automaticFixes: autoFix,
+      maxAutomaticFixRounds: autoFix ? maxAutomaticFixRounds : 0,
+      automaticMerge: autoMerge,
+      mergeTarget,
+      allowSensitivePaths,
+      allowUnconfinedAgents,
+      plannerTaskCap,
+      cleanupPolicy: "preserve" as const,
+      retentionDays,
+    };
     try {
-      const created = await createRun.mutateAsync({
-        name,
-        goal,
+      const target = {
         repoId: repoId === NONE ? null : repoId,
         projectId: projectId === NONE ? null : projectId,
+      };
+      const options = {
+        ...target,
         budgetUsd: budgetUsd.trim() ? Number(budgetUsd) : null,
         provider,
         model: model.trim() || null,
         maxConcurrency,
         reviewPolicy,
-      });
+        automationPolicy,
+      };
+      const created =
+        inputMode === "plan"
+          ? await importRun.mutateAsync({
+              source: {
+                kind: "text",
+                name,
+                text: goal,
+                ...target,
+                provider,
+                model: model.trim() || null,
+                claimMode: "write",
+                verifyCommand: importVerifyCommand.trim() || null,
+              },
+              options,
+            })
+          : await createRun.mutateAsync({ name, goal, ...options });
       setSelectedRunId(created.run.id);
       setName("");
       setGoal("");
       setBudgetUsd("");
-      if (autoPlan) {
-        try {
-          await startCreatedPlanner.mutateAsync({
-            runId: created.run.id,
-            taskCap: plannerTaskCap,
-          });
-        } catch {
-          setCreatePlannerErrorRunId(created.run.id);
-        }
-      }
     } catch {
       // React Query owns the rendered error state.
     }
@@ -1013,6 +1535,8 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
 
   const automaticPlanNeedsTarget =
     autoPlan && repoId === NONE && projectId === NONE;
+  const createPending = createRun.isPending || importRun.isPending;
+  const createError = createRun.error?.message ?? importRun.error?.message;
 
   return (
     <div className="bg-background flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -1023,6 +1547,13 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
           <span className="text-muted-foreground text-xs">
             {runs.data?.length ?? 0} runs
           </span>
+          {analytics.data && (
+            <span className="text-muted-foreground hidden items-center gap-1 text-xs sm:flex">
+              <BarChart3 className="h-3.5 w-3.5" />
+              {analytics.data.runOutcomes.completed ?? 0} completed · $
+              {analytics.data.budget.spentUsd.toFixed(2)} spent
+            </span>
+          )}
         </span>
         <div className="flex items-center gap-1">
           <Button
@@ -1060,6 +1591,24 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
               <h3 className="text-sm font-medium">Draft run</h3>
             </div>
             <div className="grid gap-2">
+              <Select
+                value={inputMode}
+                onValueChange={(value) =>
+                  setInputMode(value === "plan" ? "plan" : "epic")
+                }
+              >
+                <SelectTrigger aria-label="Fleet input mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="epic">
+                    Epic/specification — plan automatically
+                  </SelectItem>
+                  <SelectItem value="plan">
+                    Existing Markdown task plan — import
+                  </SelectItem>
+                </SelectContent>
+              </Select>
               <Input
                 aria-label="Fleet run name"
                 placeholder="Name"
@@ -1068,12 +1617,35 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                 onChange={(event) => setName(event.target.value)}
               />
               <Textarea
-                aria-label="Fleet run goal"
-                placeholder="Goal"
+                aria-label={
+                  inputMode === "plan" ? "Fleet task plan" : "Fleet run goal"
+                }
+                placeholder={
+                  inputMode === "plan"
+                    ? "Markdown tasks with [files: path] claims"
+                    : "High-level epic or project specification"
+                }
                 maxLength={FLEET_RUN_GOAL_MAX}
                 value={goal}
                 onChange={(event) => setGoal(event.target.value)}
               />
+              {inputMode === "plan" && (
+                <label className="grid gap-1 text-xs">
+                  <span>Default verification command for write tasks</span>
+                  <Input
+                    aria-label="Imported plan verification command"
+                    placeholder="npm test"
+                    value={importVerifyCommand}
+                    onChange={(event) =>
+                      setImportVerifyCommand(event.target.value)
+                    }
+                  />
+                  <span className="text-muted-foreground">
+                    Runs without a shell; use &amp;&amp; only to separate direct
+                    command steps.
+                  </span>
+                </label>
+              )}
               <Select
                 value={repoId}
                 onValueChange={(value) => {
@@ -1133,19 +1705,33 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
               </div>
               <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs">
                 <span>
-                  Plan automatically after creating the run
+                  {inputMode === "plan"
+                    ? "Continue the imported plan automatically"
+                    : "Plan automatically after creating the run"}
                   <span className="text-muted-foreground mt-0.5 block">
-                    Generates and allocates tasks, then waits for approval.
+                    {inputMode === "plan"
+                      ? "Uses the imported graph; no planner session is needed."
+                      : "Generates and allocates tasks, then waits for approval."}
                   </span>
                 </span>
                 <input
                   aria-label="Plan automatically"
                   type="checkbox"
                   checked={autoPlan}
-                  onChange={(event) => setAutoPlan(event.target.checked)}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setAutoPlan(enabled);
+                    if (!enabled) {
+                      setAutoApprove(false);
+                      setAutoStart(false);
+                      setAutoFix(false);
+                      setAutoMerge(false);
+                      setAllowUnconfinedAgents(false);
+                    }
+                  }}
                 />
               </label>
-              {autoPlan && (
+              {autoPlan && inputMode === "epic" && (
                 <label className="grid gap-1 text-xs">
                   <span>Planner task cap (1-40)</span>
                   <Input
@@ -1181,9 +1767,17 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
               </div>
               <Select
                 value={reviewPolicy}
-                onValueChange={(value) =>
-                  setReviewPolicy(value as FleetReviewPolicy)
-                }
+                onValueChange={(value) => {
+                  const next = value as FleetReviewPolicy;
+                  setReviewPolicy(next);
+                  if (next === "manual") {
+                    setAutoApprove(false);
+                    setAutoStart(false);
+                    setAutoFix(false);
+                    setAutoMerge(false);
+                    setAllowUnconfinedAgents(false);
+                  }
+                }}
               >
                 <SelectTrigger aria-label="Review policy">
                   <SelectValue placeholder="Review policy" />
@@ -1196,33 +1790,213 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                   <SelectItem value="manual">Manual</SelectItem>
                 </SelectContent>
               </Select>
+              <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs">
+                <span>
+                  Approve an exact reviewed plan automatically
+                  <span className="text-muted-foreground mt-0.5 block">
+                    Waits for four independent clean critics bound to the plan,
+                    execution contract, policy, and base commit.
+                  </span>
+                </span>
+                <input
+                  aria-label="Approve plans automatically"
+                  type="checkbox"
+                  disabled={!autoPlan || reviewPolicy === "manual"}
+                  checked={autoApprove}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setAutoApprove(enabled);
+                    if (!enabled) {
+                      setAutoStart(false);
+                      setAutoFix(false);
+                      setAutoMerge(false);
+                      setAllowUnconfinedAgents(false);
+                    }
+                  }}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs">
+                <span>
+                  Start approved work automatically
+                  <span className="text-muted-foreground mt-0.5 block">
+                    Uses compare-and-set and rechecks policy, base, and
+                    execution hashes before any worker can launch.
+                  </span>
+                </span>
+                <input
+                  aria-label="Start approved work automatically"
+                  type="checkbox"
+                  disabled={!autoApprove}
+                  checked={autoStart}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setAutoStart(enabled);
+                    if (!enabled) {
+                      setAutoFix(false);
+                      setAutoMerge(false);
+                      setAllowUnconfinedAgents(false);
+                    }
+                  }}
+                />
+              </label>
+              {autoApprove && (
+                <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs">
+                  <span>
+                    Allow sensitive paths
+                    <span className="text-muted-foreground mt-0.5 block">
+                      Explicitly permits automatic approval for CI,
+                      agent-policy, environment, or secret-related paths.
+                    </span>
+                  </span>
+                  <input
+                    aria-label="Allow sensitive paths"
+                    type="checkbox"
+                    checked={allowSensitivePaths}
+                    onChange={(event) =>
+                      setAllowSensitivePaths(event.target.checked)
+                    }
+                  />
+                </label>
+              )}
+              {autoStart && (
+                <div className="grid gap-2 rounded-md border border-amber-500/50 bg-amber-500/5 px-3 py-2 text-xs">
+                  <div className="text-amber-700 dark:text-amber-300">
+                    Unattended agents can execute code and modify the selected
+                    repository. Without a detected OS sandbox, automatic start
+                    remains paused unless you grant the consent below.
+                  </div>
+                  <label className="flex items-center gap-2">
+                    <input
+                      aria-label="Allow unconfined unattended agents"
+                      type="checkbox"
+                      checked={allowUnconfinedAgents}
+                      onChange={(event) =>
+                        setAllowUnconfinedAgents(event.target.checked)
+                      }
+                    />
+                    I explicitly allow unattended agents without OS confinement.
+                  </label>
+                </div>
+              )}
+              <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs">
+                <span>
+                  Fix blocking review findings automatically
+                  <span className="text-muted-foreground mt-0.5 block">
+                    Re-verifies and re-runs all four exact-head reviews after
+                    each bounded fix attempt.
+                  </span>
+                </span>
+                <input
+                  aria-label="Fix review findings automatically"
+                  type="checkbox"
+                  disabled={!autoStart}
+                  checked={autoFix}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setAutoFix(enabled);
+                    if (!enabled) setAutoMerge(false);
+                  }}
+                />
+              </label>
+              {autoFix && (
+                <label className="grid gap-1 text-xs">
+                  <span>Maximum automatic fix rounds (1-20)</span>
+                  <Input
+                    aria-label="Maximum automatic fix rounds"
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={maxAutomaticFixRounds}
+                    onChange={(event) =>
+                      setMaxAutomaticFixRounds(Number(event.target.value))
+                    }
+                  />
+                </label>
+              )}
+              <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs">
+                <span>
+                  Merge the fully green result automatically
+                  <span className="text-muted-foreground mt-0.5 block">
+                    Requires exact-SHA verification, four clean independent
+                    reviews, authorized fix rounds, and a final integration
+                    verification.
+                  </span>
+                </span>
+                <input
+                  aria-label="Merge green results automatically"
+                  type="checkbox"
+                  disabled={!autoFix || maxAutomaticFixRounds < 1}
+                  checked={autoMerge}
+                  onChange={(event) => setAutoMerge(event.target.checked)}
+                />
+              </label>
+              {autoMerge && (
+                <label className="grid gap-1 text-xs">
+                  <span>Merge destination</span>
+                  <Select
+                    value={mergeTarget}
+                    onValueChange={(value) =>
+                      setMergeTarget(value === "local" ? "local" : "github_pr")
+                    }
+                  >
+                    <SelectTrigger aria-label="Automatic merge destination">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="github_pr">
+                        GitHub PR, CI, then merge
+                      </SelectItem>
+                      <SelectItem value="local">
+                        Local fast-forward only
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </label>
+              )}
+              <label className="grid gap-1 text-xs">
+                <span>Audit artifact retention (days)</span>
+                <Input
+                  aria-label="Fleet artifact retention days"
+                  type="number"
+                  min={1}
+                  max={3650}
+                  value={retentionDays}
+                  onChange={(event) =>
+                    setRetentionDays(Number(event.target.value))
+                  }
+                />
+                <span className="text-muted-foreground">
+                  Audit metadata stays durable; oversized artifact bodies may be
+                  pruned after this period.
+                </span>
+              </label>
               <Button
                 className="gap-2"
                 disabled={
                   !name.trim() ||
                   !goal.trim() ||
                   automaticPlanNeedsTarget ||
-                  createRun.isPending ||
-                  startCreatedPlanner.isPending
+                  createPending
                 }
                 onClick={() => void handleCreateRun()}
               >
-                {createRun.isPending || startCreatedPlanner.isPending ? (
+                {createPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Plus className="h-4 w-4" />
                 )}
-                {autoPlan ? "Create and plan" : "Create draft"}
+                {autoMerge
+                  ? "Create epic-to-merged run"
+                  : autoStart
+                    ? "Create autonomous run"
+                    : autoPlan
+                      ? "Create and plan"
+                      : "Create draft"}
               </Button>
-              {(createRun.isError ||
-                (startCreatedPlanner.isError &&
-                  createPlannerErrorRunId === selectedRunId)) && (
+              {createError && (
                 <div className="text-destructive flex items-center gap-2 text-xs">
                   <AlertCircle className="h-3.5 w-3.5" />
-                  {createRun.error?.message ??
-                    (startCreatedPlanner.error
-                      ? `Draft created and selected; planning failed: ${startCreatedPlanner.error.message}. Retry from Plan review.`
-                      : null)}
+                  {createError}
                 </div>
               )}
               {automaticPlanNeedsTarget && (

@@ -37,7 +37,14 @@ const execFileAsync = promisify(execFile);
 
 export interface SpawnWorkerOptions {
   conductorSessionId?: string | null;
+  /** Durable, non-secret task summary stored on the session row. */
   task: string;
+  /**
+   * Optional ephemeral task delivered to the terminal instead of `task`.
+   * It is never logged or written to the session row (Fleet uses this for a
+   * one-attempt report nonce).
+   */
+  deliveryTask?: string;
   workingDirectory: string;
   branchName?: string;
   baseBranch?: string;
@@ -48,6 +55,8 @@ export interface SpawnWorkerOptions {
   requireTaskDelivery?: boolean;
   /** Skip dependency/env setup for short-lived metadata-only worktrees. */
   skipSetup?: boolean;
+  /** Keep the checkout and Git common directory read-only in an active sandbox. */
+  readOnlyWorktree?: boolean;
   /** Override the default worker approval policy (planners use prompt mode). */
   approvalMode?: ApprovalMode;
   model?: string;
@@ -138,22 +147,25 @@ function taskToSessionName(task: string): string {
  */
 async function resolveWorkerRwRoots(
   cwd: string,
-  agentType: AgentType
+  agentType: AgentType,
+  includeWorktree = true
 ): Promise<string[]> {
   let gitCommonDir: string | null = null;
-  try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-      { windowsHide: true }
-    );
-    gitCommonDir = stdout.trim() || null;
-  } catch {
-    // Not a git repo (or git absent) — bind just the cwd + state dirs.
+  if (includeWorktree) {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        { windowsHide: true }
+      );
+      gitCommonDir = stdout.trim() || null;
+    } catch {
+      // Not a git repo (or git absent) — bind just the cwd + state dirs.
+    }
   }
   const configDir = getProvider(agentType).configDir; // e.g. "~/.claude"
   return computeRwRoots({
-    worktreePaths: [cwd],
+    worktreePaths: includeWorktree ? [cwd] : [],
     gitCommonDir,
     agentConfigDir: configDir ? expandHome(configDir) : null,
     stoaHome: join(homeDir(), ".stoa"),
@@ -170,6 +182,7 @@ export async function spawnWorker(
   const {
     conductorSessionId,
     task,
+    deliveryTask = task,
     workingDirectory: rawWorkingDir,
     branchName = taskToBranchName(task),
     baseBranch = "main",
@@ -313,7 +326,11 @@ export async function spawnWorker(
     let wrapPrefix: { file: string; argsPrefix: string[] } | null = null;
     let sandboxActive = tentativeActive;
     if (tentativeActive && detected) {
-      const rwRoots = await resolveWorkerRwRoots(expandHome(cwd), provider.id);
+      const rwRoots = await resolveWorkerRwRoots(
+        expandHome(cwd),
+        provider.id,
+        options.readOnlyWorktree !== true
+      );
       const wrap = wrapSpawnForSandbox(
         { file: "", args: [] },
         "sandboxed-auto",
@@ -420,11 +437,9 @@ export async function spawnWorker(
       }
 
       // Send the task as input, then press Enter
-      console.log(
-        `[orchestration] Sending task to ${tmuxSessionName}: "${task}"`
-      );
+      console.log(`[orchestration] Sending task to ${tmuxSessionName}`);
       try {
-        await backend.sendKeysLiteral(tmuxSessionName, task);
+        await backend.sendKeysLiteral(tmuxSessionName, deliveryTask);
         await backend.sendEnter(tmuxSessionName);
         console.log(
           `[orchestration] Task sent successfully to ${tmuxSessionName}`

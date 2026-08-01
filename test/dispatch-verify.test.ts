@@ -18,7 +18,13 @@ const { state } = vi.hoisted(() => ({
     tasks: [] as Promise<unknown>[],
     onWindows: false,
     resolvedBin: null as string | null,
-    spawned: [] as Array<{ file: string; args: string[] }>,
+    spawned: [] as Array<{
+      file: string;
+      args: string[];
+      options: Record<string, unknown>;
+    }>,
+    failStdout: "running tests\n",
+    failStderr: "AssertionError: 1 !== 2\n",
   },
 }));
 
@@ -27,16 +33,16 @@ vi.mock("child_process", () => ({
   execFile: (
     file: string,
     args: string[],
-    _opts: unknown,
+    options: Record<string, unknown>,
     cb: (err: unknown, res?: { stdout: string; stderr: string }) => void
   ) => {
-    state.spawned.push({ file, args });
+    state.spawned.push({ file, args, options });
     if (state.exec === "pass") return cb(null, { stdout: "ok\n", stderr: "" });
     if (state.exec === "fail") {
       const e = Object.assign(new Error("nonzero"), {
         code: 1,
-        stdout: "running tests\n",
-        stderr: "AssertionError: 1 !== 2\n",
+        stdout: state.failStdout,
+        stderr: state.failStderr,
       });
       return cb(e);
     }
@@ -93,13 +99,29 @@ vi.mock("@/lib/async-operations", () => ({
 }));
 
 import {
-  parseVerifySteps,
-  summarizeVerifyExit,
   nextVerifyAction,
-  spawnArgs,
-  runVerify,
+  parseVerifySteps as dispatchParseVerifySteps,
+  runVerify as dispatchRunVerify,
+  spawnArgs as dispatchSpawnArgs,
   verifyPass,
 } from "../lib/dispatch/verify";
+import {
+  parseVerifySteps,
+  runVerify,
+  spawnArgs,
+  summarizeVerifyExit,
+  VERIFY_MAX_OUTPUT_BUFFER,
+  VERIFY_OUTPUT_TAIL_MAX,
+  VERIFY_TIMEOUT_MS,
+} from "../lib/verification/runner";
+
+describe("Dispatch verification adapter", () => {
+  it("retains the existing parser, spawn, and runner exports", () => {
+    expect(dispatchParseVerifySteps).toBe(parseVerifySteps);
+    expect(dispatchSpawnArgs).toBe(spawnArgs);
+    expect(dispatchRunVerify).toBe(runVerify);
+  });
+});
 
 describe("spawnArgs — Windows .cmd routing (the must-fix)", () => {
   it("routes a .cmd/.bat shim through cmd.exe /c on Windows (no shell:true)", () => {
@@ -114,6 +136,11 @@ describe("spawnArgs — Windows .cmd routing (the must-fix)", () => {
       "C:\\Program Files\\nodejs\\npm.cmd",
       "run",
       "v",
+    ]);
+    expect(spawnArgs("C:\\tools\\verify.bat", ["--quick"], true).args).toEqual([
+      "/c",
+      "C:\\tools\\verify.bat",
+      "--quick",
     ]);
   });
 
@@ -163,6 +190,9 @@ describe("parseVerifySteps — the no-shell safety gate", () => {
       "rm ${HOME}",
       "a (b)",
       "echo %PATH%", // cmd.exe expands % even quoted → reject (routing safety)
+      'echo "%PATH%"',
+      'vitest --filter "a&b"',
+      'node -e "console.log($(whoami))"',
       "a ^ b", // cmd.exe escape
       "vitest --filter 'a b'", // single quotes unsupported → reject, don't mangle
     ]) {
@@ -254,6 +284,9 @@ describe("nextVerifyAction", () => {
 describe("runVerify (mocked execFile, no real build)", () => {
   beforeEach(() => {
     state.exec = "pass";
+    state.failStdout = "running tests\n";
+    state.failStderr = "AssertionError: 1 !== 2\n";
+    state.spawned = [];
   });
 
   it("passes when every step exits 0", async () => {
@@ -262,12 +295,39 @@ describe("runVerify (mocked execFile, no real build)", () => {
     expect(r.status).toBe("pass");
   });
 
+  it("keeps the timeout, kill signal, output ceiling, and no-shell execution contract", async () => {
+    await runVerify("/wt", "npm test");
+    expect(state.spawned).toHaveLength(1);
+    expect(state.spawned[0].options).toMatchObject({
+      timeout: VERIFY_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      windowsHide: true,
+      maxBuffer: VERIFY_MAX_OUTPUT_BUFFER,
+    });
+    expect(state.spawned[0].options.shell ?? false).toBe(false);
+  });
+
   it("fails with the failing step's output tail on a non-zero exit", async () => {
     state.exec = "fail";
     const r = await runVerify("/wt", "npm test");
     expect(r.status).toBe("fail");
     expect(r.output).toContain("npm test");
     expect(r.output).toContain("AssertionError");
+  });
+
+  it("persists only the bounded tail of failing output", async () => {
+    state.exec = "fail";
+    state.failStdout = `discarded-prefix-${"x".repeat(
+      VERIFY_OUTPUT_TAIL_MAX + 100
+    )}`;
+    state.failStderr = "";
+    const result = await runVerify("/wt", "npm test");
+    expect(result.status).toBe("fail");
+    expect(result.output).toContain("(truncated)");
+    expect(result.output).not.toContain("discarded-prefix");
+    expect(result.output.endsWith("x".repeat(VERIFY_OUTPUT_TAIL_MAX))).toBe(
+      true
+    );
   });
 
   it("errors (not fail) on a missing binary, a spawn ENOENT, or a timeout", async () => {

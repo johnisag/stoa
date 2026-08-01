@@ -5,11 +5,14 @@ import {
 } from "@/lib/fleet/http";
 import { cancelFleetRun } from "@/lib/fleet/service";
 import { cancelFleetPlanner } from "@/lib/fleet/planner";
+import { requireAdmin } from "@/lib/api-security";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
   const { id } = await params;
   const body = await readCappedJsonBody(request, FLEET_APPROVAL_JSON_BODY_MAX);
   if ("error" in body)
@@ -31,7 +34,11 @@ export async function POST(
         { status: 409 }
       );
     }
-    const result = await cancelFleetRun(id, body.body);
+    const input =
+      body.body && typeof body.body === "object"
+        ? { ...(body.body as Record<string, unknown>), actor: "operator" }
+        : { actor: "operator" };
+    const result = await cancelFleetRun(id, input);
     if ("error" in result)
       return NextResponse.json(
         { error: result.error },

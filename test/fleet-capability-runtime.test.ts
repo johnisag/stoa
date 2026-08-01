@@ -1,0 +1,445 @@
+import Database from "better-sqlite3";
+import { NextRequest } from "next/server";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { POST as useCapabilityRoute } from "@/app/api/fleet/capabilities/action/route";
+import { POST as issueCapabilityRoute } from "@/app/api/fleet/capabilities/route";
+import { createSchema } from "@/lib/db/schema";
+import {
+  claimStoredFleetCapability,
+  finalizeStoredFleetCapability,
+  issueStoredFleetCapability,
+  revokeStoredFleetCapability,
+} from "@/lib/fleet/capability-runtime";
+
+const NOW = 5_000_000;
+const databases: Database.Database[] = [];
+
+function database() {
+  const db = new Database(":memory:");
+  createSchema(db);
+  databases.push(db);
+  return db;
+}
+
+function issueInput(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "fleet:create",
+    runId: "run-1",
+    taskId: null,
+    workerId: null,
+    attempt: null,
+    payload: { name: "Capability run", goal: "Exercise exact delegation" },
+    ttlMs: 10_000,
+    ...overrides,
+  };
+}
+
+function issued(
+  db: Database.Database,
+  overrides: Record<string, unknown> = {}
+) {
+  const result = issueStoredFleetCapability(issueInput(overrides), "alice", {
+    db,
+    nowMs: NOW,
+  });
+  expect("error" in result).toBe(false);
+  if ("error" in result) throw new Error(result.error);
+  return result;
+}
+
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+});
+
+describe("durable Fleet capabilities", () => {
+  it("persists only a token digest and returns the secret once", () => {
+    const db = database();
+    const result = issued(db);
+    const row = db
+      .prepare(`SELECT * FROM fleet_capabilities WHERE id = ?`)
+      .get(result.capability.id) as Record<string, unknown>;
+
+    expect(result.token).toMatch(/^stoa_fleet_v1_[A-Za-z0-9_-]{43}$/);
+    expect(row.token_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(row)).not.toContain(result.token);
+    expect(JSON.stringify(result.capability)).not.toContain(result.token);
+    const audits = db
+      .prepare(`SELECT * FROM fleet_capability_audit`)
+      .all() as Record<string, unknown>[];
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      event_type: "issued",
+      action: "fleet:create",
+    });
+    expect(JSON.stringify(audits)).not.toContain(result.token);
+  });
+
+  it("atomically consumes a one-use capability before action and rejects replay", () => {
+    const db = database();
+    const result = issued(db);
+    const request = { token: result.token, scope: result.capability.scope };
+    const first = claimStoredFleetCapability(request, { db, nowMs: NOW + 1 });
+    expect("error" in first).toBe(false);
+    if ("error" in first) return;
+
+    const raced = claimStoredFleetCapability(request, { db, nowMs: NOW + 1 });
+    expect(raced).toMatchObject({ error: "capability denied", status: 403 });
+    finalizeStoredFleetCapability(first, true, { db, nowMs: NOW + 2 });
+    expect(
+      claimStoredFleetCapability(request, { db, nowMs: NOW + 3 })
+    ).toMatchObject({ error: "capability denied", status: 403 });
+
+    const state = db
+      .prepare(
+        `SELECT consumed_at_ms, lease_owner, use_count FROM fleet_capabilities WHERE id = ?`
+      )
+      .get(result.capability.id) as Record<string, unknown>;
+    expect(state).toMatchObject({
+      consumed_at_ms: NOW + 1,
+      lease_owner: null,
+      use_count: 1,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT event_type FROM fleet_capability_audit
+           WHERE capability_id = ? ORDER BY id`
+        )
+        .all(result.capability.id)
+    ).toEqual([
+      { event_type: "issued" },
+      { event_type: "claimed" },
+      { event_type: "succeeded" },
+    ]);
+  });
+
+  it("consumes and audits a failed one-use attempt before rejecting replay", () => {
+    const db = database();
+    const result = issued(db);
+    const request = { token: result.token, scope: result.capability.scope };
+    const claim = claimStoredFleetCapability(request, { db, nowMs: NOW + 1 });
+    expect("error" in claim).toBe(false);
+    if ("error" in claim) return;
+    finalizeStoredFleetCapability(claim, false, { db, nowMs: NOW + 2 });
+
+    expect(
+      claimStoredFleetCapability(request, { db, nowMs: NOW + 3 })
+    ).toMatchObject({ error: "capability denied", status: 403 });
+    expect(
+      db
+        .prepare(
+          `SELECT event_type FROM fleet_capability_audit
+           WHERE capability_id = ? ORDER BY id`
+        )
+        .all(result.capability.id)
+    ).toEqual([
+      { event_type: "issued" },
+      { event_type: "claimed" },
+      { event_type: "failed" },
+    ]);
+  });
+
+  it("rejects malformed and oversized tokens before hashing or SQLite work", () => {
+    const db = database();
+    const prepare = vi.spyOn(db, "prepare");
+    for (const token of [null, "", "bad", "x".repeat(100_000)]) {
+      expect(
+        claimStoredFleetCapability({ token, scope: {} }, { db, nowMs: NOW + 1 })
+      ).toMatchObject({ error: "capability denied", status: 403 });
+    }
+    expect(prepare).not.toHaveBeenCalled();
+
+    const unknownToken = `stoa_fleet_v1_${"Z".repeat(43)}`;
+    expect(
+      claimStoredFleetCapability(
+        { token: unknownToken, scope: {} },
+        { db, nowMs: NOW + 1 }
+      )
+    ).toMatchObject({ error: "capability denied", status: 403 });
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["action", { action: "fleet:plan" }],
+    ["run", { runId: "run-2" }],
+    ["task", { taskId: "task-2" }],
+    ["worker", { workerId: "worker-2" }],
+    ["attempt", { attempt: 2 }],
+    ["hash", { boundHash: { kind: "artifact", value: "f".repeat(64) } }],
+  ])(
+    "rejects a valid token with the wrong exact %s scope",
+    (_name, scopeChange) => {
+      const db = database();
+      const result = issued(db);
+      const scope = { ...result.capability.scope, ...scopeChange };
+      expect(
+        claimStoredFleetCapability(
+          { token: result.token, scope },
+          { db, nowMs: NOW + 1 }
+        )
+      ).toMatchObject({ error: "capability denied", status: 403 });
+      const row = db
+        .prepare(`SELECT consumed_at_ms, use_count FROM fleet_capabilities`)
+        .get() as Record<string, unknown>;
+      expect(row).toMatchObject({ consumed_at_ms: null, use_count: 0 });
+    }
+  );
+
+  it("rejects expiry, revocation, and a cross-run replay", () => {
+    const db = database();
+    const expired = issued(db, { runId: "expired-run", ttlMs: 5 });
+    expect(
+      claimStoredFleetCapability(
+        { token: expired.token, scope: expired.capability.scope },
+        { db, nowMs: NOW + 5 }
+      )
+    ).toMatchObject({ error: "capability denied" });
+
+    const revoked = issued(db, { runId: "revoked-run" });
+    const revocation = revokeStoredFleetCapability(
+      revoked.capability.id,
+      "bob",
+      { db, nowMs: NOW + 1 }
+    );
+    expect("error" in revocation).toBe(false);
+    expect(
+      claimStoredFleetCapability(
+        { token: revoked.token, scope: revoked.capability.scope },
+        { db, nowMs: NOW + 2 }
+      )
+    ).toMatchObject({ error: "capability denied" });
+
+    const crossRun = {
+      ...revoked.capability.scope,
+      runId: "another-run",
+    };
+    expect(
+      claimStoredFleetCapability(
+        { token: revoked.token, scope: crossRun },
+        { db, nowMs: NOW + 2 }
+      )
+    ).toMatchObject({ error: "capability denied" });
+  });
+
+  it("rejects reusable mutation authority", () => {
+    const db = database();
+    expect(
+      issueStoredFleetCapability(issueInput({ useMode: "reusable" }), "alice", {
+        db,
+        nowMs: NOW,
+      })
+    ).toEqual({
+      error: "Fleet mutation capabilities must be one-use",
+      status: 400,
+    });
+    expect(
+      db.prepare(`SELECT COUNT(*) AS count FROM fleet_capabilities`).get()
+    ).toMatchObject({ count: 0 });
+  });
+
+  it("requires reusable read capabilities and isolates list and exact-run scopes", () => {
+    const db = database();
+    db.exec(`
+      INSERT INTO fleet_runs (id, name, goal) VALUES
+        ('read-run-1', 'One', 'First run'),
+        ('read-run-2', 'Two', 'Second run')
+    `);
+    expect(
+      issueStoredFleetCapability(
+        issueInput({
+          action: "fleet:read",
+          runId: "*",
+          payload: undefined,
+          useMode: "one_use",
+        }),
+        "alice",
+        { db, nowMs: NOW }
+      )
+    ).toMatchObject({
+      error: expect.stringContaining("must explicitly be reusable"),
+    });
+
+    const list = issueStoredFleetCapability(
+      issueInput({
+        action: "fleet:read",
+        runId: "*",
+        payload: undefined,
+        useMode: "reusable",
+      }),
+      "alice",
+      { db, nowMs: NOW }
+    );
+    expect("error" in list).toBe(false);
+    if ("error" in list) return;
+    expect(
+      claimStoredFleetCapability(
+        {
+          token: list.token,
+          scope: { ...list.capability.scope, runId: "read-run-1" },
+        },
+        { db, nowMs: NOW + 1 }
+      )
+    ).toMatchObject({ error: "capability denied" });
+    const listClaim = claimStoredFleetCapability(
+      { token: list.token, scope: list.capability.scope },
+      { db, nowMs: NOW + 2 }
+    );
+    expect("error" in listClaim).toBe(false);
+    if ("error" in listClaim) return;
+    finalizeStoredFleetCapability(listClaim, true, { db, nowMs: NOW + 3 });
+    const listClaimAgain = claimStoredFleetCapability(
+      { token: list.token, scope: list.capability.scope },
+      { db, nowMs: NOW + 4 }
+    );
+    expect("error" in listClaimAgain).toBe(false);
+    if ("error" in listClaimAgain) return;
+    finalizeStoredFleetCapability(listClaimAgain, true, {
+      db,
+      nowMs: NOW + 5,
+    });
+
+    const exact = issueStoredFleetCapability(
+      issueInput({
+        action: "fleet:read",
+        runId: "read-run-1",
+        payload: undefined,
+        useMode: "reusable",
+      }),
+      "alice",
+      { db, nowMs: NOW }
+    );
+    expect("error" in exact).toBe(false);
+    if ("error" in exact) return;
+    for (const wrongRun of ["read-run-2", "*"]) {
+      expect(
+        claimStoredFleetCapability(
+          {
+            token: exact.token,
+            scope: { ...exact.capability.scope, runId: wrongRun },
+          },
+          { db, nowMs: NOW + 1 }
+        )
+      ).toMatchObject({ error: "capability denied" });
+    }
+  });
+
+  it("rejects implicit dimensions and an administrator-supplied wrong intent hash", () => {
+    const db = database();
+    expect(
+      issueStoredFleetCapability(
+        {
+          action: "fleet:create",
+          runId: "run-1",
+          payload: { name: "x", goal: "y" },
+        },
+        "alice",
+        { db, nowMs: NOW }
+      )
+    ).toMatchObject({ error: expect.stringContaining("must be explicit") });
+    expect(
+      issueStoredFleetCapability(
+        issueInput({
+          boundHash: { kind: "artifact", value: "0".repeat(64) },
+        }),
+        "alice",
+        { db, nowMs: NOW }
+      )
+    ).toMatchObject({ error: expect.stringContaining("does not match") });
+  });
+
+  it("makes capability audit events append-only", () => {
+    const db = database();
+    issued(db);
+    expect(() =>
+      db
+        .prepare(`UPDATE fleet_capability_audit SET event_type = 'edited'`)
+        .run()
+    ).toThrow(/immutable/);
+    expect(() =>
+      db.prepare(`DELETE FROM fleet_capability_audit`).run()
+    ).toThrow(/immutable/);
+  });
+});
+
+describe("Fleet capability administration route", () => {
+  it("denies observers and accepts only admin-scoped issuance requests", async () => {
+    const observer = new NextRequest("http://local/api/fleet/capabilities", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-stoa-scope": "observer",
+      },
+      body: JSON.stringify(issueInput()),
+    });
+    expect((await issueCapabilityRoute(observer)).status).toBe(403);
+
+    const admin = new NextRequest("http://local/api/fleet/capabilities", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-stoa-scope": "admin",
+      },
+      body: JSON.stringify(issueInput({ action: "fleet:root" })),
+    });
+    expect((await issueCapabilityRoute(admin)).status).toBe(400);
+  });
+});
+
+describe("Fleet capability action route hardening", () => {
+  it("rate-limits each connection IP before capability or DB work", async () => {
+    const ip = "198.51.100.231";
+    for (let index = 0; index < 60; index++) {
+      const request = new NextRequest(
+        "http://local/api/fleet/capabilities/action",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-stoa-remote-addr": ip,
+          },
+          body: "{}",
+        }
+      );
+      expect((await useCapabilityRoute(request)).status).toBe(403);
+    }
+    const limited = await useCapabilityRoute(
+      new NextRequest("http://local/api/fleet/capabilities/action", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-stoa-remote-addr": ip,
+        },
+        body: "{}",
+      })
+    );
+    expect(limited.status).toBe(429);
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+
+    const otherClient = await useCapabilityRoute(
+      new NextRequest("http://local/api/fleet/capabilities/action", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-stoa-remote-addr": "198.51.100.233",
+        },
+        body: "{}",
+      })
+    );
+    expect(otherClient.status).toBe(403);
+  });
+
+  it("rejects an oversized action before parsing or capability lookup", async () => {
+    const request = new NextRequest(
+      "http://local/api/fleet/capabilities/action",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-stoa-remote-addr": "198.51.100.232",
+        },
+        body: JSON.stringify({ token: "x".repeat(70 * 1024) }),
+      }
+    );
+    expect((await useCapabilityRoute(request)).status).toBe(413);
+  });
+});

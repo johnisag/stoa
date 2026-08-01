@@ -38,6 +38,211 @@ function expectColumns(
 }
 
 describe("fleet migrations", () => {
+  it("migration 63 repairs lifecycle state without assuming complete task tables", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 62);
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_tasks (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_workers (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_artifacts (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_cleanup_actions (id TEXT PRIMARY KEY);
+      INSERT INTO fleet_cleanup_actions (id) VALUES ('partial-1'), ('partial-2');
+    `);
+
+    expect(() => runMigrations(db)).not.toThrow();
+    expectColumns(db, "fleet_runs", [
+      "archived_at",
+      "archived_by",
+      "retention_days",
+    ]);
+    expectColumns(db, "fleet_tasks", [
+      "retry_not_before",
+      "provider_failure_count",
+      "provider_state",
+      "provider_last_error",
+      "provider_backoff_event_at",
+    ]);
+    expectColumns(db, "fleet_artifacts", ["body_pruned_at"]);
+    expectColumns(db, "fleet_cleanup_actions", [
+      "action_key",
+      "fleet_run_id",
+      "action_type",
+      "state",
+      "lease_owner",
+      "lease_expires_at",
+      "attempt_count",
+    ]);
+  });
+
+  it("migration 60 adds durable exact-SHA verification state", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 59);
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_tasks (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_workers (id TEXT PRIMARY KEY);
+    `);
+
+    runMigrations(db);
+
+    expectColumns(db, "fleet_tasks", [
+      "verification_id",
+      "verification_status",
+      "verification_spec_hash",
+      "verified_head_sha",
+      "verification_artifact_id",
+      "verification_started_at",
+      "verification_completed_at",
+    ]);
+    expectColumns(db, "fleet_verifications", [
+      "fleet_run_id",
+      "task_id",
+      "worker_id",
+      "attempt",
+      "base_sha",
+      "head_sha",
+      "spec_hash",
+      "command",
+      "status",
+      "run_count",
+      "lease_owner",
+      "lease_expires_at",
+      "output_artifact_id",
+      "output_hash",
+      "error",
+      "started_at",
+      "completed_at",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'index'
+           AND name IN ('idx_fleet_verifications_identity',
+                        'idx_fleet_verifications_status',
+                        'idx_fleet_verifications_task')`
+        )
+        .all()
+    ).toHaveLength(3);
+  });
+
+  it("migration 59 adds durable worker report and Git evidence fields", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 58);
+    db.exec(`
+      CREATE TABLE fleet_tasks (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_workers (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_artifacts (id TEXT PRIMARY KEY);
+    `);
+
+    runMigrations(db);
+
+    expectColumns(db, "fleet_tasks", [
+      "base_sha",
+      "head_sha",
+      "actual_file_claims_json",
+      "report_artifact_id",
+      "diff_artifact_id",
+    ]);
+    expectColumns(db, "fleet_workers", [
+      "branch_name",
+      "base_sha",
+      "head_sha",
+      "report_path",
+      "report_nonce_hash",
+      "report_state",
+      "report_poll_count",
+      "report_next_poll_at",
+    ]);
+    expectColumns(db, "fleet_artifacts", [
+      "worker_id",
+      "attempt",
+      "base_sha",
+      "head_sha",
+      "content_hash",
+      "metadata_json",
+      "byte_count",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'index'
+           AND name IN ('idx_fleet_workers_report_poll',
+                        'idx_fleet_artifacts_worker_attempt_type')`
+        )
+        .all()
+    ).toHaveLength(2);
+  });
+
+  it("migration 58 adds safe-default automation intent and exact review audit tables", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 57);
+    db.exec(`
+      CREATE TABLE fleet_runs (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'draft'
+      );
+      INSERT INTO fleet_runs (id) VALUES ('legacy-run');
+    `);
+
+    runMigrations(db);
+
+    expectColumns(db, "fleet_runs", [
+      "desired_state",
+      "automation_policy_version",
+      "automation_policy_json",
+      "automation_policy_hash",
+      "automation_granted_by",
+      "automation_granted_at",
+      "automation_base_sha",
+      "automation_last_error",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'table'
+           AND name IN ('fleet_action_authorizations', 'fleet_reviews')`
+        )
+        .all()
+    ).toHaveLength(2);
+    expectColumns(db, "fleet_reviews", [
+      "state",
+      "request_id",
+      "nonce_hash",
+      "result_filename",
+      "result_verdict",
+      "result_bytes",
+      "project_path",
+      "worktree_path",
+      "branch_name",
+      "findings_json",
+      "error",
+      "started_at",
+      "deadline_at",
+      "completed_at",
+      "updated_at",
+    ]);
+    const legacy = db
+      .prepare(
+        `SELECT desired_state, automation_policy_json, automation_policy_hash
+         FROM fleet_runs WHERE id = 'legacy-run'`
+      )
+      .get() as {
+      desired_state: string;
+      automation_policy_json: string;
+      automation_policy_hash: string | null;
+    };
+    expect(legacy.desired_state).toBe("draft");
+    expect(JSON.parse(legacy.automation_policy_json)).toMatchObject({
+      version: 1,
+      automaticPlanning: false,
+      automaticPlanApproval: false,
+      automaticStart: false,
+      automaticMerge: false,
+    });
+    expect(legacy.automation_policy_hash).toBeNull();
+  });
+
   it("migration 57 repairs the durable scheduler schema", () => {
     const db = new Database(":memory:");
     markAppliedThrough(db, 56);
@@ -248,5 +453,90 @@ describe("fleet migrations", () => {
         )
         .all()
     ).toHaveLength(2);
+  });
+
+  it("migration 64 repairs partial hash-only capability tables idempotently", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 63);
+    db.exec(`
+      CREATE TABLE fleet_capabilities (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL
+      );
+      CREATE TABLE fleet_capability_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        capability_id TEXT NOT NULL
+      );
+    `);
+
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(() => runMigrations(db)).not.toThrow();
+    expectColumns(db, "fleet_capabilities", [
+      "version",
+      "action",
+      "run_id",
+      "task_id",
+      "worker_id",
+      "attempt",
+      "bound_hash_kind",
+      "bound_hash_value",
+      "use_mode",
+      "issued_at_ms",
+      "expires_at_ms",
+      "revoked_at_ms",
+      "consumed_at_ms",
+      "lease_owner",
+      "lease_expires_at_ms",
+      "use_count",
+      "issued_by",
+    ]);
+    expectColumns(db, "fleet_capability_audit", [
+      "run_id",
+      "action",
+      "event_type",
+      "scope_hash",
+      "metadata_json",
+      "created_at_ms",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'index'
+           AND name IN ('idx_fleet_capabilities_token_hash',
+                        'idx_fleet_capability_audit_capability')`
+        )
+        .all()
+    ).toHaveLength(2);
+  });
+
+  it("migration 65 adds durable Fleet source lineage idempotently", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 64);
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_tasks (id TEXT PRIMARY KEY, fleet_run_id TEXT);
+    `);
+
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(() => runMigrations(db)).not.toThrow();
+    expectColumns(db, "fleet_runs", [
+      "source_kind",
+      "source_id",
+      "source_name",
+    ]);
+    expectColumns(db, "fleet_tasks", [
+      "source_ref",
+      "source_step_id",
+      "source_issue_id",
+      "source_issue_number",
+    ]);
+    const indexes = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'index'
+         AND name IN ('idx_fleet_runs_source', 'idx_fleet_tasks_source',
+                      'idx_fleet_tasks_source_issue')`
+      )
+      .all();
+    expect(indexes).toHaveLength(3);
   });
 });

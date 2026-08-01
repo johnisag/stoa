@@ -1,5 +1,8 @@
 import type Database from "better-sqlite3";
 
+const SAFE_FLEET_AUTOMATION_POLICY_JSON =
+  '{"version":1,"automaticPlanning":false,"automaticPlanApproval":false,"automaticStart":false,"automaticFixes":false,"maxAutomaticFixRounds":0,"automaticMerge":false,"mergeTarget":"github_pr","allowSensitivePaths":false,"allowUnconfinedAgents":false,"plannerTaskCap":8,"cleanupPolicy":"preserve","retentionDays":null}';
+
 interface Migration {
   id: number;
   name: string;
@@ -199,6 +202,966 @@ function ensureFleetSchedulerSchema(db: Database.Database): void {
         WHERE status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending');
       CREATE INDEX IF NOT EXISTS idx_fleet_resource_leases_active ON fleet_resource_leases(resource_type, resource_key, status);
       CREATE INDEX IF NOT EXISTS idx_fleet_resource_leases_worker ON fleet_resource_leases(worker_id, status);
+    `);
+  }
+}
+
+function ensureFleetReportRuntimeSchema(db: Database.Database): void {
+  // A database can be marked through an older migration while still carrying
+  // a partially-created artifacts table. Repair the prerequisite columns
+  // before creating the runtime's artifact-type index.
+  ensureFleetArtifactRuntimeColumns(db);
+  if (hasTable(db, "fleet_tasks")) {
+    for (const column of [
+      { name: "base_sha", ddl: "base_sha TEXT" },
+      { name: "head_sha", ddl: "head_sha TEXT" },
+      {
+        name: "actual_file_claims_json",
+        ddl: "actual_file_claims_json TEXT NOT NULL DEFAULT '[]'",
+      },
+      { name: "report_artifact_id", ddl: "report_artifact_id TEXT" },
+      { name: "diff_artifact_id", ddl: "diff_artifact_id TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_tasks", column);
+    }
+  }
+  if (hasTable(db, "fleet_workers")) {
+    for (const column of [
+      { name: "branch_name", ddl: "branch_name TEXT" },
+      { name: "base_sha", ddl: "base_sha TEXT" },
+      { name: "head_sha", ddl: "head_sha TEXT" },
+      { name: "report_path", ddl: "report_path TEXT" },
+      { name: "report_nonce_hash", ddl: "report_nonce_hash TEXT" },
+      {
+        name: "report_state",
+        ddl: "report_state TEXT NOT NULL DEFAULT 'legacy'",
+      },
+      { name: "report_status", ddl: "report_status TEXT" },
+      { name: "report_submitted_at", ddl: "report_submitted_at TEXT" },
+      { name: "report_collected_at", ddl: "report_collected_at TEXT" },
+      {
+        name: "report_bytes",
+        ddl: "report_bytes INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "actual_claims_json",
+        ddl: "actual_claims_json TEXT NOT NULL DEFAULT '[]'",
+      },
+      { name: "diff_summary_json", ddl: "diff_summary_json TEXT" },
+      {
+        name: "report_poll_count",
+        ddl: "report_poll_count INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "report_last_polled_at", ddl: "report_last_polled_at TEXT" },
+      { name: "report_next_poll_at", ddl: "report_next_poll_at TEXT" },
+      { name: "report_error", ddl: "report_error TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_workers", column);
+    }
+  }
+  if (hasTable(db, "fleet_artifacts")) {
+    for (const column of [
+      { name: "worker_id", ddl: "worker_id TEXT" },
+      { name: "attempt", ddl: "attempt INTEGER" },
+      { name: "base_sha", ddl: "base_sha TEXT" },
+      { name: "head_sha", ddl: "head_sha TEXT" },
+      { name: "content_hash", ddl: "content_hash TEXT" },
+      {
+        name: "metadata_json",
+        ddl: "metadata_json TEXT NOT NULL DEFAULT '{}'",
+      },
+      { name: "byte_count", ddl: "byte_count INTEGER NOT NULL DEFAULT 0" },
+    ]) {
+      addColumnIfMissing(db, "fleet_artifacts", column);
+    }
+  }
+  if (hasTable(db, "fleet_workers")) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_fleet_workers_report_poll
+        ON fleet_workers(report_state, report_next_poll_at)
+        WHERE report_state = 'pending'
+    `);
+  }
+  if (hasTable(db, "fleet_artifacts")) {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_artifacts_worker_attempt_type
+        ON fleet_artifacts(worker_id, attempt, artifact_type)
+        WHERE worker_id IS NOT NULL AND attempt IS NOT NULL
+    `);
+  }
+}
+
+function ensureFleetVerificationSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_tasks")) {
+    for (const column of [
+      { name: "verification_id", ddl: "verification_id TEXT" },
+      { name: "verification_status", ddl: "verification_status TEXT" },
+      {
+        name: "verification_spec_hash",
+        ddl: "verification_spec_hash TEXT",
+      },
+      { name: "verified_head_sha", ddl: "verified_head_sha TEXT" },
+      {
+        name: "verification_artifact_id",
+        ddl: "verification_artifact_id TEXT",
+      },
+      { name: "verification_started_at", ddl: "verification_started_at TEXT" },
+      {
+        name: "verification_completed_at",
+        ddl: "verification_completed_at TEXT",
+      },
+    ]) {
+      addColumnIfMissing(db, "fleet_tasks", column);
+    }
+  }
+  if (
+    hasTable(db, "fleet_runs") &&
+    hasTable(db, "fleet_tasks") &&
+    hasTable(db, "fleet_workers")
+  ) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS fleet_verifications (
+        id TEXT PRIMARY KEY,
+        fleet_run_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        worker_id TEXT,
+        attempt INTEGER NOT NULL,
+        base_sha TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        spec_hash TEXT NOT NULL,
+        command TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        run_count INTEGER NOT NULL DEFAULT 0,
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        output_artifact_id TEXT,
+        output_hash TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at TEXT,
+        completed_at TEXT,
+        FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE,
+        FOREIGN KEY (worker_id) REFERENCES fleet_workers(id) ON DELETE SET NULL,
+        UNIQUE (task_id, attempt, head_sha, spec_hash)
+      )
+    `);
+  }
+  if (!hasTable(db, "fleet_verifications")) return;
+  for (const column of [
+    { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+    { name: "task_id", ddl: "task_id TEXT NOT NULL DEFAULT ''" },
+    { name: "worker_id", ddl: "worker_id TEXT" },
+    { name: "attempt", ddl: "attempt INTEGER NOT NULL DEFAULT 1" },
+    { name: "base_sha", ddl: "base_sha TEXT NOT NULL DEFAULT ''" },
+    { name: "head_sha", ddl: "head_sha TEXT NOT NULL DEFAULT ''" },
+    { name: "spec_hash", ddl: "spec_hash TEXT NOT NULL DEFAULT ''" },
+    { name: "command", ddl: "command TEXT NOT NULL DEFAULT ''" },
+    { name: "status", ddl: "status TEXT NOT NULL DEFAULT 'pending'" },
+    { name: "run_count", ddl: "run_count INTEGER NOT NULL DEFAULT 0" },
+    { name: "lease_owner", ddl: "lease_owner TEXT" },
+    { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+    { name: "output_artifact_id", ddl: "output_artifact_id TEXT" },
+    { name: "output_hash", ddl: "output_hash TEXT" },
+    { name: "error", ddl: "error TEXT" },
+    { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+    { name: "updated_at", ddl: "updated_at TEXT NOT NULL DEFAULT ''" },
+    { name: "started_at", ddl: "started_at TEXT" },
+    { name: "completed_at", ddl: "completed_at TEXT" },
+  ]) {
+    addColumnIfMissing(db, "fleet_verifications", column);
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_verifications_identity
+      ON fleet_verifications(task_id, attempt, head_sha, spec_hash);
+    CREATE INDEX IF NOT EXISTS idx_fleet_verifications_status
+      ON fleet_verifications(status, lease_expires_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_fleet_verifications_task
+      ON fleet_verifications(task_id, attempt, head_sha, spec_hash)
+  `);
+}
+
+function ensureFleetTaskReviewSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_tasks")) {
+    for (const column of [
+      { name: "review_status", ddl: "review_status TEXT" },
+      { name: "review_head_sha", ddl: "review_head_sha TEXT" },
+      {
+        name: "review_verification_hash",
+        ddl: "review_verification_hash TEXT",
+      },
+      { name: "review_completed_at", ddl: "review_completed_at TEXT" },
+      {
+        name: "fix_rounds",
+        ddl: "fix_rounds INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "active_fix_id", ddl: "active_fix_id TEXT" },
+      { name: "fixer_session_id", ddl: "fixer_session_id TEXT" },
+      { name: "fix_error", ddl: "fix_error TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_tasks", column);
+    }
+  }
+  if (
+    hasTable(db, "fleet_runs") &&
+    hasTable(db, "fleet_tasks") &&
+    hasTable(db, "fleet_workers") &&
+    hasTable(db, "fleet_verifications")
+  ) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS fleet_task_reviews (
+        id TEXT PRIMARY KEY,
+        fleet_run_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        worker_id TEXT,
+        attempt INTEGER NOT NULL,
+        base_sha TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        verification_id TEXT NOT NULL,
+        verification_spec_hash TEXT NOT NULL,
+        verification_evidence_hash TEXT NOT NULL,
+        policy_hash TEXT NOT NULL,
+        lens TEXT NOT NULL,
+        reviewer_session_id TEXT NOT NULL DEFAULT '',
+        verdict TEXT NOT NULL DEFAULT 'changes_requested',
+        state TEXT NOT NULL DEFAULT 'pending',
+        request_id TEXT NOT NULL DEFAULT '',
+        nonce_hash TEXT NOT NULL DEFAULT '',
+        result_path TEXT NOT NULL DEFAULT '',
+        result_verdict TEXT,
+        result_bytes INTEGER,
+        project_path TEXT,
+        reviewer_worktree_path TEXT,
+        reviewer_branch_name TEXT NOT NULL DEFAULT '',
+        findings_json TEXT NOT NULL DEFAULT '[]',
+        error TEXT,
+        started_at TEXT,
+        deadline_at TEXT,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE,
+        FOREIGN KEY (worker_id) REFERENCES fleet_workers(id) ON DELETE SET NULL,
+        FOREIGN KEY (verification_id) REFERENCES fleet_verifications(id) ON DELETE CASCADE,
+        UNIQUE (
+          task_id, attempt, head_sha, verification_id,
+          verification_evidence_hash, policy_hash, lens
+        )
+      );
+      CREATE TABLE IF NOT EXISTS fleet_task_fixes (
+        id TEXT PRIMARY KEY,
+        fleet_run_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        worker_id TEXT,
+        attempt INTEGER NOT NULL,
+        round INTEGER NOT NULL,
+        old_head_sha TEXT NOT NULL,
+        new_head_sha TEXT,
+        policy_hash TEXT NOT NULL,
+        verification_evidence_hash TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending',
+        request_id TEXT NOT NULL DEFAULT '',
+        nonce_hash TEXT NOT NULL DEFAULT '',
+        result_path TEXT NOT NULL DEFAULT '',
+        fixer_session_id TEXT NOT NULL DEFAULT '',
+        project_path TEXT,
+        worktree_path TEXT,
+        branch_name TEXT,
+        findings_json TEXT NOT NULL DEFAULT '[]',
+        result_bytes INTEGER,
+        error TEXT,
+        started_at TEXT,
+        deadline_at TEXT,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE,
+        FOREIGN KEY (worker_id) REFERENCES fleet_workers(id) ON DELETE SET NULL,
+        UNIQUE (task_id, attempt, old_head_sha, round, policy_hash)
+      )
+    `);
+  }
+  if (hasTable(db, "fleet_task_reviews")) {
+    for (const column of [
+      { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+      { name: "task_id", ddl: "task_id TEXT NOT NULL DEFAULT ''" },
+      { name: "worker_id", ddl: "worker_id TEXT" },
+      { name: "attempt", ddl: "attempt INTEGER NOT NULL DEFAULT 1" },
+      { name: "base_sha", ddl: "base_sha TEXT NOT NULL DEFAULT ''" },
+      { name: "head_sha", ddl: "head_sha TEXT NOT NULL DEFAULT ''" },
+      {
+        name: "verification_id",
+        ddl: "verification_id TEXT NOT NULL DEFAULT ''",
+      },
+      {
+        name: "verification_spec_hash",
+        ddl: "verification_spec_hash TEXT NOT NULL DEFAULT ''",
+      },
+      {
+        name: "verification_evidence_hash",
+        ddl: "verification_evidence_hash TEXT NOT NULL DEFAULT ''",
+      },
+      { name: "policy_hash", ddl: "policy_hash TEXT NOT NULL DEFAULT ''" },
+      { name: "lens", ddl: "lens TEXT NOT NULL DEFAULT ''" },
+      {
+        name: "reviewer_session_id",
+        ddl: "reviewer_session_id TEXT NOT NULL DEFAULT ''",
+      },
+      {
+        name: "verdict",
+        ddl: "verdict TEXT NOT NULL DEFAULT 'changes_requested'",
+      },
+      { name: "state", ddl: "state TEXT NOT NULL DEFAULT 'pending'" },
+      { name: "request_id", ddl: "request_id TEXT NOT NULL DEFAULT ''" },
+      { name: "nonce_hash", ddl: "nonce_hash TEXT NOT NULL DEFAULT ''" },
+      { name: "result_path", ddl: "result_path TEXT NOT NULL DEFAULT ''" },
+      { name: "result_verdict", ddl: "result_verdict TEXT" },
+      { name: "result_bytes", ddl: "result_bytes INTEGER" },
+      { name: "project_path", ddl: "project_path TEXT" },
+      { name: "reviewer_worktree_path", ddl: "reviewer_worktree_path TEXT" },
+      {
+        name: "reviewer_branch_name",
+        ddl: "reviewer_branch_name TEXT NOT NULL DEFAULT ''",
+      },
+      {
+        name: "findings_json",
+        ddl: "findings_json TEXT NOT NULL DEFAULT '[]'",
+      },
+      { name: "error", ddl: "error TEXT" },
+      { name: "started_at", ddl: "started_at TEXT" },
+      { name: "deadline_at", ddl: "deadline_at TEXT" },
+      { name: "completed_at", ddl: "completed_at TEXT" },
+      { name: "updated_at", ddl: "updated_at TEXT NOT NULL DEFAULT ''" },
+      { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+    ]) {
+      addColumnIfMissing(db, "fleet_task_reviews", column);
+    }
+  }
+  if (hasTable(db, "fleet_task_fixes")) {
+    for (const column of [
+      { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+      { name: "task_id", ddl: "task_id TEXT NOT NULL DEFAULT ''" },
+      { name: "worker_id", ddl: "worker_id TEXT" },
+      { name: "attempt", ddl: "attempt INTEGER NOT NULL DEFAULT 1" },
+      { name: "round", ddl: "round INTEGER NOT NULL DEFAULT 1" },
+      { name: "old_head_sha", ddl: "old_head_sha TEXT NOT NULL DEFAULT ''" },
+      { name: "new_head_sha", ddl: "new_head_sha TEXT" },
+      { name: "policy_hash", ddl: "policy_hash TEXT NOT NULL DEFAULT ''" },
+      {
+        name: "verification_evidence_hash",
+        ddl: "verification_evidence_hash TEXT NOT NULL DEFAULT ''",
+      },
+      { name: "state", ddl: "state TEXT NOT NULL DEFAULT 'pending'" },
+      { name: "request_id", ddl: "request_id TEXT NOT NULL DEFAULT ''" },
+      { name: "nonce_hash", ddl: "nonce_hash TEXT NOT NULL DEFAULT ''" },
+      { name: "result_path", ddl: "result_path TEXT NOT NULL DEFAULT ''" },
+      {
+        name: "fixer_session_id",
+        ddl: "fixer_session_id TEXT NOT NULL DEFAULT ''",
+      },
+      { name: "project_path", ddl: "project_path TEXT" },
+      { name: "worktree_path", ddl: "worktree_path TEXT" },
+      { name: "branch_name", ddl: "branch_name TEXT" },
+      {
+        name: "findings_json",
+        ddl: "findings_json TEXT NOT NULL DEFAULT '[]'",
+      },
+      { name: "result_bytes", ddl: "result_bytes INTEGER" },
+      { name: "error", ddl: "error TEXT" },
+      { name: "started_at", ddl: "started_at TEXT" },
+      { name: "deadline_at", ddl: "deadline_at TEXT" },
+      { name: "completed_at", ddl: "completed_at TEXT" },
+      { name: "updated_at", ddl: "updated_at TEXT NOT NULL DEFAULT ''" },
+      { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+    ]) {
+      addColumnIfMissing(db, "fleet_task_fixes", column);
+    }
+  }
+  if (hasTable(db, "fleet_task_reviews")) {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_task_reviews_exact_lens
+        ON fleet_task_reviews(
+          task_id, attempt, head_sha, verification_id,
+          verification_evidence_hash, policy_hash, lens
+        );
+      CREATE INDEX IF NOT EXISTS idx_fleet_task_reviews_active
+        ON fleet_task_reviews(state, fleet_run_id, task_id)
+    `);
+  }
+  if (hasTable(db, "fleet_task_fixes")) {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_task_fixes_round
+        ON fleet_task_fixes(task_id, attempt, old_head_sha, round, policy_hash);
+      CREATE INDEX IF NOT EXISTS idx_fleet_task_fixes_active
+        ON fleet_task_fixes(state, fleet_run_id, task_id)
+    `);
+  }
+}
+
+function ensureFleetMergeRuntimeSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_runs")) {
+    for (const column of [
+      { name: "merge_requested_at", ddl: "merge_requested_at TEXT" },
+      { name: "merge_requested_by", ddl: "merge_requested_by TEXT" },
+      { name: "merge_request_kind", ddl: "merge_request_kind TEXT" },
+      { name: "merge_target", ddl: "merge_target TEXT" },
+      {
+        name: "integration_state",
+        ddl: "integration_state TEXT NOT NULL DEFAULT 'idle'",
+      },
+      { name: "integration_branch", ddl: "integration_branch TEXT" },
+      { name: "integration_worktree", ddl: "integration_worktree TEXT" },
+      { name: "integration_base_sha", ddl: "integration_base_sha TEXT" },
+      { name: "integration_head_sha", ddl: "integration_head_sha TEXT" },
+      { name: "integration_pr_number", ddl: "integration_pr_number INTEGER" },
+      { name: "integration_pr_url", ddl: "integration_pr_url TEXT" },
+      { name: "integration_pr_head_sha", ddl: "integration_pr_head_sha TEXT" },
+      { name: "integration_merge_sha", ddl: "integration_merge_sha TEXT" },
+      { name: "integration_error", ddl: "integration_error TEXT" },
+      { name: "integration_updated_at", ddl: "integration_updated_at TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_runs", column);
+    }
+  }
+  if (hasTable(db, "fleet_tasks")) {
+    for (const column of [
+      {
+        name: "integration_state",
+        ddl: "integration_state TEXT NOT NULL DEFAULT 'pending'",
+      },
+      {
+        name: "integration_operation_id",
+        ddl: "integration_operation_id TEXT",
+      },
+      { name: "integrated_head_sha", ddl: "integrated_head_sha TEXT" },
+      { name: "integrated_at", ddl: "integrated_at TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_tasks", column);
+    }
+  }
+  if (hasTable(db, "fleet_runs") && hasTable(db, "fleet_tasks")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS fleet_merge_operations (
+        id TEXT PRIMARY KEY,
+        operation_key TEXT NOT NULL UNIQUE,
+        fleet_run_id TEXT NOT NULL,
+        task_id TEXT,
+        operation_type TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending',
+        target TEXT,
+        expected_base_sha TEXT NOT NULL,
+        expected_task_head_sha TEXT,
+        result_head_sha TEXT,
+        verification_commands_json TEXT NOT NULL DEFAULT '[]',
+        verification_output_hash TEXT,
+        output_artifact_id TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at TEXT,
+        completed_at TEXT,
+        FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE,
+        UNIQUE (fleet_run_id, task_id, operation_type, expected_base_sha, expected_task_head_sha)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_merge_operations_key
+        ON fleet_merge_operations(operation_key);
+      CREATE INDEX IF NOT EXISTS idx_fleet_merge_operations_queue
+        ON fleet_merge_operations(state, lease_expires_at, created_at);
+      CREATE INDEX IF NOT EXISTS idx_fleet_merge_operations_run
+        ON fleet_merge_operations(fleet_run_id, created_at, id);
+    `);
+  }
+  if (hasTable(db, "fleet_merge_operations")) {
+    for (const column of [
+      { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+      { name: "operation_key", ddl: "operation_key TEXT NOT NULL DEFAULT ''" },
+      { name: "task_id", ddl: "task_id TEXT" },
+      {
+        name: "operation_type",
+        ddl: "operation_type TEXT NOT NULL DEFAULT 'task_merge'",
+      },
+      { name: "state", ddl: "state TEXT NOT NULL DEFAULT 'pending'" },
+      { name: "target", ddl: "target TEXT" },
+      {
+        name: "expected_base_sha",
+        ddl: "expected_base_sha TEXT NOT NULL DEFAULT ''",
+      },
+      { name: "expected_task_head_sha", ddl: "expected_task_head_sha TEXT" },
+      { name: "result_head_sha", ddl: "result_head_sha TEXT" },
+      {
+        name: "verification_commands_json",
+        ddl: "verification_commands_json TEXT NOT NULL DEFAULT '[]'",
+      },
+      {
+        name: "verification_output_hash",
+        ddl: "verification_output_hash TEXT",
+      },
+      { name: "output_artifact_id", ddl: "output_artifact_id TEXT" },
+      {
+        name: "attempt_count",
+        ddl: "attempt_count INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "lease_owner", ddl: "lease_owner TEXT" },
+      { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+      { name: "error", ddl: "error TEXT" },
+      { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+      { name: "updated_at", ddl: "updated_at TEXT NOT NULL DEFAULT ''" },
+      { name: "started_at", ddl: "started_at TEXT" },
+      { name: "completed_at", ddl: "completed_at TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_merge_operations", column);
+    }
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_merge_operations_key
+        ON fleet_merge_operations(operation_key);
+      CREATE INDEX IF NOT EXISTS idx_fleet_merge_operations_queue
+        ON fleet_merge_operations(state, lease_expires_at, created_at);
+      CREATE INDEX IF NOT EXISTS idx_fleet_merge_operations_run
+        ON fleet_merge_operations(fleet_run_id, created_at, id);
+    `);
+  }
+}
+
+function ensureFleetLifecycleSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_runs")) {
+    for (const column of [
+      { name: "archived_at", ddl: "archived_at TEXT" },
+      { name: "archived_by", ddl: "archived_by TEXT" },
+      { name: "retention_days", ddl: "retention_days INTEGER" },
+    ]) {
+      addColumnIfMissing(db, "fleet_runs", column);
+    }
+  }
+  if (hasTable(db, "fleet_tasks")) {
+    for (const column of [
+      { name: "retry_not_before", ddl: "retry_not_before TEXT" },
+      {
+        name: "provider_failure_count",
+        ddl: "provider_failure_count INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "provider_state",
+        ddl: "provider_state TEXT NOT NULL DEFAULT 'ready'",
+      },
+      { name: "provider_last_error", ddl: "provider_last_error TEXT" },
+      {
+        name: "provider_backoff_event_at",
+        ddl: "provider_backoff_event_at TEXT",
+      },
+    ]) {
+      addColumnIfMissing(db, "fleet_tasks", column);
+    }
+  }
+  if (hasTable(db, "fleet_artifacts")) {
+    addColumnIfMissing(db, "fleet_artifacts", {
+      name: "body_pruned_at",
+      ddl: "body_pruned_at TEXT",
+    });
+  }
+  if (hasTable(db, "fleet_runs")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS fleet_cleanup_actions (
+        id TEXT PRIMARY KEY,
+        action_key TEXT NOT NULL UNIQUE,
+        fleet_run_id TEXT NOT NULL,
+        worker_id TEXT,
+        artifact_id TEXT,
+        action_type TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending',
+        target_path TEXT,
+        project_path TEXT,
+        expected_content_hash TEXT,
+        requested_by TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        error TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at TEXT,
+        completed_at TEXT,
+        FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY (worker_id) REFERENCES fleet_workers(id) ON DELETE SET NULL,
+        FOREIGN KEY (artifact_id) REFERENCES fleet_artifacts(id) ON DELETE SET NULL
+      )
+    `);
+  }
+  if (!hasTable(db, "fleet_cleanup_actions")) return;
+  for (const column of [
+    { name: "action_key", ddl: "action_key TEXT NOT NULL DEFAULT ''" },
+    { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+    { name: "worker_id", ddl: "worker_id TEXT" },
+    { name: "artifact_id", ddl: "artifact_id TEXT" },
+    {
+      name: "action_type",
+      ddl: "action_type TEXT NOT NULL DEFAULT 'delete_worktree'",
+    },
+    { name: "state", ddl: "state TEXT NOT NULL DEFAULT 'pending'" },
+    { name: "target_path", ddl: "target_path TEXT" },
+    { name: "project_path", ddl: "project_path TEXT" },
+    { name: "expected_content_hash", ddl: "expected_content_hash TEXT" },
+    {
+      name: "requested_by",
+      ddl: "requested_by TEXT NOT NULL DEFAULT 'operator'",
+    },
+    { name: "attempt_count", ddl: "attempt_count INTEGER NOT NULL DEFAULT 0" },
+    { name: "lease_owner", ddl: "lease_owner TEXT" },
+    { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+    { name: "error", ddl: "error TEXT" },
+    { name: "metadata_json", ddl: "metadata_json TEXT NOT NULL DEFAULT '{}'" },
+    { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+    { name: "updated_at", ddl: "updated_at TEXT NOT NULL DEFAULT ''" },
+    { name: "started_at", ddl: "started_at TEXT" },
+    { name: "completed_at", ddl: "completed_at TEXT" },
+  ]) {
+    addColumnIfMissing(db, "fleet_cleanup_actions", column);
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_cleanup_actions_key
+      ON fleet_cleanup_actions(action_key) WHERE action_key <> '';
+    CREATE INDEX IF NOT EXISTS idx_fleet_cleanup_actions_queue
+      ON fleet_cleanup_actions(state, lease_expires_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_fleet_cleanup_actions_run
+      ON fleet_cleanup_actions(fleet_run_id, created_at, id)
+  `);
+  if (
+    hasTable(db, "fleet_tasks") &&
+    hasColumn(db, "fleet_tasks", "fleet_run_id") &&
+    hasColumn(db, "fleet_tasks", "status") &&
+    hasColumn(db, "fleet_tasks", "retry_not_before")
+  ) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_fleet_tasks_retry
+        ON fleet_tasks(fleet_run_id, status, retry_not_before)
+    `);
+  }
+}
+
+/**
+ * Durable, hash-only authorization for direct Fleet tools.  This schema is
+ * deliberately independent of fleet_runs: a fleet:create capability reserves a
+ * run id before that run exists, and audit evidence must survive run cleanup.
+ *
+ * Keep this repair-style (rather than create-only).  Several supported upgrade
+ * paths can arrive with a partially-created table after an interrupted startup.
+ */
+function ensureFleetCapabilitySchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS fleet_capabilities (
+      id TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      action TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      task_id TEXT,
+      worker_id TEXT,
+      attempt INTEGER,
+      bound_hash_kind TEXT,
+      bound_hash_value TEXT,
+      use_mode TEXT NOT NULL DEFAULT 'one_use',
+      issued_at_ms INTEGER NOT NULL,
+      expires_at_ms INTEGER NOT NULL,
+      revoked_at_ms INTEGER,
+      consumed_at_ms INTEGER,
+      lease_owner TEXT,
+      lease_expires_at_ms INTEGER,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      issued_by TEXT NOT NULL DEFAULT 'operator',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_capability_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      capability_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      scope_hash TEXT NOT NULL,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at_ms INTEGER NOT NULL
+    )
+  `);
+
+  for (const column of [
+    { name: "token_hash", ddl: "token_hash TEXT NOT NULL DEFAULT ''" },
+    { name: "version", ddl: "version INTEGER NOT NULL DEFAULT 1" },
+    { name: "action", ddl: "action TEXT NOT NULL DEFAULT ''" },
+    { name: "run_id", ddl: "run_id TEXT NOT NULL DEFAULT ''" },
+    { name: "task_id", ddl: "task_id TEXT" },
+    { name: "worker_id", ddl: "worker_id TEXT" },
+    { name: "attempt", ddl: "attempt INTEGER" },
+    { name: "bound_hash_kind", ddl: "bound_hash_kind TEXT" },
+    { name: "bound_hash_value", ddl: "bound_hash_value TEXT" },
+    { name: "use_mode", ddl: "use_mode TEXT NOT NULL DEFAULT 'one_use'" },
+    { name: "issued_at_ms", ddl: "issued_at_ms INTEGER NOT NULL DEFAULT 0" },
+    { name: "expires_at_ms", ddl: "expires_at_ms INTEGER NOT NULL DEFAULT 0" },
+    { name: "revoked_at_ms", ddl: "revoked_at_ms INTEGER" },
+    { name: "consumed_at_ms", ddl: "consumed_at_ms INTEGER" },
+    { name: "lease_owner", ddl: "lease_owner TEXT" },
+    { name: "lease_expires_at_ms", ddl: "lease_expires_at_ms INTEGER" },
+    { name: "use_count", ddl: "use_count INTEGER NOT NULL DEFAULT 0" },
+    { name: "issued_by", ddl: "issued_by TEXT NOT NULL DEFAULT 'operator'" },
+    {
+      name: "created_at",
+      ddl: "created_at TEXT NOT NULL DEFAULT ''",
+    },
+    {
+      name: "updated_at",
+      ddl: "updated_at TEXT NOT NULL DEFAULT ''",
+    },
+  ]) {
+    addColumnIfMissing(db, "fleet_capabilities", column);
+  }
+
+  for (const column of [
+    { name: "capability_id", ddl: "capability_id TEXT NOT NULL DEFAULT ''" },
+    { name: "run_id", ddl: "run_id TEXT NOT NULL DEFAULT ''" },
+    { name: "action", ddl: "action TEXT NOT NULL DEFAULT ''" },
+    { name: "event_type", ddl: "event_type TEXT NOT NULL DEFAULT ''" },
+    { name: "scope_hash", ddl: "scope_hash TEXT NOT NULL DEFAULT ''" },
+    {
+      name: "metadata_json",
+      ddl: "metadata_json TEXT NOT NULL DEFAULT '{}'",
+    },
+    { name: "created_at_ms", ddl: "created_at_ms INTEGER NOT NULL DEFAULT 0" },
+  ]) {
+    addColumnIfMissing(db, "fleet_capability_audit", column);
+  }
+
+  db.exec(`
+    UPDATE fleet_capabilities
+    SET created_at = datetime('now')
+    WHERE created_at IS NULL OR created_at = '';
+    UPDATE fleet_capabilities
+    SET updated_at = datetime('now')
+    WHERE updated_at IS NULL OR updated_at = '';
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_capabilities_token_hash
+      ON fleet_capabilities(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_fleet_capabilities_scope
+      ON fleet_capabilities(run_id, action, expires_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_fleet_capability_audit_capability
+      ON fleet_capability_audit(capability_id, id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_capability_audit_run
+      ON fleet_capability_audit(run_id, id);
+
+    CREATE TRIGGER IF NOT EXISTS fleet_capability_audit_no_update
+    BEFORE UPDATE ON fleet_capability_audit
+    BEGIN
+      SELECT RAISE(ABORT, 'fleet capability audit events are immutable');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fleet_capability_audit_no_delete
+    BEFORE DELETE ON fleet_capability_audit
+    BEGIN
+      SELECT RAISE(ABORT, 'fleet capability audit events are immutable');
+    END
+  `);
+}
+
+function ensureFleetAutomationSchema(db: Database.Database): void {
+  if (!hasTable(db, "fleet_runs")) return;
+  for (const column of [
+    {
+      name: "desired_state",
+      ddl: "desired_state TEXT NOT NULL DEFAULT 'draft'",
+    },
+    {
+      name: "automation_policy_version",
+      ddl: "automation_policy_version INTEGER NOT NULL DEFAULT 1",
+    },
+    {
+      name: "automation_policy_json",
+      ddl: `automation_policy_json TEXT NOT NULL DEFAULT '${SAFE_FLEET_AUTOMATION_POLICY_JSON}'`,
+    },
+    { name: "automation_policy_hash", ddl: "automation_policy_hash TEXT" },
+    { name: "automation_granted_by", ddl: "automation_granted_by TEXT" },
+    { name: "automation_granted_at", ddl: "automation_granted_at TEXT" },
+    { name: "automation_base_sha", ddl: "automation_base_sha TEXT" },
+    { name: "automation_last_error", ddl: "automation_last_error TEXT" },
+  ]) {
+    addColumnIfMissing(db, "fleet_runs", column);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS fleet_action_authorizations (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'authorized',
+      policy_hash TEXT NOT NULL,
+      plan_hash TEXT,
+      execution_hash TEXT,
+      base_sha TEXT,
+      granted_by TEXT NOT NULL,
+      granted_at TEXT NOT NULL,
+      consumed_by TEXT,
+      consumed_at TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      UNIQUE (fleet_run_id, action, policy_hash)
+    );
+    CREATE TABLE IF NOT EXISTS fleet_reviews (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      subject_type TEXT NOT NULL DEFAULT 'plan',
+      subject_hash TEXT NOT NULL,
+      policy_hash TEXT NOT NULL,
+      execution_hash TEXT NOT NULL,
+      base_sha TEXT NOT NULL,
+      lens TEXT NOT NULL,
+      reviewer_session_id TEXT NOT NULL,
+      verdict TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'changes_requested',
+      request_id TEXT NOT NULL DEFAULT '',
+      nonce_hash TEXT NOT NULL DEFAULT '',
+      result_filename TEXT NOT NULL DEFAULT '',
+      result_verdict TEXT,
+      result_bytes INTEGER,
+      project_path TEXT,
+      worktree_path TEXT,
+      branch_name TEXT NOT NULL DEFAULT '',
+      findings_json TEXT NOT NULL DEFAULT '[]',
+      error TEXT,
+      started_at TEXT,
+      deadline_at TEXT,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      UNIQUE (
+        fleet_run_id,
+        subject_type,
+        subject_hash,
+        policy_hash,
+        execution_hash,
+        base_sha,
+        lens
+      )
+    );
+  `);
+
+  for (const column of [
+    { name: "id", ddl: "id TEXT" },
+    { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+    { name: "action", ddl: "action TEXT NOT NULL DEFAULT 'planning'" },
+    { name: "status", ddl: "status TEXT NOT NULL DEFAULT 'authorized'" },
+    { name: "policy_hash", ddl: "policy_hash TEXT NOT NULL DEFAULT ''" },
+    { name: "plan_hash", ddl: "plan_hash TEXT" },
+    { name: "execution_hash", ddl: "execution_hash TEXT" },
+    { name: "base_sha", ddl: "base_sha TEXT" },
+    { name: "granted_by", ddl: "granted_by TEXT NOT NULL DEFAULT 'operator'" },
+    { name: "granted_at", ddl: "granted_at TEXT NOT NULL DEFAULT ''" },
+    { name: "consumed_by", ddl: "consumed_by TEXT" },
+    { name: "consumed_at", ddl: "consumed_at TEXT" },
+    { name: "attempt_count", ddl: "attempt_count INTEGER NOT NULL DEFAULT 0" },
+    { name: "last_error", ddl: "last_error TEXT" },
+    { name: "updated_at", ddl: "updated_at TEXT NOT NULL DEFAULT ''" },
+  ]) {
+    addColumnIfMissing(db, "fleet_action_authorizations", column);
+  }
+  for (const column of [
+    { name: "id", ddl: "id TEXT" },
+    { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+    { name: "subject_type", ddl: "subject_type TEXT NOT NULL DEFAULT 'plan'" },
+    { name: "subject_hash", ddl: "subject_hash TEXT NOT NULL DEFAULT ''" },
+    { name: "policy_hash", ddl: "policy_hash TEXT NOT NULL DEFAULT ''" },
+    { name: "execution_hash", ddl: "execution_hash TEXT NOT NULL DEFAULT ''" },
+    { name: "base_sha", ddl: "base_sha TEXT NOT NULL DEFAULT ''" },
+    { name: "lens", ddl: "lens TEXT NOT NULL DEFAULT ''" },
+    {
+      name: "reviewer_session_id",
+      ddl: "reviewer_session_id TEXT NOT NULL DEFAULT ''",
+    },
+    {
+      name: "verdict",
+      ddl: "verdict TEXT NOT NULL DEFAULT 'changes_requested'",
+    },
+    { name: "state", ddl: "state TEXT NOT NULL DEFAULT 'changes_requested'" },
+    { name: "request_id", ddl: "request_id TEXT NOT NULL DEFAULT ''" },
+    { name: "nonce_hash", ddl: "nonce_hash TEXT NOT NULL DEFAULT ''" },
+    {
+      name: "result_filename",
+      ddl: "result_filename TEXT NOT NULL DEFAULT ''",
+    },
+    { name: "result_verdict", ddl: "result_verdict TEXT" },
+    { name: "result_bytes", ddl: "result_bytes INTEGER" },
+    { name: "project_path", ddl: "project_path TEXT" },
+    { name: "worktree_path", ddl: "worktree_path TEXT" },
+    { name: "branch_name", ddl: "branch_name TEXT NOT NULL DEFAULT ''" },
+    { name: "findings_json", ddl: "findings_json TEXT NOT NULL DEFAULT '[]'" },
+    { name: "error", ddl: "error TEXT" },
+    { name: "started_at", ddl: "started_at TEXT" },
+    { name: "deadline_at", ddl: "deadline_at TEXT" },
+    { name: "completed_at", ddl: "completed_at TEXT" },
+    { name: "updated_at", ddl: "updated_at TEXT NOT NULL DEFAULT ''" },
+    { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+  ]) {
+    addColumnIfMissing(db, "fleet_reviews", column);
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_fleet_action_authorizations_run
+      ON fleet_action_authorizations(fleet_run_id, action, status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_action_authorizations_unique
+      ON fleet_action_authorizations(fleet_run_id, action, policy_hash);
+    CREATE INDEX IF NOT EXISTS idx_fleet_reviews_subject
+      ON fleet_reviews(fleet_run_id, subject_type, subject_hash);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_reviews_exact_lens
+      ON fleet_reviews(
+        fleet_run_id,
+        subject_type,
+        subject_hash,
+        policy_hash,
+        execution_hash,
+        base_sha,
+        lens
+      );
+  `);
+}
+
+function ensureFleetSourceLineageSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_runs")) {
+    for (const column of [
+      { name: "source_kind", ddl: "source_kind TEXT" },
+      { name: "source_id", ddl: "source_id TEXT" },
+      { name: "source_name", ddl: "source_name TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_runs", column);
+    }
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_fleet_runs_source
+        ON fleet_runs(source_kind, source_id)
+    `);
+  }
+  if (hasTable(db, "fleet_tasks")) {
+    for (const column of [
+      { name: "source_ref", ddl: "source_ref TEXT" },
+      { name: "source_step_id", ddl: "source_step_id TEXT" },
+      { name: "source_issue_id", ddl: "source_issue_id TEXT" },
+      { name: "source_issue_number", ddl: "source_issue_number INTEGER" },
+    ]) {
+      addColumnIfMissing(db, "fleet_tasks", column);
+    }
+    if (hasColumn(db, "fleet_tasks", "fleet_run_id")) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_fleet_tasks_source
+          ON fleet_tasks(fleet_run_id, source_step_id)
+      `);
+    }
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_fleet_tasks_source_issue
+        ON fleet_tasks(source_issue_id)
+        WHERE source_issue_id IS NOT NULL
     `);
   }
 }
@@ -1648,6 +2611,46 @@ const migrations: Migration[] = [
     id: 57,
     name: "add_fleet_scheduler",
     up: ensureFleetSchedulerSchema,
+  },
+  {
+    id: 58,
+    name: "add_fleet_automation_foundation",
+    up: ensureFleetAutomationSchema,
+  },
+  {
+    id: 59,
+    name: "add_fleet_worker_report_runtime",
+    up: ensureFleetReportRuntimeSchema,
+  },
+  {
+    id: 60,
+    name: "add_fleet_verification_runtime",
+    up: ensureFleetVerificationSchema,
+  },
+  {
+    id: 61,
+    name: "add_fleet_task_review_and_fix_runtime",
+    up: ensureFleetTaskReviewSchema,
+  },
+  {
+    id: 62,
+    name: "add_fleet_merge_runtime",
+    up: ensureFleetMergeRuntimeSchema,
+  },
+  {
+    id: 63,
+    name: "add_fleet_lifecycle_hardening",
+    up: ensureFleetLifecycleSchema,
+  },
+  {
+    id: 64,
+    name: "add_fleet_scoped_capabilities",
+    up: ensureFleetCapabilitySchema,
+  },
+  {
+    id: 65,
+    name: "add_fleet_source_lineage",
+    up: ensureFleetSourceLineageSchema,
   },
 ];
 

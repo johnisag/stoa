@@ -189,6 +189,37 @@ describe("Fleet planner lifecycle", () => {
     expect(state.spawn).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    [false, "sandboxed-auto"],
+    [true, "full-bypass"],
+  ] as const)(
+    "derives automatic planner permissions from explicit unconfined consent (%s)",
+    async (allowUnconfinedAgents, expectedMode) => {
+      const created = createDraftFleetRun({
+        name: "Automatic planner permissions",
+        goal: "Write one exact PLAN.md",
+        repoId: "planner-repo",
+        provider: "codex",
+        automationPolicy: {
+          automaticPlanning: true,
+          allowUnconfinedAgents,
+        },
+      });
+      if ("error" in created) throw new Error(created.error);
+
+      const started = await startFleetPlanner(
+        created.run.run.id,
+        {},
+        "fleet-automation"
+      );
+      if ("error" in started) throw new Error(started.error);
+
+      expect(state.spawn).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalMode: expectedMode })
+      );
+    }
+  );
+
   it("accepts the same launch when reconciliation wins the starting race", async () => {
     const created = createDraftFleetRun({
       name: "Slow launch recovery",
@@ -274,7 +305,7 @@ describe("Fleet planner lifecycle", () => {
     try {
       await writeFile(
         join(worktree, "PLAN.md"),
-        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"api","title":"API","description":"Build API","taskType":"implementation","fileClaims":["lib/api"],"dependsOn":[]}]}\nSTOA_FLEET_PLAN_END`,
+        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"api","title":"API","description":"Build API","taskType":"implementation","fileClaims":["lib/api"],"dependsOn":[],"verifyCommand":"npm test"}]}\nSTOA_FLEET_PLAN_END`,
         "utf8"
       );
       state.spawn.mockResolvedValueOnce({
@@ -312,7 +343,7 @@ describe("Fleet planner lifecycle", () => {
     try {
       await writeFile(
         join(worktree, "PLAN.md"),
-        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"docs","title":"Docs","description":"Update docs","taskType":"docs","fileClaims":["docs/fleet.md"],"dependsOn":[]}]}\nSTOA_FLEET_PLAN_END`,
+        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"docs","title":"Docs","description":"Update docs","taskType":"docs","fileClaims":["docs/fleet.md"],"dependsOn":[],"verifyCommand":"npm test"}]}\nSTOA_FLEET_PLAN_END`,
         "utf8"
       );
       state.spawn.mockResolvedValueOnce({
@@ -352,7 +383,7 @@ describe("Fleet planner lifecycle", () => {
     try {
       await writeFile(
         join(worktree, "PLAN.md"),
-        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"test","title":"Test","description":"Add tests","taskType":"test","fileClaims":["test/fleet.ts"],"dependsOn":[]}]}\nSTOA_FLEET_PLAN_END`,
+        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"test","title":"Test","description":"Add tests","taskType":"test","fileClaims":["test/fleet.ts"],"dependsOn":[],"verifyCommand":"npm test"}]}\nSTOA_FLEET_PLAN_END`,
         "utf8"
       );
       const created = createDraftFleetRun({

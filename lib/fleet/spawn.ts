@@ -2,10 +2,12 @@ import { spawnWorker, WorkerSpawnError } from "@/lib/orchestration";
 import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/registry";
 import type { FleetRunRow, FleetTaskRow } from "./types";
 import { buildFleetWorkerPrompt } from "./prompt";
+import type { FleetWorkerAttemptContract } from "./report-runtime";
 
 export interface FleetSpawnResult {
   sessionId: string;
   worktreePath: string | null;
+  branchName?: string | null;
 }
 
 export class FleetSpawnError extends Error {
@@ -19,7 +21,7 @@ export class FleetSpawnError extends Error {
   }
 }
 
-export async function spawnFleetWorker(input: {
+export interface FleetSpawnInput {
   run: FleetRunRow;
   task: FleetTaskRow;
   workingDirectory: string;
@@ -27,16 +29,32 @@ export async function spawnFleetWorker(input: {
   dependencies: string[];
   attempt: number;
   spawnRequestId: string;
-}): Promise<FleetSpawnResult> {
+  reportContract?: FleetWorkerAttemptContract & { workerId: string };
+}
+
+export async function spawnFleetWorker(
+  input: FleetSpawnInput
+): Promise<FleetSpawnResult> {
   const provider = input.task.agent_type ?? input.run.provider;
   if (!PROVIDER_IDS.includes(provider as ProviderId) || provider === "shell") {
     throw new Error(`Unsupported fleet provider: ${provider}`);
   }
   let session;
   try {
+    const deliveryTask = buildFleetWorkerPrompt(input);
+    const persistedTask = input.reportContract
+      ? buildFleetWorkerPrompt({
+          ...input,
+          reportContract: {
+            ...input.reportContract,
+            nonce: "[redacted ephemeral nonce]",
+          },
+        })
+      : deliveryTask;
     session = await spawnWorker({
       conductorSessionId: input.run.conductor_session_id ?? null,
-      task: buildFleetWorkerPrompt(input),
+      task: persistedTask,
+      ...(input.reportContract ? { deliveryTask } : {}),
       workingDirectory: input.workingDirectory,
       branchName:
         input.task.branch_name ??
@@ -72,5 +90,9 @@ export async function spawnFleetWorker(input: {
       session.worktree_path
     );
   }
-  return { sessionId: session.id, worktreePath: session.worktree_path };
+  return {
+    sessionId: session.id,
+    worktreePath: session.worktree_path,
+    branchName: session.branch_name ?? null,
+  };
 }

@@ -12,14 +12,17 @@ import {
 } from "./engine";
 import {
   hashParsedFleetPlanTasks,
+  hashFleetAutomationPolicy,
   hashFleetExecutionContract,
   validateFleetTaskRowsForApproval,
 } from "./hash";
+import { fleetAutomationPolicyJson } from "./automation-policy";
 import { parseFleetPlanText, type ParsedFleetPlanTask } from "./plan";
 import { normalizeFleetClaims, UNKNOWN_FLEET_CLAIM } from "./conflicts";
 import {
   isFleetSchedulerReady,
   reconcileFleetRun,
+  reconcileFleetWorkerReport,
   recoverFleetRun,
 } from "./scheduler";
 import { stopFleetSession } from "./stop";
@@ -34,6 +37,8 @@ import type {
   FleetWorkerRow,
   FleetTaskClaimRow,
   FleetTaskDependencyRow,
+  FleetAutomationAction,
+  FleetVerificationRow,
 } from "./types";
 
 interface FleetRunListRow extends FleetRunRow {
@@ -154,6 +159,19 @@ function settingsJson(
 }
 
 function immediateTransaction<T>(db: Database.Database, callback: () => T): T {
+  if (db.inTransaction) {
+    const savepoint = "fleet_service_nested";
+    db.exec(`SAVEPOINT ${savepoint}`);
+    try {
+      const result = callback();
+      db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      return result;
+    } catch (error) {
+      db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+      db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      throw error;
+    }
+  }
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = callback();
@@ -191,6 +209,9 @@ export function getFleetRunDetail(id: string): FleetRunDetailDto | null {
   const artifacts = queries
     .listFleetArtifactsForRun(db)
     .all(id, FLEET_ARTIFACT_LIST_LIMIT) as FleetArtifactRow[];
+  const verifications = queries
+    .listFleetVerificationsForRun(db)
+    .all(id) as FleetVerificationRow[];
   const events = queries
     .listFleetEventsForRun(db)
     .all(id, 50) as FleetEventRow[];
@@ -200,12 +221,15 @@ export function getFleetRunDetail(id: string): FleetRunDetailDto | null {
     dependencies,
     workers,
     artifacts,
+    verifications,
     events,
   });
 }
 
 export function createDraftFleetRun(
-  input: unknown
+  input: unknown,
+  actor = "operator",
+  runIdOverride?: string
 ): { run: FleetRunDetailDto } | { error: string } {
   const normalized = normalizeFleetRunDraft(input);
   if ("error" in normalized) return normalized;
@@ -224,8 +248,12 @@ export function createDraftFleetRun(
     if (!project) return { error: "unknown projectId" };
   }
 
-  const runId = randomUUID();
+  const runId = runIdOverride ?? randomUUID();
   const rootTaskId = randomUUID();
+  const grantedBy = actorValue(actor, "operator");
+  const grantedAt = new Date().toISOString();
+  const policyJson = fleetAutomationPolicyJson(draft.automationPolicy);
+  const policyHash = hashFleetAutomationPolicy(draft.automationPolicy);
   const settingsJson = JSON.stringify({
     phase: "draft",
     canSpawnWorkers: false,
@@ -236,7 +264,19 @@ export function createDraftFleetRun(
     projectId: draft.projectId,
     maxConcurrency: draft.maxConcurrency,
     reviewPolicy: draft.reviewPolicy,
+    desiredState: draft.desiredState,
+    automationPolicyVersion: draft.automationPolicy.version,
+    automationPolicyHash: policyHash,
   });
+
+  const authorizedActions: FleetAutomationAction[] = [];
+  if (draft.automationPolicy.automaticPlanning)
+    authorizedActions.push("planning");
+  if (draft.automationPolicy.automaticPlanApproval)
+    authorizedActions.push("plan_approval");
+  if (draft.automationPolicy.automaticStart) authorizedActions.push("start");
+  if (draft.automationPolicy.automaticFixes) authorizedActions.push("fix");
+  if (draft.automationPolicy.automaticMerge) authorizedActions.push("merge");
 
   db.transaction(() => {
     queries
@@ -254,6 +294,34 @@ export function createDraftFleetRun(
         draft.reviewPolicy,
         settingsJson
       );
+    const intent = queries
+      .setFleetRunAutomationIntent(db)
+      .run(
+        draft.desiredState,
+        draft.automationPolicy.version,
+        policyJson,
+        policyHash,
+        grantedBy,
+        grantedAt,
+        grantedAt,
+        runId
+      );
+    if (intent.changes !== 1) {
+      throw new Error("failed to persist fleet automation intent");
+    }
+    for (const action of authorizedActions) {
+      queries
+        .createFleetActionAuthorization(db)
+        .run(
+          randomUUID(),
+          runId,
+          action,
+          policyHash,
+          grantedBy,
+          grantedAt,
+          grantedAt
+        );
+    }
     queries
       .createFleetTask(db)
       .run(
@@ -269,7 +337,7 @@ export function createDraftFleetRun(
       );
     queries
       .createFleetEvent(db)
-      .run(runId, "draft_created", "operator", eventPayload);
+      .run(runId, "draft_created", grantedBy, eventPayload);
   })();
 
   const detail = getFleetRunDetail(runId);
@@ -410,12 +478,15 @@ function replaceFleetRunPlan(
         );
       db.prepare(
         `UPDATE fleet_tasks SET agent_type = ?, model = ?, acceptance_criteria = ?,
-         verify_command = ? WHERE id = ? AND fleet_run_id = ?`
+         verify_command = ?, working_directory = ?, base_branch = ?
+         WHERE id = ? AND fleet_run_id = ?`
       ).run(
         task.agentType,
         task.model,
         task.acceptanceCriteria,
         task.verifyCommand,
+        task.workingDirectory ?? null,
+        task.baseBranch ?? null,
         taskId,
         id
       );
@@ -484,21 +555,53 @@ export function ingestGeneratedFleetRunPlan(
   return replaceFleetRunPlan(id, input, actorValue(input.actor, "planner"));
 }
 
+export interface FleetAutomationApprovalGuard {
+  policyHash: string;
+  baseSha: string;
+  executionHash: string;
+}
+
 export function approveFleetRunPlan(
   id: string,
-  input: unknown
+  input: unknown,
+  actor = "operator",
+  automationGuard?: FleetAutomationApprovalGuard
 ): { run: FleetRunDetailDto } | { error: string; status?: number } {
   const payload = payloadObject(input);
   const expectedPlanHash = cappedText(payload.expectedPlanHash, 128);
   if (!expectedPlanHash) return { error: "expectedPlanHash is required" };
 
   const db = getDb();
-  const approvedBy = actorValue(payload.approvedBy, "operator");
+  const approvedBy = actorValue(actor, "operator");
   const result = immediateTransaction<
     { ok: true } | { error: string; status?: number }
   >(db, () => {
     const run = queries.getFleetRun(db).get(id) as FleetRunRow | undefined;
     if (!run) return { error: "Fleet run not found", status: 404 };
+    if (automationGuard) {
+      if (
+        approvedBy !== "fleet-automation" ||
+        run.automation_policy_hash !== automationGuard.policyHash ||
+        run.automation_base_sha !== automationGuard.baseSha
+      ) {
+        return {
+          error: "automatic approval authorization changed",
+          status: 409,
+        };
+      }
+      const authorization = db
+        .prepare(
+          `SELECT status FROM fleet_action_authorizations
+           WHERE fleet_run_id = ? AND action = 'plan_approval' AND policy_hash = ?`
+        )
+        .get(id, automationGuard.policyHash) as { status: string } | undefined;
+      if (authorization?.status !== "authorized") {
+        return {
+          error: "automatic plan approval is not authorized",
+          status: 409,
+        };
+      }
+    }
     if (!canApprovePlan(run)) {
       return { error: "run is not awaiting plan approval", status: 409 };
     }
@@ -647,6 +750,15 @@ export function approveFleetRunPlan(
       claims,
       dependencies,
     });
+    if (
+      automationGuard &&
+      approvedExecutionHash !== automationGuard.executionHash
+    ) {
+      return {
+        error: "automatic approval execution hash changed",
+        status: 409,
+      };
+    }
     const settings = settingsJson(run, {
       phase: "approved_plan",
       approvedPlanHash: run.plan_hash,
@@ -665,6 +777,31 @@ export function approveFleetRunPlan(
       .run(approvedBy, approvedAt, settings, approvedAt, id, expectedPlanHash);
     if (approval.changes === 1) {
       queries.approveFleetTasksForRun(db).run(run.plan_hash, approvedAt, id);
+      if (automationGuard) {
+        const authorization = db
+          .prepare(
+            `UPDATE fleet_action_authorizations
+             SET status = 'consumed', plan_hash = ?, execution_hash = ?,
+                 base_sha = ?, consumed_by = ?, consumed_at = ?,
+                 attempt_count = attempt_count + 1, last_error = NULL,
+                 updated_at = ?
+             WHERE fleet_run_id = ? AND action = 'plan_approval'
+               AND policy_hash = ? AND status = 'authorized'`
+          )
+          .run(
+            run.plan_hash,
+            approvedExecutionHash,
+            automationGuard.baseSha,
+            approvedBy,
+            approvedAt,
+            approvedAt,
+            id,
+            automationGuard.policyHash
+          );
+        if (authorization.changes !== 1) {
+          throw new Error("automatic plan approval authorization changed");
+        }
+      }
       queries
         .createFleetEvent(db)
         .run(id, "plan_approved", approvedBy, eventPayload);
@@ -792,7 +929,7 @@ export async function resumeFleetRun(
     }
     const now = new Date().toISOString();
     db.prepare(
-      `UPDATE fleet_runs SET status = 'running', conductor_session_id = ?, pause_mode = NULL, pause_reason = NULL,
+      `UPDATE fleet_runs SET status = 'running', desired_state = 'running', conductor_session_id = ?, pause_mode = NULL, pause_reason = NULL,
       started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?`
     ).run(conductorSessionId ?? run.conductor_session_id ?? null, now, now, id);
     queries
@@ -835,7 +972,7 @@ export function pauseFleetRun(
   const paused = immediateTransaction<boolean>(db, () => {
     const changed = db
       .prepare(
-        `UPDATE fleet_runs SET status = 'paused', pause_mode = ?, pause_reason = 'operator_pause', updated_at = ? WHERE id = ? AND status = 'running'`
+        `UPDATE fleet_runs SET status = 'paused', desired_state = 'paused', pause_mode = ?, pause_reason = 'operator_pause', updated_at = ? WHERE id = ? AND status = 'running'`
       )
       .run(mode, new Date().toISOString(), id);
     if (changed.changes !== 1) return false;
@@ -898,7 +1035,7 @@ export async function cancelFleetRun(
       };
     }
     db.prepare(
-      `UPDATE fleet_runs SET status = 'canceled', cancel_mode = ?, recovery_required = 0,
+      `UPDATE fleet_runs SET status = 'canceled', desired_state = 'canceled', cancel_mode = ?, recovery_required = 0,
       spent_budget_usd = spent_budget_usd + reserved_budget_usd,
       reserved_budget_usd = 0, ended_at = ?, updated_at = ? WHERE id = ?`
     ).run(mode, now, now, id);
@@ -994,10 +1131,22 @@ export async function completeFleetWorker(
 ): Promise<{ run: FleetRunDetailDto } | { error: string; status?: number }> {
   const actor = actorValue(payloadObject(input).actor, "operator");
   const db = getDb();
+  if (isFleetSchedulerReady()) {
+    await reconcileFleetWorkerReport(runId, workerId);
+  }
   const worker = db
     .prepare(`SELECT * FROM fleet_workers WHERE id = ? AND fleet_run_id = ?`)
     .get(workerId, runId) as FleetWorkerRow | undefined;
   if (!worker) return { error: "Fleet worker not found", status: 404 };
+  if (
+    !["running", "waiting_for_operator"].includes(worker.status) &&
+    (worker.report_state === "accepted" || worker.report_state === "invalid")
+  ) {
+    const collected = getFleetRunDetail(runId);
+    return collected
+      ? { run: collected }
+      : { error: "failed to read collected fleet report" };
+  }
   if (!worker.session_id) {
     return { error: "worker has no linked session", status: 409 };
   }

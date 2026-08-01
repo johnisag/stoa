@@ -3,6 +3,7 @@ import {
   pickConductorId,
 } from "../lib/conductor-marker";
 import { PROVIDER_IDS } from "../lib/providers/registry";
+import { FLEET_MCP_CAPABILITIES } from "../lib/fleet/mcp-capabilities";
 
 // Agents that can run a worker/step — the single source of truth shared with
 // the server-side validateSpec (PROVIDER_IDS minus the non-spawnable "shell").
@@ -12,17 +13,11 @@ export const SPAWNABLE_AGENTS = PROVIDER_IDS.filter(
   (id) => id !== "shell"
 ) as string[];
 
-const DIRECT_FLEET_TOOLS = new Set([
-  "fleet_list_runs",
-  "fleet_get_run",
-  "fleet_list_tasks",
-  "fleet_create_run",
-  "fleet_plan_run",
-  "fleet_approve_run",
-  "fleet_pause_run",
-  "fleet_resume_run",
-  "fleet_cancel_run",
-  "fleet_submit_artifact",
+const BLOCKED_FLEET_TOOLS = new Set([
+  "fleet_tick_run",
+  "fleet_cleanup_run",
+  "fleet_kill_worker",
+  "fleet_retry_task",
 ]);
 
 const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
@@ -51,6 +46,98 @@ function getConductorId(
     args?.conductorId as string | undefined,
     DEFAULT_CONDUCTOR_ID
   );
+}
+
+type DirectFleetAction =
+  | "fleet:create"
+  | "fleet:plan"
+  | "fleet:approve"
+  | "fleet:start"
+  | "fleet:pause"
+  | "fleet:resume"
+  | "fleet:cancel"
+  | "fleet:submit-artifact"
+  | "fleet:merge";
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function capabilityScope(
+  args: Record<string, unknown> | undefined,
+  action: DirectFleetAction
+) {
+  const boundHashKind = requireString(args, "boundHashKind");
+  if (!["plan", "execution", "head", "artifact"].includes(boundHashKind)) {
+    throw new Error("boundHashKind is invalid");
+  }
+  const attempt = args?.attempt;
+  if (attempt !== undefined && attempt !== null && !Number.isInteger(attempt)) {
+    throw new Error("attempt must be an integer or null");
+  }
+  return {
+    version: 1,
+    action,
+    runId: requireString(args, "runId"),
+    taskId: nullableString(args?.taskId),
+    workerId: nullableString(args?.workerId),
+    attempt: attempt == null ? null : attempt,
+    boundHash: {
+      kind: boundHashKind,
+      value: requireString(args, "boundHashValue"),
+    },
+  };
+}
+
+async function callFleetCapability(
+  args: Record<string, unknown> | undefined,
+  action: DirectFleetAction,
+  payload: unknown
+) {
+  return apiCall("/api/fleet/capabilities/action", {
+    method: "POST",
+    body: JSON.stringify({
+      token: requireString(args, "capabilityToken"),
+      scope: capabilityScope(args, action),
+      payload,
+    }),
+  });
+}
+
+async function callFleetRead(
+  args: Record<string, unknown> | undefined,
+  resource: "runs" | "run" | "tasks" | "supervisor"
+) {
+  const runId = resource === "runs" ? "*" : requireString(args, "runId");
+  return apiCall("/api/fleet/capabilities/action", {
+    method: "POST",
+    body: JSON.stringify({
+      token: requireString(args, "capabilityToken"),
+      scope: {
+        version: 1,
+        action: "fleet:read",
+        runId,
+        taskId: null,
+        workerId: null,
+        attempt: null,
+        boundHash: null,
+      },
+      payload: { resource },
+    }),
+  });
+}
+
+function fleetToolResult(result: Record<string, unknown>) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: result.error
+          ? `Error: ${String(result.error)}`
+          : JSON.stringify(result.result ?? result, null, 2),
+      },
+    ],
+  };
 }
 
 /** Require a non-empty string arg, else throw a clear error (handleToolCall's
@@ -138,17 +225,82 @@ export async function handleToolCall(request: {
   const args = request.params.arguments;
 
   try {
-    if (DIRECT_FLEET_TOOLS.has(name)) {
+    if (BLOCKED_FLEET_TOOLS.has(name)) {
       return {
         content: [
           {
             type: "text" as const,
-            text: "Error: direct Fleet access is not exposed through MCP; use fleet_request_action to queue an operator request.",
+            text: "Error: this privileged Fleet operation is not exposed through MCP.",
           },
         ],
       };
     }
     switch (name) {
+      case "fleet_get_capabilities":
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(FLEET_MCP_CAPABILITIES, null, 2),
+            },
+          ],
+        };
+      case "fleet_list_runs": {
+        return fleetToolResult(await callFleetRead(args, "runs"));
+      }
+      case "fleet_get_run": {
+        return fleetToolResult(await callFleetRead(args, "run"));
+      }
+      case "fleet_list_tasks": {
+        return fleetToolResult(await callFleetRead(args, "tasks"));
+      }
+      case "fleet_supervisor_snapshot": {
+        return fleetToolResult(await callFleetRead(args, "supervisor"));
+      }
+      case "fleet_create_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:create", args?.draft)
+        );
+      case "fleet_plan_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:plan", {
+            planText: args?.planText,
+          })
+        );
+      case "fleet_approve_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:approve", {})
+        );
+      case "fleet_start_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:start", {})
+        );
+      case "fleet_pause_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:pause", {})
+        );
+      case "fleet_resume_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:resume", {})
+        );
+      case "fleet_cancel_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:cancel", {})
+        );
+      case "fleet_submit_artifact":
+        return fleetToolResult(
+          await callFleetCapability(
+            args,
+            "fleet:submit-artifact",
+            args?.artifact
+          )
+        );
+      case "fleet_merge_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:merge", {
+            target: args?.target,
+          })
+        );
       case "fleet_request_action": {
         const conductorId = getConductorId(args);
         if (!conductorId) throw new Error("conductorId is required");

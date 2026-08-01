@@ -255,6 +255,27 @@ describe("spawnWorker — conductor FK guard", () => {
     expect(workers).toHaveLength(1);
     expect(workers[0].task).toBe("implement the feature");
   });
+
+  it("delivers an ephemeral task without persisting its secret payload", async () => {
+    const conductor = addSession();
+    const worker = await spawnWorker({
+      conductorSessionId: conductor,
+      task: "redacted Fleet task",
+      deliveryTask: "Fleet task with one-use secret nonce-123",
+      workingDirectory: "/repo",
+      useWorktree: false,
+    });
+
+    expect(backendSendLiteral).toHaveBeenCalledWith(
+      expect.any(String),
+      "Fleet task with one-use secret nonce-123"
+    );
+    expect(
+      db()
+        .prepare(`SELECT worker_task FROM sessions WHERE id = ?`)
+        .get(worker.id)
+    ).toEqual({ worker_task: "redacted Fleet task" });
+  });
   it("wraps the tmux command string when STOA_SANDBOX detects bwrap", async () => {
     process.env.STOA_SANDBOX = "1";
     state.sandboxPath = "/usr/bin/bwrap";
@@ -285,6 +306,31 @@ describe("spawnWorker — conductor FK guard", () => {
     );
     expect(script).toContain("-- claude");
     expect(script).toContain("--dangerously-skip-permissions");
+  });
+
+  it("keeps a reviewer checkout read-only while allowing external Fleet state", async () => {
+    process.env.STOA_SANDBOX = "1";
+    state.sandboxPath = "/usr/bin/bwrap";
+    const conductor = addSession();
+    const reviewerWorktree = "/tmp/read-only-reviewer";
+
+    await spawnWorker({
+      conductorSessionId: conductor,
+      task: "review exact commit",
+      workingDirectory: reviewerWorktree,
+      useWorktree: false,
+      readOnlyWorktree: true,
+      agentType: "claude",
+    });
+
+    const createArg = (backendCreate.mock.calls as unknown[][])[0]?.[0] as
+      { command: string } | undefined;
+    const scriptPath = createArg!.command.slice("bash ".length);
+    const script = readFileSync(scriptPath, "utf8");
+    expect(script).toContain("--ro-bind / /");
+    expect(script).not.toContain(
+      `--bind '${reviewerWorktree}' '${reviewerWorktree}'`
+    );
   });
 
   it("warns when STOA_SANDBOX is requested but no primitive is available", async () => {

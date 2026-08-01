@@ -34,6 +34,232 @@ import {
 import { SPAWNABLE_AGENTS, handleToolCall } from "./orchestration-tools";
 import { emitGenAiEvent } from "../lib/telemetry/otel";
 
+const fleetCapabilityProperties = {
+  capabilityToken: {
+    type: "string",
+    description:
+      "Opaque token returned once by the admin-only Fleet capability API.",
+  },
+  runId: {
+    type: "string",
+    description: "Exact capability-scoped Fleet run id.",
+  },
+  taskId: {
+    type: "string",
+    description:
+      "Exact task scope when present; omit for an explicit null scope.",
+  },
+  workerId: {
+    type: "string",
+    description:
+      "Exact worker scope when present; omit for an explicit null scope.",
+  },
+  attempt: {
+    type: "integer",
+    minimum: 1,
+    description:
+      "Exact attempt scope when present; omit for an explicit null scope.",
+  },
+  boundHashKind: {
+    type: "string",
+    enum: ["plan", "execution", "head", "artifact"],
+  },
+  boundHashValue: {
+    type: "string",
+    description: "Exact lowercase hash from the issued capability scope.",
+  },
+};
+
+const fleetCapabilityRequired = [
+  "capabilityToken",
+  "runId",
+  "boundHashKind",
+  "boundHashValue",
+];
+
+const DIRECT_FLEET_MCP_TOOLS: Tool[] = [
+  {
+    name: "fleet_list_runs",
+    description:
+      "Read the bounded Fleet run snapshot using a reusable fleet:read capability with reserved run scope '*'.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        capabilityToken: fleetCapabilityProperties.capabilityToken,
+      },
+      required: ["capabilityToken"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_get_run",
+    description:
+      "Read one Fleet run snapshot, including its tasks, workers, artifacts, verifications, and recent events.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        capabilityToken: fleetCapabilityProperties.capabilityToken,
+        runId: { type: "string" },
+      },
+      required: ["capabilityToken", "runId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_list_tasks",
+    description: "Read the current task snapshot for one Fleet run.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        capabilityToken: fleetCapabilityProperties.capabilityToken,
+        runId: { type: "string" },
+      },
+      required: ["capabilityToken", "runId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_supervisor_snapshot",
+    description:
+      "Read the bounded, advisory Fleet supervisor snapshot for one exact run using a reusable fleet:read capability.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        capabilityToken: fleetCapabilityProperties.capabilityToken,
+        runId: { type: "string" },
+      },
+      required: ["capabilityToken", "runId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_create_run",
+    description:
+      "Create the exact draft authorized by a fleet:create capability. MCP cannot issue this capability.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...fleetCapabilityProperties,
+        draft: {
+          type: "object",
+          description: "Exact bound draft-run payload.",
+        },
+      },
+      required: [...fleetCapabilityRequired, "draft"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_plan_run",
+    description:
+      "Ingest an exact plan using a plan-hash-bound fleet:plan capability.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...fleetCapabilityProperties,
+        planText: { type: "string" },
+      },
+      required: [...fleetCapabilityRequired, "planText"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_approve_run",
+    description:
+      "Approve the exact reviewed plan using a separately human-issued fleet:approve capability. MCP elicitation never grants approval.",
+    inputSchema: {
+      type: "object",
+      properties: fleetCapabilityProperties,
+      required: fleetCapabilityRequired,
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_start_run",
+    description:
+      "Start an approved Fleet run using an execution-hash-bound fleet:start capability.",
+    inputSchema: {
+      type: "object",
+      properties: fleetCapabilityProperties,
+      required: fleetCapabilityRequired,
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_pause_run",
+    description:
+      "Pause new Fleet scheduling using an execution-hash-bound fleet:pause capability. It never kills workers.",
+    inputSchema: {
+      type: "object",
+      properties: fleetCapabilityProperties,
+      required: fleetCapabilityRequired,
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_resume_run",
+    description:
+      "Resume an approved Fleet run using an execution-hash-bound fleet:resume capability.",
+    inputSchema: {
+      type: "object",
+      properties: fleetCapabilityProperties,
+      required: fleetCapabilityRequired,
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_cancel_run",
+    description:
+      "Cancel a Fleet run while preserving worktrees, using an execution-hash-bound fleet:cancel capability.",
+    inputSchema: {
+      type: "object",
+      properties: fleetCapabilityProperties,
+      required: fleetCapabilityRequired,
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_submit_artifact",
+    description:
+      "Attach an exact plan-review artifact using an artifact-hash-bound capability.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...fleetCapabilityProperties,
+        artifact: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            body: { type: "string" },
+            severity: {
+              type: "string",
+              enum: ["info", "warning", "blocker"],
+            },
+            expectedPlanHash: { type: "string" },
+          },
+          required: ["title", "body", "expectedPlanHash"],
+        },
+      },
+      required: [...fleetCapabilityRequired, "artifact"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_merge_run",
+    description:
+      "Request the exact target/head-bound merge authorized by a separately human-issued fleet:merge capability.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...fleetCapabilityProperties,
+        target: { type: "string", enum: ["local", "github_pr"] },
+      },
+      required: [...fleetCapabilityRequired, "target"],
+      additionalProperties: false,
+    },
+  },
+];
+
 export function createOrchestrationServer(): Server {
   const server = new Server(
     {
@@ -506,6 +732,17 @@ export function createOrchestrationServer(): Server {
     return {
       tools: [
         ...tools,
+        ...DIRECT_FLEET_MCP_TOOLS,
+        {
+          name: "fleet_get_capabilities",
+          description:
+            "Describe Stoa Fleet's negotiated MCP protocol/SDK boundary, durable-state fallback, optional extension support, and authorization model.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {},
+            additionalProperties: false,
+          },
+        },
         {
           name: "fleet_request_action",
           description:
