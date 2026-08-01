@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NextRequest } from "next/server";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "fs";
+import { tmpdir } from "os";
+import { join, parse, resolve } from "path";
 import {
   parseJsonBody,
   clampInteger,
   sanitizeSessionName,
   sanitizeGroupPath,
   resolveSandboxedPath,
+  resolveRealSandboxedPath,
   tokenizeCommand,
   shellEscape,
   validateGitHubLabels,
@@ -124,6 +128,71 @@ describe("resolveSandboxedPath", () => {
     const roots = ["C:\\stoa\\project"];
     const result = resolveSandboxedPath("C:\\other\\file.txt", roots);
     expect(result.allowed).toBe(false);
+  });
+
+  it("handles filesystem roots and rejects similarly prefixed siblings", () => {
+    const filesystemRoot = parse(resolve(process.cwd())).root;
+    expect(
+      resolveSandboxedPath(join(filesystemRoot, "stoa-child"), [filesystemRoot])
+        .allowed
+    ).toBe(true);
+
+    const allowed = join(tmpdir(), "stoa-prefix-root");
+    expect(resolveSandboxedPath(`${allowed}-evil`, [allowed]).allowed).toBe(
+      false
+    );
+  });
+});
+
+describe("resolveRealSandboxedPath", () => {
+  it("allows an existing directory beneath a real allowed root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stoa-real-sandbox-"));
+    const child = join(root, "child");
+    mkdirSync(child);
+    try {
+      const result = await resolveRealSandboxedPath(child, [root]);
+      expect(result.allowed).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlink or junction that escapes an allowed root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stoa-real-sandbox-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "stoa-real-sandbox-outside-"));
+    const link = join(root, "escape");
+    try {
+      symlinkSync(
+        outside,
+        link,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+
+      const result = await resolveRealSandboxedPath(link, [root]);
+      expect(result.allowed).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an allowed symlink/junction root alias after verification", async () => {
+    const container = mkdtempSync(join(tmpdir(), "stoa-real-alias-"));
+    const target = mkdtempSync(join(tmpdir(), "stoa-real-target-"));
+    const alias = join(container, "project");
+    try {
+      symlinkSync(
+        target,
+        alias,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+
+      const result = await resolveRealSandboxedPath(alias, [alias]);
+      expect(result).toEqual({ allowed: true, resolved: resolve(alias) });
+    } finally {
+      rmSync(container, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
   });
 });
 

@@ -85,7 +85,7 @@ describe("resolveSessionLaunchOptions — the single resolver", () => {
     const resolved = resolveSessionLaunchOptions(
       session({ agent_type: "hermes", model: "opus" })
     );
-    expect(resolved!.options.model).toBe("gpt-5.5");
+    expect(resolved!.options.model).toBe("kimi-k3");
   });
 
   it("passes a genuine free-text model through unchanged (no catalog to clamp to)", () => {

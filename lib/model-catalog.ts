@@ -42,8 +42,8 @@ const MODEL_OPTIONS_BY_AGENT: Partial<Record<AgentType, ModelOption[]>> = {
 // Hermes is free-text (no dropdown), but Stoa gives it an explicit default so a
 // fresh session launches `hermes -m <model>` rather than relying on whatever
 // Hermes happens to be configured for. Keep it aligned with the team's current
-// Hermes backend default: OpenAI Codex / GPT-5.5.
-export const HERMES_DEFAULT_MODEL = "gpt-5.5";
+// Hermes backend default: Moonshot AI / Kimi K3.
+export const HERMES_DEFAULT_MODEL = "kimi-k3";
 
 const DEFAULT_MODEL_BY_AGENT: Partial<Record<AgentType, string>> = {
   claude: "sonnet",

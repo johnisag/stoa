@@ -12,6 +12,7 @@
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import * as fs from "fs";
 import * as path from "path";
 import { expandHome, homeDir, isWindows } from "./platform";
 import { getDb, queries } from "./db";
@@ -237,8 +238,13 @@ function normalizeForSandbox(p: string): string {
 function isUnderRoot(input: string, root: string): boolean {
   const nInput = normalizeForSandbox(input);
   const nRoot = normalizeForSandbox(root);
-  if (nInput === nRoot) return true;
-  return nInput.startsWith(nRoot + path.sep);
+  const relative = path.relative(nRoot, nInput);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
 }
 
 /**
@@ -309,6 +315,44 @@ export function resolveSandboxedPath(
     if (isUnderRoot(resolved, root)) return { allowed: true, resolved };
   }
   return { allowed: false, resolved };
+}
+
+/**
+ * Resolve an existing path and its allowed roots through filesystem links before
+ * applying the sandbox boundary. This closes symlink/junction escapes that a
+ * lexical path-prefix check alone cannot detect.
+ */
+export async function resolveRealSandboxedPath(
+  inputPath: string,
+  roots: string[]
+): Promise<SandboxResult> {
+  const lexical = resolveSandboxedPath(inputPath, roots);
+  if (!lexical.allowed) return lexical;
+
+  let realInput: string;
+  try {
+    realInput = await fs.promises.realpath(lexical.resolved);
+  } catch {
+    return { allowed: false, resolved: lexical.resolved };
+  }
+
+  for (const root of roots) {
+    try {
+      const realRoot = await fs.promises.realpath(
+        path.resolve(expandHome(root))
+      );
+      if (isUnderRoot(realInput, realRoot)) {
+        // Preserve the verified caller path. Returning the canonical target here
+        // would break later lexical project-boundary checks for projects that are
+        // intentionally registered through a symlink/junction alias.
+        return { allowed: true, resolved: lexical.resolved };
+      }
+    } catch {
+      // Stale/missing roots cannot authorize an existing target.
+    }
+  }
+
+  return { allowed: false, resolved: realInput };
 }
 
 /**

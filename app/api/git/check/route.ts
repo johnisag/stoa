@@ -15,36 +15,52 @@ import { getDb, queries, type Session } from "@/lib/db";
 import {
   parseJsonBody,
   getAllowedPathRoots,
-  resolveSandboxedPathOrHome,
+  resolveRealSandboxedPath,
+  requireAdmin,
   requireLocalhost,
 } from "@/lib/api-security";
+import { homeDir } from "@/lib/platform";
 
 /**
  * POST /api/git/check
  * Check if a path is a git repository and return branch info.
  *
- * LOCALHOST-GATED (matches /api/secret-scan, its sibling in the New Session
- * dir-pick flow): probing the home tree for git repos / worktrees / sibling
- * repo names is filesystem reconnaissance that must not be reachable from a
- * tunneled/shared instance; the check only runs for the local operator.
+ * Local callers may probe the home tree for the project-creation flow. Remote
+ * admin callers are limited to registered project/repo roots so the mobile New
+ * Session flow can discover branches without becoming a filesystem recon oracle.
  */
 export async function POST(request: NextRequest) {
-  const auth = requireLocalhost(request);
-  if (!auth.ok) return auth.response;
-  const parsed = await parseJsonBody<{ path?: string }>(request);
+  const isLocal = requireLocalhost(request).ok;
+  if (!isLocal) {
+    const adminError = requireAdmin(request);
+    if (adminError) return adminError;
+  }
+
+  const parsed = await parseJsonBody<unknown>(request);
   if (!parsed.ok) return parsed.response;
 
   const body = parsed.data;
-  const { path: dirPath } = body;
-
-  if (!dirPath) {
+  if (
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    !("path" in body) ||
+    typeof body.path !== "string" ||
+    !body.path.trim()
+  ) {
     return NextResponse.json({ error: "Path is required" }, { status: 400 });
   }
+  const dirPath = body.path;
 
-  // Allow probing the home tree (project creation flow) as well as registered
-  // project/repo roots.
+  // Only localhost gets the broader home-tree project discovery scope. Remote
+  // callers have already passed the server's admin-only POST gate and remain
+  // confined to registered project/repo/worktree roots.
   const roots = getAllowedPathRoots();
-  const { allowed, resolved } = resolveSandboxedPathOrHome(dirPath, roots);
+  const sandboxRoots = isLocal ? [...roots, homeDir()] : roots;
+  const { allowed, resolved } = await resolveRealSandboxedPath(
+    dirPath,
+    sandboxRoots
+  );
   if (!allowed) {
     return NextResponse.json(
       { error: "Path is outside the allowed workspace" },
