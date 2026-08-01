@@ -26,7 +26,11 @@ import "../lib/als-global";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Server, type Tool } from "@modelcontextprotocol/server";
-import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import {
+  serveStdio,
+  type ServeStdioOptions,
+  type StdioServerHandle,
+} from "@modelcontextprotocol/server/stdio";
 import { SPAWNABLE_AGENTS, handleToolCall } from "./orchestration-tools";
 import { emitGenAiEvent } from "../lib/telemetry/otel";
 
@@ -588,10 +592,18 @@ export function createOrchestrationServer(): Server {
   return server;
 }
 
+export function serveOrchestrationStdio(
+  options: Omit<ServeStdioOptions, "legacy"> = {}
+): StdioServerHandle {
+  return serveStdio(() => createOrchestrationServer(), {
+    ...options,
+    legacy: "serve",
+  });
+}
+
 // Start the server
 async function main() {
-  serveStdio(() => createOrchestrationServer(), {
-    legacy: "serve",
+  serveOrchestrationStdio({
     onerror: (error) => console.error("Stoa MCP transport error:", error),
   });
   console.error("Stoa Orchestration MCP Server started");

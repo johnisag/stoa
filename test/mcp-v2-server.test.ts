@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   InMemoryTransport,
   type JSONRPCMessage,
 } from "@modelcontextprotocol/server";
-import { createOrchestrationServer } from "@/mcp/orchestration-server";
+import { serveOrchestrationStdio } from "@/mcp/orchestration-server";
 
 describe("MCP SDK v2 orchestration server", () => {
   const connected: Array<{ close(): Promise<void> }> = [];
@@ -12,18 +12,119 @@ describe("MCP SDK v2 orchestration server", () => {
     await Promise.all(connected.splice(0).map((item) => item.close()));
   });
 
-  it("negotiates a legacy client through the v2 server and advertises Fleet tools", async () => {
+  function responseCollector() {
+    const responses = new Map<string | number, JSONRPCMessage>();
+    return {
+      responses,
+      onmessage(message: JSONRPCMessage) {
+        if ("id" in message && message.id != null)
+          responses.set(message.id, message);
+      },
+    };
+  }
+
+  async function waitForResponse(
+    responses: Map<string | number, JSONRPCMessage>,
+    id: string | number
+  ) {
+    await vi.waitFor(() => expect(responses.has(id)).toBe(true));
+    return responses.get(id);
+  }
+
+  it("serves a native 2026-07-28 request without legacy initialization", async () => {
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
-    const server = createOrchestrationServer();
-    connected.push(clientTransport, serverTransport, server);
-    const responses = new Map<string | number, JSONRPCMessage>();
-    clientTransport.onmessage = (message) => {
-      if ("id" in message && message.id != null)
-        responses.set(message.id, message);
-    };
+    const handle = serveOrchestrationStdio({ transport: serverTransport });
+    connected.push(clientTransport, handle);
+    const collector = responseCollector();
+    clientTransport.onmessage = collector.onmessage;
     await clientTransport.start();
-    await server.connect(serverTransport);
+    const modernMeta = {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": {
+        name: "stoa-modern-test",
+        version: "1.0.0",
+      },
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+
+    await clientTransport.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "server/discover",
+      params: {
+        _meta: modernMeta,
+      },
+    });
+    expect(await waitForResponse(collector.responses, 1)).toMatchObject({
+      result: {
+        resultType: "complete",
+        supportedVersions: expect.arrayContaining(["2026-07-28"]),
+        capabilities: { tools: {} },
+      },
+    });
+
+    await clientTransport.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: {
+        _meta: modernMeta,
+      },
+    });
+
+    expect(await waitForResponse(collector.responses, 2)).toMatchObject({
+      result: {
+        resultType: "complete",
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: "fleet_request_action" }),
+        ]),
+      },
+    });
+
+    await clientTransport.send({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "fleet_create_run",
+        arguments: {},
+        _meta: modernMeta,
+      },
+    });
+    expect(await waitForResponse(collector.responses, 3)).toMatchObject({
+      result: {
+        resultType: "complete",
+        content: [
+          expect.objectContaining({
+            text: expect.stringContaining("direct Fleet access is not exposed"),
+          }),
+        ],
+      },
+    });
+
+    await clientTransport.send({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/list",
+      params: {},
+    });
+    expect(await waitForResponse(collector.responses, 4)).toMatchObject({
+      error: {
+        code: -32602,
+        message: expect.stringContaining("_meta envelope"),
+      },
+    });
+  });
+
+  it("negotiates a legacy client through Stoa's v2 stdio entry", async () => {
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const handle = serveOrchestrationStdio({ transport: serverTransport });
+    connected.push(clientTransport, handle);
+    const collector = responseCollector();
+    clientTransport.onmessage = collector.onmessage;
+    await clientTransport.start();
 
     await clientTransport.send({
       jsonrpc: "2.0",
@@ -35,8 +136,7 @@ describe("MCP SDK v2 orchestration server", () => {
         clientInfo: { name: "stoa-test", version: "1.0.0" },
       },
     });
-    await new Promise((resolveWait) => setTimeout(resolveWait, 0));
-    expect(responses.get(1)).toMatchObject({
+    expect(await waitForResponse(collector.responses, 1)).toMatchObject({
       result: {
         serverInfo: { name: "stoa-orchestration", version: "2.0.0" },
       },
@@ -52,8 +152,7 @@ describe("MCP SDK v2 orchestration server", () => {
       method: "tools/list",
       params: {},
     });
-    await new Promise((resolveWait) => setTimeout(resolveWait, 0));
-    const listed = responses.get(2) as {
+    const listed = (await waitForResponse(collector.responses, 2)) as {
       result?: { tools?: Array<{ name?: string }> };
     };
     const names = listed.result?.tools?.map((tool) => tool.name) ?? [];
