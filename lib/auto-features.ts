@@ -216,3 +216,154 @@ export function makeGuardedInterval(
     },
   };
 }
+
+export interface RecoverableFleetRuntimeOptions {
+  /** Retry recovery on this cadence while Fleet launch admission is closed. */
+  recoveryRetryMs: number;
+  /** Cadence for the normal planner/automation and scheduler runtime loops. */
+  runtimeIntervalMs: number;
+  /** Restart recovery. No launch-capable callback runs until this succeeds. */
+  recover: () => void | Promise<void>;
+  /** Poll/clean already-persisted runtimes while admission remains closed. */
+  pollWhileBlocked: () => void | Promise<void>;
+  /** One normal startup reconciliation after recovery succeeds. */
+  onRecovered: () => void | Promise<void>;
+  /** Normal planner polling plus automation admission. */
+  plannerTick: () => void | Promise<void>;
+  /** Normal worker/reviewer/runtime reconciliation. */
+  schedulerTick: () => void | Promise<void>;
+  onRecoveryError?: (err: unknown) => void;
+  onBlockedPollError?: (err: unknown) => void;
+  onRecoveredError?: (err: unknown) => void;
+  onPlannerError?: (err: unknown) => void;
+  onSchedulerError?: (err: unknown) => void;
+}
+
+export interface RecoverableFleetRuntime {
+  /** True after restart recovery succeeds, even while the one-shot startup pass runs. */
+  readonly ready: boolean;
+  /** Stop recovery and normal runtime timers. Idempotent. */
+  stop(): void;
+}
+
+function reportRuntimeError(
+  handler: ((err: unknown) => void) | undefined,
+  fallback: string,
+  error: unknown
+): void {
+  try {
+    (handler ?? ((err) => console.error(fallback, err)))(error);
+  } catch (reportError) {
+    console.error(fallback, error, reportError);
+  }
+}
+
+/**
+ * Start Fleet's fail-closed background runtime.
+ *
+ * Recovery gets one immediate attempt and then one busy-guarded attempt per
+ * retry interval. Until it succeeds, only the explicitly safe persisted-runtime
+ * poll is called; planner automation, reviewers, and worker admission stay
+ * unreachable. Success atomically closes the retry loop, runs normal startup
+ * reconciliation once, then arms exactly one planner timer and one scheduler
+ * timer. The returned stop handle owns every timer across both phases.
+ */
+export async function startRecoverableFleetRuntime(
+  opts: RecoverableFleetRuntimeOptions
+): Promise<RecoverableFleetRuntime> {
+  let stopped = false;
+  let ready = false;
+  let recoveryInterval: GuardedInterval | null = null;
+  let plannerInterval: GuardedInterval | null = null;
+  let schedulerInterval: GuardedInterval | null = null;
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    recoveryInterval?.stop();
+    plannerInterval?.stop();
+    schedulerInterval?.stop();
+    recoveryInterval = null;
+    plannerInterval = null;
+    schedulerInterval = null;
+  };
+
+  const activate = async () => {
+    if (stopped || ready) return;
+    // Set the gate before awaiting startup work. A racing retry can neither run
+    // the one-shot callback twice nor arm duplicate normal timers.
+    ready = true;
+    recoveryInterval?.stop();
+    recoveryInterval = null;
+    try {
+      await opts.onRecovered();
+    } catch (error) {
+      reportRuntimeError(
+        opts.onRecoveredError,
+        "fleet recovered startup reconcile failed:",
+        error
+      );
+    }
+    if (stopped) return;
+    plannerInterval = makeGuardedInterval({
+      intervalMs: opts.runtimeIntervalMs,
+      tick: opts.plannerTick,
+      onError:
+        opts.onPlannerError ??
+        ((error) => console.error("fleet planner tick failed:", error)),
+    });
+    schedulerInterval = makeGuardedInterval({
+      intervalMs: opts.runtimeIntervalMs,
+      tick: opts.schedulerTick,
+      onError:
+        opts.onSchedulerError ??
+        ((error) => console.error("fleet scheduler tick failed:", error)),
+    });
+  };
+
+  const attemptRecovery = async () => {
+    if (stopped || ready) return;
+    try {
+      await opts.recover();
+    } catch (error) {
+      reportRuntimeError(
+        opts.onRecoveryError,
+        "fleet recovery failed; automatic launches disabled:",
+        error
+      );
+      if (stopped) return;
+      try {
+        await opts.pollWhileBlocked();
+      } catch (pollError) {
+        reportRuntimeError(
+          opts.onBlockedPollError,
+          "fleet blocked-runtime poll failed:",
+          pollError
+        );
+      }
+      return;
+    }
+    await activate();
+  };
+
+  await attemptRecovery();
+  if (!stopped && !ready) {
+    recoveryInterval = makeGuardedInterval({
+      intervalMs: opts.recoveryRetryMs,
+      tick: attemptRecovery,
+      onError: (error) =>
+        reportRuntimeError(
+          opts.onRecoveryError,
+          "fleet recovery retry failed; automatic launches disabled:",
+          error
+        ),
+    });
+  }
+
+  return {
+    get ready() {
+      return ready;
+    },
+    stop,
+  };
+}

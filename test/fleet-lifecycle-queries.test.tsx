@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   useArchiveFleetRun,
   useFleetAnalyticsQuery,
+  useFleetCancellationPreview,
   useFleetCleanupPreview,
   useFleetMergeStatus,
   useFleetSupervisorSnapshot,
@@ -81,9 +82,14 @@ describe("Fleet lifecycle client controls", () => {
     await waitFor(() =>
       expect(lifecycle.result.current.preview.isSuccess).toBe(true)
     );
-    await lifecycle.result.current.cleanup.mutateAsync();
+    await lifecycle.result.current.cleanup.mutateAsync({
+      confirmation: "run-1",
+      previewDigest: "a".repeat(64),
+    });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/fleet/runs/run-1/cleanup");
+    expect(fetchMock).toHaveBeenCalledWith("/api/fleet/runs/run-1/cleanup", {
+      cache: "no-store",
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/fleet/runs/run-1/cleanup",
       expect.objectContaining({
@@ -91,10 +97,45 @@ describe("Fleet lifecycle client controls", () => {
         body: JSON.stringify({
           confirm: true,
           confirmation: "run-1",
+          previewDigest: "a".repeat(64),
           actor: "operator",
         }),
       })
     );
+  });
+
+  it("loads the bounded destructive cancellation inventory without caching", async () => {
+    const preview = {
+      runId: "run/a",
+      complete: true,
+      objectLimit: 128,
+      truncatedKinds: [],
+      excludedWorktreeCount: 0,
+      owners: [],
+      sessions: [],
+      worktrees: [],
+      branches: [],
+      artifacts: [],
+      effects: {
+        stopActiveSessions: true,
+        deleteVerifiedWorktrees: true,
+        preserveBranches: true,
+        preserveArtifactMetadata: true,
+        artifactBodyRetentionDays: 30,
+      },
+    };
+    const fetchMock = vi.fn(async () => Response.json(preview));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = renderHook(
+      () => useFleetCancellationPreview("run/a", true),
+      { wrapper: wrapper() }
+    );
+
+    await waitFor(() => expect(result.result.current.isSuccess).toBe(true));
+    expect(fetchMock).toHaveBeenCalledWith("/api/fleet/runs/run%2Fa/cancel", {
+      cache: "no-store",
+    });
+    expect(result.result.current.data).toEqual(preview);
   });
 
   it("loads bounded historical analytics", async () => {

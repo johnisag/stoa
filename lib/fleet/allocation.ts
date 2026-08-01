@@ -1,6 +1,8 @@
 import type { ProviderId } from "@/lib/providers/registry";
-
-type SpawnableProviderId = Exclude<ProviderId, "shell">;
+import {
+  filterFleetUnattendedProviders,
+  type FleetUnattendedProviderId,
+} from "./provider-eligibility";
 
 export interface FleetAllocationTask {
   suggestedProvider?: string | null;
@@ -22,17 +24,15 @@ export function allocateFleetAgents(input: {
   defaultProvider: ProviderId;
   defaultModel: string | null;
 }): FleetTaskAllocation[] {
-  const available = [...new Set(input.availableProviders)].filter(
-    (provider): provider is SpawnableProviderId => provider !== "shell"
-  );
+  const available = filterFleetUnattendedProviders(input.availableProviders);
   if (available.length === 0) {
     throw new Error("no installed agent provider is available");
   }
 
   const fallback = available.includes(
-    input.defaultProvider as SpawnableProviderId
+    input.defaultProvider as FleetUnattendedProviderId
   )
-    ? (input.defaultProvider as SpawnableProviderId)
+    ? (input.defaultProvider as FleetUnattendedProviderId)
     : available[0];
   const counts = new Map<ProviderId, number>(
     available.map((provider) => [provider, 0])

@@ -3,10 +3,21 @@ import type Database from "better-sqlite3";
 import { getDb, queries } from "../db";
 import type { Project } from "../db/types";
 import type { DispatchRepo, IssueDispatch } from "../dispatch/types";
+import { getDefaultBranch } from "../git-status";
 import { expandHome, isWindows } from "../platform";
+import { isValidProviderId } from "../providers/registry";
 import type { CreateFleetRunInput, FleetRunDetailDto } from "./types";
-import { adaptFleetSource, type FleetSourceDraftPlanInput } from "./sources";
-import { fleetSourceDraftToPlan } from "./source-plan";
+import {
+  adaptFleetSource,
+  type FleetSourceDraftPlanInput,
+  type FleetSourceProvider,
+} from "./sources";
+import { allocateFleetSourcePlan, fleetSourceDraftToPlan } from "./source-plan";
+import { redactAndCapFleetText } from "./redaction";
+import {
+  detectInstalledFleetAgentProviders,
+  type FleetAgentProviderId,
+} from "./auxiliary-provider";
 import {
   createDraftFleetRun,
   getFleetRunDetail,
@@ -18,6 +29,21 @@ type FleetSourceCreateOptions = Omit<CreateFleetRunInput, "name" | "goal">;
 interface FleetSourceCreatePayload {
   source?: unknown;
   options?: FleetSourceCreateOptions;
+}
+
+export interface FleetSourceServiceDeps {
+  detectInstalledProviders: () => FleetAgentProviderId[];
+  defaultBranch: (workingDirectory: string) => string;
+}
+
+function sourceServiceDeps(
+  overrides: Partial<FleetSourceServiceDeps>
+): FleetSourceServiceDeps {
+  return {
+    detectInstalledProviders:
+      overrides.detectInstalledProviders ?? detectInstalledFleetAgentProviders,
+    defaultBranch: overrides.defaultBranch ?? getDefaultBranch,
+  };
 }
 
 class FleetSourceCreateError extends Error {
@@ -42,12 +68,94 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function sanitizedLineageName(value: string | null): string | null {
+  if (!value) return null;
+  return (
+    redactAndCapFleetText(value, 160 * 4)
+      .text.trim()
+      .slice(0, 160) || null
+  );
+}
+
+function containsCredentialShapedText(
+  value: string | null | undefined
+): boolean {
+  if (!value) return false;
+  return redactAndCapFleetText(value, Buffer.byteLength(value, "utf8"))
+    .redacted;
+}
+
+const SOURCE_PROSE_KEYS = new Set([
+  "body",
+  "description",
+  "exitCriteria",
+  "goal",
+  "issue_title",
+  "issue_url",
+  "name",
+  "sourceName",
+  "spec",
+  "task",
+  "task_body",
+  "text",
+  "title",
+]);
+
+/**
+ * Redact source prose before an adapter applies character limits. Otherwise a
+ * credential that straddles an adapter's boundary can be truncated into a
+ * fragment that no longer matches the redaction rules and then be persisted.
+ * Identity, path, branch, claim, model, and command fields remain byte-for-byte
+ * intact here so their dedicated validation can reject unsafe values.
+ */
+function sanitizeSourceProse(
+  value: unknown,
+  key: string | null = null
+): unknown {
+  if (typeof value === "string") {
+    if (!key || !SOURCE_PROSE_KEYS.has(key)) return value;
+    return redactAndCapFleetText(value, Buffer.byteLength(value, "utf8")).text;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeSourceProse(entry, key));
+  }
+  const record = plainRecord(value);
+  if (!record) return value;
+  return Object.fromEntries(
+    Object.entries(record).map(([childKey, childValue]) => [
+      childKey,
+      sanitizeSourceProse(childValue, childKey),
+    ])
+  );
+}
+
 interface ResolvedSourceTarget {
   repoId: string | null;
   projectId: string | null;
   workingDirectory: string;
   baseBranch: string;
+  provider: FleetSourceProvider | null;
+  model: string | null;
   label: string;
+}
+
+function sourceProvider(value: unknown): FleetSourceProvider | null {
+  const provider = optionalString(value)?.toLowerCase() ?? null;
+  return provider && isValidProviderId(provider) && provider !== "shell"
+    ? provider
+    : null;
+}
+
+function optionProvider(value: unknown): FleetSourceProvider | null {
+  const provider = optionalString(value);
+  if (!provider) return null;
+  const normalized = sourceProvider(provider);
+  if (!normalized) {
+    throw new FleetSourceCreateError(
+      "options provider must be a supported agent provider"
+    );
+  }
+  return normalized;
 }
 
 function comparablePath(value: string): string {
@@ -105,7 +213,8 @@ function validateTargetHints(
 function resolveSourceTarget(
   db: Database.Database,
   draft: FleetSourceDraftPlanInput,
-  options: FleetSourceCreateOptions
+  options: FleetSourceCreateOptions,
+  defaultBranch: (workingDirectory: string) => string
 ): ResolvedSourceTarget {
   const optionRepoId = optionalString(options.repoId);
   const optionProjectId = optionalString(options.projectId);
@@ -158,6 +267,8 @@ function resolveSourceTarget(
       projectId: null,
       workingDirectory: repo.repo_path,
       baseBranch: repo.base_branch,
+      provider: sourceProvider(repo.agent_type),
+      model: optionalString(repo.default_model),
       label: `registered repository ${repoId}`,
     };
     validateTargetHints(draft, target, repo.repo_slug);
@@ -203,7 +314,9 @@ function resolveSourceTarget(
     repoId: null,
     projectId: project.id,
     workingDirectory: project.working_directory,
-    baseBranch: "main",
+    baseBranch: defaultBranch(project.working_directory),
+    provider: sourceProvider(project.agent_type),
+    model: optionalString(project.default_model),
     label: `registered project ${project.id}`,
   };
   validateTargetHints(draft, target, null);
@@ -217,8 +330,14 @@ function resolveSourceTarget(
  */
 export function createFleetRunFromSource(
   input: unknown,
-  actor = "operator"
+  actor = "operator",
+  overrides: Partial<FleetSourceServiceDeps> = {}
 ): { run: FleetRunDetailDto } | { error: string; status?: number } {
+  const runtime = sourceServiceDeps(overrides);
+  const safeActor =
+    redactAndCapFleetText(actor, 80 * 4)
+      .text.trim()
+      .slice(0, 80) || "operator";
   const payload = plainRecord(input) as FleetSourceCreatePayload | null;
   if (!payload || !("source" in payload)) {
     return { error: "source is required", status: 400 };
@@ -227,13 +346,29 @@ export function createFleetRunFromSource(
     return { error: "options must be an object", status: 400 };
   }
 
-  const adapted = adaptFleetSource(payload.source);
+  const adapted = adaptFleetSource(sanitizeSourceProse(payload.source));
   if (!adapted.ok) {
     return {
       error: adapted.errors.map((issue) => issue.message).join("; "),
       status: 400,
     };
   }
+
+  const unsafeLineageIdentity = [
+    adapted.draft.provenance.sourceId,
+    ...adapted.draft.tasks.flatMap((task) => [
+      task.id,
+      task.sourceRef,
+      task.sourceIssueId ?? null,
+    ]),
+  ].some(containsCredentialShapedText);
+  if (unsafeLineageIdentity) {
+    return {
+      error: "source lineage identity contains credential-shaped text",
+      status: 400,
+    };
+  }
+  const sourceName = sanitizedLineageName(adapted.draft.provenance.sourceName);
 
   let executable;
   try {
@@ -251,10 +386,73 @@ export function createFleetRunFromSource(
   const options = payload.options ?? {};
   try {
     const db = getDb();
-    const target = resolveSourceTarget(db, adapted.draft, options);
+    const target = resolveSourceTarget(
+      db,
+      adapted.draft,
+      options,
+      runtime.defaultBranch
+    );
+    const requestedProvider = optionProvider(options.provider);
+    const requestedModel = optionalString(options.model);
+    const sourceDefault = adapted.draft.tasks.find((task) => task.provider);
+    const preferences: Array<{
+      provider: FleetSourceProvider;
+      model: string | null;
+    }> = [];
+    if (requestedProvider) {
+      preferences.push({
+        provider: requestedProvider,
+        model:
+          requestedModel ??
+          (sourceDefault?.provider === requestedProvider
+            ? sourceDefault.model
+            : target.provider === requestedProvider
+              ? target.model
+              : null),
+      });
+    }
+    if (sourceDefault?.provider) {
+      preferences.push({
+        provider: sourceDefault.provider,
+        model: requestedProvider
+          ? sourceDefault.model
+          : (requestedModel ?? sourceDefault.model),
+      });
+    }
+    if (target.provider) {
+      preferences.push({
+        provider: target.provider,
+        model:
+          !requestedProvider && !sourceDefault
+            ? (requestedModel ?? target.model)
+            : target.model,
+      });
+    }
+    const installedProviders = runtime.detectInstalledProviders();
+    const installed = new Set(installedProviders);
+    const preference =
+      preferences.find((candidate) => installed.has(candidate.provider)) ??
+      preferences[0] ??
+      null;
+    let allocated;
+    try {
+      allocated = allocateFleetSourcePlan(executable, {
+        availableProviders: installedProviders,
+        preferredProvider: preference?.provider ?? null,
+        preferredModel: preference?.model ?? null,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "no installed agent provider is available"
+      ) {
+        throw new FleetSourceCreateError(error.message, 409);
+      }
+      throw error;
+    }
     const boundExecutable = {
-      ...executable,
-      tasks: executable.tasks.map((task) => ({
+      ...allocated.plan,
+      tasks: allocated.plan.tasks.map((task) => ({
         ...task,
         workingDirectory: target.workingDirectory,
         baseBranch: target.baseBranch,
@@ -266,18 +464,12 @@ export function createFleetRunFromSource(
       goal: adapted.draft.goal,
       repoId: target.repoId,
       projectId: target.projectId,
-      provider:
-        optionalString(options.provider) ??
-        adapted.draft.tasks.find((task) => task.provider)?.provider ??
-        "claude",
-      model:
-        optionalString(options.model) ??
-        adapted.draft.tasks.find((task) => task.model)?.model ??
-        null,
+      provider: allocated.provider,
+      model: allocated.model,
     };
 
     return db.transaction(() => {
-      const created = createDraftFleetRun(createInput, actor);
+      const created = createDraftFleetRun(createInput, safeActor);
       if ("error" in created) throw new FleetSourceCreateError(created.error);
       const runId = created.run.run.id;
       const sourceUpdate = db
@@ -289,7 +481,7 @@ export function createFleetRunFromSource(
         .run(
           adapted.draft.provenance.kind,
           adapted.draft.provenance.sourceId,
-          adapted.draft.provenance.sourceName,
+          sourceName,
           runId
         );
       if (sourceUpdate.changes !== 1) {
@@ -301,7 +493,7 @@ export function createFleetRunFromSource(
       const ingested = ingestGeneratedFleetRunPlan(created.run.run.id, {
         ...boundExecutable,
         source: "operator",
-        actor,
+        actor: safeActor,
       });
       if ("error" in ingested) {
         throw new FleetSourceCreateError(
@@ -351,11 +543,11 @@ export function createFleetRunFromSource(
       queries.createFleetEvent(db).run(
         runId,
         "source_imported",
-        actor,
+        safeActor,
         JSON.stringify({
           kind: adapted.draft.provenance.kind,
           sourceId: adapted.draft.provenance.sourceId,
-          sourceName: adapted.draft.provenance.sourceName,
+          sourceName,
           taskCount: adapted.draft.tasks.length,
           repoId: target.repoId,
           projectId: target.projectId,

@@ -4,6 +4,13 @@ import childProcess from "node:child_process";
 // global `self` at module load. Provide it in the Node test environment.
 (globalThis as any).self = globalThis;
 
+// Application startup explicitly closes this gate before Fleet recovery. Unit
+// tests run isolated runtimes with in-memory databases, so default their worker
+// to the post-recovery state; recovery-specific tests override it explicitly.
+(
+  globalThis as typeof globalThis & { __stoaFleetSchedulerReady?: boolean }
+).__stoaFleetSchedulerReady = true;
+
 const originalFork = childProcess.fork as (...args: unknown[]) => unknown;
 
 childProcess.fork = ((...args: unknown[]) => {

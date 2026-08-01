@@ -1,11 +1,22 @@
-import { detectSandboxTool } from "@/lib/sandbox/detect";
+import { resolve } from "path";
 import type { ApprovalMode } from "@/lib/sandbox/types";
 import type Database from "better-sqlite3";
 import { queries, type Session } from "@/lib/db";
 import { WorkerSpawnError } from "@/lib/orchestration";
 import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/registry";
+import { expandHome, isWindows } from "@/lib/platform";
 import { parseFleetAutomationPolicy } from "./automation-policy";
+import { fleetStrongConfinementAvailable } from "./confinement";
 import type { FleetArtifactReadResult } from "./artifacts";
+import { decideFleetAuxiliaryLaunchRetry } from "./auxiliary-retry";
+import {
+  fleetProviderRetryIsDue,
+  fleetProviderRetryNotBefore,
+} from "./backoff";
+import {
+  allocateFleetAuxiliaryProvider,
+  type FleetAgentProviderId,
+} from "./auxiliary-provider";
 import {
   collectFleetGitState,
   compareFleetPathClaims,
@@ -16,7 +27,14 @@ import {
   fleetPlanReviewerApprovalMode,
   type FleetPlanReviewFinding,
 } from "./plan-review";
-import { boundedFleetArtifactJson } from "./report-runtime";
+import { redactAndCapFleetText } from "./redaction";
+import { insertFleetArtifact } from "./durable-write";
+import { clearFleetProviderCooldown } from "./resource-runtime";
+import {
+  activateFleetPaidSession,
+  finishFleetPaidSession,
+  reserveFleetPaidSession,
+} from "./session-admission";
 import {
   buildFleetTaskFixPrompt,
   FLEET_TASK_REVIEW_RESULT_MAX_BYTES,
@@ -27,11 +45,14 @@ import {
   type TaskFixCandidate,
   type TaskFixContract,
 } from "./task-review-contract";
-import type { FleetTaskFixRow } from "./types";
+import type { FleetRunRow, FleetTaskFixRow } from "./types";
+import { assertFleetLaunchReady } from "./recovery-gate";
+import { isFleetUnattendedProvider } from "./provider-eligibility";
 
 const FIX_TIMEOUT_MS = 30 * 60 * 1_000;
 export const FLEET_TASK_FIX_SPAWN_RECOVERY_GRACE_MS = 90 * 1_000;
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+const ACTIVE_FLEET_RUN_STATUSES = new Set(["running", "reviewing", "merging"]);
 
 interface FixSpawnResult {
   id: string;
@@ -42,6 +63,7 @@ export interface FleetTaskFixRuntimeDeps {
   now: () => Date;
   randomId: () => string;
   randomNonce: () => string;
+  installedProviders: () => FleetAgentProviderId[];
   prepareResultPath: (input: {
     kind: "reviews" | "fixes";
     runId: string;
@@ -74,10 +96,13 @@ export interface FleetTaskFixRuntimeDeps {
     prompt: string;
     persistedPrompt: string;
     approvalMode: ApprovalMode;
+    provider: FleetAgentProviderId;
+    model: string | null;
   }) => Promise<FixSpawnResult>;
 }
 
 function transaction<T>(db: Database.Database, callback: () => T): T {
+  if (db.inTransaction) return callback();
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = callback();
@@ -93,11 +118,14 @@ function event(
   db: Database.Database,
   runId: string,
   type: string,
-  payload: unknown
+  payload: unknown,
+  createdAt: string
 ): void {
   queries
     .createFleetEvent(db)
-    .run(runId, type, "fleet-task-review", JSON.stringify(payload));
+    .run(runId, type, "fleet-task-review", JSON.stringify(payload), {
+      createdAt,
+    });
 }
 
 function artifact(
@@ -120,50 +148,166 @@ function artifact(
     nowIso: string;
   }
 ): void {
-  const bounded = boundedFleetArtifactJson({
-    schemaVersion: 1,
-    metadata: input.metadata,
-    body: input.body,
-  });
-  db.prepare(
-    `INSERT OR IGNORE INTO fleet_artifacts
-     (id, fleet_run_id, task_id, worker_id, attempt, plan_hash, base_sha,
-      head_sha, content_hash, metadata_json, byte_count, artifact_type,
-      title, body, severity, actor, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    input.id,
-    input.runId,
-    input.taskId,
-    input.workerId ?? null,
-    input.attempt,
-    input.planHash,
-    input.baseSha,
-    input.headSha,
-    bounded.contentHash,
-    JSON.stringify(input.metadata),
-    bounded.bytes,
-    input.artifactType,
-    input.title.slice(0, 240),
-    input.body.slice(0, 64 * 1024),
-    input.severity,
-    input.actor,
-    input.nowIso
+  const title = redactAndCapFleetText(input.title, 240);
+  const body = redactAndCapFleetText(input.body, 64 * 1024);
+  insertFleetArtifact(
+    db,
+    {
+      id: input.id,
+      runId: input.runId,
+      taskId: input.taskId,
+      workerId: input.workerId ?? null,
+      attempt: input.attempt,
+      planHash: input.planHash,
+      baseSha: input.baseSha,
+      headSha: input.headSha,
+      metadataJson: JSON.stringify(input.metadata),
+      artifactType: input.artifactType,
+      title: title.text,
+      body: body.text,
+      severity: input.severity,
+      actor: input.actor,
+      createdAt: input.nowIso,
+    },
+    { orIgnore: true }
   );
 }
 
-function provider(value: string): ProviderId {
+function provider(value: string): FleetAgentProviderId {
   if (!PROVIDER_IDS.includes(value as ProviderId) || value === "shell") {
     throw new Error(`unsupported Fleet automatic fixer provider: ${value}`);
   }
-  return value as ProviderId;
+  return value as FleetAgentProviderId;
+}
+
+function preferredFixerModel(candidate: TaskFixCandidate): string | null {
+  if (candidate.task_model) return candidate.task_model;
+  return !candidate.task_agent_type ||
+    candidate.task_agent_type === candidate.run_provider
+    ? candidate.run_model
+    : null;
+}
+
+function repositoryResourceKey(
+  run: Pick<FleetRunRow, "repo_id" | "project_id">,
+  repoPath: string
+): string {
+  if (run.repo_id) return run.repo_id;
+  if (run.project_id) return run.project_id;
+  const normalized = resolve(expandHome(repoPath)).replace(/\\/g, "/");
+  return `path:${isWindows ? normalized.toLowerCase() : normalized}`;
+}
+
+function sessionOwnedByAnotherFleetAccount(
+  db: Database.Database,
+  input: { runId: string; ownerId: string; sessionId: string }
+): boolean {
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 FROM fleet_cost_accounts
+         WHERE session_id = ?
+           AND NOT (
+             fleet_run_id = ? AND owner_type = 'fixer' AND owner_id = ?
+           )
+         LIMIT 1`
+      )
+      .get(input.sessionId, input.runId, input.ownerId)
+  );
+}
+
+function fixerSessionWasActivated(
+  db: Database.Database,
+  row: FleetTaskFixRow
+): boolean {
+  const account = db
+    .prepare(
+      `SELECT session_id FROM fleet_cost_accounts
+       WHERE fleet_run_id = ? AND owner_type = 'fixer' AND owner_id = ?`
+    )
+    .get(row.fleet_run_id, row.request_id) as
+    { session_id: string | null } | undefined;
+  return Boolean(account?.session_id);
+}
+
+function fixerProviderError(
+  row: FleetTaskFixRow,
+  session?: Session
+): string | null {
+  const recoveredProvider = session?.agent_type?.trim() ?? "";
+  const persistedProvider = row.provider?.trim() || recoveredProvider;
+  if (
+    !isFleetUnattendedProvider(persistedProvider) ||
+    (session &&
+      (!isFleetUnattendedProvider(recoveredProvider) ||
+        recoveredProvider !== persistedProvider))
+  ) {
+    return "persisted automatic fixer provider cannot run unattended";
+  }
+  return null;
+}
+
+async function rejectIneligibleFixerSession(
+  deps: FleetTaskFixRuntimeDeps,
+  row: FleetTaskFixRow,
+  session?: Session
+): Promise<FleetTaskFixRow> {
+  const message = fixerProviderError(row, session);
+  if (!message) return row;
+  const sessionId = session?.id ?? row.fixer_session_id;
+  const foreignSessionOwner = Boolean(
+    sessionId &&
+    sessionOwnedByAnotherFleetAccount(deps.db, {
+      runId: row.fleet_run_id,
+      ownerId: row.request_id,
+      sessionId,
+    })
+  );
+  if (session && !foreignSessionOwner) {
+    deps.db
+      .prepare(
+        `UPDATE fleet_task_fixes SET fixer_session_id = ?, updated_at = ?
+         WHERE id = ? AND state = ? AND request_id = ?`
+      )
+      .run(
+        session.id,
+        deps.now().toISOString(),
+        row.id,
+        row.state,
+        row.request_id
+      );
+  }
+  const latest = (deps.db
+    .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
+    .get(row.id) ?? row) as FleetTaskFixRow;
+  if (!foreignSessionOwner && sessionId) {
+    const stopped = await deps
+      .stopSession(sessionId, "failed")
+      .catch(() => false);
+    if (!stopped && (await deps.sessionExists(deps.db, sessionId)))
+      return latest;
+  }
+  if (
+    !foreignSessionOwner &&
+    latest.result_path &&
+    !(await deps.removeResult(latest.result_path))
+  ) {
+    return latest;
+  }
+  recordFleetTaskFixFailure(deps, { ...latest, result_path: "" }, message, {
+    sessionCreated:
+      !foreignSessionOwner && fixerSessionWasActivated(deps.db, latest),
+  });
+  return (deps.db
+    .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
+    .get(row.id) ?? latest) as FleetTaskFixRow;
 }
 
 function approvalMode(policy: TaskFixContract["policy"]): ApprovalMode {
   const sandboxEnabled = process.env.STOA_SANDBOX === "1";
   return fleetPlanReviewerApprovalMode(policy, {
     sandboxEnabled,
-    confinementAvailable: sandboxEnabled && detectSandboxTool() !== null,
+    confinementAvailable: fleetStrongConfinementAvailable(),
   });
 }
 
@@ -211,7 +355,7 @@ function loadFixContract(
     return { error: "automatic fix task identity was superseded" };
   }
   if (
-    candidate.run_status !== "running" ||
+    !ACTIVE_FLEET_RUN_STATUSES.has(candidate.run_status) ||
     candidate.desired_state !== "running"
   ) {
     return { error: "automatic fix requires an actively running Fleet run" };
@@ -255,10 +399,12 @@ function loadFixContract(
   if (authorization?.status !== "authorized") {
     return { error: "automatic fix authorization is no longer active" };
   }
-  let fixerProvider: ProviderId;
+  let fixerProvider: FleetAgentProviderId;
   try {
     fixerProvider = provider(
-      candidate.task_agent_type ?? candidate.run_provider
+      row.request_id && row.provider
+        ? row.provider
+        : (candidate.task_agent_type ?? candidate.run_provider)
     );
   } catch (error) {
     return {
@@ -321,19 +467,30 @@ function validateGitState(
 export function recordFleetTaskFixFailure(
   deps: FleetTaskFixRuntimeDeps,
   row: FleetTaskFixRow,
-  message: string
+  message: string,
+  options: {
+    launchFailureCount?: number;
+    sessionCreated?: boolean;
+  } = {}
 ): boolean {
   const nowIso = deps.now().toISOString();
-  const boundedMessage = message.slice(0, 1_000);
+  const boundedMessage = redactAndCapFleetText(message, 1_000).text;
   const changed = transaction(deps.db, () => {
     const fixChanged = deps.db
       .prepare(
         `UPDATE fleet_task_fixes
          SET state = 'failed', error = ?, completed_at = COALESCE(completed_at, ?),
-             updated_at = ?
-         WHERE id = ? AND state IN ('pending','spawning','running')`
+             launch_failure_count = COALESCE(?, launch_failure_count),
+             retry_not_before = NULL, updated_at = ?
+         WHERE id = ? AND state IN ('pending','spawning','running','cleanup_pending')`
       )
-      .run(boundedMessage, nowIso, nowIso, row.id);
+      .run(
+        boundedMessage,
+        nowIso,
+        options.launchFailureCount ?? null,
+        nowIso,
+        row.id
+      );
     if (fixChanged.changes !== 1) return false;
     deps.db
       .prepare(
@@ -375,18 +532,183 @@ export function recordFleetTaskFixFailure(
       actor: "fleet-task-fixer",
       nowIso,
     });
-    event(deps.db, row.fleet_run_id, "task_fix_failed", {
-      fixId: row.id,
-      taskId: row.task_id,
-      attempt: row.attempt,
-      round: row.round,
-      oldHeadSha: row.old_head_sha,
-      error: boundedMessage,
+    event(
+      deps.db,
+      row.fleet_run_id,
+      "task_fix_failed",
+      {
+        fixId: row.id,
+        taskId: row.task_id,
+        attempt: row.attempt,
+        round: row.round,
+        oldHeadSha: row.old_head_sha,
+        error: boundedMessage,
+      },
+      nowIso
+    );
+    finishFleetPaidSession(deps.db, {
+      runId: row.fleet_run_id,
+      ownerType: "fixer",
+      ownerId: row.request_id,
+      sessionCreated: options.sessionCreated ?? Boolean(row.fixer_session_id),
+      now: deps.now(),
     });
     return true;
   });
   if (row.result_path) void deps.removeResult(row.result_path);
   return changed;
+}
+
+function queueFleetTaskFixLaunchRetry(
+  deps: FleetTaskFixRuntimeDeps,
+  row: FleetTaskFixRow,
+  input: { failureCount: number; retryNotBefore: string; error: string }
+): boolean {
+  const nowIso = deps.now().toISOString();
+  const safeError = redactAndCapFleetText(input.error, 1_000).text;
+  return transaction(deps.db, () => {
+    const changed = deps.db
+      .prepare(
+        `UPDATE fleet_task_fixes
+         SET state = 'cleanup_pending', error = ?, launch_failure_count = ?,
+             retry_not_before = ?, updated_at = ?
+         WHERE id = ? AND state = 'spawning'`
+      )
+      .run(safeError, input.failureCount, input.retryNotBefore, nowIso, row.id);
+    if (changed.changes !== 1) return false;
+    deps.db
+      .prepare(
+        `UPDATE fleet_tasks SET fixer_session_id = NULL, updated_at = ?
+         WHERE id = ? AND fleet_run_id = ? AND status = 'fixing'
+           AND active_fix_id = ?`
+      )
+      .run(nowIso, row.task_id, row.fleet_run_id, row.id);
+    event(
+      deps.db,
+      row.fleet_run_id,
+      "task_fix_retry_scheduled",
+      {
+        fixId: row.id,
+        taskId: row.task_id,
+        round: row.round,
+        failureCount: input.failureCount,
+        retryNotBefore: input.retryNotBefore,
+      },
+      nowIso
+    );
+    return true;
+  });
+}
+
+async function cleanupFleetTaskFixLaunchRetry(
+  deps: FleetTaskFixRuntimeDeps,
+  row: FleetTaskFixRow
+): Promise<boolean> {
+  if (row.state !== "cleanup_pending" || !row.retry_not_before) return false;
+  const foreignSessionOwner = Boolean(
+    row.fixer_session_id &&
+    sessionOwnedByAnotherFleetAccount(deps.db, {
+      runId: row.fleet_run_id,
+      ownerId: row.request_id,
+      sessionId: row.fixer_session_id,
+    })
+  );
+  if (foreignSessionOwner) return false;
+  if (row.fixer_session_id) {
+    const stopped = await deps
+      .stopSession(row.fixer_session_id, "failed")
+      .catch(() => false);
+    if (!stopped && (await deps.sessionExists(deps.db, row.fixer_session_id))) {
+      return false;
+    }
+  }
+  if (row.result_path && !(await deps.removeResult(row.result_path))) {
+    return false;
+  }
+  const nowIso = deps.now().toISOString();
+  return transaction(deps.db, () => {
+    finishFleetPaidSession(deps.db, {
+      runId: row.fleet_run_id,
+      ownerType: "fixer",
+      ownerId: row.request_id,
+      sessionCreated: Boolean(row.fixer_session_id),
+      now: deps.now(),
+    });
+    const changed = deps.db
+      .prepare(
+        `UPDATE fleet_task_fixes
+         SET state = 'pending', provider = NULL, model = NULL,
+             request_id = '', nonce_hash = '', result_path = '',
+             fixer_session_id = '', started_at = NULL, deadline_at = NULL,
+             completed_at = NULL, updated_at = ?
+         WHERE id = ? AND state = 'cleanup_pending'
+           AND retry_not_before = ?`
+      )
+      .run(nowIso, row.id, row.retry_not_before);
+    if (changed.changes === 1) {
+      event(
+        deps.db,
+        row.fleet_run_id,
+        "task_fix_retry_ready",
+        {
+          fixId: row.id,
+          taskId: row.task_id,
+          round: row.round,
+          failureCount: row.launch_failure_count,
+          retryNotBefore: row.retry_not_before,
+        },
+        nowIso
+      );
+    }
+    return changed.changes === 1;
+  });
+}
+
+/**
+ * Upgrade/restart repair for terminal rows written before settlement became
+ * part of the same transaction as the terminal state. Both cost and runtime
+ * release functions are idempotent, so repeated passes are safe.
+ */
+export function reconcileFleetTaskFixSettlements(
+  deps: FleetTaskFixRuntimeDeps,
+  limit = 100
+): number {
+  const rows = deps.db
+    .prepare(
+      `SELECT f.* FROM fleet_task_fixes f
+       WHERE f.state IN ('completed','failed') AND f.request_id <> ''
+         AND (
+           EXISTS (
+             SELECT 1 FROM fleet_cost_accounts account
+             WHERE account.fleet_run_id = f.fleet_run_id
+               AND account.owner_type = 'fixer'
+               AND account.owner_id = f.request_id
+               AND account.reservation_released_at IS NULL
+           ) OR EXISTS (
+             SELECT 1 FROM fleet_runtime_leases lease
+             WHERE lease.owner_type = 'fixer'
+               AND lease.owner_id = f.request_id
+               AND lease.status = 'reserved'
+           )
+         )
+       ORDER BY f.completed_at ASC, f.updated_at ASC, f.id ASC
+       LIMIT ?`
+    )
+    .all(Math.min(Math.max(limit, 1), 500)) as FleetTaskFixRow[];
+  let settled = 0;
+  for (const row of rows) {
+    transaction(deps.db, () => {
+      finishFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "fixer",
+        ownerId: row.request_id,
+        sessionCreated: Boolean(row.fixer_session_id),
+        now: deps.now(),
+      });
+    });
+    settled += 1;
+  }
+  return settled;
 }
 
 export async function recoverSpawningFleetTaskFix(
@@ -402,11 +724,96 @@ export async function recoverSpawningFleetTaskFix(
     )
     .get(row.worktree_path, row.result_path) as Session | undefined;
   if (session) {
+    if (fixerProviderError(row, session)) {
+      return rejectIneligibleFixerSession(deps, row, session);
+    }
+    let selectedProvider: FleetAgentProviderId;
+    let selectedModel = row.model;
+    try {
+      const recoveredProvider = provider(session.agent_type ?? "");
+      selectedProvider = provider(row.provider ?? recoveredProvider);
+      if (selectedProvider !== recoveredProvider) {
+        throw new Error("recovered provider does not match persisted binding");
+      }
+      if (!row.provider) {
+        selectedModel = session.model?.trim() || null;
+        deps.db
+          .prepare(
+            `UPDATE fleet_task_fixes SET provider = ?, model = ?, updated_at = ?
+             WHERE id = ? AND state = 'spawning' AND request_id = ?
+               AND provider IS NULL`
+          )
+          .run(
+            selectedProvider,
+            selectedModel,
+            deps.now().toISOString(),
+            row.id,
+            row.request_id
+          );
+      }
+    } catch {
+      recordFleetTaskFixFailure(
+        deps,
+        row,
+        "persisted automatic fixer provider is invalid"
+      );
+      return (deps.db
+        .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
+        .get(row.id) ?? row) as FleetTaskFixRow;
+    }
+    const activated = activateFleetPaidSession(deps.db, {
+      runId: row.fleet_run_id,
+      ownerType: "fixer",
+      ownerId: row.request_id,
+      taskId: row.task_id,
+      session,
+      provider: selectedProvider,
+      model: selectedModel,
+      now: deps.now(),
+    });
+    if (!activated) {
+      deps.db
+        .prepare(
+          `UPDATE fleet_task_fixes SET fixer_session_id = ?, updated_at = ?
+           WHERE id = ? AND state = 'spawning' AND request_id = ?`
+        )
+        .run(session.id, deps.now().toISOString(), row.id, row.request_id);
+      const foreignSessionOwner = sessionOwnedByAnotherFleetAccount(deps.db, {
+        runId: row.fleet_run_id,
+        ownerId: row.request_id,
+        sessionId: session.id,
+      });
+      if (!foreignSessionOwner) {
+        const stopped = await deps
+          .stopSession(session.id, "failed")
+          .catch(() => false);
+        if (!stopped && (await deps.sessionExists(deps.db, session.id))) {
+          return (deps.db
+            .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
+            .get(row.id) ?? row) as FleetTaskFixRow;
+        }
+      }
+      const latest = deps.db
+        .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
+        .get(row.id) as FleetTaskFixRow;
+      recordFleetTaskFixFailure(
+        deps,
+        latest,
+        foreignSessionOwner
+          ? "recovered automatic fixer session is owned by another Fleet account"
+          : "recovered automatic fixer admission is no longer valid",
+        { sessionCreated: false }
+      );
+      return (deps.db
+        .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
+        .get(row.id) ?? latest) as FleetTaskFixRow;
+    }
     transaction(deps.db, () => {
       const changed = deps.db
         .prepare(
           `UPDATE fleet_task_fixes
-           SET state = 'running', fixer_session_id = ?, updated_at = ?
+           SET state = 'running', fixer_session_id = ?,
+               launch_failure_count = 0, retry_not_before = NULL, updated_at = ?
            WHERE id = ? AND state = 'spawning' AND request_id = ?`
         )
         .run(session.id, deps.now().toISOString(), row.id, row.request_id);
@@ -419,6 +826,7 @@ export async function recoverSpawningFleetTaskFix(
           .run(session.id, deps.now().toISOString(), row.task_id, row.id);
       }
     });
+    clearFleetProviderCooldown(deps.db, selectedProvider);
   }
   return (deps.db
     .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
@@ -430,6 +838,7 @@ async function startFix(
   contract: TaskFixContract,
   row: FleetTaskFixRow
 ): Promise<void> {
+  if (!fleetProviderRetryIsDue(row.retry_not_before, deps.now())) return;
   const candidate = contract.candidate;
   let before: FleetGitState;
   try {
@@ -476,34 +885,148 @@ async function startFix(
     requestId,
   });
   const started = deps.now();
-  const claimed = deps.db
-    .prepare(
-      `UPDATE fleet_task_fixes
-       SET state = 'spawning', request_id = ?, nonce_hash = ?, result_path = ?,
-           started_at = ?, deadline_at = ?, error = NULL, updated_at = ?
-       WHERE id = ? AND state = 'pending' AND old_head_sha = ?`
-    )
-    .run(
-      requestId,
-      // The plaintext nonce is delivered once and never persisted.
-      hashFleetTaskRuntimeNonce(nonce),
-      resultPath,
-      started.toISOString(),
-      new Date(started.getTime() + FIX_TIMEOUT_MS).toISOString(),
-      started.toISOString(),
-      row.id,
-      row.old_head_sha
+  const run = queries.getFleetRun(deps.db).get(row.fleet_run_id) as
+    FleetRunRow | undefined;
+  if (!run) {
+    recordFleetTaskFixFailure(
+      deps,
+      row,
+      "Fleet run disappeared before fixer launch"
     );
-  if (claimed.changes !== 1) return;
-  const findings = parseStoredFindings(row.findings_json);
-  event(deps.db, row.fleet_run_id, "task_fix_spawn_requested", {
-    fixId: row.id,
-    taskId: row.task_id,
-    attempt: row.attempt,
-    round: row.round,
-    requestId,
-    oldHeadSha: row.old_head_sha,
+    return;
+  }
+  const preferredProvider = provider(
+    candidate.task_agent_type ?? candidate.run_provider
+  );
+  let selection;
+  try {
+    selection = allocateFleetAuxiliaryProvider({
+      availableProviders: deps.installedProviders(),
+      preferredProvider,
+      preferredModel: preferredFixerModel(candidate),
+    });
+  } catch {
+    recordFleetTaskFixFailure(
+      deps,
+      row,
+      "automatic fixer requires an installed agent provider"
+    );
+    return;
+  }
+  const admissionAndClaim = transaction(deps.db, () => {
+    const assigned = deps.db
+      .prepare(
+        `UPDATE fleet_task_fixes SET provider = ?, model = ?, updated_at = ?
+         WHERE id = ? AND state = 'pending' AND request_id = ''
+           AND old_head_sha = ?`
+      )
+      .run(
+        selection.provider,
+        selection.model,
+        started.toISOString(),
+        row.id,
+        row.old_head_sha
+      );
+    if (assigned.changes !== 1) {
+      return {
+        admission: { admitted: true as const },
+        claimed: false,
+      };
+    }
+    const admission = reserveFleetPaidSession(deps.db, {
+      run,
+      ownerType: "fixer",
+      ownerId: requestId,
+      taskId: row.task_id,
+      taskType: "fix",
+      provider: selection.provider,
+      model: selection.model,
+      repositoryKey: repositoryResourceKey(run, row.project_path!),
+      now: started,
+      leaseExpiresAt: new Date(
+        started.getTime() + FLEET_TASK_FIX_SPAWN_RECOVERY_GRACE_MS
+      ).toISOString(),
+    });
+    if (!admission.admitted) return { admission, claimed: false };
+    const claimed = deps.db
+      .prepare(
+        `UPDATE fleet_task_fixes
+         SET state = 'spawning', request_id = ?, nonce_hash = ?, result_path = ?,
+             started_at = ?, deadline_at = ?, retry_not_before = NULL,
+             error = NULL, updated_at = ?
+         WHERE id = ? AND state = 'pending' AND request_id = ''
+           AND old_head_sha = ? AND provider = ? AND model IS ?`
+      )
+      .run(
+        requestId,
+        // The plaintext nonce is delivered once and never persisted.
+        hashFleetTaskRuntimeNonce(nonce),
+        resultPath,
+        started.toISOString(),
+        new Date(started.getTime() + FIX_TIMEOUT_MS).toISOString(),
+        started.toISOString(),
+        row.id,
+        row.old_head_sha,
+        selection.provider,
+        selection.model
+      );
+    if (claimed.changes !== 1) {
+      finishFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "fixer",
+        ownerId: requestId,
+        sessionCreated: false,
+        now: deps.now(),
+      });
+      return { admission, claimed: false };
+    }
+    return { admission, claimed: true };
   });
+  if (!admissionAndClaim.admission.admitted) {
+    await deps.removeResult(resultPath);
+    if (admissionAndClaim.admission.reason === "budget") {
+      recordFleetTaskFixFailure(
+        deps,
+        row,
+        "automatic fixer budget admission was blocked"
+      );
+      return;
+    }
+    const retryNotBefore =
+      admissionAndClaim.admission.retryAt ??
+      fleetProviderRetryNotBefore(started, 1);
+    deps.db
+      .prepare(
+        `UPDATE fleet_task_fixes SET retry_not_before = ?, error = ?,
+             updated_at = ?
+         WHERE id = ? AND state = 'pending' AND request_id = ''`
+      )
+      .run(
+        retryNotBefore,
+        "automatic fixer is waiting for runtime capacity",
+        started.toISOString(),
+        row.id
+      );
+    return;
+  }
+  if (!admissionAndClaim.claimed) return;
+  const findings = parseStoredFindings(row.findings_json);
+  event(
+    deps.db,
+    row.fleet_run_id,
+    "task_fix_spawn_requested",
+    {
+      fixId: row.id,
+      taskId: row.task_id,
+      attempt: row.attempt,
+      round: row.round,
+      requestId,
+      oldHeadSha: row.old_head_sha,
+      provider: selection.provider,
+      model: selection.model,
+    },
+    started.toISOString()
+  );
   let spawned: FixSpawnResult | null = null;
   try {
     spawned = await deps.spawnFix({
@@ -524,12 +1047,34 @@ async function startFix(
         findings,
       }),
       approvalMode: mode,
+      provider: selection.provider,
+      model: selection.model,
     });
+    const session = queries.getSession(deps.db).get(spawned.id) as
+      Session | undefined;
+    if (
+      session &&
+      !activateFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "fixer",
+        ownerId: requestId,
+        taskId: row.task_id,
+        session,
+        provider: selection.provider,
+        model: selection.model,
+        now: deps.now(),
+      })
+    ) {
+      throw new Error(
+        "fixer paid-session admission was invalidated before activation"
+      );
+    }
     const updated = transaction(deps.db, () => {
       const fixChanged = deps.db
         .prepare(
           `UPDATE fleet_task_fixes
-           SET state = 'running', fixer_session_id = ?, updated_at = ?
+           SET state = 'running', fixer_session_id = ?,
+               launch_failure_count = 0, retry_not_before = NULL, updated_at = ?
            WHERE id = ? AND state = 'spawning' AND request_id = ?`
         )
         .run(spawned!.id, deps.now().toISOString(), row.id, requestId);
@@ -555,41 +1100,108 @@ async function startFix(
     });
     if (!updated) {
       await deps.stopSession(spawned.id, "failed").catch(() => false);
+      finishFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "fixer",
+        ownerId: requestId,
+        sessionCreated: true,
+        now: deps.now(),
+      });
       return;
     }
-    event(deps.db, row.fleet_run_id, "task_fix_started", {
-      fixId: row.id,
-      taskId: row.task_id,
-      attempt: row.attempt,
-      round: row.round,
-      fixerSessionId: spawned.id,
-      oldHeadSha: row.old_head_sha,
-    });
+    clearFleetProviderCooldown(deps.db, selection.provider);
+    event(
+      deps.db,
+      row.fleet_run_id,
+      "task_fix_started",
+      {
+        fixId: row.id,
+        taskId: row.task_id,
+        attempt: row.attempt,
+        round: row.round,
+        fixerSessionId: spawned.id,
+        oldHeadSha: row.old_head_sha,
+        provider: selection.provider,
+        model: selection.model,
+      },
+      deps.now().toISOString()
+    );
   } catch (error) {
     const sessionId =
       spawned?.id ??
       (error instanceof WorkerSpawnError ? error.sessionId : null) ??
       "";
+    const foreignSessionOwner = Boolean(
+      sessionId &&
+      sessionOwnedByAnotherFleetAccount(deps.db, {
+        runId: row.fleet_run_id,
+        ownerId: requestId,
+        sessionId,
+      })
+    );
     deps.db
       .prepare(
         `UPDATE fleet_task_fixes SET fixer_session_id = ?, updated_at = ?
          WHERE id = ? AND state = 'spawning' AND request_id = ?`
       )
       .run(sessionId, deps.now().toISOString(), row.id, requestId);
-    if (sessionId) {
-      const stopped = await deps
-        .stopSession(sessionId, "failed")
-        .catch(() => false);
-      if (!stopped) return;
+    const recoveredSession = sessionId
+      ? (queries.getSession(deps.db).get(sessionId) as Session | undefined)
+      : undefined;
+    const ambiguousExternalState =
+      foreignSessionOwner || Boolean(sessionId && !recoveredSession);
+    if (recoveredSession && !foreignSessionOwner) {
+      activateFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "fixer",
+        ownerId: requestId,
+        taskId: row.task_id,
+        session: recoveredSession,
+        provider: selection.provider,
+        model: selection.model,
+        now: deps.now(),
+      });
+    } else if (!sessionId) {
+      finishFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "fixer",
+        ownerId: requestId,
+        sessionCreated: false,
+        now: deps.now(),
+      });
     }
     const latest = deps.db
       .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
       .get(row.id) as FleetTaskFixRow;
-    recordFleetTaskFixFailure(
-      deps,
-      latest,
-      error instanceof Error ? error.message : "automatic fixer failed to start"
-    );
+    const message =
+      error instanceof Error
+        ? error.message
+        : "automatic fixer failed to start";
+    const retry = decideFleetAuxiliaryLaunchRetry(deps.db, {
+      provider: selection.provider,
+      previousFailureCount: latest.launch_failure_count,
+      error,
+      now: deps.now(),
+      safeToRetry: spawned === null && !ambiguousExternalState,
+    });
+    if (retry.retry && retry.retryNotBefore) {
+      queueFleetTaskFixLaunchRetry(deps, latest, {
+        failureCount: retry.failureCount,
+        retryNotBefore: retry.retryNotBefore,
+        error: message,
+      });
+    } else {
+      if (sessionId && !ambiguousExternalState) {
+        const stopped = await deps
+          .stopSession(sessionId, "failed")
+          .catch(() => false);
+        if (!stopped && (await deps.sessionExists(deps.db, sessionId))) return;
+      }
+      recordFleetTaskFixFailure(deps, latest, message, {
+        launchFailureCount: retry.failureCount,
+        sessionCreated: Boolean(recoveredSession) && !ambiguousExternalState,
+      });
+    }
   }
 }
 
@@ -657,7 +1269,7 @@ function finalizeFix(
       row.policy_hash
     ) as Array<{ id: string; lens: string; verdict: string }>;
   const actualClaims = input.gitState.allTouchedPaths;
-  return transaction(deps.db, () => {
+  const finalized = transaction(deps.db, () => {
     deps.db
       .prepare(
         `INSERT INTO fleet_workers
@@ -675,8 +1287,8 @@ function finalizeFix(
         row.fleet_run_id,
         row.task_id,
         row.fixer_session_id,
-        contract.provider,
-        candidate.task_model ?? candidate.run_model,
+        provider(row.provider ?? ""),
+        row.model,
         row.attempt,
         `fix:${row.id}`,
         row.worktree_path,
@@ -732,6 +1344,10 @@ function finalizeFix(
         newHeadSha: input.newHeadSha,
         verificationEvidenceHash: row.verification_evidence_hash,
         policyHash: row.policy_hash,
+        // Automatic fix results have no follow-up channel. Persist the same
+        // explicit empty-list evidence that normal worker reports expose so
+        // merge readiness can fail closed without rejecting valid fix output.
+        followUps: [],
       },
       severity: "info",
       actor: "fleet-task-fixer",
@@ -759,6 +1375,9 @@ function finalizeFix(
         oldHeadSha: row.old_head_sha,
         newHeadSha: input.newHeadSha,
         branchName: input.gitState.currentBranch,
+        // validateGitState has already compared every touched path against
+        // the approved claims before this immutable artifact is written.
+        claimDrift: { hasDrift: false },
       },
       severity: "info",
       actor: "fleet-task-fixer",
@@ -807,7 +1426,8 @@ function finalizeFix(
            AND EXISTS (
              SELECT 1 FROM fleet_runs r
              WHERE r.id = fleet_tasks.fleet_run_id
-               AND r.status = 'running' AND r.desired_state = 'running'
+               AND r.status IN ('running','reviewing','merging')
+               AND r.desired_state = 'running'
                AND r.automation_policy_hash = ?
            )`
       )
@@ -828,29 +1448,49 @@ function finalizeFix(
     if (taskChanged.changes !== 1) {
       throw new Error("automatic fix task changed before exact-head CAS");
     }
-    event(deps.db, row.fleet_run_id, "task_review_resolved_by_fix", {
-      fixId: row.id,
-      taskId: row.task_id,
-      attempt: row.attempt,
-      round: row.round,
-      reviewIds: reviewRows.map((review) => review.id),
-      oldHeadSha: row.old_head_sha,
-      newHeadSha: input.newHeadSha,
-      oldVerificationEvidenceHash: row.verification_evidence_hash,
-      policyHash: row.policy_hash,
-      historicalArtifactsImmutable: true,
-    });
-    event(deps.db, row.fleet_run_id, "task_fix_completed", {
-      fixId: row.id,
-      taskId: row.task_id,
-      attempt: row.attempt,
-      round: row.round,
-      oldHeadSha: row.old_head_sha,
-      newHeadSha: input.newHeadSha,
-      workerId,
+    event(
+      deps.db,
+      row.fleet_run_id,
+      "task_review_resolved_by_fix",
+      {
+        fixId: row.id,
+        taskId: row.task_id,
+        attempt: row.attempt,
+        round: row.round,
+        reviewIds: reviewRows.map((review) => review.id),
+        oldHeadSha: row.old_head_sha,
+        newHeadSha: input.newHeadSha,
+        oldVerificationEvidenceHash: row.verification_evidence_hash,
+        policyHash: row.policy_hash,
+        historicalArtifactsImmutable: true,
+      },
+      nowIso
+    );
+    event(
+      deps.db,
+      row.fleet_run_id,
+      "task_fix_completed",
+      {
+        fixId: row.id,
+        taskId: row.task_id,
+        attempt: row.attempt,
+        round: row.round,
+        oldHeadSha: row.old_head_sha,
+        newHeadSha: input.newHeadSha,
+        workerId,
+      },
+      nowIso
+    );
+    finishFleetPaidSession(deps.db, {
+      runId: row.fleet_run_id,
+      ownerType: "fixer",
+      ownerId: row.request_id,
+      sessionCreated: Boolean(row.fixer_session_id),
+      now: deps.now(),
     });
     return true;
   });
+  return finalized;
 }
 
 async function pollRunningFix(
@@ -880,7 +1520,9 @@ async function pollRunningFix(
     const stopped = await deps
       .stopSession(row.fixer_session_id, "failed")
       .catch(() => false);
-    if (!stopped) return;
+    if (!stopped && (await deps.sessionExists(deps.db, row.fixer_session_id))) {
+      return;
+    }
     recordFleetTaskFixFailure(
       deps,
       row,
@@ -905,7 +1547,9 @@ async function pollRunningFix(
   const stopped = await deps
     .stopSession(row.fixer_session_id, parsed.ok ? "completed" : "failed")
     .catch(() => false);
-  if (!stopped) return;
+  if (!stopped && (await deps.sessionExists(deps.db, row.fixer_session_id))) {
+    return;
+  }
   if (!parsed.ok) {
     recordFleetTaskFixFailure(deps, row, parsed.error);
     return;
@@ -970,26 +1614,18 @@ export async function reconcileFleetTaskFixRow(
   initial: FleetTaskFixRow
 ): Promise<void> {
   let row = initial;
-  const loaded = loadFixContract(deps, row);
-  if ("error" in loaded) {
-    if (row.fixer_session_id) {
-      const stopped = await deps
-        .stopSession(row.fixer_session_id, "failed")
-        .catch(() => false);
-      if (!stopped) return;
-    }
-    recordFleetTaskFixFailure(deps, row, loaded.error);
+  if (row.state === "completed" || row.state === "failed") {
+    reconcileFleetTaskFixSettlements(deps);
+    if (row.result_path) await deps.removeResult(row.result_path);
     return;
   }
-  if (row.state === "pending") {
-    await startFix(deps, loaded.contract, row);
-    row = deps.db
-      .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
-      .get(row.id) as FleetTaskFixRow;
-    if (row.state === "running") return;
+  if (row.state === "cleanup_pending") {
+    await cleanupFleetTaskFixLaunchRetry(deps, row);
+    return;
   }
   if (row.state === "spawning") {
     row = await recoverSpawningFleetTaskFix(deps, row);
+    if (row.state === "failed" || row.state === "completed") return;
     if (row.state === "spawning") {
       const started = Date.parse(row.started_at ?? "");
       if (
@@ -1002,7 +1638,12 @@ export async function reconcileFleetTaskFixRow(
         const stopped = await deps
           .stopSession(row.fixer_session_id, "failed")
           .catch(() => false);
-        if (!stopped) return;
+        if (
+          !stopped &&
+          (await deps.sessionExists(deps.db, row.fixer_session_id))
+        ) {
+          return;
+        }
       }
       recordFleetTaskFixFailure(
         deps,
@@ -1012,5 +1653,43 @@ export async function reconcileFleetTaskFixRow(
       return;
     }
   }
-  if (row.state === "running") await pollRunningFix(deps, loaded.contract, row);
+  const loaded = loadFixContract(deps, row);
+  if ("error" in loaded) {
+    if (row.fixer_session_id) {
+      const stopped = await deps
+        .stopSession(row.fixer_session_id, "failed")
+        .catch(() => false);
+      if (
+        !stopped &&
+        (await deps.sessionExists(deps.db, row.fixer_session_id))
+      ) {
+        return;
+      }
+    }
+    recordFleetTaskFixFailure(deps, row, loaded.error);
+    return;
+  }
+  if (row.state === "pending") {
+    assertFleetLaunchReady(deps.db, row.fleet_run_id);
+    await startFix(deps, loaded.contract, row);
+    row = deps.db
+      .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
+      .get(row.id) as FleetTaskFixRow;
+    if (row.state === "running") return;
+    if (row.state === "cleanup_pending") {
+      await cleanupFleetTaskFixLaunchRetry(deps, row);
+      return;
+    }
+  }
+  if (row.state === "running") {
+    const session = row.fixer_session_id
+      ? (queries.getSession(deps.db).get(row.fixer_session_id) as
+          Session | undefined)
+      : undefined;
+    if (fixerProviderError(row, session)) {
+      await rejectIneligibleFixerSession(deps, row, session);
+      return;
+    }
+    await pollRunningFix(deps, loaded.contract, row);
+  }
 }

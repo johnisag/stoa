@@ -50,6 +50,12 @@ describe("normalizeFleetRunDraft", () => {
       repoId: "  repo-1  ",
       projectId: "  proj-1  ",
       budgetUsd: -5,
+      budgetTokens: 250000,
+      budgetStopMode: "hard-stop",
+      budgetWarningThreshold: 0.75,
+      providerCaps: { codex: 8, hermes: 3 },
+      resourceLimits: { verifier: 4, worktreesPerRepo: 20 },
+      maxRetriesPerTask: 3,
       provider: " codex ",
       model: " gpt-5.5 ",
       maxConcurrency: 99,
@@ -64,6 +70,11 @@ describe("normalizeFleetRunDraft", () => {
       repoId: "repo-1",
       projectId: "proj-1",
       budgetUsd: 0,
+      budgetTokens: 250000,
+      budgetStopMode: "hard-stop",
+      budgetWarningThreshold: 0.75,
+      providerCaps: { codex: 8, hermes: 3 },
+      defaultMaxAttempts: 4,
       provider: "codex",
       model: "gpt-5.5",
       maxConcurrency: 40,
@@ -84,6 +95,10 @@ describe("normalizeFleetRunDraft", () => {
     expect(res.draft.repoId).toBeNull();
     expect(res.draft.projectId).toBeNull();
     expect(res.draft.budgetUsd).toBeNull();
+    expect(res.draft.budgetTokens).toBeNull();
+    expect(res.draft.budgetStopMode).toBe("pause-new");
+    expect(res.draft.budgetWarningThreshold).toBe(0.8);
+    expect(res.draft.defaultMaxAttempts).toBe(2);
     expect(res.draft.provider).toBe("claude");
     expect(res.draft.model).toBeNull();
     expect(res.draft.maxConcurrency).toBe(1);
@@ -152,8 +167,7 @@ describe("normalizeFleetRunDraft", () => {
         automationPolicy: { automaticMerge: true },
       })
     ).toEqual({
-      error:
-        "automatic merge requires automatic start and at least one automatic fix round",
+      error: "automatic merge requires automatic start",
     });
     expect(
       normalizeFleetRunDraft({
@@ -163,8 +177,6 @@ describe("normalizeFleetRunDraft", () => {
           automaticPlanning: true,
           automaticPlanApproval: true,
           automaticStart: true,
-          automaticFixes: true,
-          maxAutomaticFixRounds: 1,
           automaticMerge: true,
         },
       })

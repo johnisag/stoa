@@ -45,7 +45,10 @@ import {
   buildAgentArgs,
 } from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
-import { resolveSessionLaunchOptions } from "@/lib/session-launch";
+import {
+  resolveSessionLaunchOptions,
+  sessionLaunchEnv,
+} from "@/lib/session-launch";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
@@ -399,7 +402,12 @@ function HomeContent() {
       sessionName: string;
       cwd: string;
       command: string;
-      spawn: { binary: string; args: string[]; cwd: string };
+      spawn: {
+        binary: string;
+        args: string[];
+        cwd: string;
+        env: Record<string, string>;
+      };
     }> => {
       const provider = getProvider(session.agent_type || "claude");
       const sessionName =
@@ -408,6 +416,7 @@ function HomeContent() {
       const cwd = session.working_directory?.replace("~", "$HOME") || "$HOME";
       // Raw cwd for the pty backend (the registry expands a leading "~").
       const ptyCwd = session.working_directory || "~";
+      const env = sessionLaunchEnv(session);
 
       // Shell sessions just open a terminal - no agent command
       if (provider.id === "shell") {
@@ -415,14 +424,13 @@ function HomeContent() {
           sessionName,
           cwd,
           command: "",
-          spawn: { binary: "", args: [], cwd: ptyCwd },
+          spawn: { binary: "", args: [], cwd: ptyCwd, env },
         };
       }
 
-      // TODO: Add explicit "Enable Orchestration" toggle that creates .mcp.json
-      // for conductor sessions. Removed auto-creation because it pollutes projects
-      // with .mcp.json files that aren't in their .gitignore.
-      // See: /api/sessions/[id]/mcp-config, lib/mcp-config.ts
+      // Orchestration is configured explicitly at session creation (or repaired
+      // through /api/sessions/[id]/mcp-config) using each provider's native MCP
+      // convention. Generated project files are locally git-excluded.
 
       // Check for pending initial prompt
       const initialPrompt = getPendingPrompt(session.id);
@@ -475,7 +483,7 @@ function HomeContent() {
         sessionName,
         cwd,
         command,
-        spawn: { binary, args, cwd: ptyCwd },
+        spawn: { binary, args, cwd: ptyCwd, env },
       };
     },
     [sessions, getInitScriptCommand]
@@ -491,7 +499,12 @@ function HomeContent() {
         sessionName: string;
         cwd: string;
         command: string;
-        spawn: { binary: string; args: string[]; cwd: string };
+        spawn: {
+          binary: string;
+          args: string[];
+          cwd: string;
+          env: Record<string, string>;
+        };
       },
       backend: "pty" | "tmux"
     ) => {
@@ -500,9 +513,16 @@ function HomeContent() {
         // Native: subscribe to (or spawn) the registry session directly.
         terminal.attachSession({ key: sessionName, spawn });
       } else {
+        // This terminal drives tmux through a shell, unlike TmuxBackend's
+        // execFile argv path. Quote each complete KEY=value token at this final
+        // boundary so even a hostile persisted session id remains data.
+        const envFlags = Object.entries(spawn.env)
+          .map(([key, value]) => `-e ${shellQuoteArg(`${key}=${value}`)}`)
+          .join(" ");
+        const envPart = envFlags ? ` ${envFlags}` : "";
         const tmuxNew = command
-          ? `tmux new -s ${sessionName} -c "${cwd}" "${command}"`
-          : `tmux new -s ${sessionName} -c "${cwd}"`;
+          ? `tmux new -s ${sessionName} -c "${cwd}"${envPart} "${command}"`
+          : `tmux new -s ${sessionName} -c "${cwd}"${envPart}`;
         terminal.sendCommand(
           `tmux set -g mouse on 2>/dev/null; tmux attach -t ${sessionName} 2>/dev/null || ${tmuxNew}`
         );

@@ -17,6 +17,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveSessionLaunchOptions,
   buildAgentArgsForSession,
+  sessionLaunchEnv,
 } from "@/lib/session-launch";
 import { buildSpawnForSession } from "@/lib/client/backend";
 import { buildAgentArgs } from "@/lib/providers";
@@ -60,6 +61,21 @@ function session(over: Partial<Session> = {}): Session {
 // An injection-shaped value that would be catastrophic if it rode into the POSIX
 // tmux `-m <model>` launch unescaped.
 const INJECTION = "$(touch /tmp/pwned)";
+
+describe("sessionLaunchEnv", () => {
+  it("adds process identity for argv and empty-array conductor sentinels", () => {
+    expect(
+      sessionLaunchEnv(session({ id: "codex-c", mcp_launch_args: '["-c"]' }))
+    ).toEqual({ STOA_CONDUCTOR_SESSION_ID: "codex-c" });
+    expect(
+      sessionLaunchEnv(session({ id: "file-c", mcp_launch_args: "[]" }))
+    ).toEqual({ STOA_CONDUCTOR_SESSION_ID: "file-c" });
+  });
+
+  it("returns no overlay only for a non-conductor SQL NULL", () => {
+    expect(sessionLaunchEnv(session({ mcp_launch_args: null }))).toEqual({});
+  });
+});
 
 describe("resolveSessionLaunchOptions — the single resolver", () => {
   it("clamps a bogus static-agent model to the safe catalog default", () => {

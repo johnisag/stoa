@@ -1,18 +1,20 @@
-#!/usr/bin/env npx ts-node
 /**
  * MCP Server for Session Orchestration
  *
  * Exposes tools for any Claude session to become a "conductor" that spawns
  * and manages worker sessions. Each worker gets its own git worktree.
  *
- * Setup (one-time, in ~/.claude/settings.json or project .mcp.json):
+ * Stoa writes provider-native MCP config automatically. The generated command
+ * uses `process.execPath` plus Stoa's absolute, pinned `tsx/dist/cli.mjs` path;
+ * never launch this through project-local `npx`. A representative Claude entry:
  *   {
  *     "mcpServers": {
  *       "stoa": {
- *         "command": "npx",
- *         "args": ["tsx", "/path/to/stoa/mcp/orchestration-server.ts"],
+ *         "command": "/absolute/path/to/node",
+ *         "args": ["/path/to/stoa/node_modules/tsx/dist/cli.mjs", "/path/to/stoa/mcp/orchestration-server.ts"],
  *         "env": {
- *           "STOA_URL": "http://localhost:3011"
+ *           "STOA_URL": "http://localhost:3011",
+ *           "CONDUCTOR_SESSION_ID": "${STOA_CONDUCTOR_SESSION_ID}"
  *         }
  *       }
  *     }
@@ -25,7 +27,12 @@
 import "../lib/als-global";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Server, type Tool } from "@modelcontextprotocol/server";
+import {
+  INVALID_PARAMS,
+  ProtocolError,
+  Server,
+  type Tool,
+} from "@modelcontextprotocol/server";
 import {
   serveStdio,
   type ServeStdioOptions,
@@ -792,11 +799,28 @@ export function createOrchestrationServer(): Server {
   // Wrap the tool handler with a GenAI "tool" span at the natural tool boundary.
   // No-op unless STOA_OTEL_ENDPOINT is set, and best-effort — the span emit can
   // never change the tool's result or throw (emitGenAiEvent swallows its errors).
-  server.setRequestHandler("tools/call", async (request) => {
+  server.setRequestHandler("tools/call", async (request, context) => {
     const startMs = Date.now();
     const toolName = request.params.name;
     try {
-      const result = await handleToolCall(request);
+      const result = await handleToolCall(request, {
+        signal: context.mcpReq.signal,
+      });
+      const first = result.content[0];
+      if (
+        result.isError === true &&
+        first?.type === "text" &&
+        first.text.startsWith("Error: Unknown tool:")
+      ) {
+        throw new ProtocolError(
+          INVALID_PARAMS,
+          first.text.slice("Error: ".length)
+        );
+      }
+      // The low-level Server API leaves SEP-2106 result projection to its
+      // caller. All current tools are text-only, but using the SDK codec keeps
+      // this boundary correct if structured output is introduced later.
+      const projectedResult = server.projectCallToolResult(result, undefined);
       const status = toolResultStatus(result);
       void emitGenAiEvent({
         operation: "tool",
@@ -810,7 +834,7 @@ export function createOrchestrationServer(): Server {
         statusMessage: status.message,
         extra: { "stoa.mcp.tool": toolName },
       });
-      return result;
+      return projectedResult;
     } catch (error) {
       void emitGenAiEvent({
         operation: "tool",

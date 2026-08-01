@@ -29,6 +29,7 @@ import {
 import { requestFleetMerge } from "./merge-runtime";
 import { getFleetSupervisorSnapshot } from "./supervisor";
 import type { FleetMergeTarget, FleetRunRow } from "./types";
+import { fleetLaunchBlockedResult } from "./recovery-gate";
 
 const CAPABILITY_LEASE_MS = 5 * 60 * 1000;
 const ACTOR_MAX = 80;
@@ -111,6 +112,32 @@ interface ClaimedCapability {
   row: FleetCapabilityRow;
   record: FleetCapabilityRecord;
   leaseOwner: string;
+}
+
+interface ExactFleetMergeIntent {
+  target: FleetMergeTarget;
+  planHash: string;
+  baseSha: string;
+  executionHash: string;
+  integrationHeadSha: string | null;
+}
+
+function authorizeStoredFleetCapabilityReadOnly(
+  request: FleetCapabilityActionRequest,
+  options: FleetCapabilityRuntimeOptions = {}
+): FleetCapabilityRecord | FleetCapabilityRuntimeError {
+  const token = typeof request.token === "string" ? request.token : "";
+  const scope = objectValue(request.scope) as unknown as FleetCapabilityScope;
+  if (!isFleetCapabilityToken(token)) {
+    return { error: "capability denied", status: 403 };
+  }
+  const db = options.db ?? getDb();
+  const nowMs = options.nowMs ?? Date.now();
+  const row = getRowByToken(db, token);
+  if (!row) return { error: "capability denied", status: 403 };
+  const record = rowRecord(row);
+  const decision = decideFleetCapabilityUse(record, token, scope, nowMs);
+  return decision.ok ? record : { error: "capability denied", status: 403 };
 }
 
 function objectValue(value: unknown): Record<string, unknown> | null {
@@ -256,6 +283,58 @@ function mergeTarget(payload: unknown): FleetMergeTarget | null {
   return target === "local" || target === "github_pr" ? target : null;
 }
 
+function exactFleetMergeIntent(
+  db: Database.Database,
+  runId: string,
+  payload: unknown
+): ExactFleetMergeIntent | FleetCapabilityRuntimeError {
+  const target = mergeTarget(payload);
+  if (!target) return { error: "merge target is required", status: 400 };
+  const run = getRun(db, runId);
+  if (!run) return { error: "Fleet run not found", status: 404 };
+  const snapshot = getFleetSupervisorSnapshot(runId, db);
+  const bindings = snapshot?.bindings;
+  if (
+    !bindings?.contractComplete ||
+    !bindings.exactPlanApproval ||
+    !bindings.exactExecutionApproval ||
+    !bindings.planHash ||
+    !bindings.executionHash
+  ) {
+    return {
+      error: "run has no exact approved execution contract",
+      status: 409,
+    };
+  }
+  const baseSha = run.automation_base_sha;
+  if (!baseSha || !SHA.test(baseSha)) {
+    return {
+      error: "run has no exact automation base head for merge authorization",
+      status: 409,
+    };
+  }
+  const integrationHeadSha = run.integration_head_sha ?? null;
+  if (integrationHeadSha !== null && !SHA.test(integrationHeadSha)) {
+    return {
+      error: "run has no exact integration head for merge authorization",
+      status: 409,
+    };
+  }
+  return {
+    target,
+    planHash: bindings.planHash,
+    baseSha,
+    executionHash: bindings.executionHash,
+    integrationHeadSha,
+  };
+}
+
+function fleetMergeIntentHash(
+  intent: ExactFleetMergeIntent
+): FleetCapabilityHashScope {
+  return { kind: "head", value: stableHash(intent) };
+}
+
 function withoutUntrustedActor(
   payload: unknown,
   stripTask = false
@@ -313,17 +392,8 @@ function deriveBoundHash(
       ? { kind: "artifact", value: stableHash(artifact) }
       : { error: "payload is required for fleet:submit-artifact", status: 400 };
   }
-  const target = mergeTarget(payload);
-  const head = run.automation_base_sha;
-  if (!target) return { error: "merge target is required", status: 400 };
-  if (!head || !SHA.test(head)) {
-    return {
-      error: "run has no exact automation base head for merge authorization",
-      status: 409,
-    };
-  }
-  // A SHA-256 merge-intent digest binds both the exact Git head and target.
-  return { kind: "head", value: stableHash({ head, target }) };
+  const intent = exactFleetMergeIntent(db, runId, payload);
+  return "error" in intent ? intent : fleetMergeIntentHash(intent);
 }
 
 function validateScopeRelations(
@@ -606,20 +676,15 @@ export function finalizeStoredFleetCapability(
 
 function verifyCurrentIntent(
   db: Database.Database,
-  claim: ClaimedCapability,
+  record: FleetCapabilityRecord,
   payload: unknown
 ): FleetCapabilityRuntimeError | null {
-  const action = directAction(claim.record.scope.action);
+  const action = directAction(record.scope.action);
   if (!action)
     return { error: "unsupported Fleet capability action", status: 403 };
-  const current = deriveBoundHash(
-    db,
-    action,
-    claim.record.scope.runId,
-    payload
-  );
+  const current = deriveBoundHash(db, action, record.scope.runId, payload);
   if (current && "error" in current) return current;
-  const expected = claim.record.scope.boundHash;
+  const expected = record.scope.boundHash;
   if (current === null || expected === null) {
     return current === expected
       ? null
@@ -633,14 +698,47 @@ function verifyCurrentIntent(
 
 /** Claim, re-check the state/payload hash, execute, and immutably audit. */
 export async function executeStoredFleetCapability(
-  request: FleetCapabilityActionRequest
+  request: FleetCapabilityActionRequest,
+  options: FleetCapabilityRuntimeOptions = {}
 ): Promise<{ result: unknown } | FleetCapabilityRuntimeError> {
-  const claim = claimStoredFleetCapability(request);
+  const authorized = authorizeStoredFleetCapabilityReadOnly(request, options);
+  if ("error" in authorized) return authorized;
+  const db = options.db ?? getDb();
+  if (
+    ["fleet:start", "fleet:resume", "fleet:merge"].includes(
+      authorized.scope.action
+    )
+  ) {
+    const recoveryBlocked = fleetLaunchBlockedResult(
+      db,
+      authorized.scope.runId
+    );
+    if (recoveryBlocked) return recoveryBlocked;
+  }
+  let mergeIntent: ExactFleetMergeIntent | null = null;
+  if (authorized.scope.action === "fleet:merge") {
+    const current = exactFleetMergeIntent(
+      db,
+      authorized.scope.runId,
+      request.payload
+    );
+    if ("error" in current) return current;
+    const expected = authorized.scope.boundHash;
+    const currentHash = fleetMergeIntentHash(current);
+    if (
+      !expected ||
+      expected.kind !== currentHash.kind ||
+      expected.value !== currentHash.value
+    ) {
+      return { error: "capability action intent changed", status: 409 };
+    }
+    mergeIntent = current;
+  }
+  const claim = claimStoredFleetCapability(request, options);
   if ("error" in claim) return claim;
-  const db = getDb();
   let succeeded = false;
   try {
-    const intentError = verifyCurrentIntent(db, claim, request.payload);
+    const intentError = verifyCurrentIntent(db, claim.record, request.payload);
     if (intentError) return intentError;
     const { action, runId, taskId, boundHash } = claim.record.scope;
     const payload = withoutUntrustedActor(request.payload) ?? {};
@@ -686,7 +784,7 @@ export async function executeStoredFleetCapability(
         conductorSessionId: null,
       });
     } else if (action === "fleet:pause") {
-      result = pauseFleetRun(runId, { actor, mode: "pause-new" });
+      result = await pauseFleetRun(runId, { actor, mode: "pause-new" });
     } else if (action === "fleet:cancel") {
       result = await cancelFleetRun(runId, {
         actor,
@@ -699,9 +797,19 @@ export async function executeStoredFleetCapability(
         actor,
       });
     } else if (action === "fleet:merge") {
-      const target = mergeTarget(payload);
-      result = target
-        ? await requestFleetMerge(runId, target, actor)
+      result = mergeIntent
+        ? await requestFleetMerge(
+            runId,
+            mergeIntent.target,
+            actor,
+            { db },
+            {
+              planHash: mergeIntent.planHash,
+              baseSha: mergeIntent.baseSha,
+              executionHash: mergeIntent.executionHash,
+              integrationHeadSha: mergeIntent.integrationHeadSha,
+            }
+          )
         : { error: "merge target is required" };
     } else {
       return { error: "unsupported Fleet capability action", status: 403 };
@@ -717,6 +825,6 @@ export async function executeStoredFleetCapability(
     succeeded = true;
     return { result };
   } finally {
-    finalizeStoredFleetCapability(claim, succeeded);
+    finalizeStoredFleetCapability(claim, succeeded, options);
   }
 }

@@ -50,7 +50,7 @@ describe("buildSpawnForSession", () => {
       "-c",
       'mcp_servers.stoa.args=["mcp"]',
     ];
-    const { args } = buildSpawnForSession(
+    const { args, env } = buildSpawnForSession(
       session({ mcp_launch_args: JSON.stringify(mcp) })
     );
     // The conductor tokens land as a contiguous, order-preserving run of discrete
@@ -59,11 +59,15 @@ describe("buildSpawnForSession", () => {
     const start = args.indexOf("-c");
     expect(start).toBeGreaterThanOrEqual(0);
     expect(args.slice(start, start + mcp.length)).toEqual(mcp);
+    expect(env).toEqual({ STOA_CONDUCTOR_SESSION_ID: "s1" });
   });
 
   it("omits the MCP flags for a non-conductor (null mcp_launch_args)", () => {
-    const { args } = buildSpawnForSession(session({ mcp_launch_args: null }));
+    const { args, env } = buildSpawnForSession(
+      session({ mcp_launch_args: null })
+    );
     expect(args).not.toContain("-c");
+    expect(env).toEqual({});
   });
 
   it("survives a malformed mcp_launch_args (spawns without the flags, no throw)", () => {
@@ -83,7 +87,15 @@ describe("buildSpawnForSession", () => {
 
   it("a shell session yields an empty spawn", () => {
     const spawn = buildSpawnForSession(session({ agent_type: "shell" }));
-    expect(spawn).toEqual({ binary: "", args: [], cwd: "/repo" });
+    expect(spawn).toEqual({ binary: "", args: [], cwd: "/repo", env: {} });
+  });
+
+  it("treats an empty MCP argv sentinel as a conductor and keeps its id as env data", () => {
+    const hostile = String.raw`id$(touch /tmp/pwn);"quoted`;
+    const spawn = buildSpawnForSession(
+      session({ id: hostile, mcp_launch_args: "[]" })
+    );
+    expect(spawn.env).toEqual({ STOA_CONDUCTOR_SESSION_ID: hostile });
   });
 
   // #8: a native fork that re-attaches BEFORE its first turn (no own

@@ -23,6 +23,11 @@ import {
   normalizeFleetAutomationPolicy,
 } from "./automation-policy";
 import type { FleetAutomationPolicy, FleetDesiredState } from "./types";
+import {
+  normalizeFleetResourceLimits,
+  type FleetResourceLimits,
+} from "./resource-admission";
+import type { FleetBudgetStopMode } from "./budgets";
 
 export interface NormalizedFleetRunDraft {
   name: string;
@@ -30,6 +35,12 @@ export interface NormalizedFleetRunDraft {
   repoId: string | null;
   projectId: string | null;
   budgetUsd: number | null;
+  budgetTokens: number | null;
+  budgetStopMode: FleetBudgetStopMode;
+  budgetWarningThreshold: number;
+  providerCaps: Readonly<Record<string, number>>;
+  resourceLimits: FleetResourceLimits;
+  defaultMaxAttempts: number;
   provider: string;
   model: string | null;
   maxConcurrency: number;
@@ -69,6 +80,12 @@ function reviewPolicyValue(value: unknown): FleetReviewPolicy {
     : "four_agent";
 }
 
+function budgetStopModeValue(value: unknown): FleetBudgetStopMode {
+  return value === "hard-stop" || value === "ask-operator"
+    ? value
+    : "pause-new";
+}
+
 function draftPayload(
   value: unknown
 ): Partial<Record<keyof CreateFleetRunInput, unknown>> {
@@ -95,6 +112,33 @@ export function normalizeFleetRunDraft(
     rawBudgetUsd == null || !Number.isFinite(rawBudgetUsd)
       ? null
       : Math.max(0, rawBudgetUsd);
+  const rawBudgetTokens = numberValue(payload.budgetTokens);
+  const budgetTokens =
+    rawBudgetTokens == null ||
+    !Number.isSafeInteger(rawBudgetTokens) ||
+    rawBudgetTokens < 0
+      ? null
+      : Math.min(rawBudgetTokens, 1_000_000_000_000);
+  const rawWarningThreshold = numberValue(payload.budgetWarningThreshold);
+  const budgetWarningThreshold =
+    rawWarningThreshold == null || !Number.isFinite(rawWarningThreshold)
+      ? 0.8
+      : Math.min(1, Math.max(0.01, rawWarningThreshold));
+  const rawRetries = Math.trunc(numberValue(payload.maxRetriesPerTask) ?? 1);
+  const defaultMaxAttempts = Number.isFinite(rawRetries)
+    ? Math.min(10, Math.max(1, rawRetries + 1))
+    : 2;
+  const requestedLimits =
+    payload.resourceLimits && typeof payload.resourceLimits === "object"
+      ? (payload.resourceLimits as Partial<FleetResourceLimits>)
+      : {};
+  const resourceLimits = normalizeFleetResourceLimits({
+    ...requestedLimits,
+    providerCaps:
+      payload.providerCaps && typeof payload.providerCaps === "object"
+        ? (payload.providerCaps as Readonly<Record<string, number>>)
+        : requestedLimits.providerCaps,
+  });
   const reviewPolicy = reviewPolicyValue(payload.reviewPolicy);
   const automation = normalizeFleetAutomationPolicy(
     payload.automationPolicy,
@@ -109,6 +153,12 @@ export function normalizeFleetRunDraft(
       repoId: textValue(payload.repoId).trim() || null,
       projectId: textValue(payload.projectId).trim() || null,
       budgetUsd,
+      budgetTokens,
+      budgetStopMode: budgetStopModeValue(payload.budgetStopMode),
+      budgetWarningThreshold,
+      providerCaps: resourceLimits.providerCaps,
+      resourceLimits,
+      defaultMaxAttempts,
       provider:
         cappedTextValue(payload.provider, FLEET_PROVIDER_MAX) || "claude",
       model: cappedTextValue(payload.model, FLEET_MODEL_MAX) || null,
@@ -159,6 +209,15 @@ function parseSettingsPlanText(value: string): string | null {
   if (!parsed || typeof parsed !== "object") return null;
   const planText = (parsed as { planText?: unknown }).planText;
   return typeof planText === "string" && planText.trim() ? planText : null;
+}
+
+function parseObject(
+  value: string | null | undefined
+): Record<string, unknown> {
+  const parsed = parseJson(value ?? null);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
 }
 
 function parsePlannerSettings(value: string): {
@@ -224,6 +283,7 @@ export function toFleetRunDto(
     sourceName: row.source_name ?? null,
     status: row.status,
     budgetUsd: row.budget_usd,
+    budgetTokens: row.budget_tokens ?? null,
     provider: row.provider,
     model: row.model,
     maxConcurrency: row.max_concurrency,
@@ -263,6 +323,23 @@ export function toFleetRunDto(
     recoveryRequired: row.recovery_required === 1,
     reservedBudgetUsd: row.reserved_budget_usd ?? 0,
     spentBudgetUsd: row.spent_budget_usd ?? 0,
+    reservedBudgetTokens: row.reserved_budget_tokens ?? 0,
+    spentBudgetTokens: row.spent_budget_tokens ?? 0,
+    costConfidence: row.cost_confidence ?? "unknown",
+    budgetStopMode: row.budget_stop_mode ?? "pause-new",
+    budgetWarningThreshold: row.budget_warning_threshold ?? 0.8,
+    budgetWarningEmittedAt: row.budget_warning_emitted_at ?? null,
+    budgetHardLimitAt: row.budget_hard_limit_at ?? null,
+    budgetInterruptDeadlineAt: row.budget_interrupt_deadline_at ?? null,
+    providerCaps: normalizeFleetResourceLimits({
+      providerCaps: parseObject(row.provider_caps_json) as Readonly<
+        Record<string, number>
+      >,
+    }).providerCaps,
+    resourceLimits: normalizeFleetResourceLimits(
+      parseObject(row.resource_limits_json) as Partial<FleetResourceLimits>
+    ),
+    defaultMaxAttempts: row.default_max_attempts ?? 2,
     pauseMode: row.pause_mode ?? null,
     pauseReason: row.pause_reason ?? null,
     cancelMode: row.cancel_mode ?? null,
@@ -371,6 +448,27 @@ export function toFleetWorkerDto(row: FleetWorkerRow): FleetWorkerDto {
     reportNextPollAt: row.report_next_poll_at ?? null,
     reportError: row.report_error ?? null,
     reservationUsd: row.reservation_usd ?? 0,
+    reservationTokens: row.reservation_tokens ?? 0,
+    reservationConfidence: row.reservation_confidence ?? "unknown",
+    reservationBasis: row.reservation_basis ?? null,
+    actualCostUsd: row.actual_cost_usd ?? null,
+    actualTokens: row.actual_tokens ?? null,
+    costConfidence: row.cost_confidence ?? "unknown",
+    costReconciledAt: row.cost_reconciled_at ?? null,
+    interruptRequestedAt: row.interrupt_requested_at ?? null,
+    interruptDeadlineAt: row.interrupt_deadline_at ?? null,
+    interruptNoticeState: row.interrupt_notice_state ?? "unattempted",
+    interruptStopState: row.interrupt_stop_state ?? "unattempted",
+    interruptCause: row.interrupt_cause ?? null,
+    renderedStatus: row.rendered_status ?? null,
+    renderedStatusSummary: row.rendered_status_summary ?? null,
+    renderedStatusSummaryRedacted:
+      (row.rendered_status_summary_redacted ?? 0) === 1,
+    renderedStatusReplacementCount: row.rendered_status_replacement_count ?? 0,
+    renderedStatusStabilityCount: row.rendered_status_stability_count ?? 0,
+    renderedStatusLastCapturedAt: row.rendered_status_last_captured_at ?? null,
+    renderedStatusNextCaptureAt: row.rendered_status_next_capture_at ?? null,
+    renderedStatusError: row.rendered_status_error ?? null,
     terminalCause: row.terminal_cause ?? null,
     failureCode: row.failure_code ?? null,
     createdAt: row.created_at,

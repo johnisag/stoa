@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   laneForInboxItem,
   laneForDispatch,
+  laneForFleetRun,
   composeFleetCards,
   bucketByLane,
   cardNeedsMe,
@@ -14,6 +15,7 @@ import {
 import { countNeedsMe } from "@/lib/verdict-inbox-selectors";
 import type { InboxItem } from "@/lib/verdict-inbox";
 import type { IssueDispatch } from "@/lib/dispatch/types";
+import type { FleetRunDto } from "@/lib/fleet/types";
 
 const inbox = (o: Partial<InboxItem>): InboxItem =>
   ({
@@ -26,6 +28,16 @@ const inbox = (o: Partial<InboxItem>): InboxItem =>
   }) as unknown as InboxItem;
 const disp = (o: Partial<IssueDispatch>): IssueDispatch =>
   ({ id: "d", status: "pending", ...o }) as unknown as IssueDispatch;
+const run = (o: Partial<FleetRunDto>): FleetRunDto =>
+  ({
+    id: "run",
+    name: "Fleet run",
+    goal: "Ship it",
+    status: "running",
+    taskCount: 2,
+    workerCount: 1,
+    ...o,
+  }) as unknown as FleetRunDto;
 
 describe("cardNeedsMe — board attention reuses the nav badge's needsMe predicate", () => {
   it("the board's needs-me total equals the nav badge's countNeedsMe(inbox)", () => {
@@ -110,6 +122,20 @@ describe("laneForDispatch", () => {
   });
 });
 
+describe("laneForFleetRun", () => {
+  it("maps every durable Fleet run lifecycle to a delivery lane", () => {
+    expect(laneForFleetRun(run({ status: "draft" }))).toBe("queued");
+    expect(laneForFleetRun(run({ status: "planned" }))).toBe("queued");
+    expect(laneForFleetRun(run({ status: "running" }))).toBe("working");
+    expect(laneForFleetRun(run({ status: "paused" }))).toBe("working");
+    expect(laneForFleetRun(run({ status: "reviewing" }))).toBe("in_review");
+    expect(laneForFleetRun(run({ status: "merging" }))).toBe("working");
+    expect(laneForFleetRun(run({ status: "completed" }))).toBe("merged");
+    expect(laneForFleetRun(run({ status: "failed" }))).toBe("failed");
+    expect(laneForFleetRun(run({ status: "canceled" }))).toBe("failed");
+  });
+});
+
 describe("composeFleetCards", () => {
   it("dedupes a pr_open row to the inbox version (richer)", () => {
     const cards = composeFleetCards(
@@ -136,5 +162,21 @@ describe("composeFleetCards", () => {
     expect(byLane.working.map((c) => c.dispatch!.id)).toEqual(["w"]);
     expect(byLane.merged.map((c) => c.dispatch!.id)).toEqual(["m"]);
     expect(byLane.in_review.map((c) => c.inbox!.id)).toEqual(["c"]);
+  });
+
+  it("adds durable Fleet Management runs without colliding with dispatch ids", () => {
+    const cards = composeFleetCards(
+      [disp({ id: "same", status: "dispatched" })],
+      [],
+      [],
+      [run({ id: "same", status: "reviewing" })]
+    );
+    expect(cards).toHaveLength(2);
+    expect(cards.find((card) => card.source === "fleet")?.lane).toBe(
+      "in_review"
+    );
+    expect(cards.find((card) => card.source === "dispatch")?.lane).toBe(
+      "working"
+    );
   });
 });

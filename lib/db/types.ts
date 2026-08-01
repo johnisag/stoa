@@ -40,7 +40,7 @@ export interface Session {
   // Conductor launch args: extra argv tokens replayed at every spawn to wire the
   // stoa MCP server into a provider with no on-disk config (Codex's
   // `-c mcp_servers.stoa.*`). NULL for non-conductors and file-configured
-  // providers (Claude's .mcp.json). JSON-encoded string[].
+  // providers (Claude/Kilo/Kimi). JSON-encoded string[].
   mcp_launch_args: string | null;
   /** A native fork inherits its parent's transcript; this is the parent's
    * cumulative usage AT FORK TIME (JSON TokenUsage), netted out by the cost path so

@@ -117,6 +117,12 @@ export function hashFleetExecutionContract(input: {
       repoId: run.repo_id,
       projectId: run.project_id,
       budgetUsd: run.budget_usd,
+      budgetTokens: run.budget_tokens ?? null,
+      budgetStopMode: run.budget_stop_mode ?? "pause-new",
+      budgetWarningThreshold: run.budget_warning_threshold ?? 0.8,
+      providerCapsJson: run.provider_caps_json ?? "{}",
+      resourceLimitsJson: run.resource_limits_json ?? "{}",
+      defaultMaxAttempts: run.default_max_attempts ?? 2,
       provider: run.provider,
       model: run.model,
       maxConcurrency: run.max_concurrency,
@@ -138,7 +144,9 @@ export function hashFleetExecutionContract(input: {
         model: task.model ?? null,
         workingDirectory: task.working_directory ?? null,
         baseBranch: task.base_branch ?? null,
-        branchName: task.branch_name ?? null,
+        // branch_name is assigned only after a worker is spawned. Including
+        // that runtime output would invalidate the exact approval hash on the
+        // scheduler pass immediately following a successful launch.
         maxAttempts: task.max_attempts ?? 2,
         acceptanceCriteria: task.acceptance_criteria ?? null,
         verifyCommand: task.verify_command ?? null,

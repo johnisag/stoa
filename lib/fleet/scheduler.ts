@@ -2,16 +2,30 @@ import { randomUUID } from "crypto";
 import type Database from "better-sqlite3";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
+import { backendKeyForSession } from "@/lib/providers/registry";
+import { computeSessionCosts } from "@/lib/session-cost";
+import { persistCostSamples } from "@/lib/cost-history";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 import type { Project } from "@/lib/db/types";
 import {
   availableFleetSlots,
-  canReserveFleetBudget,
-  FLEET_DEFAULT_PARALLEL_WORKERS,
   FLEET_MAX_TOTAL_WORKERS,
-  FLEET_WORKER_RESERVATION_USD,
   providerConcurrencyCap,
 } from "./admission";
+import {
+  estimateFleetTaskReservation,
+  evaluateFleetBudget,
+  type FleetBudgetDecision,
+  type FleetTaskReservation,
+} from "./budgets";
+import {
+  fleetReservationHistory,
+  finalizeFleetWorkerCost,
+  reconcileFleetCostAccount,
+  registerFleetCostAccount,
+  settleFleetCostOwner,
+  type FleetCostOwnerType,
+} from "./cost-runtime";
 import { fleetClaimsConflict } from "./conflicts";
 import {
   FleetSpawnError,
@@ -23,6 +37,23 @@ import { fleetProviderRetryNotBefore } from "./backoff";
 import { hashFleetExecutionContract, hashFleetTaskRows } from "./hash";
 import { stopFleetSession } from "./stop";
 import { parseFleetAutomationPolicy } from "./automation-policy";
+import { insertFleetArtifact } from "./durable-write";
+import {
+  acquireFleetRuntimeResources,
+  clearFleetProviderCooldown,
+  fleetResourceLimitsForRun,
+  fleetWorkerResourceRequest,
+  looksLikeProviderRateLimit,
+  recordFleetProviderCooldown,
+  releaseFleetRuntimeResources,
+} from "./resource-runtime";
+import type { FleetResourceKind } from "./resource-admission";
+import { reconcileFleetRenderedStatuses } from "./status-runtime";
+import {
+  FLEET_INTERRUPT_DEFAULT_GRACE_MS,
+  FLEET_INTERRUPT_MAX_WORKERS,
+  decideFleetInterruptAction,
+} from "./interrupt-policy";
 import {
   boundedFleetArtifactJson,
   collectFleetWorkerReport,
@@ -38,6 +69,13 @@ import type {
   FleetTaskRow,
   FleetWorkerRow,
 } from "./types";
+import {
+  fleetRecoveryUnavailable,
+  isFleetSchedulerReady,
+  setFleetSchedulerReady,
+} from "./recovery-gate";
+
+export { isFleetSchedulerReady } from "./recovery-gate";
 
 const ACTIVE_WORKER_STATUSES = [
   "leasing",
@@ -47,20 +85,20 @@ const ACTIVE_WORKER_STATUSES = [
   "cleanup_pending",
 ] as const;
 const TERMINAL_TASK_STATUSES = ["completed", "merged", "skipped"];
+const ACTIVE_RUN_PHASE_STATUSES = ["running", "reviewing", "merging"];
+const TERMINAL_RUN_STATUSES = ["completed", "failed", "canceled"];
+const AUXILIARY_COST_OWNER_TYPES = new Set<FleetCostOwnerType>([
+  "planner",
+  "plan_review",
+  "task_review",
+  "fixer",
+]);
 const LEASE_MS = 2 * 60 * 1000;
+const FLEET_COST_SAMPLE_INTERVAL_MS = 30_000;
+const FLEET_COST_SAMPLE_MAX_PER_TICK = 8;
 const runLocks = new Set<string>();
 const launchingWorkers = new Set<string>();
-const fleetGlobal = globalThis as typeof globalThis & {
-  __stoaFleetSchedulerReady?: boolean;
-};
-if (fleetGlobal.__stoaFleetSchedulerReady == null) {
-  fleetGlobal.__stoaFleetSchedulerReady = false;
-}
-
-export function isFleetSchedulerReady(): boolean {
-  return fleetGlobal.__stoaFleetSchedulerReady === true;
-}
-
+const fleetCostSampleAt = new WeakMap<object, number>();
 export interface FleetSchedulerDeps {
   db: Database.Database;
   now: () => Date;
@@ -70,26 +108,57 @@ export interface FleetSchedulerDeps {
     sessionId: string,
     finalStatus?: "completed" | "failed"
   ) => Promise<void>;
+  sendMessage: (sessionId: string, message: string) => Promise<void>;
+  sampleCosts: (sessions: Session[], nowMs: number) => Promise<number>;
   prepareAttempt: typeof prepareFleetWorkerAttempt;
   collectReport: typeof collectFleetWorkerReport;
+}
+
+/** Resolve the same cross-platform backend key used by status, send, and stop. */
+export async function fleetSessionBackendExists(
+  session: Session,
+  backend: Pick<
+    ReturnType<typeof getSessionBackend>,
+    "exists"
+  > = getSessionBackend()
+): Promise<boolean> {
+  return backend.exists(backendKeyForSession(session));
 }
 
 function schedulerDeps(
   overrides: Partial<FleetSchedulerDeps>
 ): FleetSchedulerDeps {
+  const db = overrides.db ?? getDb();
   return {
-    db: overrides.db ?? getDb(),
+    db,
     now: overrides.now ?? (() => new Date()),
     spawn: overrides.spawn ?? executeFleetWorker,
     sessionExists:
       overrides.sessionExists ??
-      (async (session) => getSessionBackend().exists(session.tmux_name)),
+      ((session) => fleetSessionBackendExists(session)),
     stopSession:
       overrides.stopSession ??
       (async (sessionId, finalStatus = "failed") => {
         if (!(await stopFleetSession(sessionId, finalStatus))) {
           throw new Error("worker session remained alive after stop");
         }
+      }),
+    sendMessage:
+      overrides.sendMessage ??
+      (async (sessionId, message) => {
+        const session = queries.getSession(db).get(sessionId) as
+          Session | undefined;
+        if (!session) throw new Error("worker session was not found");
+        const backend = getSessionBackend();
+        const backendKey = backendKeyForSession(session);
+        await backend.sendKeysLiteral(backendKey, message);
+        await backend.sendEnter(backendKey);
+      }),
+    sampleCosts:
+      overrides.sampleCosts ??
+      (async (sessions, nowMs) => {
+        const costs = await computeSessionCosts(sessions);
+        return persistCostSamples(db, sessions, costs, nowMs);
       }),
     prepareAttempt: overrides.prepareAttempt ?? prepareFleetWorkerAttempt,
     collectReport: overrides.collectReport ?? collectFleetWorkerReport,
@@ -110,6 +179,22 @@ function transaction<T>(db: Database.Database, fn: () => T): T {
 
 function activePlaceholders(): string {
   return ACTIVE_WORKER_STATUSES.map(() => "?").join(", ");
+}
+
+function runAllowsFleetExecution(run: FleetRunRow): boolean {
+  return (
+    ACTIVE_RUN_PHASE_STATUSES.includes(run.status) &&
+    run.desired_state === "running"
+  );
+}
+
+function isAuxiliaryCostOwnerType(
+  value: string
+): value is Exclude<FleetCostOwnerType, "worker"> {
+  return (
+    value !== "worker" &&
+    AUXILIARY_COST_OWNER_TYPES.has(value as FleetCostOwnerType)
+  );
 }
 
 function activePlannerCount(db: Database.Database, provider?: string): number {
@@ -168,6 +253,201 @@ function releaseWorkerResources(
     WHERE worker_id = ? AND status = 'reserved'
       AND (? IS NULL OR resource_type = ?)`
   ).run(nowIso, workerId, resourceType ?? null, resourceType ?? null);
+  const runtimeType: FleetResourceKind | undefined =
+    resourceType === "worktree"
+      ? "repo_worktree"
+      : resourceType === "pty" ||
+          resourceType === "transport_host" ||
+          resourceType === "provider" ||
+          resourceType === "verifier" ||
+          resourceType === "git_operation" ||
+          resourceType === "merge_operation" ||
+          resourceType === "repo_worktree" ||
+          resourceType === "disk_bytes" ||
+          resourceType === "output_bytes_per_minute" ||
+          resourceType === "artifact_bytes_per_minute" ||
+          resourceType === "event_bytes_per_minute" ||
+          resourceType === "event_fanout_per_minute"
+        ? resourceType
+        : undefined;
+  releaseFleetRuntimeResources(db, {
+    ownerType: "worker",
+    ownerId: workerId,
+    now: new Date(nowIso),
+    resourceTypes: runtimeType ? [runtimeType] : undefined,
+  });
+}
+
+function releaseWorkerResourcesExceptWorktree(
+  db: Database.Database,
+  workerId: string,
+  nowIso: string
+): void {
+  db.prepare(
+    `UPDATE fleet_resource_leases SET status = 'released', released_at = ?
+     WHERE worker_id = ? AND status = 'reserved' AND resource_type <> 'worktree'`
+  ).run(nowIso, workerId);
+  releaseFleetRuntimeResources(db, {
+    ownerType: "worker",
+    ownerId: workerId,
+    now: new Date(nowIso),
+    preserveResourceTypes: ["repo_worktree", "disk_bytes"],
+  });
+}
+
+function settleWorkerBudget(
+  db: Database.Database,
+  workerId: string,
+  now: Date,
+  chargeFallback: boolean
+): void {
+  const worker = db
+    .prepare(`SELECT * FROM fleet_workers WHERE id = ?`)
+    .get(workerId) as FleetWorkerRow | undefined;
+  if (!worker || worker.cost_reconciled_at) return;
+  finalizeFleetWorkerCost(db, worker, now, chargeFallback);
+}
+
+function fleetBudgetDecision(
+  run: FleetRunRow,
+  reservation?: FleetTaskReservation
+): FleetBudgetDecision {
+  return evaluateFleetBudget({
+    config: {
+      budgetUsd: run.budget_usd,
+      budgetTokens: run.budget_tokens ?? null,
+      warningThreshold: run.budget_warning_threshold ?? 0.8,
+      stopMode: run.budget_stop_mode ?? "pause-new",
+    },
+    ledger: {
+      spentUsd: run.spent_budget_usd ?? 0,
+      reservedUsd: run.reserved_budget_usd ?? 0,
+      spentTokens: run.spent_budget_tokens ?? 0,
+      reservedTokens: run.reserved_budget_tokens ?? 0,
+    },
+    reservation,
+  });
+}
+
+function recordFleetBudgetWarning(
+  db: Database.Database,
+  run: FleetRunRow,
+  decision: FleetBudgetDecision,
+  reservation: FleetTaskReservation | undefined,
+  nowIso: string
+): void {
+  if (!decision.warning || run.budget_warning_emitted_at) return;
+  const changed = db
+    .prepare(
+      `UPDATE fleet_runs SET budget_warning_emitted_at = ?, updated_at = ?
+       WHERE id = ? AND budget_warning_emitted_at IS NULL`
+    )
+    .run(nowIso, nowIso, run.id);
+  if (changed.changes !== 1) return;
+  queries.createFleetEvent(db).run(
+    run.id,
+    "budget_warning_threshold_reached",
+    "scheduler",
+    JSON.stringify({
+      reason: decision.reason,
+      projectedUsd: decision.projectedUsd,
+      projectedTokens: decision.projectedTokens,
+      confidence: reservation?.confidence ?? run.cost_confidence ?? "unknown",
+      threshold: run.budget_warning_threshold ?? 0.8,
+    })
+  );
+}
+
+function pauseFleetForBudget(
+  db: Database.Database,
+  run: FleetRunRow,
+  decision: FleetBudgetDecision,
+  reservation: FleetTaskReservation | undefined,
+  now: Date
+): void {
+  const nowIso = now.toISOString();
+  const pauseReason =
+    decision.reason === "low-confidence"
+      ? "budget_telemetry_low_confidence"
+      : decision.stopAction === "ask-operator"
+        ? "budget_operator_decision_required"
+        : "budget_exhausted";
+  const interrupt = decision.stopAction === "interrupt-active";
+  const deadline = interrupt
+    ? new Date(now.getTime() + FLEET_INTERRUPT_DEFAULT_GRACE_MS).toISOString()
+    : null;
+  const changed = db
+    .prepare(
+      `UPDATE fleet_runs SET status = 'paused', desired_state = 'paused',
+       pause_mode = ?, pause_reason = ?, budget_hard_limit_at = CASE WHEN ? THEN COALESCE(budget_hard_limit_at, ?) ELSE budget_hard_limit_at END,
+       budget_interrupt_deadline_at = CASE WHEN ? THEN COALESCE(budget_interrupt_deadline_at, ?) ELSE budget_interrupt_deadline_at END,
+       updated_at = ? WHERE id = ?
+         AND status NOT IN ('completed', 'failed', 'canceled')
+         AND (status <> 'paused' OR (? = 1 AND budget_interrupt_deadline_at IS NULL))`
+    )
+    .run(
+      interrupt ? "pause-and-interrupt" : "pause-new",
+      pauseReason,
+      decision.hardLimitReached ? 1 : 0,
+      nowIso,
+      interrupt ? 1 : 0,
+      deadline,
+      nowIso,
+      run.id,
+      interrupt ? 1 : 0
+    );
+  if (changed.changes !== 1) return;
+  let auxiliaryInterrupts = 0;
+  if (interrupt && deadline) {
+    db.prepare(
+      `UPDATE fleet_workers SET interrupt_requested_at = COALESCE(interrupt_requested_at, ?),
+       interrupt_deadline_at = COALESCE(interrupt_deadline_at, ?),
+       interrupt_notice_state = CASE WHEN interrupt_requested_at IS NULL
+         THEN 'unattempted' ELSE interrupt_notice_state END,
+       interrupt_stop_state = CASE WHEN interrupt_requested_at IS NULL
+         THEN 'unattempted' ELSE interrupt_stop_state END,
+       interrupt_cause = COALESCE(interrupt_cause, 'budget_hard_limit')
+       WHERE fleet_run_id = ? AND status IN ('running', 'waiting_for_operator')`
+    ).run(nowIso, deadline, run.id);
+    auxiliaryInterrupts = db
+      .prepare(
+        `UPDATE fleet_cost_accounts
+         SET interrupt_requested_at = COALESCE(interrupt_requested_at, ?),
+             interrupt_deadline_at = COALESCE(interrupt_deadline_at, ?),
+             interrupt_notice_state = CASE WHEN interrupt_requested_at IS NULL
+               THEN 'unattempted' ELSE interrupt_notice_state END,
+             interrupt_stop_state = CASE WHEN interrupt_requested_at IS NULL
+               THEN 'unattempted' ELSE interrupt_stop_state END,
+             interrupt_cause = COALESCE(interrupt_cause, 'budget_hard_limit'),
+             updated_at = ?
+         WHERE fleet_run_id = ? AND owner_type <> 'worker'
+           AND session_id IS NOT NULL AND terminal_at IS NULL
+           AND reservation_released_at IS NULL`
+      )
+      .run(nowIso, deadline, nowIso, run.id).changes;
+  }
+  queries.createFleetEvent(db).run(
+    run.id,
+    decision.reason === "low-confidence"
+      ? "budget_confidence_blocked"
+      : decision.stopAction === "ask-operator"
+        ? "budget_operator_action_required"
+        : interrupt
+          ? "budget_hard_limit_interrupt_scheduled"
+          : "budget_reservation_blocked",
+    "scheduler",
+    JSON.stringify({
+      reason: decision.reason,
+      projectedUsd: decision.projectedUsd,
+      projectedTokens: decision.projectedTokens,
+      reservationUsd: reservation?.usd ?? null,
+      reservationTokens: reservation?.tokens ?? null,
+      reservationConfidence: reservation?.confidence ?? null,
+      reservationBasis: reservation?.basis ?? null,
+      interruptDeadlineAt: deadline,
+      auxiliaryInterrupts,
+    })
+  );
 }
 
 function taskClaims(
@@ -327,9 +607,14 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
   const { db, now } = deps;
   return transaction(db, () => {
     const run = queries.getFleetRun(db).get(runId) as FleetRunRow | undefined;
-    if (!run || run.status !== "running" || run.approval_state !== "approved")
+    if (
+      !run ||
+      !runAllowsFleetExecution(run) ||
+      run.approval_state !== "approved"
+    )
       return null;
     if (run.recovery_required === 1) return null;
+    const resourceLimits = fleetResourceLimitsForRun(run);
     const approvedTasks = db
       .prepare(
         `SELECT * FROM fleet_tasks WHERE fleet_run_id = ? ORDER BY sort_order`
@@ -382,41 +667,10 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
     const plannersActive = activePlannerCount(db);
     if (
       runActive.n >= run.max_concurrency ||
-      localActive.n + plannersActive >= FLEET_DEFAULT_PARALLEL_WORKERS ||
+      localActive.n + plannersActive >= resourceLimits.pty ||
       totalActive.n + plannersActive >= FLEET_MAX_TOTAL_WORKERS
     )
       return null;
-    if (
-      !canReserveFleetBudget({
-        budgetUsd: run.budget_usd,
-        reservedBudgetUsd: run.reserved_budget_usd ?? 0,
-        spentBudgetUsd: run.spent_budget_usd ?? 0,
-      })
-    ) {
-      const ready = db
-        .prepare(
-          `SELECT 1 FROM fleet_tasks WHERE fleet_run_id = ? AND status = 'ready' LIMIT 1`
-        )
-        .get(runId);
-      if (ready) {
-        const changedAt = now().toISOString();
-        db.prepare(
-          `UPDATE fleet_runs SET status = 'paused', pause_mode = 'pause-new', pause_reason = 'budget_exhausted', updated_at = ? WHERE id = ?`
-        ).run(changedAt, runId);
-        queries.createFleetEvent(db).run(
-          runId,
-          "budget_reservation_blocked",
-          "scheduler",
-          JSON.stringify({
-            budgetUsd: run.budget_usd,
-            reservedBudgetUsd: run.reserved_budget_usd ?? 0,
-            spentBudgetUsd: run.spent_budget_usd ?? 0,
-            requestedReservationUsd: FLEET_WORKER_RESERVATION_USD,
-          })
-        );
-      }
-      return null;
-    }
 
     const admissionNowIso = now().toISOString();
     const candidates = db
@@ -465,7 +719,7 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
         .get(candidateProvider, ...ACTIVE_WORKER_STATUSES) as { n: number };
       return (
         providerActive.n + activePlannerCount(db, candidateProvider) <
-        providerConcurrencyCap(candidateProvider)
+        providerConcurrencyCap(candidateProvider, resourceLimits.providerCaps)
       );
     });
     if (!task) return null;
@@ -484,6 +738,8 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
         providerActiveWorkers: providerActive.n + providerPlannersActive,
         totalWorkers: totalActive.n + plannersActive,
         provider: effectiveProvider,
+        providerCaps: resourceLimits.providerCaps,
+        localCapacity: resourceLimits.pty,
       }) < 1
     )
       return null;
@@ -495,6 +751,27 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
       return null;
     }
 
+    const effectiveModel = task.model ?? run.model;
+    const reservation = estimateFleetTaskReservation({
+      provider: effectiveProvider,
+      model: effectiveModel,
+      taskType: task.task_type || "implementation",
+      history: fleetReservationHistory(db),
+    });
+    const budgetDecision = fleetBudgetDecision(run, reservation);
+    const budgetNow = now();
+    recordFleetBudgetWarning(
+      db,
+      run,
+      budgetDecision,
+      reservation,
+      budgetNow.toISOString()
+    );
+    if (!budgetDecision.allowed) {
+      pauseFleetForBudget(db, run, budgetDecision, reservation, budgetNow);
+      return null;
+    }
+
     const attempt = (task.current_attempt ?? 0) + 1;
     const spawnRequestId = `${runId}:${task.id}:${attempt}`;
     const workerId = randomUUID();
@@ -502,6 +779,38 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
     const nowIso = now().toISOString();
     const leaseExpires = new Date(now().getTime() + LEASE_MS).toISOString();
     const epoch = (run.scheduler_epoch ?? 0) + 1;
+    const runtimeResources = acquireFleetRuntimeResources(db, {
+      runId,
+      ownerType: "worker",
+      ownerId: workerId,
+      resources: fleetWorkerResourceRequest({
+        provider: effectiveProvider,
+        repositoryKey: run.repo_id ?? run.project_id ?? workingDirectory,
+      }),
+      limits: resourceLimits,
+      now: new Date(nowIso),
+      leaseExpiresAt: leaseExpires,
+    });
+    if (!runtimeResources.admitted) {
+      if (runtimeResources.retryAt) {
+        db.prepare(
+          `UPDATE fleet_tasks SET retry_not_before = ?, provider_state = 'backoff',
+           provider_last_error = 'provider cooldown active', provider_backoff_event_at = ?,
+           updated_at = ? WHERE id = ? AND status = 'ready'`
+        ).run(runtimeResources.retryAt, nowIso, nowIso, task.id);
+        queries.createFleetEvent(db).run(
+          runId,
+          "provider_cooldown_admission_blocked",
+          "scheduler",
+          JSON.stringify({
+            taskId: task.id,
+            provider: effectiveProvider,
+            retryNotBefore: runtimeResources.retryAt,
+          })
+        );
+      }
+      return null;
+    }
     const claimed = db
       .prepare(
         `UPDATE fleet_tasks SET status = 'leasing', current_attempt = ?, lease_owner = ?,
@@ -520,23 +829,35 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
         nowIso,
         task.id
       );
-    if (claimed.changes !== 1) return null;
+    if (claimed.changes !== 1) {
+      releaseFleetRuntimeResources(db, {
+        ownerType: "worker",
+        ownerId: workerId,
+        now: new Date(nowIso),
+      });
+      return null;
+    }
     db.prepare(
       `INSERT INTO fleet_workers
        (id, fleet_run_id, task_id, status, provider, model, attempt, spawn_request_id,
-        lease_owner, lease_expires_at, reservation_usd, created_at)
-       VALUES (?, ?, ?, 'spawning', ?, ?, ?, ?, ?, ?, ?, ?)`
+        lease_owner, lease_expires_at, reservation_usd, reservation_tokens,
+        reservation_confidence, reservation_basis, cost_confidence, created_at)
+       VALUES (?, ?, ?, 'spawning', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       workerId,
       runId,
       task.id,
       effectiveProvider,
-      task.model ?? run.model,
+      effectiveModel,
       attempt,
       spawnRequestId,
       leaseOwner,
       leaseExpires,
-      FLEET_WORKER_RESERVATION_USD,
+      reservation.usd,
+      reservation.tokens,
+      reservation.confidence,
+      reservation.basis,
+      reservation.confidence,
       nowIso
     );
     reserveWorkerResources(db, {
@@ -547,16 +868,26 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
       nowIso,
     });
     db.prepare(
-      `UPDATE fleet_runs SET scheduler_epoch = ?, reserved_budget_usd = reserved_budget_usd + ?, updated_at = ? WHERE id = ?`
-    ).run(epoch, FLEET_WORKER_RESERVATION_USD, nowIso, runId);
-    queries
-      .createFleetEvent(db)
-      .run(
-        runId,
-        "worker_leased",
-        "scheduler",
-        JSON.stringify({ taskId: task.id, workerId, spawnRequestId, attempt })
-      );
+      `UPDATE fleet_runs SET scheduler_epoch = ?,
+       reserved_budget_usd = reserved_budget_usd + ?,
+       reserved_budget_tokens = reserved_budget_tokens + ?, updated_at = ?
+       WHERE id = ?`
+    ).run(epoch, reservation.usd, reservation.tokens, nowIso, runId);
+    queries.createFleetEvent(db).run(
+      runId,
+      "worker_leased",
+      "scheduler",
+      JSON.stringify({
+        taskId: task.id,
+        workerId,
+        spawnRequestId,
+        attempt,
+        reservationUsd: reservation.usd,
+        reservationTokens: reservation.tokens,
+        reservationConfidence: reservation.confidence,
+        reservationBasis: reservation.basis,
+      })
+    );
     return {
       run: { ...run, scheduler_epoch: epoch },
       task: {
@@ -582,6 +913,7 @@ async function launchLease(
   deps: FleetSchedulerDeps,
   lease: LeasedTask
 ): Promise<void> {
+  let spawnedResult: FleetSpawnResult | null = null;
   try {
     launchingWorkers.add(lease.workerId);
     let attemptContract: FleetWorkerAttemptContract;
@@ -642,6 +974,7 @@ async function launchLease(
           workerId: lease.workerId,
         },
       });
+      spawnedResult = result;
     } finally {
       launchingWorkers.delete(lease.workerId);
     }
@@ -649,6 +982,16 @@ async function launchLease(
       deps.db,
       () => {
         const nowIso = deps.now().toISOString();
+        const queueLaunchCleanup = (cause: string) => {
+          deps.db
+            .prepare(
+              `UPDATE fleet_workers SET status = 'cleanup_pending',
+               terminal_cause = ?, failure_code = ?
+               WHERE id = ? AND status = 'running'`
+            )
+            .run(cause, cause, lease.workerId);
+          return "cleanup" as const;
+        };
         const workerUpdate = deps.db
           .prepare(
             `UPDATE fleet_workers SET status = 'running', session_id = ?, worktree_path = ?,
@@ -695,6 +1038,51 @@ async function launchLease(
             (current.session_id == null ||
               current.session_id === result.sessionId)
           ) {
+            deps.db
+              .prepare(
+                `UPDATE fleet_runtime_leases SET lease_expires_at = NULL
+                 WHERE owner_type = 'worker' AND owner_id = ? AND status = 'reserved'`
+              )
+              .run(lease.workerId);
+            const session = queries
+              .getSession(deps.db)
+              .get(result.sessionId) as Session | undefined;
+            if (!session) return queueLaunchCleanup("cost_session_missing");
+            const currentWorker = deps.db
+              .prepare(
+                `SELECT reservation_usd, reservation_tokens,
+                        reservation_confidence, reservation_basis
+                 FROM fleet_workers WHERE id = ?`
+              )
+              .get(lease.workerId) as FleetWorkerRow | undefined;
+            if (
+              !registerFleetCostAccount(deps.db, {
+                runId: lease.run.id,
+                ownerType: "worker",
+                ownerId: lease.workerId,
+                taskId: lease.task.id,
+                session,
+                provider: lease.task.agent_type ?? lease.run.provider,
+                model: lease.task.model ?? lease.run.model,
+                confidence: currentWorker?.reservation_confidence,
+                reservation: currentWorker
+                  ? {
+                      usd: currentWorker.reservation_usd ?? 0,
+                      tokens: currentWorker.reservation_tokens ?? 0,
+                      confidence:
+                        currentWorker.reservation_confidence ?? "unknown",
+                      basis: (currentWorker.reservation_basis ??
+                        "unknown-provider") as FleetTaskReservation["basis"],
+                      sampleCount: 0,
+                    }
+                  : undefined,
+              })
+            )
+              return queueLaunchCleanup("cost_session_owner_collision");
+            clearFleetProviderCooldown(
+              deps.db,
+              lease.task.agent_type ?? lease.run.provider
+            );
             releaseWorkerResources(
               deps.db,
               lease.workerId,
@@ -705,6 +1093,49 @@ async function launchLease(
           }
           return "cleanup";
         }
+        deps.db
+          .prepare(
+            `UPDATE fleet_runtime_leases SET lease_expires_at = NULL
+             WHERE owner_type = 'worker' AND owner_id = ? AND status = 'reserved'`
+          )
+          .run(lease.workerId);
+        const session = queries.getSession(deps.db).get(result.sessionId) as
+          Session | undefined;
+        if (!session) return queueLaunchCleanup("cost_session_missing");
+        const currentWorker = deps.db
+          .prepare(
+            `SELECT reservation_usd, reservation_tokens,
+                      reservation_confidence, reservation_basis
+               FROM fleet_workers WHERE id = ?`
+          )
+          .get(lease.workerId) as FleetWorkerRow | undefined;
+        if (
+          !registerFleetCostAccount(deps.db, {
+            runId: lease.run.id,
+            ownerType: "worker",
+            ownerId: lease.workerId,
+            taskId: lease.task.id,
+            session,
+            provider: lease.task.agent_type ?? lease.run.provider,
+            model: lease.task.model ?? lease.run.model,
+            confidence: currentWorker?.reservation_confidence,
+            reservation: currentWorker
+              ? {
+                  usd: currentWorker.reservation_usd ?? 0,
+                  tokens: currentWorker.reservation_tokens ?? 0,
+                  confidence: currentWorker.reservation_confidence ?? "unknown",
+                  basis: (currentWorker.reservation_basis ??
+                    "unknown-provider") as FleetTaskReservation["basis"],
+                  sampleCount: 0,
+                }
+              : undefined,
+          })
+        )
+          return queueLaunchCleanup("cost_session_owner_collision");
+        clearFleetProviderCooldown(
+          deps.db,
+          lease.task.agent_type ?? lease.run.provider
+        );
         releaseWorkerResources(
           deps.db,
           lease.workerId,
@@ -743,7 +1174,8 @@ async function launchLease(
             taskId: lease.task.id,
             workerId: lease.workerId,
             sessionId: result.sessionId,
-          })
+          }),
+          { controlPlane: true }
         );
         return "accepted";
       }
@@ -769,14 +1201,24 @@ async function launchLease(
             );
           if (changed.changes !== 1) return;
           if (canceled) {
-            releaseWorkerResources(deps.db, lease.workerId, nowIso);
+            releaseWorkerResourcesExceptWorktree(
+              deps.db,
+              lease.workerId,
+              nowIso
+            );
+            settleWorkerBudget(
+              deps.db,
+              lease.workerId,
+              new Date(nowIso),
+              false
+            );
           } else {
-            deps.db
-              .prepare(
-                `UPDATE fleet_resource_leases SET status = 'released', released_at = ?
-                 WHERE worker_id = ? AND status = 'reserved' AND resource_type <> 'worktree'`
-              )
-              .run(nowIso, lease.workerId);
+            releaseWorkerResourcesExceptWorktree(
+              deps.db,
+              lease.workerId,
+              nowIso
+            );
+            settleWorkerBudget(deps.db, lease.workerId, new Date(nowIso), true);
             deps.db
               .prepare(
                 `UPDATE fleet_tasks SET status = 'needs_inspection', failure_code = 'recovery_late_spawn',
@@ -821,6 +1263,13 @@ async function launchLease(
                WHERE worker_id = ? AND resource_type <> 'git_operation'`
             )
             .run(lease.workerId);
+          deps.db
+            .prepare(
+              `UPDATE fleet_runtime_leases SET status = 'reserved', released_at = NULL,
+               lease_expires_at = NULL WHERE owner_type = 'worker' AND owner_id = ?
+               AND resource_type <> 'git_operation'`
+            )
+            .run(lease.workerId);
           queries.createFleetEvent(deps.db).run(
             lease.run.id,
             canceled ? "cancel_cleanup_pending" : "spawn_cleanup_pending",
@@ -835,13 +1284,18 @@ async function launchLease(
     }
   } catch (error) {
     const failedSessionId =
-      error instanceof FleetSpawnError ? error.sessionId : null;
+      error instanceof FleetSpawnError
+        ? error.sessionId
+        : (spawnedResult?.sessionId ?? null);
     const failedWorktreePath =
-      error instanceof FleetSpawnError ? error.worktreePath : null;
+      error instanceof FleetSpawnError
+        ? error.worktreePath
+        : (spawnedResult?.worktreePath ?? null);
+    const failedBranchName = spawnedResult?.branchName ?? null;
     const preserved = failedSessionId != null || failedWorktreePath != null;
     const failureCount = (lease.task.provider_failure_count ?? 0) + 1;
     const retry = !preserved && lease.attempt < (lease.task.max_attempts ?? 2);
-    const retryNotBefore = retry
+    let retryNotBefore = retry
       ? fleetProviderRetryNotBefore(deps.now(), failureCount)
       : null;
     const errorText =
@@ -856,6 +1310,16 @@ async function launchLease(
     }
     transaction(deps.db, () => {
       const nowIso = deps.now().toISOString();
+      if (looksLikeProviderRateLimit(error)) {
+        const cooldownUntil = recordFleetProviderCooldown(deps.db, {
+          provider: lease.task.agent_type ?? lease.run.provider,
+          reason: errorText,
+          now: new Date(nowIso),
+        });
+        if (retry && (!retryNotBefore || cooldownUntil > retryNotBefore)) {
+          retryNotBefore = cooldownUntil;
+        }
+      }
       const current = deps.db
         .prepare(`SELECT status FROM fleet_workers WHERE id = ?`)
         .get(lease.workerId) as { status: string } | undefined;
@@ -864,6 +1328,7 @@ async function launchLease(
         .prepare(
           `UPDATE fleet_workers SET status = ?, terminal_cause = ?, failure_code = ?,
            session_id = COALESCE(?, session_id), worktree_path = COALESCE(?, worktree_path),
+           branch_name = COALESCE(?, branch_name),
            ended_at = ?, lease_owner = NULL, lease_expires_at = NULL WHERE id = ?`
         )
         .run(
@@ -876,6 +1341,7 @@ async function launchLease(
           errorText,
           failedSessionId,
           failedWorktreePath,
+          failedBranchName,
           stopFailed ? null : nowIso,
           lease.workerId
         );
@@ -896,6 +1362,22 @@ async function launchLease(
                AND resource_type NOT IN ('worktree'${stopFailed ? ", 'pty', 'provider'" : ""})`
           )
           .run(nowIso, lease.workerId);
+        if (stopFailed) {
+          releaseFleetRuntimeResources(deps.db, {
+            ownerType: "worker",
+            ownerId: lease.workerId,
+            now: new Date(nowIso),
+            resourceTypes: ["git_operation"],
+          });
+          deps.db
+            .prepare(
+              `UPDATE fleet_runtime_leases SET lease_expires_at = NULL
+               WHERE owner_type = 'worker' AND owner_id = ? AND status = 'reserved'`
+            )
+            .run(lease.workerId);
+        } else {
+          releaseWorkerResourcesExceptWorktree(deps.db, lease.workerId, nowIso);
+        }
       } else {
         releaseWorkerResources(deps.db, lease.workerId, nowIso);
       }
@@ -903,12 +1385,16 @@ async function launchLease(
         .prepare(
           `UPDATE fleet_tasks SET status = ?, failure_code = 'spawn_failed',
            lease_owner = NULL, lease_expires_at = NULL, spawn_request_id = NULL,
+           worktree_path = COALESCE(?, worktree_path),
+           branch_name = COALESCE(?, branch_name),
            retry_not_before = ?, provider_failure_count = ?, provider_state = ?,
            provider_last_error = ?, provider_backoff_event_at = ?,
            ended_at = CASE WHEN ? THEN NULL ELSE ? END, updated_at = ? WHERE id = ?`
         )
         .run(
           preserved ? "needs_inspection" : retry ? "ready" : "failed",
+          failedWorktreePath,
+          failedBranchName,
           retryNotBefore,
           failureCount,
           retry ? "backoff" : "failed",
@@ -919,17 +1405,14 @@ async function launchLease(
           nowIso,
           lease.task.id
         );
-      deps.db
-        .prepare(
-          `UPDATE fleet_runs SET reserved_budget_usd = MAX(0, reserved_budget_usd - ?),
-           spent_budget_usd = spent_budget_usd + ?, updated_at = ? WHERE id = ?`
-        )
-        .run(
-          FLEET_WORKER_RESERVATION_USD,
-          preserved ? FLEET_WORKER_RESERVATION_USD : 0,
-          nowIso,
-          lease.run.id
+      if (!stopFailed) {
+        settleWorkerBudget(
+          deps.db,
+          lease.workerId,
+          new Date(nowIso),
+          preserved
         );
+      }
       queries.createFleetEvent(deps.db).run(
         lease.run.id,
         retry ? "provider_spawn_backoff_scheduled" : "worker_spawn_failed",
@@ -1001,23 +1484,12 @@ function finalizeFleetReportCleanup(
         input.worker.id
       );
     if (changed.changes !== 1) return false;
-    deps.db
-      .prepare(
-        `UPDATE fleet_resource_leases SET status = 'released', released_at = ?
-         WHERE worker_id = ? AND status = 'reserved' AND resource_type <> 'worktree'`
-      )
-      .run(input.nowIso, input.worker.id);
-    deps.db
-      .prepare(
-        `UPDATE fleet_runs SET reserved_budget_usd = MAX(0, reserved_budget_usd - ?),
-         spent_budget_usd = spent_budget_usd + ?, updated_at = ? WHERE id = ?`
-      )
-      .run(
-        input.worker.reservation_usd ?? 0,
-        input.worker.reservation_usd ?? 0,
-        input.nowIso,
-        input.worker.fleet_run_id
-      );
+    releaseWorkerResourcesExceptWorktree(
+      deps.db,
+      input.worker.id,
+      input.nowIso
+    );
+    settleWorkerBudget(deps.db, input.worker.id, new Date(input.nowIso), true);
     queries.createFleetEvent(deps.db).run(
       input.worker.fleet_run_id,
       "worker_report_cleanup_completed",
@@ -1159,53 +1631,56 @@ async function pollFleetWorkerReport(
       taskStatus === "verifying" || taskStatus === "completed"
         ? "info"
         : "blocker";
-    const insertArtifact = deps.db.prepare(
-      `INSERT OR IGNORE INTO fleet_artifacts
-       (id, fleet_run_id, task_id, worker_id, attempt, plan_hash, base_sha,
-        head_sha, content_hash, metadata_json, byte_count, artifact_type,
-        title, body, severity, actor, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    insertFleetArtifact(
+      deps.db,
+      {
+        id: reportArtifactId,
+        runId: run.id,
+        taskId: task.id,
+        workerId: worker.id,
+        attempt: worker.attempt,
+        planHash: run.approved_plan_hash,
+        baseSha: worker.base_sha,
+        headSha: gitState?.headSha ?? null,
+        contentHash: evidence.report.contentHash,
+        metadataJson: JSON.stringify({
+          accepted,
+          status: reportStatus,
+          failureCode,
+        }),
+        artifactType: accepted ? "worker_report" : "worker_report_rejected",
+        title: accepted ? "Worker completion report" : "Rejected worker report",
+        body: evidence.report.body,
+        severity,
+        actor: accepted ? "worker" : "scheduler",
+        createdAt: nowIso,
+      },
+      { orIgnore: true }
     );
-    insertArtifact.run(
-      reportArtifactId,
-      run.id,
-      task.id,
-      worker.id,
-      worker.attempt,
-      run.approved_plan_hash,
-      worker.base_sha,
-      gitState?.headSha ?? null,
-      evidence.report.contentHash,
-      JSON.stringify({ accepted, status: reportStatus, failureCode }),
-      evidence.report.bytes,
-      accepted ? "worker_report" : "worker_report_rejected",
-      accepted ? "Worker completion report" : "Rejected worker report",
-      evidence.report.body,
-      severity,
-      accepted ? "worker" : "scheduler",
-      nowIso
-    );
-    insertArtifact.run(
-      diffArtifactId,
-      run.id,
-      task.id,
-      worker.id,
-      worker.attempt,
-      run.approved_plan_hash,
-      worker.base_sha,
-      gitState?.headSha ?? null,
-      evidence.diff.contentHash,
-      JSON.stringify({
-        claimDrift:
-          collection.kind === "collected" ? collection.claimDrift : null,
-      }),
-      evidence.diff.bytes,
-      "worker_git_state",
-      "Authoritative worker Git state",
-      evidence.diff.body,
-      severity,
-      "scheduler",
-      nowIso
+    insertFleetArtifact(
+      deps.db,
+      {
+        id: diffArtifactId,
+        runId: run.id,
+        taskId: task.id,
+        workerId: worker.id,
+        attempt: worker.attempt,
+        planHash: run.approved_plan_hash,
+        baseSha: worker.base_sha,
+        headSha: gitState?.headSha ?? null,
+        contentHash: evidence.diff.contentHash,
+        metadataJson: JSON.stringify({
+          claimDrift:
+            collection.kind === "collected" ? collection.claimDrift : null,
+        }),
+        artifactType: "worker_git_state",
+        title: "Authoritative worker Git state",
+        body: evidence.diff.body,
+        severity,
+        actor: "scheduler",
+        createdAt: nowIso,
+      },
+      { orIgnore: true }
     );
     deps.db
       .prepare(
@@ -1309,17 +1784,28 @@ async function pollActiveWorkers(
     }
     let terminalStatus: "completed" | "failed" | "dead" | null = null;
     let terminalCause: string | null = null;
+    const interruptStopStarted = ["requested", "confirmed"].includes(
+      worker.interrupt_stop_state ?? "unattempted"
+    );
+    const interruptTerminalCause = !interruptStopStarted
+      ? null
+      : worker.interrupt_cause === "budget_hard_limit"
+        ? "budget_hard_limit_stop_requested"
+        : worker.interrupt_cause === "operator_pause"
+          ? "operator_interrupt_stop_requested"
+          : "interrupt_state_invalid";
     let claimedForCleanup = false;
     let claimedCleanupCause: string | null = null;
     if (!session) {
       terminalStatus = "dead";
-      terminalCause = "session_missing";
+      terminalCause = interruptTerminalCause ?? "session_missing";
     } else if (
       session.worker_status === "completed" ||
       session.worker_status === "failed"
     ) {
       terminalStatus = session.worker_status;
-      terminalCause = `session_${session.worker_status}`;
+      terminalCause =
+        interruptTerminalCause ?? `session_${session.worker_status}`;
       let backendAlive = true;
       try {
         backendAlive = await deps.sessionExists(session);
@@ -1356,9 +1842,19 @@ async function pollActiveWorkers(
           continue;
         }
       }
-    } else if (!(await deps.sessionExists(session))) {
-      terminalStatus = "dead";
-      terminalCause = "backend_missing";
+    } else {
+      let backendAlive = true;
+      try {
+        backendAlive = await deps.sessionExists(session);
+      } catch {
+        // A transient backend probe failure is not evidence that the exact
+        // session died. Keep the worker active and retry on the next tick.
+        backendAlive = true;
+      }
+      if (!backendAlive) {
+        terminalStatus = "dead";
+        terminalCause = interruptTerminalCause ?? "backend_missing";
+      }
     }
     if (!terminalStatus || !terminalCause) continue;
     transaction(deps.db, () => {
@@ -1379,23 +1875,8 @@ async function pollActiveWorkers(
           claimedCleanupCause
         );
       if (changed.changes !== 1) return;
-      deps.db
-        .prepare(
-          `UPDATE fleet_resource_leases SET status = 'released', released_at = ?
-           WHERE worker_id = ? AND status = 'reserved' AND resource_type <> 'worktree'`
-        )
-        .run(nowIso, worker.id);
-      deps.db
-        .prepare(
-          `UPDATE fleet_runs SET reserved_budget_usd = MAX(0, reserved_budget_usd - ?),
-           spent_budget_usd = spent_budget_usd + ?, updated_at = ? WHERE id = ?`
-        )
-        .run(
-          worker.reservation_usd ?? 0,
-          worker.reservation_usd ?? 0,
-          nowIso,
-          runId
-        );
+      releaseWorkerResourcesExceptWorktree(deps.db, worker.id, nowIso);
+      settleWorkerBudget(deps.db, worker.id, new Date(nowIso), true);
       deps.db
         .prepare(
           `UPDATE fleet_tasks SET status = ?, failure_code = ?, ended_at = ?, updated_at = ?
@@ -1421,6 +1902,849 @@ async function pollActiveWorkers(
       );
     });
   }
+}
+
+function enforceFleetBudget(deps: FleetSchedulerDeps, runId: string): void {
+  transaction(deps.db, () => {
+    const run = queries.getFleetRun(deps.db).get(runId) as
+      FleetRunRow | undefined;
+    if (!run || TERMINAL_RUN_STATUSES.includes(run.status)) return;
+    const decision = fleetBudgetDecision(run);
+    const now = deps.now();
+    recordFleetBudgetWarning(
+      deps.db,
+      run,
+      decision,
+      undefined,
+      now.toISOString()
+    );
+    if (!decision.allowed) {
+      pauseFleetForBudget(deps.db, run, decision, undefined, now);
+    }
+  });
+}
+
+function enforceAllFleetBudgets(deps: FleetSchedulerDeps): void {
+  const runs = deps.db
+    .prepare(
+      `SELECT id FROM fleet_runs
+       WHERE status NOT IN ('completed', 'failed', 'canceled')
+         AND (budget_usd IS NOT NULL OR budget_tokens IS NOT NULL)
+       ORDER BY updated_at, id`
+    )
+    .all() as { id: string }[];
+  for (const run of runs) enforceFleetBudget(deps, run.id);
+}
+
+async function processFleetInterrupts(
+  deps: FleetSchedulerDeps,
+  runId: string
+): Promise<void> {
+  const recordAttention = (worker: FleetWorkerRow, reason: string) => {
+    transaction(deps.db, () => {
+      const alreadyRecorded = deps.db
+        .prepare(
+          `SELECT 1 FROM fleet_events
+           WHERE fleet_run_id = ?
+             AND event_type = 'worker_interrupt_attention_required'
+             AND json_valid(payload)
+             AND json_extract(payload, '$.workerId') = ?
+             AND json_extract(payload, '$.requestedAt') IS ?
+           LIMIT 1`
+        )
+        .get(runId, worker.id, worker.interrupt_requested_at ?? null);
+      if (alreadyRecorded) return;
+      queries.createFleetEvent(deps.db).run(
+        runId,
+        "worker_interrupt_attention_required",
+        "scheduler",
+        JSON.stringify({
+          workerId: worker.id,
+          requestedAt: worker.interrupt_requested_at,
+          reason,
+        })
+      );
+    });
+  };
+  const workers = deps.db
+    .prepare(
+      `SELECT * FROM fleet_workers WHERE fleet_run_id = ?
+       AND status IN ('running', 'waiting_for_operator')
+       AND interrupt_requested_at IS NOT NULL
+       AND interrupt_deadline_at IS NOT NULL`
+    )
+    .all(runId) as FleetWorkerRow[];
+  for (const worker of workers) {
+    const now = deps.now();
+    const cause = worker.interrupt_cause;
+    if (cause !== "budget_hard_limit" && cause !== "operator_pause") {
+      recordAttention(worker, "interrupt cause is invalid");
+      continue;
+    }
+    const activeSessionOwners = worker.session_id
+      ? (
+          deps.db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM fleet_workers
+             WHERE session_id = ?
+               AND status IN ('running', 'waiting_for_operator')`
+            )
+            .get(worker.session_id) as { count: number }
+        ).count
+      : 0;
+    if (activeSessionOwners !== 1) {
+      recordAttention(
+        worker,
+        "interrupt session is not bound to exactly one active worker"
+      );
+      continue;
+    }
+    const decision = decideFleetInterruptAction(
+      {
+        runId,
+        workerId: worker.id,
+        sessionId: worker.session_id,
+        workerStatus: worker.status,
+        interruptRequestedAt: worker.interrupt_requested_at ?? null,
+        interruptDeadlineAt: worker.interrupt_deadline_at ?? null,
+        noticeState: worker.interrupt_notice_state ?? "unattempted",
+        stopState: worker.interrupt_stop_state ?? "unattempted",
+      },
+      now
+    );
+    if (decision.kind === "operator_attention") {
+      recordAttention(worker, decision.reason);
+      continue;
+    }
+    if (decision.kind === "none" || decision.kind === "wait_for_deadline") {
+      continue;
+    }
+    if (decision.kind === "deliver_notice") {
+      const claimed = transaction(deps.db, () => {
+        if (decision.replay) {
+          return Boolean(
+            deps.db
+              .prepare(
+                `SELECT 1 FROM fleet_workers
+                 WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+                   AND status IN ('running', 'waiting_for_operator')
+                   AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+                   AND interrupt_notice_state = 'requested'
+                   AND 1 = (
+                     SELECT COUNT(*) FROM fleet_workers bound
+                     WHERE bound.session_id = ?
+                       AND bound.status IN ('running', 'waiting_for_operator')
+                   )`
+              )
+              .get(
+                worker.id,
+                runId,
+                worker.session_id,
+                decision.requestedAt,
+                decision.deadlineAt,
+                worker.session_id
+              )
+          );
+        }
+        const changed = deps.db
+          .prepare(
+            `UPDATE fleet_workers SET interrupt_notice_state = 'requested'
+             WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+               AND status IN ('running', 'waiting_for_operator')
+               AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+               AND interrupt_notice_state = 'unattempted'
+               AND 1 = (
+                 SELECT COUNT(*) FROM fleet_workers bound
+                 WHERE bound.session_id = ?
+                   AND bound.status IN ('running', 'waiting_for_operator')
+               )`
+          )
+          .run(
+            worker.id,
+            runId,
+            worker.session_id,
+            decision.requestedAt,
+            decision.deadlineAt,
+            worker.session_id
+          );
+        if (changed.changes !== 1) return false;
+        queries.createFleetEvent(deps.db).run(
+          runId,
+          "worker_interrupt_notice_claimed",
+          "scheduler",
+          JSON.stringify({
+            workerId: worker.id,
+            sessionId: worker.session_id,
+            operationKey: decision.operationKey,
+            cause,
+            requestedAt: decision.requestedAt,
+            deadlineAt: decision.deadlineAt,
+          })
+        );
+        return true;
+      });
+      if (!claimed || !worker.session_id) continue;
+      let delivered = false;
+      try {
+        await deps.sendMessage(
+          worker.session_id,
+          cause === "budget_hard_limit"
+            ? "[Stoa Fleet] The configured hard budget limit has been reached. Reach a safe stopping point and submit your report now; Stoa will stop this worker after the grace period."
+            : "[Stoa Fleet] This run was paused with interruption requested. Reach a safe stopping point and submit your report now; Stoa will stop this worker after the grace period."
+        );
+        delivered = true;
+      } catch {
+        delivered = false;
+      }
+      transaction(deps.db, () => {
+        deps.db
+          .prepare(
+            `UPDATE fleet_workers SET interrupt_notice_state = ?
+             WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+               AND interrupt_requested_at = ?
+               AND interrupt_notice_state = 'requested'
+               AND 1 = (
+                 SELECT COUNT(*) FROM fleet_workers bound
+                 WHERE bound.session_id = ?
+                   AND bound.status IN ('running', 'waiting_for_operator')
+               )`
+          )
+          .run(
+            delivered ? "delivered" : "failed",
+            worker.id,
+            runId,
+            worker.session_id,
+            decision.requestedAt,
+            worker.session_id
+          );
+        queries.createFleetEvent(deps.db).run(
+          runId,
+          delivered
+            ? "worker_interrupt_notice_delivered"
+            : "worker_interrupt_notice_failed",
+          "scheduler",
+          JSON.stringify({
+            workerId: worker.id,
+            sessionId: worker.session_id,
+            operationKey: decision.operationKey,
+            cause,
+            requestedAt: decision.requestedAt,
+            deadlineAt: decision.deadlineAt,
+          })
+        );
+      });
+      continue;
+    }
+    const stopClaimed = transaction(deps.db, () => {
+      if (decision.replay) {
+        return Boolean(
+          deps.db
+            .prepare(
+              `SELECT 1 FROM fleet_workers
+               WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+                 AND status IN ('running', 'waiting_for_operator')
+                 AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+                 AND interrupt_stop_state = 'requested'
+                 AND 1 = (
+                   SELECT COUNT(*) FROM fleet_workers bound
+                   WHERE bound.session_id = ?
+                     AND bound.status IN ('running', 'waiting_for_operator')
+                 )`
+            )
+            .get(
+              worker.id,
+              runId,
+              worker.session_id,
+              decision.requestedAt,
+              decision.deadlineAt,
+              worker.session_id
+            )
+        );
+      }
+      const changed = deps.db
+        .prepare(
+          `UPDATE fleet_workers SET interrupt_stop_state = 'requested'
+           WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+             AND status IN ('running', 'waiting_for_operator')
+             AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+             AND interrupt_stop_state = 'unattempted'
+             AND 1 = (
+               SELECT COUNT(*) FROM fleet_workers bound
+               WHERE bound.session_id = ?
+                 AND bound.status IN ('running', 'waiting_for_operator')
+             )`
+        )
+        .run(
+          worker.id,
+          runId,
+          worker.session_id,
+          decision.requestedAt,
+          decision.deadlineAt,
+          worker.session_id
+        );
+      if (changed.changes !== 1) return false;
+      queries.createFleetEvent(deps.db).run(
+        runId,
+        "worker_interrupt_stop_requested",
+        "scheduler",
+        JSON.stringify({
+          workerId: worker.id,
+          sessionId: worker.session_id,
+          operationKey: decision.operationKey,
+          cause,
+          requestedAt: decision.requestedAt,
+          deadlineAt: decision.deadlineAt,
+        })
+      );
+      return true;
+    });
+    if (!stopClaimed || !worker.session_id) continue;
+    try {
+      await deps.stopSession(worker.session_id, "failed");
+    } catch {
+      continue;
+    }
+    transaction(deps.db, () => {
+      const changed = deps.db
+        .prepare(
+          `UPDATE fleet_workers SET interrupt_stop_state = 'confirmed',
+           terminal_cause = ?
+           WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+             AND status IN ('running', 'waiting_for_operator')
+             AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+             AND interrupt_stop_state = 'requested'
+             AND 1 = (
+               SELECT COUNT(*) FROM fleet_workers bound
+               WHERE bound.session_id = ?
+                 AND bound.status IN ('running', 'waiting_for_operator')
+             )`
+        )
+        .run(
+          cause === "budget_hard_limit"
+            ? "budget_hard_limit_stop_requested"
+            : "operator_interrupt_stop_requested",
+          worker.id,
+          runId,
+          worker.session_id,
+          decision.requestedAt,
+          decision.deadlineAt,
+          worker.session_id
+        );
+      if (changed.changes !== 1) return;
+      queries.createFleetEvent(deps.db).run(
+        runId,
+        "worker_interrupt_stop_confirmed",
+        "scheduler",
+        JSON.stringify({
+          workerId: worker.id,
+          sessionId: worker.session_id,
+          operationKey: decision.operationKey,
+          cause,
+          requestedAt: decision.requestedAt,
+          deadlineAt: decision.deadlineAt,
+        }),
+        { controlPlane: true }
+      );
+    });
+  }
+}
+
+interface FleetAuxiliaryInterruptRow {
+  id: string;
+  fleet_run_id: string;
+  session_id: string | null;
+  owner_type: string;
+  owner_id: string;
+  interrupt_requested_at: string | null;
+  interrupt_deadline_at: string | null;
+  interrupt_notice_state: string;
+  interrupt_stop_state: string;
+  interrupt_cause: string | null;
+}
+
+function auxiliarySessionHasExactOwner(
+  db: Database.Database,
+  account: FleetAuxiliaryInterruptRow
+): boolean {
+  if (!account.session_id) return false;
+  const activeAccounts = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM fleet_cost_accounts
+       WHERE session_id = ? AND terminal_at IS NULL
+         AND reservation_released_at IS NULL`
+    )
+    .get(account.session_id) as { count: number };
+  const activeWorkers = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM fleet_workers
+       WHERE session_id = ? AND status IN ('running', 'waiting_for_operator')`
+    )
+    .get(account.session_id) as { count: number };
+  return activeAccounts.count === 1 && activeWorkers.count === 0;
+}
+
+function recordAuxiliaryInterruptAttention(
+  deps: FleetSchedulerDeps,
+  account: FleetAuxiliaryInterruptRow,
+  reason: string
+): void {
+  transaction(deps.db, () => {
+    const exists = deps.db
+      .prepare(
+        `SELECT 1 FROM fleet_events
+         WHERE fleet_run_id = ?
+           AND event_type = 'auxiliary_interrupt_attention_required'
+           AND json_valid(payload)
+           AND json_extract(payload, '$.accountId') = ?
+           AND json_extract(payload, '$.requestedAt') IS ?
+         LIMIT 1`
+      )
+      .get(account.fleet_run_id, account.id, account.interrupt_requested_at);
+    if (exists) return;
+    queries.createFleetEvent(deps.db).run(
+      account.fleet_run_id,
+      "auxiliary_interrupt_attention_required",
+      "scheduler",
+      JSON.stringify({
+        accountId: account.id,
+        ownerType: account.owner_type,
+        ownerId: account.owner_id,
+        sessionId: account.session_id,
+        requestedAt: account.interrupt_requested_at,
+        reason,
+      })
+    );
+  });
+}
+
+function confirmAuxiliaryInterruptStop(
+  deps: FleetSchedulerDeps,
+  account: FleetAuxiliaryInterruptRow,
+  requestedAt: string,
+  deadlineAt: string,
+  operationKey: string
+): boolean {
+  const ownerType = account.owner_type;
+  if (!isAuxiliaryCostOwnerType(ownerType)) return false;
+  return transaction(deps.db, () => {
+    const now = deps.now();
+    let changed = deps.db
+      .prepare(
+        `UPDATE fleet_cost_accounts SET interrupt_stop_state = 'confirmed',
+         updated_at = ?
+         WHERE id = ? AND fleet_run_id = ? AND owner_type = ? AND owner_id = ?
+           AND session_id = ? AND terminal_at IS NULL
+           AND reservation_released_at IS NULL
+           AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+           AND interrupt_stop_state = 'requested'
+           AND 1 = (
+             SELECT COUNT(*) FROM fleet_cost_accounts bound
+             WHERE bound.session_id = ? AND bound.terminal_at IS NULL
+               AND bound.reservation_released_at IS NULL
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM fleet_workers worker
+             WHERE worker.session_id = ?
+               AND worker.status IN ('running', 'waiting_for_operator')
+           )`
+      )
+      .run(
+        now.toISOString(),
+        account.id,
+        account.fleet_run_id,
+        ownerType,
+        account.owner_id,
+        account.session_id,
+        requestedAt,
+        deadlineAt,
+        account.session_id,
+        account.session_id
+      );
+    let settledByOwner = false;
+    if (changed.changes !== 1) {
+      // The owning runtime may observe the stopped session and settle while the
+      // external stop call is in flight. That terminal account is authoritative
+      // completion; persist the interrupt confirmation without charging again.
+      changed = deps.db
+        .prepare(
+          `UPDATE fleet_cost_accounts SET interrupt_stop_state = 'confirmed',
+           updated_at = ?
+           WHERE id = ? AND fleet_run_id = ? AND owner_type = ? AND owner_id = ?
+             AND session_id = ? AND terminal_at IS NOT NULL
+             AND reservation_released_at IS NOT NULL
+             AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+             AND interrupt_stop_state = 'requested'`
+        )
+        .run(
+          now.toISOString(),
+          account.id,
+          account.fleet_run_id,
+          ownerType,
+          account.owner_id,
+          account.session_id,
+          requestedAt,
+          deadlineAt
+        );
+      if (changed.changes !== 1) return false;
+      settledByOwner = true;
+    }
+    if (!settledByOwner) {
+      if (
+        !settleFleetCostOwner(deps.db, {
+          runId: account.fleet_run_id,
+          ownerType,
+          ownerId: account.owner_id,
+          now,
+        })
+      ) {
+        throw new Error("auxiliary interrupt cost settlement changed");
+      }
+    }
+    releaseFleetRuntimeResources(deps.db, {
+      ownerType,
+      ownerId: account.owner_id,
+      now,
+    });
+    queries.createFleetEvent(deps.db).run(
+      account.fleet_run_id,
+      "auxiliary_interrupt_stop_confirmed",
+      "scheduler",
+      JSON.stringify({
+        accountId: account.id,
+        ownerType,
+        ownerId: account.owner_id,
+        sessionId: account.session_id,
+        operationKey,
+        cause: account.interrupt_cause,
+        requestedAt,
+        deadlineAt,
+        settledByOwner,
+      }),
+      { controlPlane: true }
+    );
+    return true;
+  });
+}
+
+async function processFleetAuxiliaryInterrupts(
+  deps: FleetSchedulerDeps,
+  runId: string
+): Promise<void> {
+  const accounts = deps.db
+    .prepare(
+      `SELECT id, fleet_run_id, session_id, owner_type, owner_id,
+              interrupt_requested_at, interrupt_deadline_at,
+              interrupt_notice_state, interrupt_stop_state, interrupt_cause
+       FROM fleet_cost_accounts
+       WHERE fleet_run_id = ? AND owner_type <> 'worker'
+         AND terminal_at IS NULL AND reservation_released_at IS NULL
+         AND interrupt_requested_at IS NOT NULL
+         AND interrupt_deadline_at IS NOT NULL
+       ORDER BY interrupt_requested_at, id LIMIT ?`
+    )
+    .all(runId, FLEET_INTERRUPT_MAX_WORKERS) as FleetAuxiliaryInterruptRow[];
+
+  for (const account of accounts) {
+    if (!isAuxiliaryCostOwnerType(account.owner_type)) {
+      recordAuxiliaryInterruptAttention(
+        deps,
+        account,
+        "auxiliary interrupt owner type is invalid"
+      );
+      continue;
+    }
+    if (!auxiliarySessionHasExactOwner(deps.db, account)) {
+      recordAuxiliaryInterruptAttention(
+        deps,
+        account,
+        "interrupt session is not bound to exactly one active auxiliary owner"
+      );
+      continue;
+    }
+    if (
+      account.interrupt_cause !== "budget_hard_limit" &&
+      account.interrupt_cause !== "operator_pause"
+    ) {
+      recordAuxiliaryInterruptAttention(
+        deps,
+        account,
+        "auxiliary interrupt cause is invalid"
+      );
+      continue;
+    }
+    const decision = decideFleetInterruptAction(
+      {
+        runId,
+        workerId: account.id,
+        sessionId: account.session_id,
+        workerStatus: "running",
+        interruptRequestedAt: account.interrupt_requested_at,
+        interruptDeadlineAt: account.interrupt_deadline_at,
+        noticeState: account.interrupt_notice_state,
+        stopState: account.interrupt_stop_state,
+      },
+      deps.now()
+    );
+    if (decision.kind === "operator_attention") {
+      recordAuxiliaryInterruptAttention(deps, account, decision.reason);
+      continue;
+    }
+    if (decision.kind === "none" || decision.kind === "wait_for_deadline") {
+      continue;
+    }
+    if (decision.kind === "deliver_notice") {
+      const claimed = transaction(deps.db, () => {
+        if (decision.replay) {
+          return Boolean(
+            deps.db
+              .prepare(
+                `SELECT 1 FROM fleet_cost_accounts
+                 WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+                   AND terminal_at IS NULL AND reservation_released_at IS NULL
+                   AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+                   AND interrupt_notice_state = 'requested'`
+              )
+              .get(
+                account.id,
+                runId,
+                account.session_id,
+                decision.requestedAt,
+                decision.deadlineAt
+              )
+          );
+        }
+        const changed = deps.db
+          .prepare(
+            `UPDATE fleet_cost_accounts SET interrupt_notice_state = 'requested',
+             updated_at = ?
+             WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+               AND terminal_at IS NULL AND reservation_released_at IS NULL
+               AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+               AND interrupt_notice_state = 'unattempted'`
+          )
+          .run(
+            deps.now().toISOString(),
+            account.id,
+            runId,
+            account.session_id,
+            decision.requestedAt,
+            decision.deadlineAt
+          );
+        if (changed.changes !== 1) return false;
+        queries.createFleetEvent(deps.db).run(
+          runId,
+          "auxiliary_interrupt_notice_claimed",
+          "scheduler",
+          JSON.stringify({
+            accountId: account.id,
+            ownerType: account.owner_type,
+            ownerId: account.owner_id,
+            sessionId: account.session_id,
+            operationKey: decision.operationKey,
+            cause: account.interrupt_cause,
+            requestedAt: decision.requestedAt,
+            deadlineAt: decision.deadlineAt,
+          })
+        );
+        return true;
+      });
+      if (!claimed || !account.session_id) continue;
+      let delivered = false;
+      try {
+        await deps.sendMessage(
+          account.session_id,
+          account.interrupt_cause === "budget_hard_limit"
+            ? "[Stoa Fleet] The configured hard budget limit has been reached. Reach a safe stopping point now; Stoa will stop this auxiliary agent after the grace period."
+            : "[Stoa Fleet] This run was paused with interruption requested. Reach a safe stopping point now; Stoa will stop this auxiliary agent after the grace period."
+        );
+        delivered = true;
+      } catch {
+        delivered = false;
+      }
+      transaction(deps.db, () => {
+        const changed = deps.db
+          .prepare(
+            `UPDATE fleet_cost_accounts SET interrupt_notice_state = ?,
+             updated_at = ?
+             WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+               AND terminal_at IS NULL AND reservation_released_at IS NULL
+               AND interrupt_requested_at = ?
+               AND interrupt_notice_state = 'requested'`
+          )
+          .run(
+            delivered ? "delivered" : "failed",
+            deps.now().toISOString(),
+            account.id,
+            runId,
+            account.session_id,
+            decision.requestedAt
+          );
+        if (changed.changes !== 1) return;
+        queries.createFleetEvent(deps.db).run(
+          runId,
+          delivered
+            ? "auxiliary_interrupt_notice_delivered"
+            : "auxiliary_interrupt_notice_failed",
+          "scheduler",
+          JSON.stringify({
+            accountId: account.id,
+            ownerType: account.owner_type,
+            ownerId: account.owner_id,
+            sessionId: account.session_id,
+            operationKey: decision.operationKey,
+            cause: account.interrupt_cause,
+            requestedAt: decision.requestedAt,
+            deadlineAt: decision.deadlineAt,
+          })
+        );
+      });
+      continue;
+    }
+
+    const stopClaimed = transaction(deps.db, () => {
+      if (decision.replay) {
+        return Boolean(
+          deps.db
+            .prepare(
+              `SELECT 1 FROM fleet_cost_accounts
+               WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+                 AND terminal_at IS NULL AND reservation_released_at IS NULL
+                 AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+                 AND interrupt_stop_state = 'requested'`
+            )
+            .get(
+              account.id,
+              runId,
+              account.session_id,
+              decision.requestedAt,
+              decision.deadlineAt
+            )
+        );
+      }
+      const changed = deps.db
+        .prepare(
+          `UPDATE fleet_cost_accounts SET interrupt_stop_state = 'requested',
+           updated_at = ?
+           WHERE id = ? AND fleet_run_id = ? AND session_id = ?
+             AND terminal_at IS NULL AND reservation_released_at IS NULL
+             AND interrupt_requested_at = ? AND interrupt_deadline_at = ?
+             AND interrupt_stop_state = 'unattempted'`
+        )
+        .run(
+          deps.now().toISOString(),
+          account.id,
+          runId,
+          account.session_id,
+          decision.requestedAt,
+          decision.deadlineAt
+        );
+      if (changed.changes !== 1) return false;
+      queries.createFleetEvent(deps.db).run(
+        runId,
+        "auxiliary_interrupt_stop_requested",
+        "scheduler",
+        JSON.stringify({
+          accountId: account.id,
+          ownerType: account.owner_type,
+          ownerId: account.owner_id,
+          sessionId: account.session_id,
+          operationKey: decision.operationKey,
+          cause: account.interrupt_cause,
+          requestedAt: decision.requestedAt,
+          deadlineAt: decision.deadlineAt,
+        })
+      );
+      return true;
+    });
+    if (!stopClaimed || !account.session_id) continue;
+
+    const session = queries.getSession(deps.db).get(account.session_id) as
+      Session | undefined;
+    let knownStopped = false;
+    if (decision.replay && session) {
+      try {
+        knownStopped = !(await deps.sessionExists(session));
+      } catch {
+        knownStopped = false;
+      }
+    }
+    if (!knownStopped) {
+      try {
+        await deps.stopSession(account.session_id, "failed");
+        knownStopped = true;
+      } catch {
+        if (session) {
+          try {
+            knownStopped = !(await deps.sessionExists(session));
+          } catch {
+            knownStopped = false;
+          }
+        }
+      }
+    }
+    if (!knownStopped) continue;
+    confirmAuxiliaryInterruptStop(
+      deps,
+      account,
+      decision.requestedAt,
+      decision.deadlineAt,
+      decision.operationKey
+    );
+  }
+}
+
+async function reconcileFleetCostTelemetryWithDeps(
+  deps: FleetSchedulerDeps
+): Promise<number> {
+  const now = deps.now();
+  const previous = fleetCostSampleAt.get(deps.db);
+  if (
+    previous != null &&
+    now.getTime() - previous < FLEET_COST_SAMPLE_INTERVAL_MS
+  ) {
+    return 0;
+  }
+  // Advance before transcript reads so a persistent failure backs off instead of
+  // turning the scheduler cadence into a tight cost-reader retry loop.
+  fleetCostSampleAt.set(deps.db, now.getTime());
+  const accounts = deps.db
+    .prepare(
+      `SELECT a.fleet_run_id, a.owner_type, a.owner_id, a.session_id
+       FROM fleet_cost_accounts a
+       JOIN sessions s ON s.id = a.session_id
+       WHERE a.terminal_at IS NULL
+       ORDER BY COALESCE(a.last_sample_at, '') ASC, a.updated_at ASC, a.id ASC
+       LIMIT ?`
+    )
+    .all(FLEET_COST_SAMPLE_MAX_PER_TICK) as Array<{
+    fleet_run_id: string;
+    owner_type: string;
+    owner_id: string;
+    session_id: string;
+  }>;
+  if (accounts.length === 0) return 0;
+  const getSession = queries.getSession(deps.db);
+  const sessions = accounts
+    .map((account) => getSession.get(account.session_id) as Session | undefined)
+    .filter((session): session is Session => session != null);
+  if (sessions.length === 0) return 0;
+  await deps.sampleCosts(sessions, now.getTime());
+  for (const account of accounts) {
+    reconcileFleetCostAccount(deps.db, {
+      runId: account.fleet_run_id,
+      ownerType: account.owner_type,
+      ownerId: account.owner_id,
+      now,
+    });
+  }
+  return sessions.length;
+}
+
+/** Bounded Fleet-owned sampling, independent of the opt-in global cost loop. */
+export async function reconcileFleetCostTelemetry(
+  overrides: Partial<FleetSchedulerDeps> = {}
+): Promise<number> {
+  return reconcileFleetCostTelemetryWithDeps(schedulerDeps(overrides));
 }
 
 async function reconcilePendingCleanup(
@@ -1518,25 +2842,15 @@ async function reconcilePendingCleanup(
       if (worker.run_status === "canceled") {
         releaseWorkerResources(deps.db, worker.id, nowIso);
       } else {
-        deps.db
-          .prepare(
-            `UPDATE fleet_resource_leases SET status = 'released', released_at = ?
-             WHERE worker_id = ? AND status = 'reserved' AND resource_type <> 'worktree'`
-          )
-          .run(nowIso, worker.id);
+        releaseWorkerResourcesExceptWorktree(deps.db, worker.id, nowIso);
       }
       if (terminalSessionCleanup) {
-        deps.db
-          .prepare(
-            `UPDATE fleet_runs SET reserved_budget_usd = MAX(0, reserved_budget_usd - ?),
-             spent_budget_usd = spent_budget_usd + ?, updated_at = ? WHERE id = ?`
-          )
-          .run(
-            worker.reservation_usd ?? 0,
-            worker.reservation_usd ?? 0,
-            nowIso,
-            worker.fleet_run_id
-          );
+        settleWorkerBudget(
+          deps.db,
+          worker.id,
+          new Date(nowIso),
+          worker.run_status !== "canceled"
+        );
         if (!reportCleanup) {
           deps.db
             .prepare(
@@ -1551,6 +2865,8 @@ async function reconcilePendingCleanup(
               worker.task_id
             );
         }
+      } else if (worker.run_status === "canceled") {
+        settleWorkerBudget(deps.db, worker.id, new Date(nowIso), false);
       }
       queries.createFleetEvent(deps.db).run(
         worker.fleet_run_id,
@@ -1616,7 +2932,16 @@ export async function reconcileFleetRun(
   runLocks.add(runId);
   const deps = schedulerDeps(overrides);
   try {
+    // A run still being recovered is deliberately inert. Public launch
+    // surfaces perform their own 503 boundary before reaching the scheduler;
+    // the internal reconciler instead reports that it launched no work so the
+    // recovery loop can continue settling persisted leases.
+    if (fleetRecoveryUnavailable(deps.db, runId)) return 0;
+    await reconcileFleetCostTelemetryWithDeps(deps);
     await pollActiveWorkers(deps, runId);
+    enforceFleetBudget(deps, runId);
+    await processFleetInterrupts(deps, runId);
+    await processFleetAuxiliaryInterrupts(deps, runId);
     const leases: LeasedTask[] = [];
     while (true) {
       const lease = leaseOne(deps, runId);
@@ -1638,14 +2963,40 @@ export async function reconcileFleetRuns(
   }
   const deps = schedulerDeps(overrides);
   await reconcilePendingCleanup(deps);
+  // Sampling and aggregate budget enforcement are control-plane work, not a
+  // worker phase. Planners and reviewers can accrue cost while a run is still
+  // draft, and fixers remain paid owners while the presentation status is
+  // reviewing. Run this once before selecting worker-bearing runs.
+  await reconcileFleetCostTelemetryWithDeps(deps);
+  enforceAllFleetBudgets(deps);
+  // The automatic scheduler owns one global rendered-screen batch. Calling the
+  // collector from each run would multiply terminal IPC and defeat its hard
+  // cross-run cap; injected test/runtime dependencies may exercise it directly.
+  if (Object.keys(overrides).length === 0) {
+    await reconcileFleetRenderedStatuses({ db: deps.db, now: deps.now });
+  }
   const runs = deps.db
     .prepare(
       `SELECT id FROM fleet_runs
-       WHERE status = 'running' OR (status = 'paused' AND EXISTS (
-         SELECT 1 FROM fleet_workers
-         WHERE fleet_workers.fleet_run_id = fleet_runs.id
-           AND fleet_workers.status IN ('running', 'waiting_for_operator')
-       ))`
+       WHERE (
+         status IN ('running', 'reviewing', 'merging')
+           AND desired_state = 'running' AND recovery_required = 0
+       ) OR (
+         status = 'paused' AND recovery_required = 0 AND (
+           EXISTS (
+             SELECT 1 FROM fleet_workers
+             WHERE fleet_workers.fleet_run_id = fleet_runs.id
+               AND fleet_workers.status IN ('running', 'waiting_for_operator')
+           ) OR EXISTS (
+             SELECT 1 FROM fleet_cost_accounts account
+             WHERE account.fleet_run_id = fleet_runs.id
+               AND account.owner_type <> 'worker'
+               AND account.terminal_at IS NULL
+               AND account.reservation_released_at IS NULL
+               AND account.interrupt_requested_at IS NOT NULL
+           )
+         )
+       )`
     )
     .all() as { id: string }[];
   const results = await Promise.all(
@@ -1665,17 +3016,21 @@ export async function recoverFleetRuns(
     deps.db
       .prepare(
         `UPDATE fleet_runs SET recovery_required = 1
-         WHERE (status = 'running' OR (status = 'paused' AND EXISTS (
-           SELECT 1 FROM fleet_workers
-           WHERE fleet_workers.fleet_run_id = fleet_runs.id
-             AND fleet_workers.status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending')
-         )))${options.runId ? " AND id = ?" : ""}`
+         WHERE ((status IN ('running', 'reviewing', 'merging')
+                  AND desired_state = 'running')
+           OR (status = 'paused' AND EXISTS (
+             SELECT 1 FROM fleet_workers
+             WHERE fleet_workers.fleet_run_id = fleet_runs.id
+               AND fleet_workers.status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending')
+           )))${options.runId ? " AND id = ?" : ""}`
       )
       .run(...(options.runId ? [options.runId] : []));
   }
   const runs = deps.db
     .prepare(
-      `SELECT * FROM fleet_runs WHERE status IN ('running', 'paused') AND recovery_required = 1${options.runId ? " AND id = ?" : ""}`
+      `SELECT * FROM fleet_runs
+       WHERE status IN ('running', 'reviewing', 'merging', 'paused')
+         AND recovery_required = 1${options.runId ? " AND id = ?" : ""}`
     )
     .all(...(options.runId ? [options.runId] : [])) as FleetRunRow[];
   for (const run of runs) {
@@ -1739,6 +3094,37 @@ export async function recoverFleetRuns(
               )
               .run(session.worktree_path, worker.id);
           }
+          deps.db
+            .prepare(
+              `UPDATE fleet_runtime_leases SET lease_expires_at = NULL
+               WHERE owner_type = 'worker' AND owner_id = ? AND status = 'reserved'`
+            )
+            .run(worker.id);
+          if (
+            !registerFleetCostAccount(deps.db, {
+              runId: run.id,
+              ownerType: "worker",
+              ownerId: worker.id,
+              taskId: worker.task_id,
+              session,
+              provider: worker.provider ?? run.provider,
+              model: worker.model ?? run.model,
+              confidence: worker.reservation_confidence,
+              reservation: {
+                usd: worker.reservation_usd ?? 0,
+                tokens: worker.reservation_tokens ?? 0,
+                confidence: worker.reservation_confidence ?? "unknown",
+                basis: (worker.reservation_basis ??
+                  "unknown-provider") as FleetTaskReservation["basis"],
+                sampleCount: 0,
+              },
+            })
+          ) {
+            throw new Error(
+              "recovered worker session is already owned by another Fleet cost account"
+            );
+          }
+          clearFleetProviderCooldown(deps.db, worker.provider ?? run.provider);
           releaseWorkerResources(deps.db, worker.id, nowIso, "git_operation");
         });
         continue;
@@ -1777,12 +3163,7 @@ export async function recoverFleetRuns(
           );
         if (workerUpdate.changes !== 1) return;
         if (committed) {
-          deps.db
-            .prepare(
-              `UPDATE fleet_resource_leases SET status = 'released', released_at = ?
-               WHERE worker_id = ? AND status = 'reserved' AND resource_type <> 'worktree'`
-            )
-            .run(nowIso, worker.id);
+          releaseWorkerResourcesExceptWorktree(deps.db, worker.id, nowIso);
         } else {
           releaseWorkerResources(deps.db, worker.id, nowIso);
         }
@@ -1818,17 +3199,7 @@ export async function recoverFleetRuns(
               worker.task_id
             );
         }
-        deps.db
-          .prepare(
-            `UPDATE fleet_runs SET reserved_budget_usd = MAX(0, reserved_budget_usd - ?),
-             spent_budget_usd = spent_budget_usd + ?, updated_at = ? WHERE id = ?`
-          )
-          .run(
-            worker.reservation_usd ?? 0,
-            committed ? (worker.reservation_usd ?? 0) : 0,
-            nowIso,
-            run.id
-          );
+        settleWorkerBudget(deps.db, worker.id, new Date(nowIso), committed);
         queries.createFleetEvent(deps.db).run(
           run.id,
           "recovery_expired",
@@ -1848,7 +3219,8 @@ export async function recoverFleetRuns(
       transaction(deps.db, () => {
         const paused = deps.db
           .prepare(
-            `UPDATE fleet_runs SET status = 'paused', pause_mode = 'pause-new', pause_reason = 'recovery_unresolved', updated_at = ?
+            `UPDATE fleet_runs SET status = 'paused', desired_state = 'paused',
+             pause_mode = 'pause-new', pause_reason = 'recovery_unresolved', updated_at = ?
              WHERE id = ? AND (status <> 'paused' OR pause_reason IS NOT 'recovery_unresolved')`
           )
           .run(nowIso, run.id);
@@ -1884,7 +3256,7 @@ export async function recoverFleetRun(
 }
 
 export async function initializeFleetScheduler(): Promise<void> {
-  fleetGlobal.__stoaFleetSchedulerReady = false;
+  setFleetSchedulerReady(false);
   await recoverFleetRuns();
-  fleetGlobal.__stoaFleetSchedulerReady = true;
+  setFleetSchedulerReady(true);
 }

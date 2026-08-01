@@ -4,18 +4,21 @@ import type { DispatchRepo } from "@/lib/dispatch/types";
 import type { Project } from "@/lib/db/types";
 import { runGit } from "@/lib/git";
 import { getDefaultBranch } from "@/lib/git-status";
-import { detectSandboxTool } from "@/lib/sandbox/detect";
 import { parseFleetAutomationPolicy } from "./automation-policy";
+import { fleetStrongConfinementAvailable } from "./confinement";
 import {
   hashFleetAutomationPolicy,
   hashFleetExecutionContract,
   hashFleetTaskRows,
 } from "./hash";
+import { classifySensitiveFleetPath } from "./git-state";
+import { fleetProviderRetryIsDue } from "./backoff";
 import { startFleetPlanner } from "./planner";
 import {
   FLEET_PLAN_REVIEW_LENSES,
   reconcileFleetPlanReviews,
 } from "./plan-review";
+import { redactAndCapFleetText } from "./redaction";
 import {
   approveFleetRunPlan,
   type FleetAutomationApprovalGuard,
@@ -60,6 +63,9 @@ export function evaluateAutomaticPlanning(
     planHash: string | null;
     plannerState: FleetPlannerState;
     baseSha: string | null;
+    confinementAvailable: boolean;
+    retryNotBefore?: string | null;
+    now?: Date;
   }
 ): FleetAutomationDecision {
   if (!input.policy.automaticPlanning)
@@ -70,6 +76,12 @@ export function evaluateAutomaticPlanning(
     return { action: "wait", reason: "planning is not authorized" };
   if (!input.baseSha)
     return { action: "wait", reason: "base commit is not bound" };
+  if (!input.policy.allowUnconfinedAgents && !input.confinementAvailable) {
+    return {
+      action: "wait",
+      reason: "automatic planning requires confinement or explicit consent",
+    };
+  }
   if (!["planned", "running"].includes(input.desiredState))
     return { action: "wait", reason: "run does not desire a plan" };
   if (input.status !== "draft")
@@ -80,24 +92,14 @@ export function evaluateAutomaticPlanning(
     return { action: "wait", reason: "a plan already exists" };
   if (input.plannerState !== "idle")
     return { action: "wait", reason: "planner is not idle" };
+  if (!fleetProviderRetryIsDue(input.retryNotBefore, input.now ?? new Date())) {
+    return { action: "wait", reason: "planner launch retry is deferred" };
+  }
   return { action: "planning" };
 }
 
-function normalizedClaimPath(value: string): string {
-  return value.replaceAll("\\", "/").replace(/^\.\//, "").toLowerCase();
-}
-
 export function isSensitiveFleetPath(value: string): boolean {
-  const path = normalizedClaimPath(value);
-  return (
-    path === "agents.md" ||
-    path.startsWith(".github/workflows/") ||
-    path.startsWith(".codex/") ||
-    path.startsWith(".agents/") ||
-    path === ".env" ||
-    path.startsWith(".env.") ||
-    path.includes("/secrets/")
-  );
+  return classifySensitiveFleetPath(value) !== null;
 }
 
 export function evaluateAutomaticApproval(
@@ -247,14 +249,10 @@ export function evaluateAutomaticMerge(
 ): FleetAutomationDecision {
   if (!policy.automaticMerge)
     return { action: "wait", reason: "automatic merge is disabled" };
-  if (
-    !policy.automaticStart ||
-    !policy.automaticFixes ||
-    policy.maxAutomaticFixRounds < 1
-  ) {
+  if (!policy.automaticStart) {
     return {
       action: "wait",
-      reason: "automatic merge prerequisites are not enabled",
+      reason: "automatic start is not enabled",
     };
   }
   return { action: "merge" };
@@ -297,8 +295,7 @@ function automationDeps(
     reconcileRun: overrides.reconcileRun ?? reconcileFleetRun,
     schedulerReady: overrides.schedulerReady ?? isFleetSchedulerReady,
     confinementAvailable:
-      overrides.confinementAvailable ??
-      (() => process.env.STOA_SANDBOX === "1" && detectSandboxTool() !== null),
+      overrides.confinementAvailable ?? fleetStrongConfinementAvailable,
     resolveBaseSha: overrides.resolveBaseSha ?? resolveFleetBaseSha,
   };
 }
@@ -322,6 +319,19 @@ function plannerState(run: FleetRunRow): FleetPlannerState {
       : "idle";
   } catch {
     return "idle";
+  }
+}
+
+function plannerRetryNotBefore(run: FleetRunRow): string | null {
+  try {
+    const settings = JSON.parse(run.settings_json) as {
+      planner?: { retryNotBefore?: unknown };
+    };
+    return typeof settings.planner?.retryNotBefore === "string"
+      ? settings.planner.retryNotBefore
+      : null;
+  } catch {
+    return null;
   }
 }
 
@@ -458,19 +468,42 @@ function recordAutomationFailure(
   error: unknown,
   now: string
 ): void {
-  const message = (
-    error instanceof Error ? error.message : String(error)
-  ).slice(0, 500);
-  db.prepare(
-    `UPDATE fleet_runs SET automation_last_error = ?, updated_at = ? WHERE id = ?`
-  ).run(message, now, run.id);
-  if (run.automation_policy_hash) {
-    db.prepare(
-      `UPDATE fleet_action_authorizations
-       SET attempt_count = attempt_count + 1, last_error = ?, updated_at = ?
-       WHERE fleet_run_id = ? AND action = ? AND policy_hash = ?
-         AND status = 'authorized'`
-    ).run(message, now, run.id, action, run.automation_policy_hash);
+  const message = redactAndCapFleetText(
+    error instanceof Error ? error.message : String(error),
+    500
+  ).text;
+  const ownsTransaction = !db.inTransaction;
+  if (ownsTransaction) db.exec("BEGIN IMMEDIATE");
+  try {
+    const changed = db
+      .prepare(
+        `UPDATE fleet_runs SET automation_last_error = ?, updated_at = ? WHERE id = ?`
+      )
+      .run(message, now, run.id);
+    if (changed.changes !== 1) {
+      if (ownsTransaction) db.exec("COMMIT");
+      return;
+    }
+    if (run.automation_policy_hash) {
+      db.prepare(
+        `UPDATE fleet_action_authorizations
+         SET attempt_count = attempt_count + 1, last_error = ?, updated_at = ?
+         WHERE fleet_run_id = ? AND action = ? AND policy_hash = ?
+           AND status = 'authorized'`
+      ).run(message, now, run.id, action, run.automation_policy_hash);
+    }
+    queries
+      .createFleetEvent(db)
+      .run(
+        run.id,
+        "automation_action_failed",
+        "fleet-automation",
+        JSON.stringify({ action, error: message })
+      );
+    if (ownsTransaction) db.exec("COMMIT");
+  } catch (failure) {
+    if (ownsTransaction && db.inTransaction) db.exec("ROLLBACK");
+    throw failure;
   }
 }
 
@@ -493,22 +526,33 @@ async function bindAndReadBaseSha(
     return { stored: run.automation_base_sha, current };
   }
   const now = deps.now().toISOString();
-  const changed = deps.db
-    .prepare(
-      `UPDATE fleet_runs SET automation_base_sha = ?, updated_at = ?
-       WHERE id = ? AND automation_base_sha IS NULL
-         AND automation_policy_hash = ?`
-    )
-    .run(current, now, run.id, run.automation_policy_hash);
-  if (changed.changes === 1) {
-    queries
-      .createFleetEvent(deps.db)
-      .run(
-        run.id,
-        "automation_base_bound",
-        "fleet-automation",
-        JSON.stringify({ baseSha: current })
-      );
+  let bound = false;
+  deps.db.exec("BEGIN IMMEDIATE");
+  try {
+    const changed = deps.db
+      .prepare(
+        `UPDATE fleet_runs SET automation_base_sha = ?, updated_at = ?
+         WHERE id = ? AND automation_base_sha IS NULL
+           AND automation_policy_hash = ?`
+      )
+      .run(current, now, run.id, run.automation_policy_hash);
+    if (changed.changes === 1) {
+      queries
+        .createFleetEvent(deps.db)
+        .run(
+          run.id,
+          "automation_base_bound",
+          "fleet-automation",
+          JSON.stringify({ baseSha: current })
+        );
+      bound = true;
+    }
+    deps.db.exec("COMMIT");
+  } catch (error) {
+    deps.db.exec("ROLLBACK");
+    throw error;
+  }
+  if (bound) {
     return { stored: current, current };
   }
   const refreshed = queries.getFleetRun(deps.db).get(run.id) as
@@ -708,6 +752,9 @@ async function reconcileOneFleetAutomation(
       planHash: run.plan_hash,
       plannerState: currentPlannerState,
       baseSha: base.stored,
+      confinementAvailable: deps.confinementAvailable(),
+      retryNotBefore: plannerRetryNotBefore(run),
+      now: deps.now(),
     });
     if (planning.action === "planning") {
       const result = await deps.startPlanner(
@@ -797,9 +844,12 @@ async function reconcileOneFleetAutomation(
                 base.stored
               ) as { n: number })
           : { n: 0 };
+      const auxiliaryLaunchAllowed =
+        parsed.policy.allowUnconfinedAgents || deps.confinementAvailable();
       if (
         preview &&
         run.plan_hash &&
+        auxiliaryLaunchAllowed &&
         reviewEligibility.action === "wait" &&
         reviewEligibility.reason ===
           "four independent clean plan critics are required" &&

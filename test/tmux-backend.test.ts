@@ -91,6 +91,32 @@ describe("TmuxBackend command construction (macOS/Linux path)", () => {
     });
   });
 
+  it("create: conductor environment is passed as tmux argv data", async () => {
+    const hostile = String.raw`session$(touch /tmp/pwn);"value`;
+    await tb.create({
+      name: "conductor-1",
+      cwd: "/repo",
+      command: "claude",
+      env: { STOA_CONDUCTOR_SESSION_ID: hostile },
+    });
+
+    expect(execCalls).toHaveLength(0);
+    expect(execFileCalls[1]).toEqual({
+      file: "tmux",
+      args: [
+        "new-session",
+        "-d",
+        "-s",
+        "conductor-1",
+        "-c",
+        "/repo",
+        "-e",
+        `STOA_CONDUCTOR_SESSION_ID=${hostile}`,
+        "claude",
+      ],
+    });
+  });
+
   it("capture: visible screen vs N scrollback lines", async () => {
     await tb.capture("claude-1");
     expect(last()).toBe('tmux capture-pane -t "claude-1" -p 2>/dev/null');

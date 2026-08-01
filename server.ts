@@ -130,6 +130,7 @@ import {
 import { backendKeyForSession } from "./lib/providers/registry";
 import {
   makeGuardedInterval,
+  startRecoverableFleetRuntime,
   getAutoFeatures,
   anyTickEnabled,
   describeEnabled,
@@ -1492,53 +1493,62 @@ app.prepare().then(() => {
         );
       }
     }
-    let fleetSchedulerReady = false;
-    try {
-      await initializeFleetScheduler();
-      fleetSchedulerReady = true;
-      console.log("> Fleet recovery complete; scheduler ready");
-    } catch (err) {
-      // Fail closed: explicit ticks also run recovery and reject while the flag
-      // remains set, so a recovery error cannot create duplicate workers.
-      console.error(
-        "> Fleet recovery failed; automatic launches disabled:",
-        err
-      );
-    }
-    try {
-      await reconcileFleetAutomation();
-    } catch (err) {
-      console.error("> Fleet automation startup reconcile failed:", err);
-    }
-    try {
-      await reconcileFleetVerifications();
-      await reconcileFleetTaskReviews();
-      await reconcileFleetMerges();
-      await reconcileFleetLifecycle();
-    } catch (err) {
-      console.error("> Fleet task runtime startup reconcile failed:", err);
-    }
-    makeGuardedInterval({
-      intervalMs: 5000,
-      enabled: true,
-      onError: (err) => console.error("fleet planner tick failed:", err),
-      tick: async () => {
+    const fleetRuntime = await startRecoverableFleetRuntime({
+      recoveryRetryMs: 5000,
+      runtimeIntervalMs: 5000,
+      recover: initializeFleetScheduler,
+      // Recovery failure closes every launch-capable path. Planner polling and
+      // lifecycle cleanup can still settle persisted external runtimes without
+      // admitting a new planner, reviewer, fixer, or worker.
+      pollWhileBlocked: async () => {
+        try {
+          await reconcileFleetPlanners();
+        } catch (err) {
+          console.error("fleet blocked planner poll failed:", err);
+        }
+        try {
+          await reconcileFleetLifecycle();
+        } catch (err) {
+          console.error("fleet blocked lifecycle cleanup failed:", err);
+        }
+      },
+      onRecovered: async () => {
+        console.log("> Fleet recovery complete; scheduler ready");
+        try {
+          await reconcileFleetAutomation();
+        } catch (err) {
+          console.error("> Fleet automation startup reconcile failed:", err);
+        }
+        try {
+          await reconcileFleetVerifications();
+          await reconcileFleetTaskReviews();
+          await reconcileFleetMerges();
+          await reconcileFleetLifecycle();
+        } catch (err) {
+          console.error("> Fleet task runtime startup reconcile failed:", err);
+        }
+      },
+      plannerTick: async () => {
         await reconcileFleetPlanners();
         await reconcileFleetAutomation();
       },
-    });
-    makeGuardedInterval({
-      intervalMs: 5000,
-      enabled: fleetSchedulerReady,
-      onError: (err) => console.error("fleet scheduler tick failed:", err),
-      tick: async () => {
+      schedulerTick: async () => {
         await reconcileFleetRuns();
         await reconcileFleetVerifications();
         await reconcileFleetTaskReviews();
         await reconcileFleetMerges();
         await reconcileFleetLifecycle();
       },
+      onRecoveryError: (err) =>
+        console.error(
+          "> Fleet recovery failed; automatic launches disabled:",
+          err
+        ),
+      onPlannerError: (err) => console.error("fleet planner tick failed:", err),
+      onSchedulerError: (err) =>
+        console.error("fleet scheduler tick failed:", err),
     });
+    server.once("close", () => fleetRuntime.stop());
     // Dispatch startup catch-up: free slots held by workers that didn't survive
     // a Tier-1 restart, then run one reconcile pass immediately so a day missed
     // while Stoa was down is topped up now (not only on the next 60s tick).

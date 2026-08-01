@@ -8,6 +8,13 @@ import { runMigrations } from "@/lib/db/migrations";
 
 const state = vi.hoisted(() => ({
   db: null as unknown,
+  binaries: {
+    claude: true,
+    codex: true,
+    hermes: false,
+    kilo: false,
+    kimi: false,
+  },
   spawn: vi.fn(),
   stop: vi.fn(async () => true),
   remove: vi.fn(async () => undefined),
@@ -43,13 +50,7 @@ vi.mock("@/lib/git", async (importOriginal) => {
 });
 
 vi.mock("@/lib/readiness-server", () => ({
-  detectAgentBinaries: () => ({
-    claude: true,
-    codex: true,
-    hermes: false,
-    kilo: false,
-    kimi: false,
-  }),
+  detectAgentBinaries: () => state.binaries,
 }));
 
 vi.mock("@/lib/orchestration", () => {
@@ -81,7 +82,9 @@ import {
   readBoundedFleetPlannerFile,
   startFleetPlanner,
 } from "@/lib/fleet/planner";
+import { reserveFleetPaidSession } from "@/lib/fleet/session-admission";
 import { createDraftFleetRun } from "@/lib/fleet/service";
+import type { FleetRunRow } from "@/lib/fleet/types";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
@@ -95,12 +98,20 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  Object.assign(state.binaries, {
+    claude: true,
+    codex: true,
+    hermes: false,
+    kilo: false,
+    kimi: false,
+  });
   state.spawn.mockReset();
   state.stop.mockClear();
   state.remove.mockClear();
   state.runGit.mockClear();
   db().exec(`
     DELETE FROM fleet_events;
+    DELETE FROM fleet_provider_cooldowns;
     DELETE FROM fleet_artifacts;
     DELETE FROM fleet_workers;
     DELETE FROM fleet_tasks;
@@ -189,8 +200,229 @@ describe("Fleet planner lifecycle", () => {
     expect(state.spawn).toHaveBeenCalledTimes(1);
   });
 
+  it("never selects Kilo for an unattended planner", async () => {
+    state.binaries.kilo = true;
+    const created = createDraftFleetRun({
+      name: "Kilo fallback",
+      goal: "Plan without an interactive permission prompt",
+      repoId: "planner-repo",
+      provider: "kilo",
+      model: "kilo/model",
+    });
+    if ("error" in created) throw new Error(created.error);
+
+    const started = await startFleetPlanner(created.run.run.id, {
+      provider: "kilo",
+    });
+    if ("error" in started) throw new Error(started.error);
+    expect(started.run.run.plannerProvider).toBe("claude");
+    expect(state.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentType: "claude",
+        model: undefined,
+      })
+    );
+    expect(state.spawn.mock.calls[0]?.[0].task).not.toContain("kilo");
+  });
+
+  it("reports no Fleet provider when Kilo is the only installed CLI", async () => {
+    Object.assign(state.binaries, {
+      claude: false,
+      codex: false,
+      hermes: false,
+      kilo: true,
+      kimi: false,
+    });
+    const created = createDraftFleetRun({
+      name: "Kilo only",
+      goal: "Do not launch an interactive TUI unattended",
+      repoId: "planner-repo",
+      provider: "kilo",
+    });
+    if ("error" in created) throw new Error(created.error);
+
+    await expect(startFleetPlanner(created.run.run.id)).resolves.toMatchObject({
+      error: "no installed agent provider is available",
+      status: 409,
+    });
+    expect(state.spawn).not.toHaveBeenCalled();
+  });
+
+  it("redacts legacy goal prose and spawn failures before durable planner writes", async () => {
+    const canary = "sk-PLANNERERRORCANARY012345";
+    const created = createDraftFleetRun({
+      name: "Planner redaction",
+      goal: "Plan safely",
+      repoId: "planner-repo",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    db()
+      .prepare(`UPDATE fleet_runs SET goal = ? WHERE id = ?`)
+      .run(`Legacy goal ${canary}`, runId);
+    state.spawn.mockRejectedValueOnce(
+      new Error(`planner failed password=${canary}`)
+    );
+
+    const failed = await startFleetPlanner(runId);
+    expect(failed).toMatchObject({ status: 500 });
+    expect(JSON.stringify(failed)).not.toContain(canary);
+    expect(state.spawn.mock.calls[0]?.[0].task).not.toContain(canary);
+    expect(state.spawn.mock.calls[0]?.[0].task).toContain("[REDACTED]");
+    const row = db()
+      .prepare(`SELECT settings_json FROM fleet_runs WHERE id = ?`)
+      .get(runId) as { settings_json: string };
+    const events = db()
+      .prepare(
+        `SELECT payload FROM fleet_events
+         WHERE fleet_run_id = ? AND event_type LIKE 'planner_%'`
+      )
+      .all(runId);
+    expect(
+      JSON.stringify({ settings: row.settings_json, events })
+    ).not.toContain(canary);
+    expect(JSON.stringify({ settings: row.settings_json, events })).toContain(
+      "[REDACTED]"
+    );
+  });
+
+  it("persists a bounded rate-limit retry, honors cooldown after restart, then launches", async () => {
+    const created = createDraftFleetRun({
+      name: "Restart-safe planner retry",
+      goal: "Retry a transient provider launch",
+      repoId: "planner-repo",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    state.spawn.mockRejectedValueOnce(new Error("429 too many requests"));
+
+    await expect(startFleetPlanner(runId)).resolves.toMatchObject({
+      status: 500,
+    });
+    let row = db()
+      .prepare(`SELECT settings_json FROM fleet_runs WHERE id = ?`)
+      .get(runId) as { settings_json: string };
+    let planner = JSON.parse(row.settings_json).planner as {
+      state: string;
+      failureCount: number;
+      retryNotBefore: string;
+    };
+    expect(planner).toMatchObject({ state: "idle", failureCount: 1 });
+    expect(Date.parse(planner.retryNotBefore)).toBeGreaterThan(Date.now());
+
+    // A fresh process would only have the persisted row. It must not launch
+    // before the owner deadline, and the global provider cooldown is a second
+    // admission barrier if that owner deadline is stale or manually altered.
+    await expect(startFleetPlanner(runId)).resolves.toMatchObject({
+      error: expect.stringContaining("deferred until"),
+      status: 429,
+    });
+    expect(state.spawn).toHaveBeenCalledTimes(1);
+
+    const settings = JSON.parse(row.settings_json);
+    settings.planner.retryNotBefore = "2000-01-01T00:00:00.000Z";
+    db()
+      .prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`)
+      .run(JSON.stringify(settings), runId);
+    await expect(startFleetPlanner(runId)).resolves.toMatchObject({
+      error: "planner capacity is currently full",
+      status: 429,
+    });
+    expect(state.spawn).toHaveBeenCalledTimes(1);
+
+    row = db()
+      .prepare(`SELECT settings_json FROM fleet_runs WHERE id = ?`)
+      .get(runId) as { settings_json: string };
+    const dueSettings = JSON.parse(row.settings_json);
+    dueSettings.planner.retryNotBefore = "2000-01-01T00:00:00.000Z";
+    db()
+      .prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`)
+      .run(JSON.stringify(dueSettings), runId);
+    db()
+      .prepare(
+        `UPDATE fleet_provider_cooldowns SET blocked_until = ? WHERE provider = ?`
+      )
+      .run("2000-01-01T00:00:00.000Z", "codex");
+
+    const retried = await startFleetPlanner(runId);
+    if ("error" in retried) throw new Error(retried.error);
+    expect(retried.run.run.plannerState).toBe("running");
+    expect(state.spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("rolls back the planner launch claim when its audit event exceeds quota", async () => {
+    const created = createDraftFleetRun({
+      name: "Planner event rollback",
+      goal: "Never launch without audit evidence",
+      repoId: "planner-repo",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    db()
+      .prepare(`UPDATE fleet_runs SET resource_limits_json = ? WHERE id = ?`)
+      .run(JSON.stringify({ eventBytesTotal: 1 }), runId);
+
+    await expect(startFleetPlanner(runId)).rejects.toThrow(/event_bytes_total/);
+    expect(state.spawn).not.toHaveBeenCalled();
+    const row = db()
+      .prepare(`SELECT settings_json FROM fleet_runs WHERE id = ?`)
+      .get(runId) as { settings_json: string };
+    expect(JSON.parse(row.settings_json).planner?.state).not.toBe("starting");
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_cost_accounts
+           WHERE fleet_run_id = ? AND owner_type = 'planner'`
+        )
+        .get(runId)
+    ).toEqual({ n: 0 });
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_runtime_leases
+           WHERE fleet_run_id = ? AND owner_type = 'planner'`
+        )
+        .get(runId)
+    ).toEqual({ n: 0 });
+  });
+
+  it("keeps a planner starting when the started audit event cannot commit", async () => {
+    const created = createDraftFleetRun({
+      name: "Planner started rollback",
+      goal: "Keep transition and evidence atomic",
+      repoId: "planner-repo",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    state.spawn.mockImplementationOnce(async () => {
+      db()
+        .prepare(`UPDATE fleet_runs SET resource_limits_json = ? WHERE id = ?`)
+        .run(JSON.stringify({ eventBytesTotal: 1 }), runId);
+      return {
+        id: "planner-session",
+        worktree_path: "C:\\worktrees\\planner",
+      };
+    });
+
+    await expect(startFleetPlanner(runId)).rejects.toThrow(/event_bytes_total/);
+    const row = db()
+      .prepare(`SELECT settings_json FROM fleet_runs WHERE id = ?`)
+      .get(runId) as { settings_json: string };
+    expect(JSON.parse(row.settings_json).planner.state).toBe("starting");
+    expect(
+      db()
+        .prepare(
+          `SELECT event_type FROM fleet_events
+           WHERE fleet_run_id = ? AND event_type LIKE 'planner_%'
+           ORDER BY id`
+        )
+        .all(runId)
+    ).toEqual([{ event_type: "planner_requested" }]);
+  });
+
   it.each([
-    [false, "sandboxed-auto"],
+    [false, "prompt"],
     [true, "full-bypass"],
   ] as const)(
     "derives automatic planner permissions from explicit unconfined consent (%s)",
@@ -212,6 +444,16 @@ describe("Fleet planner lifecycle", () => {
         {},
         "fleet-automation"
       );
+      if (!allowUnconfinedAgents) {
+        expect(started).toMatchObject({
+          status: 409,
+          error: expect.stringContaining(
+            "explicit unconfined-agent authorization"
+          ),
+        });
+        expect(state.spawn).not.toHaveBeenCalled();
+        return;
+      }
       if ("error" in started) throw new Error(started.error);
 
       expect(state.spawn).toHaveBeenCalledWith(
@@ -429,6 +671,104 @@ describe("Fleet planner lifecycle", () => {
     }
   });
 
+  it("rejects and cleans up a recovered Kilo planner without activating it", async () => {
+    const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-kilo-planner-"));
+    try {
+      await writeFile(
+        join(worktree, "PLAN.md"),
+        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"unsafe","title":"Unsafe","description":"Must not be ingested","taskType":"test","fileClaims":["test/unsafe.ts"],"dependsOn":[],"verifyCommand":"npm test"}]}\nSTOA_FLEET_PLAN_END`,
+        "utf8"
+      );
+      const created = createDraftFleetRun({
+        name: "Reject recovered Kilo planner",
+        goal: "Never adopt an interactive provider after restart",
+        repoId: "planner-repo",
+        provider: "claude",
+        model: "sonnet",
+      });
+      if ("error" in created) throw new Error(created.error);
+      const runId = created.run.run.id;
+      const requestId = "recover-kilo-planner";
+      const branchName = "feature/fleet-plan-recover-kilo";
+      db()
+        .prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`)
+        .run(
+          JSON.stringify({
+            phase: "planning",
+            canSpawnWorkers: false,
+            planner: {
+              state: "starting",
+              requestId,
+              projectPath: "C:\\repo",
+              branchName,
+              provider: "kilo",
+              model: null,
+              taskCap: 8,
+              startedAt: new Date().toISOString(),
+            },
+          }),
+          runId
+        );
+      db()
+        .prepare(
+          `INSERT INTO sessions (
+             id, name, tmux_name, working_directory, group_path, agent_type,
+             worker_task, worker_status, worktree_path, branch_name
+           ) VALUES ('recovered-kilo-planner', 'Recovered Kilo planner',
+             'recovered-kilo-planner', ?, 'sessions', 'kilo',
+             'Write PLAN.md', 'running', ?, ?)`
+        )
+        .run(worktree, worktree, branchName);
+      const run = db()
+        .prepare(`SELECT * FROM fleet_runs WHERE id = ?`)
+        .get(runId) as FleetRunRow;
+      const now = new Date();
+      expect(
+        reserveFleetPaidSession(db(), {
+          run,
+          ownerType: "planner",
+          ownerId: requestId,
+          taskType: "planning",
+          provider: "kilo",
+          model: null,
+          repositoryKey: "C:\\repo",
+          now,
+          leaseExpiresAt: new Date(now.getTime() + 90_000).toISOString(),
+        })
+      ).toMatchObject({ admitted: true });
+
+      const recovered = await pollFleetPlanner(runId);
+      if ("error" in recovered) throw new Error(recovered.error);
+
+      expect(recovered.run.run.plannerState).toBe("failed");
+      expect(recovered.run.run.plannerError).toContain("cannot run unattended");
+      expect(recovered.run.tasks.map((task) => task.title)).toEqual([
+        "Draft scope",
+      ]);
+      expect(
+        recovered.run.events.some(
+          (event) => event.eventType === "planner_recovered"
+        )
+      ).toBe(false);
+      expect(state.stop).toHaveBeenCalledWith(
+        "recovered-kilo-planner",
+        "failed"
+      );
+      expect(state.remove).toHaveBeenCalledWith(worktree, "C:\\repo", false);
+      expect(
+        db()
+          .prepare(
+            `SELECT session_id, reservation_released_at IS NOT NULL AS released
+             FROM fleet_cost_accounts
+             WHERE fleet_run_id = ? AND owner_type = 'planner' AND owner_id = ?`
+          )
+          .get(runId, requestId)
+      ).toEqual({ session_id: null, released: 1 });
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
   it("retains cleanup identity and capacity until a failed stop can retry", async () => {
     const created = createDraftFleetRun({
       name: "Cleanup retry",
@@ -482,6 +822,14 @@ describe("Fleet planner lifecycle", () => {
   });
 
   it("enforces global and per-provider planner admission", async () => {
+    let spawned = 0;
+    state.spawn.mockImplementation(async () => {
+      spawned += 1;
+      return {
+        id: `planner-session-${spawned}`,
+        worktree_path: `C:\\worktrees\\planner-${spawned}`,
+      };
+    });
     const create = (name: string, provider: "claude" | "codex") => {
       const created = createDraftFleetRun({
         name,

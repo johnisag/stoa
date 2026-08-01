@@ -9,19 +9,21 @@ import {
 } from "@/data/dispatch/queries";
 import { composeFleetCards, bucketByLane } from "@/lib/fleet-board/lanes";
 import { countNeedsMe } from "@/lib/verdict-inbox-selectors";
+import { useFleetRunsQuery } from "@/data/fleet/queries";
 
 /**
- * The fleet board's data: composes the three EXISTING read models (verdict inbox +
- * dispatch board + pending backlog) into the six lifecycle lanes. Reuses the
- * inbox's normalization so the board stays verdict-identical with it. All three
- * already poll while open (5–8s), which is the board's live-refresh — there is no
- * dispatch/ceremony WS push, so we don't pretend otherwise.
+ * The fleet board's data: composes the existing verdict inbox, dispatch board,
+ * pending backlog, and durable Fleet Management list into six lifecycle lanes.
+ * Reuses the inbox's normalization so verdict-driven attention stays identical.
+ * These read models already poll while open; there is no dispatch/ceremony WS
+ * push, so the board does not pretend otherwise.
  */
 export function useFleetBoard(open: boolean) {
   const inbox = useInbox(open);
   const board = useBoardQuery(open);
   const pending = usePendingQuery(open);
   const repos = useDispatchReposQuery(open);
+  const fleetRuns = useFleetRunsQuery(open);
 
   const lanes = useMemo(
     () =>
@@ -29,10 +31,11 @@ export function useFleetBoard(open: boolean) {
         composeFleetCards(
           board.data ?? [],
           pending.data ?? [],
-          inbox.data ?? []
+          inbox.data ?? [],
+          fleetRuns.data ?? []
         )
       ),
-    [board.data, pending.data, inbox.data]
+    [board.data, pending.data, inbox.data, fleetRuns.data]
   );
 
   const repoById = useMemo(
@@ -62,19 +65,33 @@ export function useFleetBoard(open: boolean) {
       inbox.isLoading ||
       board.isLoading ||
       pending.isLoading ||
-      repos.isLoading,
-    isError: inbox.isError || board.isError || pending.isError || repos.isError,
+      repos.isLoading ||
+      fleetRuns.isLoading,
+    isError:
+      inbox.isError ||
+      board.isError ||
+      pending.isError ||
+      repos.isError ||
+      fleetRuns.isError,
     isFetching:
       inbox.isFetching ||
       board.isFetching ||
       pending.isFetching ||
-      repos.isFetching,
+      repos.isFetching ||
+      fleetRuns.isFetching,
     // Re-fetch every read model behind the board on a manual Retry.
     refetch: useCallback(() => {
       void inbox.refetch();
       void board.refetch();
       void pending.refetch();
       void repos.refetch();
-    }, [inbox.refetch, board.refetch, pending.refetch, repos.refetch]),
+      void fleetRuns.refetch();
+    }, [
+      inbox.refetch,
+      board.refetch,
+      pending.refetch,
+      repos.refetch,
+      fleetRuns.refetch,
+    ]),
   };
 }

@@ -18,6 +18,7 @@ import {
   describeEnabled,
   makeGuardedInterval,
   perTurnSnapshotsEnabled,
+  startRecoverableFleetRuntime,
   type AutoFeatures,
 } from "@/lib/auto-features";
 
@@ -298,5 +299,129 @@ describe("makeGuardedInterval", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("startRecoverableFleetRuntime", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("keeps every launch path closed until a later recovery succeeds", async () => {
+    const recover = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("restart recovery failed"))
+      .mockResolvedValue(undefined);
+    const pollPersistedRuntimes = vi.fn();
+    const enableNormalAutomation = vi.fn();
+    const admitPlannerOrPlanReviewer = vi.fn();
+    const admitWorkerOrTaskReviewer = vi.fn();
+    const recoveryErrors = vi.fn();
+
+    const runtime = await startRecoverableFleetRuntime({
+      recoveryRetryMs: 1_000,
+      runtimeIntervalMs: 1_000,
+      recover,
+      pollWhileBlocked: pollPersistedRuntimes,
+      onRecovered: enableNormalAutomation,
+      plannerTick: admitPlannerOrPlanReviewer,
+      schedulerTick: admitWorkerOrTaskReviewer,
+      onRecoveryError: recoveryErrors,
+    });
+
+    expect(runtime.ready).toBe(false);
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(pollPersistedRuntimes).toHaveBeenCalledTimes(1);
+    expect(enableNormalAutomation).not.toHaveBeenCalled();
+    expect(admitPlannerOrPlanReviewer).not.toHaveBeenCalled();
+    expect(admitWorkerOrTaskReviewer).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(runtime.ready).toBe(true);
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(enableNormalAutomation).toHaveBeenCalledTimes(1);
+    expect(admitPlannerOrPlanReviewer).not.toHaveBeenCalled();
+    expect(admitWorkerOrTaskReviewer).not.toHaveBeenCalled();
+    // The retry timer is gone; exactly one planner and one scheduler timer exist.
+    expect(vi.getTimerCount()).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(admitPlannerOrPlanReviewer).toHaveBeenCalledTimes(1);
+    expect(admitWorkerOrTaskReviewer).toHaveBeenCalledTimes(1);
+    expect(enableNormalAutomation).toHaveBeenCalledTimes(1);
+    runtime.stop();
+  });
+
+  it("does not overlap slow recovery retries or arm duplicate normal loops", async () => {
+    let releaseRecovery!: () => void;
+    const recover = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("not ready"))
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseRecovery = resolve;
+          })
+      );
+    const onRecovered = vi.fn();
+    const plannerTick = vi.fn();
+    const schedulerTick = vi.fn();
+    const runtime = await startRecoverableFleetRuntime({
+      recoveryRetryMs: 1_000,
+      runtimeIntervalMs: 1_000,
+      recover,
+      pollWhileBlocked: vi.fn(),
+      onRecovered,
+      plannerTick,
+      schedulerTick,
+      onRecoveryError: vi.fn(),
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(recover).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(onRecovered).not.toHaveBeenCalled();
+
+    releaseRecovery();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(runtime.ready).toBe(true);
+    expect(onRecovered).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(onRecovered).toHaveBeenCalledTimes(1);
+    expect(plannerTick).toHaveBeenCalledTimes(3);
+    expect(schedulerTick).toHaveBeenCalledTimes(3);
+    runtime.stop();
+  });
+
+  it("cleans recovery and normal timers on shutdown", async () => {
+    const plannerTick = vi.fn();
+    const schedulerTick = vi.fn();
+    const runtime = await startRecoverableFleetRuntime({
+      recoveryRetryMs: 1_000,
+      runtimeIntervalMs: 1_000,
+      recover: vi.fn(),
+      pollWhileBlocked: vi.fn(),
+      onRecovered: vi.fn(),
+      plannerTick,
+      schedulerTick,
+    });
+
+    expect(runtime.ready).toBe(true);
+    expect(vi.getTimerCount()).toBe(2);
+    runtime.stop();
+    runtime.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(plannerTick).not.toHaveBeenCalled();
+    expect(schedulerTick).not.toHaveBeenCalled();
   });
 });

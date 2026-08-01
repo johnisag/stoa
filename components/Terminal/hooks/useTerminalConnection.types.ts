@@ -18,7 +18,12 @@ export interface AttachPayload {
    * How to spawn the session if it doesn't exist yet. Omit binary (or pass "")
    * for a plain shell. cwd may contain a leading "~".
    */
-  spawn?: { binary: string; args: string[]; cwd: string };
+  spawn?: {
+    binary: string;
+    args: string[];
+    cwd: string;
+    env?: Record<string, string>;
+  };
 }
 
 export interface UseTerminalConnectionProps {

@@ -312,6 +312,43 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
         name: "reservation_usd",
         ddl: "reservation_usd REAL NOT NULL DEFAULT 0",
       },
+      { name: "interrupt_requested_at", ddl: "interrupt_requested_at TEXT" },
+      { name: "interrupt_deadline_at", ddl: "interrupt_deadline_at TEXT" },
+      {
+        name: "interrupt_notice_state",
+        ddl: "interrupt_notice_state TEXT NOT NULL DEFAULT 'unattempted'",
+      },
+      {
+        name: "interrupt_stop_state",
+        ddl: "interrupt_stop_state TEXT NOT NULL DEFAULT 'unattempted'",
+      },
+      { name: "interrupt_cause", ddl: "interrupt_cause TEXT" },
+      { name: "rendered_status", ddl: "rendered_status TEXT" },
+      {
+        name: "rendered_status_summary",
+        ddl: "rendered_status_summary TEXT",
+      },
+      {
+        name: "rendered_status_summary_redacted",
+        ddl: "rendered_status_summary_redacted INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "rendered_status_replacement_count",
+        ddl: "rendered_status_replacement_count INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "rendered_status_stability_count",
+        ddl: "rendered_status_stability_count INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "rendered_status_last_captured_at",
+        ddl: "rendered_status_last_captured_at TEXT",
+      },
+      {
+        name: "rendered_status_next_capture_at",
+        ddl: "rendered_status_next_capture_at TEXT",
+      },
+      { name: "rendered_status_error", ddl: "rendered_status_error TEXT" },
       { name: "terminal_cause", ddl: "terminal_cause TEXT" },
       { name: "failure_code", ddl: "failure_code TEXT" },
       { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
@@ -402,6 +439,13 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
       },
       { name: "base_sha", ddl: "base_sha TEXT NOT NULL DEFAULT ''" },
       { name: "lens", ddl: "lens TEXT NOT NULL DEFAULT ''" },
+      { name: "provider", ddl: "provider TEXT" },
+      { name: "model", ddl: "model TEXT" },
+      {
+        name: "launch_failure_count",
+        ddl: "launch_failure_count INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "retry_not_before", ddl: "retry_not_before TEXT" },
       {
         name: "reviewer_session_id",
         ddl: "reviewer_session_id TEXT NOT NULL DEFAULT ''",
@@ -490,6 +534,13 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
       },
       { name: "policy_hash", ddl: "policy_hash TEXT NOT NULL DEFAULT ''" },
       { name: "lens", ddl: "lens TEXT NOT NULL DEFAULT ''" },
+      { name: "provider", ddl: "provider TEXT" },
+      { name: "model", ddl: "model TEXT" },
+      {
+        name: "launch_failure_count",
+        ddl: "launch_failure_count INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "retry_not_before", ddl: "retry_not_before TEXT" },
       {
         name: "reviewer_session_id",
         ddl: "reviewer_session_id TEXT NOT NULL DEFAULT ''",
@@ -540,6 +591,13 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
         name: "verification_evidence_hash",
         ddl: "verification_evidence_hash TEXT NOT NULL DEFAULT ''",
       },
+      { name: "provider", ddl: "provider TEXT" },
+      { name: "model", ddl: "model TEXT" },
+      {
+        name: "launch_failure_count",
+        ddl: "launch_failure_count INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "retry_not_before", ddl: "retry_not_before TEXT" },
       { name: "state", ddl: "state TEXT NOT NULL DEFAULT 'pending'" },
       { name: "request_id", ddl: "request_id TEXT NOT NULL DEFAULT ''" },
       { name: "nonce_hash", ddl: "nonce_hash TEXT NOT NULL DEFAULT ''" },
@@ -1131,6 +1189,7 @@ export function createSchema(db: Database.Database): void {
       source_name TEXT,
       status TEXT NOT NULL DEFAULT 'draft',
       budget_usd REAL,
+      budget_tokens INTEGER,
       provider TEXT NOT NULL DEFAULT 'claude',
       model TEXT,
       max_concurrency INTEGER NOT NULL DEFAULT 1,
@@ -1168,6 +1227,17 @@ export function createSchema(db: Database.Database): void {
       recovery_required INTEGER NOT NULL DEFAULT 0,
       reserved_budget_usd REAL NOT NULL DEFAULT 0,
       spent_budget_usd REAL NOT NULL DEFAULT 0,
+      reserved_budget_tokens INTEGER NOT NULL DEFAULT 0,
+      spent_budget_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_confidence TEXT NOT NULL DEFAULT 'unknown',
+      budget_stop_mode TEXT NOT NULL DEFAULT 'pause-new',
+      budget_warning_threshold REAL NOT NULL DEFAULT 0.8,
+      budget_warning_emitted_at TEXT,
+      budget_hard_limit_at TEXT,
+      budget_interrupt_deadline_at TEXT,
+      provider_caps_json TEXT NOT NULL DEFAULT '{}',
+      resource_limits_json TEXT NOT NULL DEFAULT '{}',
+      default_max_attempts INTEGER NOT NULL DEFAULT 2,
       pause_mode TEXT,
       pause_reason TEXT,
       cancel_mode TEXT,
@@ -1283,6 +1353,26 @@ export function createSchema(db: Database.Database): void {
       lease_owner TEXT,
       lease_expires_at TEXT,
       reservation_usd REAL NOT NULL DEFAULT 0,
+      reservation_tokens INTEGER NOT NULL DEFAULT 0,
+      reservation_confidence TEXT NOT NULL DEFAULT 'unknown',
+      reservation_basis TEXT,
+      actual_cost_usd REAL,
+      actual_tokens INTEGER,
+      cost_confidence TEXT NOT NULL DEFAULT 'unknown',
+      cost_reconciled_at TEXT,
+      interrupt_requested_at TEXT,
+      interrupt_deadline_at TEXT,
+      interrupt_notice_state TEXT NOT NULL DEFAULT 'unattempted',
+      interrupt_stop_state TEXT NOT NULL DEFAULT 'unattempted',
+      interrupt_cause TEXT,
+      rendered_status TEXT,
+      rendered_status_summary TEXT,
+      rendered_status_summary_redacted INTEGER NOT NULL DEFAULT 0,
+      rendered_status_replacement_count INTEGER NOT NULL DEFAULT 0,
+      rendered_status_stability_count INTEGER NOT NULL DEFAULT 0,
+      rendered_status_last_captured_at TEXT,
+      rendered_status_next_capture_at TEXT,
+      rendered_status_error TEXT,
       terminal_cause TEXT,
       failure_code TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1328,6 +1418,80 @@ export function createSchema(db: Database.Database): void {
       released_at TEXT,
       FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
       FOREIGN KEY (worker_id) REFERENCES fleet_workers(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_cost_accounts (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      session_id TEXT,
+      session_key TEXT NOT NULL,
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      task_id TEXT,
+      provider TEXT NOT NULL,
+      model TEXT,
+      reservation_usd REAL NOT NULL DEFAULT 0,
+      reservation_tokens INTEGER NOT NULL DEFAULT 0,
+      reservation_confidence TEXT NOT NULL DEFAULT 'unknown',
+      reservation_basis TEXT,
+      reservation_released_at TEXT,
+      peak_input_tokens INTEGER NOT NULL DEFAULT 0,
+      peak_output_tokens INTEGER NOT NULL DEFAULT 0,
+      peak_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      peak_cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      observed_cost_usd REAL,
+      fallback_cost_usd REAL NOT NULL DEFAULT 0,
+      charged_cost_usd REAL NOT NULL DEFAULT 0,
+      fallback_tokens INTEGER NOT NULL DEFAULT 0,
+      charged_tokens INTEGER NOT NULL DEFAULT 0,
+      confidence TEXT NOT NULL DEFAULT 'unknown',
+      last_sample_day TEXT,
+      last_sample_at TEXT,
+      terminal_at TEXT,
+      interrupt_requested_at TEXT,
+      interrupt_deadline_at TEXT,
+      interrupt_notice_state TEXT NOT NULL DEFAULT 'unattempted',
+      interrupt_stop_state TEXT NOT NULL DEFAULT 'unattempted',
+      interrupt_cause TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      UNIQUE (fleet_run_id, owner_type, owner_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_runtime_leases (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_key TEXT NOT NULL,
+      units INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'reserved',
+      lease_expires_at TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      released_at TEXT,
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_resource_usage_buckets (
+      fleet_run_id TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_key TEXT NOT NULL,
+      bucket_start_ms INTEGER NOT NULL,
+      units INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (fleet_run_id, resource_type, resource_key, bucket_start_ms),
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_provider_cooldowns (
+      provider TEXT PRIMARY KEY,
+      blocked_until TEXT NOT NULL,
+      failure_count INTEGER NOT NULL DEFAULT 1,
+      reason TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS fleet_events (
@@ -1393,6 +1557,10 @@ export function createSchema(db: Database.Database): void {
       execution_hash TEXT NOT NULL,
       base_sha TEXT NOT NULL,
       lens TEXT NOT NULL,
+      provider TEXT,
+      model TEXT,
+      launch_failure_count INTEGER NOT NULL DEFAULT 0,
+      retry_not_before TEXT,
       reviewer_session_id TEXT NOT NULL,
       verdict TEXT NOT NULL,
       state TEXT NOT NULL DEFAULT 'changes_requested',
@@ -1463,6 +1631,10 @@ export function createSchema(db: Database.Database): void {
       verification_evidence_hash TEXT NOT NULL,
       policy_hash TEXT NOT NULL,
       lens TEXT NOT NULL,
+      provider TEXT,
+      model TEXT,
+      launch_failure_count INTEGER NOT NULL DEFAULT 0,
+      retry_not_before TEXT,
       reviewer_session_id TEXT NOT NULL DEFAULT '',
       verdict TEXT NOT NULL DEFAULT 'changes_requested',
       state TEXT NOT NULL DEFAULT 'pending',
@@ -1502,6 +1674,10 @@ export function createSchema(db: Database.Database): void {
       new_head_sha TEXT,
       policy_hash TEXT NOT NULL,
       verification_evidence_hash TEXT NOT NULL,
+      provider TEXT,
+      model TEXT,
+      launch_failure_count INTEGER NOT NULL DEFAULT 0,
+      retry_not_before TEXT,
       state TEXT NOT NULL DEFAULT 'pending',
       request_id TEXT NOT NULL DEFAULT '',
       nonce_hash TEXT NOT NULL DEFAULT '',
@@ -1660,8 +1836,24 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_fleet_claims_path ON fleet_task_claims(fleet_run_id, path);
     CREATE INDEX IF NOT EXISTS idx_fleet_resource_leases_active ON fleet_resource_leases(resource_type, resource_key, status);
     CREATE INDEX IF NOT EXISTS idx_fleet_resource_leases_worker ON fleet_resource_leases(worker_id, status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_cost_accounts_session ON fleet_cost_accounts(fleet_run_id, session_key);
+    CREATE INDEX IF NOT EXISTS idx_fleet_cost_accounts_interrupt ON fleet_cost_accounts(fleet_run_id, interrupt_deadline_at, owner_type) WHERE terminal_at IS NULL AND reservation_released_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_fleet_cost_accounts_history ON fleet_cost_accounts(provider, model, task_id, terminal_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_runtime_leases_owner_resource
+      ON fleet_runtime_leases(owner_type, owner_id, resource_type, resource_key)
+      WHERE status = 'reserved';
+    CREATE INDEX IF NOT EXISTS idx_fleet_runtime_leases_active
+      ON fleet_runtime_leases(resource_type, resource_key, status, lease_expires_at);
+    CREATE INDEX IF NOT EXISTS idx_fleet_runtime_leases_run
+      ON fleet_runtime_leases(fleet_run_id, status, owner_type, owner_id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_resource_usage_bucket_time
+      ON fleet_resource_usage_buckets(bucket_start_ms, fleet_run_id, resource_type, resource_key);
+    CREATE INDEX IF NOT EXISTS idx_fleet_provider_cooldowns_until
+      ON fleet_provider_cooldowns(blocked_until, provider);
     CREATE INDEX IF NOT EXISTS idx_fleet_workers_run ON fleet_workers(fleet_run_id);
     CREATE INDEX IF NOT EXISTS idx_fleet_workers_status ON fleet_workers(fleet_run_id, status);
+    CREATE INDEX IF NOT EXISTS idx_fleet_workers_rendered_status_due
+      ON fleet_workers(status, rendered_status_next_capture_at, id);
     CREATE INDEX IF NOT EXISTS idx_fleet_workers_session ON fleet_workers(session_id);
     CREATE INDEX IF NOT EXISTS idx_fleet_workers_report_poll ON fleet_workers(report_state, report_next_poll_at) WHERE report_state = 'pending';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_spawn_request ON fleet_workers(spawn_request_id) WHERE spawn_request_id IS NOT NULL;
@@ -1684,14 +1876,20 @@ export function createSchema(db: Database.Database): void {
       );
     CREATE INDEX IF NOT EXISTS idx_fleet_task_reviews_active
       ON fleet_task_reviews(state, fleet_run_id, task_id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_task_reviews_launch_retry
+      ON fleet_task_reviews(state, retry_not_before);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_task_fixes_round
       ON fleet_task_fixes(task_id, attempt, old_head_sha, round, policy_hash);
     CREATE INDEX IF NOT EXISTS idx_fleet_task_fixes_active
       ON fleet_task_fixes(state, fleet_run_id, task_id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_task_fixes_launch_retry
+      ON fleet_task_fixes(state, retry_not_before);
     CREATE INDEX IF NOT EXISTS idx_fleet_action_authorizations_run
       ON fleet_action_authorizations(fleet_run_id, action, status);
     CREATE INDEX IF NOT EXISTS idx_fleet_reviews_subject
       ON fleet_reviews(fleet_run_id, subject_type, subject_hash);
+    CREATE INDEX IF NOT EXISTS idx_fleet_reviews_launch_retry
+      ON fleet_reviews(state, retry_not_before);
     CREATE INDEX IF NOT EXISTS idx_fleet_merge_operations_queue
       ON fleet_merge_operations(state, lease_expires_at, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_merge_operations_key

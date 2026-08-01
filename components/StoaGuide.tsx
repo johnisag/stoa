@@ -129,7 +129,7 @@ const COCKPIT: Item[] = [
     icon: Network,
     title: "Session orchestration",
     blurb:
-      "Coordinate conductor/worker agents over MCP SDK v2. Fleet lifecycle stays in the authenticated UI; MCP agents can queue an operator request but cannot read or mutate Fleet runs.",
+      "Coordinate conductor/worker agents over MCP SDK v2. Fleet authority stays in the authenticated admin control plane: agents may use explicitly issued, narrowly scoped capabilities for bounded reads or exact one-shot lifecycle actions, or queue an operator request, but they cannot mint approval or merge authority.",
   },
   {
     icon: BrainCircuit,

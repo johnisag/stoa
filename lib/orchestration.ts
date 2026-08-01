@@ -9,7 +9,7 @@ import { randomUUID } from "crypto";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { rm } from "fs/promises";
-import { db, queries, type Session } from "./db";
+import { db, queries, resolveDbPath, type Session } from "./db";
 import { createWorktree, deleteWorktree } from "./worktrees";
 import { setupWorktree } from "./env-setup";
 import { resolveModelForAgent } from "./model-catalog";
@@ -24,14 +24,14 @@ import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
 import { getSessionBackend } from "./session-backend";
-import { expandHome, homeDir } from "./platform";
+import { expandHome, isWindows, stoaHomeDir } from "./platform";
 import { emitGenAiEvent } from "./telemetry/otel";
 import { detectSandboxTool } from "./sandbox/detect";
 import { wrapSpawnForSandbox } from "./sandbox/wrap";
 import { computeRwRoots } from "./sandbox/policy";
 import { decideWorkerSandbox, effectiveSandboxActive } from "./sandbox/worker";
 import type { ApprovalMode } from "./sandbox/types";
-import { join } from "path";
+import { isAbsolute, relative, resolve, sep } from "path";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,6 +57,14 @@ export interface SpawnWorkerOptions {
   skipSetup?: boolean;
   /** Keep the checkout and Git common directory read-only in an active sandbox. */
   readOnlyWorktree?: boolean;
+  /**
+   * Exact Fleet-owned attempt directories the process may write outside its
+   * checkout. Values are validated against the two narrow runtime layouts;
+   * passing STOA_HOME (or an arbitrary parent) is rejected.
+   */
+  fleetWritableRoots?: string[];
+  /** Fleet requires stronger isolation than the legacy generic worker sandbox. */
+  requireStrongIsolation?: boolean;
   /** Override the default worker approval policy (planners use prompt mode). */
   approvalMode?: ApprovalMode;
   model?: string;
@@ -143,12 +151,14 @@ function taskToSessionName(task: string): string {
  * Resolve a worker's writable roots (#27): its worktree + the git-common dir (so
  * index/refs/objects writes succeed) + the agent's OWN state dir (~/.claude,
  * ~/.codex — where the CLI writes its rollout/transcript, which Stoa reads) +
- * ~/.stoa. Everything else is read-only inside the sandbox.
+ * exact Fleet attempt output directories. Stoa's authority directory remains
+ * hidden inside the sandbox.
  */
 async function resolveWorkerRwRoots(
   cwd: string,
   agentType: AgentType,
-  includeWorktree = true
+  includeWorktree = true,
+  fleetWritableRoots: string[] = []
 ): Promise<string[]> {
   let gitCommonDir: string | null = null;
   if (includeWorktree) {
@@ -168,8 +178,69 @@ async function resolveWorkerRwRoots(
     worktreePaths: includeWorktree ? [cwd] : [],
     gitCommonDir,
     agentConfigDir: configDir ? expandHome(configDir) : null,
-    stoaHome: join(homeDir(), ".stoa"),
+    fleetWritableRoots,
   });
+}
+
+const FLEET_SANDBOX_AUTHORITY_ENV = [
+  "STOA_TOKEN",
+  "STOA_FLEET_SCHEDULER_TOKEN",
+  "STOA_WEBHOOK_SECRET",
+  "STOA_VAPID_PRIVATE_KEY",
+] as const;
+
+function isPathWithin(parent: string, candidate: string): boolean {
+  const rel = relative(parent, candidate);
+  return (
+    rel.length === 0 ||
+    (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
+  );
+}
+
+/** Validate that a Fleet launch exposes only one exact attempt directory. */
+export function validateFleetSandboxWritableRoots(
+  roots: readonly string[],
+  stoaHome = stoaHomeDir()
+): string[] {
+  const authorityRoot = resolve(stoaHome);
+  const layouts = [
+    { root: resolve(authorityRoot, "fleet"), minimumDepth: 3 },
+    { root: resolve(authorityRoot, "fleet-task-runtime"), minimumDepth: 4 },
+  ];
+  const seen = new Set<string>();
+  const validated: string[] = [];
+  for (const value of roots) {
+    const candidate = resolve(expandHome(value));
+    const layout = layouts.find(({ root }) => isPathWithin(root, candidate));
+    const depth = layout
+      ? relative(layout.root, candidate).split(sep).filter(Boolean).length
+      : 0;
+    if (!layout || depth < layout.minimumDepth) {
+      throw new Error(
+        "Fleet sandbox writable roots must identify one exact server-owned attempt directory"
+      );
+    }
+    const key = isWindows ? candidate.toLowerCase() : candidate;
+    if (!seen.has(key)) {
+      seen.add(key);
+      validated.push(candidate);
+    }
+  }
+  return validated;
+}
+
+function sandboxAuthorityPolicy(fleetWritableRoots: string[]) {
+  const authorityRoot = resolve(stoaHomeDir());
+  const dbPath = resolve(resolveDbPath());
+  const maskedPaths = isPathWithin(authorityRoot, dbPath)
+    ? []
+    : [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
+  return {
+    hiddenRoots: [authorityRoot],
+    maskedPaths,
+    unsetEnv: [...FLEET_SANDBOX_AUTHORITY_ENV],
+    fleetWritableRoots,
+  };
 }
 
 /**
@@ -196,6 +267,9 @@ export async function spawnWorker(
 
   // Expand ~ to home directory
   const workingDirectory = expandHome(rawWorkingDir);
+  const fleetWritableRoots = validateFleetSandboxWritableRoots(
+    options.fleetWritableRoots ?? []
+  );
 
   const sessionId = randomUUID();
   const sessionName = taskToSessionName(task);
@@ -318,7 +392,17 @@ export async function spawnWorker(
     });
     const approvalMode = options.approvalMode ?? sandboxDecision.approvalMode;
     const tentativeActive =
-      approvalMode === "sandboxed-auto" && sandboxDecision.sandboxActive;
+      approvalMode === "sandboxed-auto" &&
+      sandboxDecision.sandboxActive &&
+      options.requireStrongIsolation !== true;
+    if (
+      approvalMode === "sandboxed-auto" &&
+      options.requireStrongIsolation === true
+    ) {
+      console.warn(
+        "[sandbox] Fleet strong isolation is unavailable; running without prompt bypass"
+      );
+    }
 
     // Resolve the ACTUAL wrap BEFORE building argv, so the bypass flag is pushed
     // ONLY when the sandbox truly confines: a downgrade withdraws the flag (the
@@ -326,15 +410,23 @@ export async function spawnWorker(
     let wrapPrefix: { file: string; argsPrefix: string[] } | null = null;
     let sandboxActive = tentativeActive;
     if (tentativeActive && detected) {
+      const authorityPolicy = sandboxAuthorityPolicy(fleetWritableRoots);
       const rwRoots = await resolveWorkerRwRoots(
         expandHome(cwd),
         provider.id,
-        options.readOnlyWorktree !== true
+        options.readOnlyWorktree !== true,
+        authorityPolicy.fleetWritableRoots
       );
       const wrap = wrapSpawnForSandbox(
         { file: "", args: [] },
         "sandboxed-auto",
-        { rwRoots, allowNet: true },
+        {
+          rwRoots,
+          hiddenRoots: authorityPolicy.hiddenRoots,
+          maskedPaths: authorityPolicy.maskedPaths,
+          unsetEnv: authorityPolicy.unsetEnv,
+          allowNet: true,
+        },
         { detect: () => detected } // reuse the one detection — no second probe
       );
       sandboxActive = effectiveSandboxActive(tentativeActive, wrap.downgraded);

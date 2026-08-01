@@ -100,4 +100,44 @@ describe("B007 — interpolated ids are URL-encoded", () => {
     expect(fetchedUrls[0]).toContain(`/pipelines/${ENCODED}`);
     expect(fetchedUrls[0]).not.toContain(NASTY);
   });
+
+  it("rejects a missing runId before requesting an undefined pipeline", async () => {
+    const result = await callTool("get_pipeline", {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("runId is required");
+    expect(fetchedUrls).toHaveLength(0);
+  });
+
+  it("does not misclassify rendered worker output beginning with Error", async () => {
+    fetchMock.mockResolvedValueOnce({
+      json: async () => ({
+        output: "Error: compiler diagnostic from the agent",
+      }),
+    } as unknown as Response);
+    const result = await callTool("get_worker_output", {
+      workerId: "worker-1",
+    });
+    expect(result.content[0]?.text).toBe(
+      "Error: compiler diagnostic from the agent"
+    );
+    expect(result.isError).toBeUndefined();
+  });
+
+  it("still marks a worker-output API failure as a tool error", async () => {
+    fetchMock.mockResolvedValueOnce({
+      json: async () => ({ error: "worker not found" }),
+    } as unknown as Response);
+    const result = await callTool("get_worker_output", { workerId: "missing" });
+    expect(result.content[0]?.text).toContain("worker not found");
+    expect(result.isError).toBe(true);
+  });
+
+  it("does not treat a memory key named Error as a failed tool", async () => {
+    fetchMock.mockResolvedValueOnce({
+      json: async () => ({ entry: { value: "a legitimate note" } }),
+    } as unknown as Response);
+    const result = await callTool("memory_get", { key: "Error" });
+    expect(result.content[0]?.text).toBe("Error: a legitimate note");
+    expect(result.isError).toBeUndefined();
+  });
 });

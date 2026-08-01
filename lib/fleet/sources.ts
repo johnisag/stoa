@@ -131,6 +131,8 @@ export interface FleetTextSourceInput {
 export interface FleetPipelineSourceInput {
   kind: "pipeline";
   spec: PipelineSpec | string;
+  /** Default direct-argv verification command for imported write tasks. */
+  verifyCommand: string;
   sourceId?: string;
   goal?: string;
   repoId?: string | null;
@@ -141,6 +143,8 @@ export interface FleetPipelineSourceInput {
 export interface FleetBuilderSourceInput {
   kind: "builder";
   workflow: BuilderDoc | SavedWorkflow;
+  /** Default direct-argv verification command for imported write tasks. */
+  verifyCommand: string;
   sourceId?: string;
   goal?: string;
   repoId?: string | null;
@@ -158,6 +162,8 @@ export interface FleetDispatchPlannerSourceInput {
   repo?: Partial<DispatchRepo> | null;
   provider?: string | null;
   model?: string | null;
+  /** Defaults to the Dispatch repository command when omitted. */
+  verifyCommand?: string | null;
 }
 
 export interface FleetDispatchIssueSourceInput {
@@ -171,6 +177,8 @@ export interface FleetDispatchIssueSourceInput {
   repo?: Partial<DispatchRepo> | null;
   provider?: string | null;
   model?: string | null;
+  /** Defaults to the Dispatch repository command when omitted. */
+  verifyCommand?: string | null;
 }
 
 export type FleetSourceInput =
@@ -253,6 +261,37 @@ function branchHint(value: unknown, path: string): string | null {
     reject("unsafe_branch", path, `${path} is not a safe branch hint`);
   }
   return branch;
+}
+
+function verifyCommand(
+  value: unknown,
+  path = "verifyCommand",
+  required = false
+): string | null {
+  if (required && (value == null || value === "")) {
+    reject(
+      "missing_verify_command",
+      path,
+      "write tasks require a verification command"
+    );
+  }
+  const command = boundedText(value, path, VERIFY_COMMAND_MAX);
+  if (required && !command) {
+    reject(
+      "missing_verify_command",
+      path,
+      "write tasks require a verification command"
+    );
+  }
+  if (!command) return null;
+  if (!("steps" in parseVerifySteps(command))) {
+    reject(
+      "unsafe_verify_command",
+      path,
+      `${path} must use direct argv steps separated only by &&`
+    );
+  }
+  return command;
 }
 
 function normalizeProvider(
@@ -425,6 +464,20 @@ function validateDraft(
       );
     }
     ids.add(task.id);
+    if (task.claimMode === "write" && !task.verifyCommand) {
+      reject(
+        "missing_verify_command",
+        `tasks[${task.order}].verifyCommand`,
+        "write tasks require a verification command"
+      );
+    }
+    if (task.claimMode === "read" && task.verifyCommand !== null) {
+      reject(
+        "invalid_verify_command",
+        `tasks[${task.order}].verifyCommand`,
+        "read-only tasks cannot execute a verification command"
+      );
+    }
   }
   const dependencies = new Map<string, string[]>();
   for (const task of draft.tasks) {
@@ -570,6 +623,7 @@ function pipelineDraft(input: {
   repoId?: unknown;
   projectId?: unknown;
   baseBranch?: unknown;
+  verifyCommand?: unknown;
 }): FleetSourceDraftPlanInput {
   const spec = parsePipeline(input.spec);
   if (spec.steps.length > FLEET_SOURCE_TASK_CAP) {
@@ -586,6 +640,11 @@ function pipelineDraft(input: {
     required: true,
     multiline: true,
   })!;
+  const defaultVerifyCommand = verifyCommand(
+    input.verifyCommand,
+    "verifyCommand",
+    true
+  );
   const tasks = spec.steps.map((step: PipelineStep, order) => {
     const stepRecord = step as unknown as Record<string, unknown>;
     const id = explicitTaskId(step.id, `spec.steps[${order}].id`);
@@ -643,7 +702,7 @@ function pipelineDraft(input: {
         ACCEPTANCE_MAX,
         { multiline: true }
       ),
-      verifyCommand: null,
+      verifyCommand: defaultVerifyCommand,
       sourceRef: `${input.kind}:${id}`,
     };
   });
@@ -714,21 +773,7 @@ export function adaptFleetTextSource(input: unknown): FleetSourceAdapterResult {
         "claimMode must be read or write"
       );
     }
-    const defaultVerifyCommand = boundedText(
-      source.verifyCommand,
-      "verifyCommand",
-      VERIFY_COMMAND_MAX
-    );
-    if (
-      defaultVerifyCommand &&
-      !("steps" in parseVerifySteps(defaultVerifyCommand))
-    ) {
-      reject(
-        "unsafe_verify_command",
-        "verifyCommand",
-        "verifyCommand must use direct argv steps separated only by &&"
-      );
-    }
+    const defaultVerifyCommand = verifyCommand(source.verifyCommand);
     const tasks: FleetSourceDraftTask[] = parsed.tasks.map((task, order) => {
       const claimMode =
         (requestedClaimMode as FleetSourceClaimAccess | undefined) ??
@@ -787,6 +832,7 @@ export function adaptFleetPipelineSource(
       repoId: source.repoId,
       projectId: source.projectId,
       baseBranch: source.baseBranch,
+      verifyCommand: source.verifyCommand,
     });
   });
 }
@@ -823,6 +869,7 @@ export function adaptFleetBuilderSource(
       repoId: source.repoId,
       projectId: doc.projectId,
       baseBranch: source.baseBranch,
+      verifyCommand: source.verifyCommand,
     });
   });
 }
@@ -845,7 +892,12 @@ function dispatchRepoContext(source: Record<string, unknown>) {
     workingDirectory: repo?.repo_path,
     baseBranch: repo?.base_branch,
   });
-  return { provider, model, repository };
+  const defaultVerifyCommand = verifyCommand(
+    source.verifyCommand ?? repo?.verify_command,
+    "verifyCommand",
+    true
+  );
+  return { provider, model, repository, defaultVerifyCommand };
 }
 
 function dependencyIndexes(value: unknown, taskCount: number): number[][] {
@@ -938,7 +990,7 @@ export function adaptFleetDispatchPlannerSource(
         `tasks[${order}].claims`
       ),
       acceptanceCriteria: null,
-      verifyCommand: null,
+      verifyCommand: context.defaultVerifyCommand,
       sourceRef: `dispatch-planner:${order + 1}`,
     }));
     for (const task of tasks) {
@@ -1106,7 +1158,7 @@ export function adaptFleetDispatchIssueSource(
           `issues[${order}].file_claims`
         ),
         acceptanceCriteria: null,
-        verifyCommand: null,
+        verifyCommand: context.defaultVerifyCommand,
         sourceRef: `dispatch-issue:${rawIds[order]}`,
         sourceIssueId: rawIds[order],
         sourceIssueNumber: issueNumber,

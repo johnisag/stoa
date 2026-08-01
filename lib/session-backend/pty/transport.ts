@@ -28,6 +28,7 @@ export interface AttachSpawn {
   binary?: string;
   args?: string[];
   cwd?: string;
+  env?: Record<string, string>;
 }
 
 export interface AttachRequest {
@@ -128,6 +129,7 @@ export class LocalTransport implements PtyTransport {
               cwd,
               cols: req.cols,
               rows: req.rows,
+              env: req.spawn.env,
             })
           : spawnShellSession(req.key, cwd, req.cols, req.rows);
     }
@@ -207,6 +209,7 @@ export class HostTransport implements PtyTransport {
           cwd,
           cols: req.cols,
           rows: req.rows,
+          env: req.spawn.env,
         });
       } else {
         await this.client.spawnShell(req.key, cwd, req.cols, req.rows);

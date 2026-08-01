@@ -43,6 +43,8 @@ export interface CreateOptions {
    * backend — avoids the bash banner so it works on native Windows. */
   binary?: string;
   args?: string[];
+  /** Extra environment overlaid on the spawned process. */
+  env?: Record<string, string>;
 }
 
 export interface SendOptions {

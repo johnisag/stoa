@@ -10,6 +10,8 @@ import type {
   CreateFleetRunInput,
   FleetRunDetailDto,
   FleetRunDto,
+  FleetArtifactBodyDto,
+  FleetDestructiveActionPreview,
   IngestFleetPlanInput,
   PauseFleetRunInput,
   ResumeFleetRunInput,
@@ -17,6 +19,12 @@ import type {
   FleetMergeTarget,
 } from "@/lib/fleet/types";
 import type { FleetSupervisorSnapshot } from "@/lib/fleet/supervisor-types";
+import type { FleetWorkerOutputDto } from "@/lib/fleet/worker-output-types";
+import type {
+  FleetApprovalControlMutation,
+  FleetApprovalControlPreviewDto,
+  FleetApprovalControlResponseDto,
+} from "@/lib/fleet/approval-control-types";
 import { fleetKeys } from "./keys";
 
 async function fetchFleetRuns(): Promise<FleetRunDto[]> {
@@ -52,6 +60,172 @@ export function useFleetRunQuery(id: string | null, enabled = true) {
   });
 }
 
+/** Lazy, exact-attempt terminal preview. The component mounts this query for at
+ * most one selected worker; it deliberately has no polling interval. */
+export function useFleetWorkerOutput(
+  runId: string | null,
+  workerId: string | null,
+  expectedAttempt: number | null,
+  expectedSessionId: string | null,
+  enabled = true,
+  lines = 80
+) {
+  return useQuery({
+    queryKey: [
+      ...fleetKeys.run(runId ?? "__disabled__"),
+      "worker-output",
+      workerId ?? "__none__",
+      expectedAttempt,
+      expectedSessionId,
+      lines,
+    ],
+    queryFn:
+      enabled &&
+      runId &&
+      workerId &&
+      expectedAttempt != null &&
+      expectedSessionId
+        ? async () => {
+            const query = new URLSearchParams({
+              expectedAttempt: String(expectedAttempt),
+              expectedSessionId,
+              lines: String(lines),
+            });
+            const res = await fetch(
+              `/api/fleet/runs/${encodeURIComponent(runId)}/workers/${encodeURIComponent(workerId)}/output?${query}`,
+              { cache: "no-store" }
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              throw new Error(
+                data.error || "Failed to load rendered Fleet worker output"
+              );
+            }
+            return data as FleetWorkerOutputDto;
+          }
+        : skipToken,
+    enabled:
+      enabled &&
+      !!runId &&
+      !!workerId &&
+      expectedAttempt != null &&
+      !!expectedSessionId,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Fetch at most one immutable artifact body after explicit user expansion. */
+export function useFleetArtifactBody(
+  runId: string | null,
+  artifactId: string | null,
+  enabled = true
+) {
+  return useQuery({
+    queryKey: [
+      ...fleetKeys.run(runId ?? "__disabled__"),
+      "artifact-body",
+      artifactId ?? "__none__",
+    ],
+    queryFn:
+      enabled && runId && artifactId
+        ? async () => {
+            const res = await fetch(
+              `/api/fleet/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`,
+              { cache: "no-store" }
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              throw new Error(
+                data.error || "Failed to load Fleet artifact body"
+              );
+            }
+            return data as FleetArtifactBodyDto;
+          }
+        : skipToken,
+    enabled: enabled && !!runId && !!artifactId,
+    // Bodies are immutable until retention pruning. Treat cached data as stale
+    // so a close/re-open cannot resurrect a body after the server pruned it.
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useFleetApprovalControlPreview(
+  runId: string | null,
+  enabled = true
+) {
+  return useQuery({
+    queryKey: [...fleetKeys.run(runId ?? "__disabled__"), "approval-preview"],
+    queryFn:
+      enabled && runId
+        ? async () => {
+            const res = await fetch(
+              `/api/fleet/runs/${encodeURIComponent(runId)}/approvals/preview`,
+              { cache: "no-store" }
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              throw new Error(
+                data.error || "Failed to load exact Fleet approval controls"
+              );
+            }
+            return data as FleetApprovalControlPreviewDto;
+          }
+        : skipToken,
+    enabled: enabled && !!runId,
+    staleTime: 2000,
+    refetchInterval: enabled && runId ? 5000 : false,
+  });
+}
+
+export function useFleetApprovalControl(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0,
+    mutationFn: async (input: FleetApprovalControlMutation) => {
+      if (!runId) throw new Error("No Fleet run selected");
+      const taskPrefix =
+        "taskId" in input ? `/tasks/${encodeURIComponent(input.taskId)}` : "";
+      const suffix =
+        input.kind === "concurrency"
+          ? "/controls/concurrency"
+          : input.kind === "budget"
+            ? "/controls/budget"
+            : input.kind === "task_skip"
+              ? `${taskPrefix}/controls/skip`
+              : input.kind === "task_manual_launch"
+                ? `${taskPrefix}/controls/manual-launch`
+                : input.kind === "task_read_only"
+                  ? `${taskPrefix}/controls/read-only`
+                  : `${taskPrefix}/claims/approve`;
+      const res = await fetch(
+        `/api/fleet/runs/${encodeURIComponent(runId)}${suffix}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input.body),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Fleet approval control was rejected");
+      }
+      return data as FleetApprovalControlResponseDto;
+    },
+    onSuccess: (result) => {
+      if (!runId) return;
+      qc.setQueryData(
+        [...fleetKeys.run(runId), "approval-preview"],
+        result.preview
+      );
+      qc.invalidateQueries({ queryKey: fleetKeys.run(runId) });
+      qc.invalidateQueries({ queryKey: fleetKeys.runs() });
+    },
+  });
+}
+
 export function useCreateFleetRun() {
   const qc = useQueryClient();
   return useMutation({
@@ -83,16 +257,22 @@ export interface FleetCleanupPreview {
   archived: boolean;
   terminal: boolean;
   eligible: Array<{
-    workerId: string;
+    ownerType: "worker" | "plan_review" | "task_review" | "fixer";
+    ownerId: string;
+    workerId: string | null;
     worktreePath: string;
     projectPath: string;
     exists: boolean;
+    ownerCount: number;
   }>;
   skipped: Array<{
-    workerId: string;
+    ownerType: "worker" | "plan_review" | "task_review" | "fixer";
+    ownerId: string;
+    workerId: string | null;
     worktreePath: string;
     reason: string;
   }>;
+  impact: FleetDestructiveActionPreview;
 }
 
 export interface FleetAnalyticsDto {
@@ -154,6 +334,21 @@ export interface FleetMergeStatusDto {
     error: string | null;
     updatedAt: string;
   }>;
+  retry: {
+    action: "retry_final_verification" | null;
+    state: "not_applicable" | "available" | "blocked" | "exhausted";
+    available: boolean;
+    reason: string | null;
+    operationId: string | null;
+    attemptCount: number;
+    maxAttempts: number;
+    preconditions: {
+      planHash: string;
+      executionHash: string;
+      baseSha: string;
+      integrationHeadSha: string;
+    } | null;
+  };
 }
 
 export function useImportFleetRun() {
@@ -227,7 +422,8 @@ export function useFleetCleanupPreview(runId: string | null, enabled = true) {
       enabled && runId
         ? async () => {
             const res = await fetch(
-              `/api/fleet/runs/${encodeURIComponent(runId)}/cleanup`
+              `/api/fleet/runs/${encodeURIComponent(runId)}/cleanup`,
+              { cache: "no-store" }
             );
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
@@ -238,6 +434,35 @@ export function useFleetCleanupPreview(runId: string | null, enabled = true) {
         : skipToken,
     enabled: enabled && !!runId,
     staleTime: 5000,
+  });
+}
+
+export function useFleetCancellationPreview(
+  runId: string | null,
+  enabled = true
+) {
+  return useQuery({
+    queryKey: [...fleetKeys.run(runId ?? "__disabled__"), "cancel-preview"],
+    queryFn:
+      enabled && runId
+        ? async () => {
+            const res = await fetch(
+              `/api/fleet/runs/${encodeURIComponent(runId)}/cancel`,
+              { cache: "no-store" }
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              throw new Error(
+                data.error || "Failed to preview destructive Fleet cancellation"
+              );
+            }
+            return data as FleetDestructiveActionPreview;
+          }
+        : skipToken,
+    enabled: enabled && !!runId,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -348,7 +573,10 @@ export function useRequestFleetCleanup(runId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     retry: 0,
-    mutationFn: async () => {
+    mutationFn: async (input: {
+      confirmation: string;
+      previewDigest: string;
+    }) => {
       if (!runId) throw new Error("No fleet run selected");
       const res = await fetch(
         `/api/fleet/runs/${encodeURIComponent(runId)}/cleanup`,
@@ -357,7 +585,8 @@ export function useRequestFleetCleanup(runId: string | null) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             confirm: true,
-            confirmation: runId,
+            confirmation: input.confirmation,
+            previewDigest: input.previewDigest,
             actor: "operator",
           }),
         }
@@ -607,6 +836,7 @@ export interface FleetOperatorActionResponse {
 export interface FleetMergeRequestInput {
   target: "local" | "github_pr";
   expectedPlanHash: string;
+  expectedExecutionHash?: string;
   expectedBaseSha: string | null;
   expectedIntegrationHeadSha: string | null;
 }

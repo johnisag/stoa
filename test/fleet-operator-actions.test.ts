@@ -403,12 +403,13 @@ describe("Fleet task operator actions", () => {
 });
 
 describe("Fleet worker operator actions", () => {
-  it("delivers a bounded message once through the bound session without auditing its body", async () => {
+  it("delivers a bounded message once even when redaction would match the request id", async () => {
     seedApprovedTask({ status: "running", headSha: null });
     seedActiveWorker();
     const send = vi.fn(async () => true);
+    const requestId = `stoa_fleet_v1_${"a".repeat(43)}`;
     const input = {
-      requestId: "message-1",
+      requestId,
       expectedAttempt: 1,
       expectedSessionId: SESSION_ID,
       message: "Please report your blocker.",
@@ -440,6 +441,16 @@ describe("Fleet worker operator actions", () => {
     expect(payloads).toHaveLength(2);
     expect(
       payloads.every((row) => !row.payload.includes("Please report"))
+    ).toBe(true);
+    expect(payloads.every((row) => !row.payload.includes(requestId))).toBe(
+      true
+    );
+    expect(
+      payloads.every((row) =>
+        /^[0-9a-f]{64}$/.test(
+          String(JSON.parse(row.payload).requestIdHash ?? "")
+        )
+      )
     ).toBe(true);
   });
 

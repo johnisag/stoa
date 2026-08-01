@@ -20,6 +20,10 @@ export interface FleetAnalytics {
     configuredUsd: number;
     reservedUsd: number;
     spentUsd: number;
+    configuredTokens: number;
+    reservedTokens: number;
+    spentTokens: number;
+    confidence: Record<string, number>;
   };
 }
 
@@ -29,6 +33,10 @@ interface AnalyticsRunRow {
   budget_usd: number | null;
   reserved_budget_usd: number;
   spent_budget_usd: number;
+  budget_tokens: number | null;
+  reserved_budget_tokens: number;
+  spent_budget_tokens: number;
+  cost_confidence: string;
   started_at: string | null;
   ended_at: string | null;
   archived_at: string | null;
@@ -56,6 +64,8 @@ export function getFleetAnalytics(
   const runs = db
     .prepare(
       `SELECT id, status, budget_usd, reserved_budget_usd, spent_budget_usd,
+              budget_tokens, reserved_budget_tokens, spent_budget_tokens,
+              cost_confidence,
               started_at, ended_at, archived_at
        FROM fleet_runs ORDER BY created_at DESC, id DESC LIMIT ?`
     )
@@ -67,6 +77,10 @@ export function getFleetAnalytics(
   let configuredUsd = 0;
   let reservedUsd = 0;
   let spentUsd = 0;
+  let configuredTokens = 0;
+  let reservedTokens = 0;
+  let spentTokens = 0;
+  const costConfidence: Record<string, number> = {};
   const durations: number[] = [];
   for (const run of runs) {
     increment(runOutcomes, run.status);
@@ -74,6 +88,10 @@ export function getFleetAnalytics(
     configuredUsd += run.budget_usd ?? 0;
     reservedUsd += run.reserved_budget_usd ?? 0;
     spentUsd += run.spent_budget_usd ?? 0;
+    configuredTokens += run.budget_tokens ?? 0;
+    reservedTokens += run.reserved_budget_tokens ?? 0;
+    spentTokens += run.spent_budget_tokens ?? 0;
+    increment(costConfidence, run.cost_confidence || "unknown");
     if (run.started_at && run.ended_at) {
       const started = Date.parse(run.started_at);
       const ended = Date.parse(run.ended_at);
@@ -145,6 +163,10 @@ export function getFleetAnalytics(
       configuredUsd: roundedCurrency(configuredUsd),
       reservedUsd: roundedCurrency(reservedUsd),
       spentUsd: roundedCurrency(spentUsd),
+      configuredTokens,
+      reservedTokens,
+      spentTokens,
+      confidence: costConfidence,
     },
   };
 }

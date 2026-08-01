@@ -4,8 +4,36 @@ import {
   readCappedJsonBody,
 } from "@/lib/fleet/http";
 import { cancelFleetRun } from "@/lib/fleet/service";
-import { cancelFleetPlanner } from "@/lib/fleet/planner";
+import { parseFleetCancelRequest } from "@/lib/fleet/interrupt-policy";
 import { requireAdmin } from "@/lib/api-security";
+import { previewFleetDestructiveAction } from "@/lib/fleet/lifecycle";
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
+  const { id } = await params;
+  try {
+    const result = await previewFleetDestructiveAction(id);
+    if ("error" in result) {
+      return NextResponse.json(
+        { error: result.error },
+        { status: result.status }
+      );
+    }
+    return NextResponse.json(result, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch (error) {
+    console.error("[fleet] destructive cancellation preview failed:", error);
+    return NextResponse.json(
+      { error: "Failed to preview destructive Fleet cancellation" },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(
   request: NextRequest,
@@ -18,26 +46,14 @@ export async function POST(
   if ("error" in body)
     return NextResponse.json({ error: body.error }, { status: body.status });
   try {
-    const planner = await cancelFleetPlanner(id, "operator");
-    if ("error" in planner) {
-      return NextResponse.json(
-        { error: planner.error },
-        { status: planner.status ?? 400 }
-      );
-    }
-    if (planner.run.run.plannerState === "cleanup_pending") {
-      return NextResponse.json(
-        {
-          error:
-            "Planner cancellation is queued; retry Fleet cancellation after cleanup completes",
-        },
-        { status: 409 }
-      );
-    }
     const input =
       body.body && typeof body.body === "object"
         ? { ...(body.body as Record<string, unknown>), actor: "operator" }
         : { actor: "operator" };
+    const parsed = parseFleetCancelRequest(id, input);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
     const result = await cancelFleetRun(id, input);
     if ("error" in result)
       return NextResponse.json(

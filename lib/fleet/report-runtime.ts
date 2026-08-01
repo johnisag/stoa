@@ -1,8 +1,8 @@
-import { createHash, randomBytes } from "crypto";
-import { lstat, mkdir } from "fs/promises";
-import { join } from "path";
+import { randomBytes } from "crypto";
+import { lstat, mkdir, unlink } from "fs/promises";
+import { dirname, join, resolve } from "path";
 import { runGit } from "@/lib/git";
-import { expandHome, homeDir } from "@/lib/platform";
+import { expandHome, isWindows, stoaHomeDir } from "@/lib/platform";
 import {
   readBoundedRegularFile,
   type FleetArtifactReadResult,
@@ -20,6 +20,7 @@ import {
   type ExpectedFleetReportIdentity,
   type FleetTaskCompletionReport,
 } from "./report";
+import { prepareFleetArtifactBody } from "./durable-write";
 
 const FLEET_REPORT_NONCE_BYTES = 32;
 const FLEET_REPORT_POLL_MIN_MS = 1_000;
@@ -48,6 +49,15 @@ export interface PrepareFleetWorkerAttemptInput {
   workingDirectory: string;
   baseRef: string;
 }
+
+export interface FleetWorkerReportFileIdentity {
+  runId: string;
+  taskId: string;
+  attempt: number;
+  reportPath: string;
+}
+
+export type FleetWorkerReportFileRemovalResult = "deleted" | "missing";
 
 export interface FleetWorkerReportCollectionInput {
   reportPath: string;
@@ -100,6 +110,67 @@ function safePathComponent(value: string, label: string): string {
   return value;
 }
 
+function safeAttempt(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error("Fleet attempt must be a positive integer");
+  }
+  return value;
+}
+
+/** The sole report path Fleet may create or remove for an exact worker attempt. */
+export function fleetWorkerReportPath(
+  input: Pick<FleetWorkerReportFileIdentity, "runId" | "taskId" | "attempt">
+): string {
+  const runId = safePathComponent(input.runId, "runId");
+  const taskId = safePathComponent(input.taskId, "taskId");
+  const attempt = safeAttempt(input.attempt);
+  return join(
+    stoaHomeDir(),
+    "fleet",
+    runId,
+    taskId,
+    String(attempt),
+    "report.json"
+  );
+}
+
+export function isFleetOwnedWorkerReportPath(
+  input: FleetWorkerReportFileIdentity
+): boolean {
+  let expected: string;
+  try {
+    expected = fleetWorkerReportPath(input);
+  } catch {
+    return false;
+  }
+  const actualPath = resolve(input.reportPath);
+  const expectedPath = resolve(expected);
+  return isWindows
+    ? actualPath.toLowerCase() === expectedPath.toLowerCase()
+    : actualPath === expectedPath;
+}
+
+/**
+ * Remove only the exact Fleet-owned raw report for an authenticated attempt.
+ * Missing files are success: the durable lifecycle action can then converge
+ * after a crash between unlink and its database acknowledgement.
+ */
+export async function deleteFleetWorkerReportFile(
+  input: FleetWorkerReportFileIdentity,
+  removeFile: (filePath: string) => Promise<void> = unlink
+): Promise<FleetWorkerReportFileRemovalResult> {
+  if (!isFleetOwnedWorkerReportPath(input)) {
+    throw new Error("report path is not owned by the exact Fleet attempt");
+  }
+  try {
+    await removeFile(input.reportPath);
+    return "deleted";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+}
+
 function safeBaseRef(value: string): string {
   const ref = value.trim();
   if (
@@ -141,21 +212,16 @@ async function resolveBaseSha(
 export async function prepareFleetWorkerAttempt(
   input: PrepareFleetWorkerAttemptInput
 ): Promise<FleetWorkerAttemptContract> {
-  if (!Number.isSafeInteger(input.attempt) || input.attempt < 1) {
-    throw new Error("Fleet attempt must be a positive integer");
-  }
+  safeAttempt(input.attempt);
   const runId = safePathComponent(input.runId, "runId");
   const taskId = safePathComponent(input.taskId, "taskId");
   const baseSha = await resolveBaseSha(input.workingDirectory, input.baseRef);
-  const attemptDirectory = join(
-    homeDir(),
-    ".stoa",
-    "fleet",
+  const reportPath = fleetWorkerReportPath({
     runId,
     taskId,
-    String(input.attempt)
-  );
-  const reportPath = join(attemptDirectory, "report.json");
+    attempt: input.attempt,
+  });
+  const attemptDirectory = dirname(reportPath);
   await mkdir(attemptDirectory, { recursive: true });
   try {
     await lstat(reportPath);
@@ -367,7 +433,7 @@ export function nextFleetReportPollAt(
 }
 
 export function fleetArtifactContentHash(body: string): string {
-  return createHash("sha256").update(body, "utf8").digest("hex");
+  return prepareFleetArtifactBody(body).contentHash;
 }
 
 export function boundedFleetArtifactJson(value: unknown): {
@@ -375,10 +441,13 @@ export function boundedFleetArtifactJson(value: unknown): {
   bytes: number;
   contentHash: string;
 } {
-  const body = JSON.stringify(value);
-  const bytes = Buffer.byteLength(body, "utf8");
-  if (bytes > FLEET_RUNTIME_ARTIFACT_MAX_BYTES) {
+  const prepared = prepareFleetArtifactBody(JSON.stringify(value));
+  if (prepared.byteCount > FLEET_RUNTIME_ARTIFACT_MAX_BYTES) {
     throw new Error("Fleet runtime artifact exceeds its safety limit");
   }
-  return { body, bytes, contentHash: fleetArtifactContentHash(body) };
+  return {
+    body: prepared.body,
+    bytes: prepared.byteCount,
+    contentHash: prepared.contentHash,
+  };
 }

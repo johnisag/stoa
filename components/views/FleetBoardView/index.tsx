@@ -21,6 +21,7 @@ export function FleetBoardView({
   onOpenDispatch,
   onOpenWorkflows,
   onOpenVerdictInbox,
+  onOpenFleetRun,
   onClose,
 }: {
   /** Jump into a card's live worker session (ceremony rows carry a session id).
@@ -31,6 +32,8 @@ export function FleetBoardView({
   onOpenDispatch?: () => void;
   onOpenWorkflows?: () => void;
   onOpenVerdictInbox?: () => void;
+  /** Open an exact durable Fleet Management run/task in the sibling view. */
+  onOpenFleetRun?: (runId: string, taskId?: string) => void;
   /** Optional close affordance, used on mobile where the tab strip is hidden. */
   onClose?: () => void;
 }) {
@@ -203,6 +206,7 @@ export function FleetBoardView({
                           card={card}
                           repoById={repoById}
                           onOpenSession={onOpenSession}
+                          onOpenFleetRun={onOpenFleetRun}
                         />
                       ))}
                       {hidden > 0 && (

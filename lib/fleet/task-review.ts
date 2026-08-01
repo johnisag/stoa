@@ -5,28 +5,45 @@ import type Database from "better-sqlite3";
 import { getDb, queries, type Session } from "@/lib/db";
 import { generateBranchName, runGit } from "@/lib/git";
 import { spawnWorker, WorkerSpawnError } from "@/lib/orchestration";
-import { homeDir } from "@/lib/platform";
+import { stoaHomeDir } from "@/lib/platform";
 import {
   backendKeyForSession,
   PROVIDER_IDS,
   type ProviderId,
 } from "@/lib/providers/registry";
-import { detectSandboxTool } from "@/lib/sandbox/detect";
 import type { ApprovalMode } from "@/lib/sandbox/types";
 import { getSessionBackend } from "@/lib/session-backend";
 import { deleteWorktree } from "@/lib/worktrees";
 import { parseFleetAutomationPolicy } from "./automation-policy";
 import { readBoundedRegularFile } from "./artifacts";
+import { decideFleetAuxiliaryLaunchRetry } from "./auxiliary-retry";
+import {
+  allocateFleetAuxiliaryProvider,
+  detectInstalledFleetAgentProviders,
+  type FleetAgentProviderId,
+} from "./auxiliary-provider";
 import { collectFleetGitState } from "./git-state";
+import { fleetProviderRetryIsDue } from "./backoff";
 import { hashFleetAutomationPolicy } from "./hash";
 import {
   FLEET_PLAN_REVIEW_LENSES,
   fleetPlanReviewerApprovalMode,
   type FleetPlanReviewFinding,
 } from "./plan-review";
-import { boundedFleetArtifactJson } from "./report-runtime";
+import { redactAndCapFleetText } from "./redaction";
+import { insertFleetArtifact } from "./durable-write";
+import { clearFleetProviderCooldown } from "./resource-runtime";
+import { fleetStrongConfinementAvailable } from "./confinement";
 import { stopFleetSession } from "./stop";
 import {
+  activateFleetPaidSession,
+  finishFleetPaidSession,
+  reserveFleetPaidSession,
+} from "./session-admission";
+import { assertFleetLaunchReady } from "./recovery-gate";
+import { isFleetUnattendedProvider } from "./provider-eligibility";
+import {
+  reconcileFleetTaskFixSettlements,
   reconcileFleetTaskFixRow,
   recordFleetTaskFixFailure,
   recoverSpawningFleetTaskFix,
@@ -36,6 +53,7 @@ import {
   buildFleetTaskReviewPrompt,
   FLEET_TASK_REVIEW_FINDING_BODY_MAX_CHARS as FINDING_BODY_MAX_CHARS,
   FLEET_TASK_REVIEW_FINDING_MAX_COUNT as FINDING_MAX_COUNT,
+  FLEET_TASK_REVIEW_FINDING_TITLE_MAX_CHARS as FINDING_TITLE_MAX_CHARS,
   FLEET_TASK_REVIEW_RESULT_MAX_BYTES as RESULT_MAX_BYTES,
   hashFleetTaskRuntimeNonce,
   hashFleetVerificationEvidence,
@@ -50,6 +68,7 @@ import {
 import type {
   FleetAutomationPolicy,
   FleetPlanReviewLens,
+  FleetRunRow,
   FleetTaskFixRow,
   FleetTaskReviewRow,
   FleetVerificationRow,
@@ -71,11 +90,14 @@ export type {
 
 const REVIEW_TIMEOUT_MS = 20 * 60 * 1_000;
 const SPAWN_RECOVERY_GRACE_MS = 90 * 1_000;
+const TASK_REVIEW_UNATTENDED_PROVIDER_ERROR =
+  "persisted task reviewer provider cannot run unattended";
 const CANDIDATE_LIMIT = 16;
 const ACTIVE_LIMIT = 64;
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
 const SAFE_PATH_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const ACTIVE_FLEET_RUN_STATUSES = new Set(["running", "reviewing", "merging"]);
 
 interface ReviewSpawnResult {
   id: string;
@@ -92,6 +114,7 @@ export interface FleetTaskReviewDeps {
   now: () => Date;
   randomId: () => string;
   randomNonce: () => string;
+  installedProviders: () => FleetAgentProviderId[];
   prepareResultPath: (input: {
     kind: "reviews" | "fixes";
     runId: string;
@@ -118,8 +141,11 @@ export interface FleetTaskReviewDeps {
     lens: FleetPlanReviewLens;
     prompt: string;
     persistedPrompt: string;
+    resultPath: string;
     branchFeature: string;
     approvalMode: ApprovalMode;
+    provider: FleetAgentProviderId;
+    model: string | null;
   }) => Promise<ReviewSpawnResult>;
   spawnFix: (input: {
     contract: TaskFixContract;
@@ -127,6 +153,8 @@ export interface FleetTaskReviewDeps {
     prompt: string;
     persistedPrompt: string;
     approvalMode: ApprovalMode;
+    provider: FleetAgentProviderId;
+    model: string | null;
   }) => Promise<FixSpawnResult>;
 }
 
@@ -156,8 +184,7 @@ async function defaultPrepareResultPath(input: {
     throw new Error("Fleet task review attempt must be positive");
   }
   const directory = join(
-    homeDir(),
-    ".stoa",
+    stoaHomeDir(),
     "fleet-task-runtime",
     safePathComponent(input.runId, "runId"),
     safePathComponent(input.taskId, "taskId"),
@@ -181,18 +208,18 @@ async function defaultRemoveResult(path: string): Promise<boolean> {
   }
 }
 
-function provider(value: string): ProviderId {
+function provider(value: string): FleetAgentProviderId {
   if (!PROVIDER_IDS.includes(value as ProviderId) || value === "shell") {
     throw new Error(`unsupported Fleet task reviewer provider: ${value}`);
   }
-  return value as ProviderId;
+  return value as FleetAgentProviderId;
 }
 
 function approvalMode(policy: FleetAutomationPolicy): ApprovalMode {
   const sandboxEnabled = process.env.STOA_SANDBOX === "1";
   return fleetPlanReviewerApprovalMode(policy, {
     sandboxEnabled,
-    confinementAvailable: sandboxEnabled && detectSandboxTool() !== null,
+    confinementAvailable: fleetStrongConfinementAvailable(),
   });
 }
 
@@ -218,6 +245,8 @@ function dependencies(
     randomId: overrides.randomId ?? randomUUID,
     randomNonce:
       overrides.randomNonce ?? (() => randomBytes(32).toString("hex")),
+    installedProviders:
+      overrides.installedProviders ?? detectInstalledFleetAgentProviders,
     prepareResultPath: overrides.prepareResultPath ?? defaultPrepareResultPath,
     readResult: overrides.readResult ?? readBoundedRegularFile,
     removeResult: overrides.removeResult ?? defaultRemoveResult,
@@ -232,8 +261,11 @@ function dependencies(
         contract,
         prompt,
         persistedPrompt,
+        resultPath,
         branchFeature,
         approvalMode: mode,
+        provider: reviewProvider,
+        model,
       }) =>
         spawnWorker({
           conductorSessionId: contract.candidate.conductor_session_id ?? null,
@@ -247,9 +279,11 @@ function dependencies(
           requireTaskDelivery: true,
           skipSetup: true,
           readOnlyWorktree: true,
+          fleetWritableRoots: [dirname(resultPath)],
+          requireStrongIsolation: true,
           approvalMode: mode,
-          agentType: contract.provider,
-          model: contract.candidate.run_model ?? undefined,
+          agentType: reviewProvider,
+          model: model ?? undefined,
         })),
     spawnFix:
       overrides.spawnFix ??
@@ -259,6 +293,8 @@ function dependencies(
         prompt,
         persistedPrompt,
         approvalMode: mode,
+        provider: fixerProvider,
+        model,
       }) => {
         const session = await spawnWorker({
           conductorSessionId: contract.candidate.conductor_session_id ?? null,
@@ -267,15 +303,11 @@ function dependencies(
           workingDirectory: row.worktree_path!,
           useWorktree: false,
           requireTaskDelivery: true,
+          fleetWritableRoots: [dirname(row.result_path!)],
+          requireStrongIsolation: true,
           approvalMode: mode,
-          agentType: provider(
-            contract.candidate.task_agent_type ??
-              contract.candidate.run_provider
-          ),
-          model:
-            contract.candidate.task_model ??
-            contract.candidate.run_model ??
-            undefined,
+          agentType: fixerProvider,
+          model: model ?? undefined,
         });
         queries
           .updateSessionWorktree(getDb())
@@ -292,6 +324,19 @@ function dependencies(
 }
 
 function transaction<T>(db: Database.Database, callback: () => T): T {
+  if (db.inTransaction) {
+    const savepoint = "fleet_task_review_nested";
+    db.exec(`SAVEPOINT ${savepoint}`);
+    try {
+      const result = callback();
+      db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      return result;
+    } catch (error) {
+      db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+      db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      throw error;
+    }
+  }
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = callback();
@@ -307,11 +352,130 @@ function event(
   db: Database.Database,
   runId: string,
   type: string,
-  payload: unknown
+  payload: unknown,
+  createdAt?: string
 ): void {
   queries
     .createFleetEvent(db)
-    .run(runId, type, "fleet-task-review", JSON.stringify(payload));
+    .run(runId, type, "fleet-task-review", JSON.stringify(payload), {
+      createdAt,
+    });
+}
+
+function sessionOwnedByAnotherFleetAccount(
+  db: Database.Database,
+  input: {
+    runId: string;
+    ownerId: string;
+    sessionId: string;
+  }
+): boolean {
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 FROM fleet_cost_accounts
+         WHERE session_id = ?
+           AND NOT (
+             fleet_run_id = ? AND owner_type = 'task_review' AND owner_id = ?
+           )
+         LIMIT 1`
+      )
+      .get(input.sessionId, input.runId, input.ownerId)
+  );
+}
+
+function taskReviewSessionWasActivated(
+  db: Database.Database,
+  row: FleetTaskReviewRow
+): boolean {
+  const account = db
+    .prepare(
+      `SELECT session_id FROM fleet_cost_accounts
+       WHERE fleet_run_id = ? AND owner_type = 'task_review' AND owner_id = ?`
+    )
+    .get(row.fleet_run_id, row.request_id) as
+    { session_id: string | null } | undefined;
+  return Boolean(account?.session_id);
+}
+
+function taskReviewProviderError(
+  row: FleetTaskReviewRow,
+  session?: Session
+): string | null {
+  const recoveredProvider = session?.agent_type?.trim() ?? "";
+  const persistedProvider = row.provider?.trim() || recoveredProvider;
+  if (
+    !isFleetUnattendedProvider(persistedProvider) ||
+    (session &&
+      (!isFleetUnattendedProvider(recoveredProvider) ||
+        recoveredProvider !== persistedProvider))
+  ) {
+    return TASK_REVIEW_UNATTENDED_PROVIDER_ERROR;
+  }
+  return null;
+}
+
+function rejectIneligibleTaskReviewSession(
+  deps: FleetTaskReviewDeps,
+  row: FleetTaskReviewRow,
+  session?: Session
+): FleetTaskReviewRow {
+  const message = taskReviewProviderError(row, session);
+  if (!message) return row;
+  const sessionId = session?.id ?? row.reviewer_session_id;
+  const foreignSessionOwner = Boolean(
+    sessionId &&
+    sessionOwnedByAnotherFleetAccount(deps.db, {
+      runId: row.fleet_run_id,
+      ownerId: row.request_id,
+      sessionId,
+    })
+  );
+  if (session && !foreignSessionOwner) {
+    deps.db
+      .prepare(
+        `UPDATE fleet_task_reviews
+         SET reviewer_session_id = ?, reviewer_worktree_path = ?,
+             reviewer_branch_name = ?, updated_at = ?
+         WHERE id = ? AND state = ? AND request_id = ?`
+      )
+      .run(
+        session.id,
+        session.worktree_path,
+        session.branch_name ?? row.reviewer_branch_name,
+        deps.now().toISOString(),
+        row.id,
+        row.state,
+        row.request_id
+      );
+  }
+  const latest = (deps.db
+    .prepare(`SELECT * FROM fleet_task_reviews WHERE id = ?`)
+    .get(row.id) ?? row) as FleetTaskReviewRow;
+  queueReviewResult(deps, latest, {
+    verdict: "changes_requested",
+    findings: [failureFinding(message)],
+    bytes: null,
+    error: message,
+    preserveExternalState: foreignSessionOwner,
+  });
+  return (deps.db
+    .prepare(`SELECT * FROM fleet_task_reviews WHERE id = ?`)
+    .get(row.id) ?? latest) as FleetTaskReviewRow;
+}
+
+function redactedText(value: string, maxChars: number): string {
+  return redactAndCapFleetText(value, maxChars * 4).text.slice(0, maxChars);
+}
+
+function sanitizedFinding(
+  finding: FleetPlanReviewFinding
+): FleetPlanReviewFinding {
+  return {
+    severity: finding.severity,
+    title: redactedText(finding.title, FINDING_TITLE_MAX_CHARS),
+    body: redactedText(finding.body, FINDING_BODY_MAX_CHARS),
+  };
 }
 
 function verificationFromCandidate(
@@ -359,7 +523,7 @@ function candidateError(
     };
   }
   if (
-    candidate.run_status !== "running" ||
+    !ACTIVE_FLEET_RUN_STATUSES.has(candidate.run_status) ||
     candidate.desired_state !== "running"
   ) {
     return {
@@ -465,7 +629,7 @@ function candidateError(
         "the accepted worker evidence does not match the exact verified task HEAD",
     };
   }
-  let reviewerProvider: ProviderId;
+  let reviewerProvider: FleetAgentProviderId;
   try {
     reviewerProvider = provider(candidate.run_provider);
   } catch (error) {
@@ -541,6 +705,9 @@ function listReviewCandidates(
        LEFT JOIN fleet_artifacts a ON a.id = v.output_artifact_id
        LEFT JOIN fleet_workers w ON w.id = v.worker_id
        WHERE t.status = 'reviewing'
+         AND r.status IN ('running','reviewing','merging')
+         AND r.desired_state = 'running'
+         AND r.recovery_required = 0
        ORDER BY t.updated_at ASC, t.sort_order ASC, t.id ASC
        LIMIT ?`
     )
@@ -551,7 +718,7 @@ function failureFinding(message: string): FleetPlanReviewFinding {
   return {
     severity: "blocker",
     title: "Code review could not establish clean evidence",
-    body: message.slice(0, FINDING_BODY_MAX_CHARS),
+    body: redactedText(message, FINDING_BODY_MAX_CHARS),
   };
 }
 
@@ -575,35 +742,28 @@ function artifact(
     nowIso: string;
   }
 ): void {
-  const bounded = boundedFleetArtifactJson({
-    schemaVersion: 1,
-    metadata: input.metadata,
-    body: input.body,
-  });
-  db.prepare(
-    `INSERT OR IGNORE INTO fleet_artifacts
-     (id, fleet_run_id, task_id, worker_id, attempt, plan_hash, base_sha,
-      head_sha, content_hash, metadata_json, byte_count, artifact_type,
-      title, body, severity, actor, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    input.id,
-    input.runId,
-    input.taskId,
-    input.workerId ?? null,
-    input.attempt,
-    input.planHash,
-    input.baseSha,
-    input.headSha,
-    bounded.contentHash,
-    JSON.stringify(input.metadata),
-    bounded.bytes,
-    input.artifactType,
-    input.title.slice(0, 240),
-    input.body.slice(0, 64 * 1024),
-    input.severity,
-    input.actor,
-    input.nowIso
+  const title = redactAndCapFleetText(input.title, 240);
+  const body = redactAndCapFleetText(input.body, 64 * 1024);
+  insertFleetArtifact(
+    db,
+    {
+      id: input.id,
+      runId: input.runId,
+      taskId: input.taskId,
+      workerId: input.workerId ?? null,
+      attempt: input.attempt,
+      planHash: input.planHash,
+      baseSha: input.baseSha,
+      headSha: input.headSha,
+      metadataJson: JSON.stringify(input.metadata),
+      artifactType: input.artifactType,
+      title: title.text,
+      body: body.text,
+      severity: input.severity,
+      actor: input.actor,
+      createdAt: input.nowIso,
+    },
+    { orIgnore: true }
   );
 }
 
@@ -614,6 +774,7 @@ function writeTaskBlocker(
   message: string
 ): boolean {
   const nowIso = deps.now().toISOString();
+  const safeMessage = redactedText(message, 1_000);
   return transaction(deps.db, () => {
     const changed = deps.db
       .prepare(
@@ -622,11 +783,17 @@ function writeTaskBlocker(
              review_status = 'changes_requested', review_head_sha = head_sha,
              review_completed_at = ?, updated_at = ?
          WHERE id = ? AND fleet_run_id = ? AND status = 'reviewing'
-           AND current_attempt = ?`
+           AND current_attempt = ?
+           AND EXISTS (
+             SELECT 1 FROM fleet_runs r
+             WHERE r.id = fleet_tasks.fleet_run_id
+               AND r.status IN ('running','reviewing','merging')
+               AND r.desired_state = 'running'
+           )`
       )
       .run(
         code,
-        message.slice(0, 1_000),
+        safeMessage,
         nowIso,
         nowIso,
         candidate.task_id,
@@ -644,7 +811,7 @@ function writeTaskBlocker(
       headSha: candidate.task_head_sha ?? "",
       artifactType: "task_review_precondition",
       title: "Task code review requires operator inspection",
-      body: message,
+      body: safeMessage,
       metadata: {
         code,
         attempt: candidate.current_attempt,
@@ -680,36 +847,38 @@ function ensureReviewSlots(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'changes_requested',
        'pending', ?, '[]', ?, ?)`
   );
-  for (const lens of FLEET_PLAN_REVIEW_LENSES) {
-    const inserted = statement.run(
-      deps.randomId(),
-      candidate.fleet_run_id,
-      candidate.task_id,
-      candidate.verification_worker_id,
-      candidate.current_attempt,
-      candidate.task_base_sha,
-      candidate.task_head_sha,
-      contract.verification.id,
-      contract.verification.spec_hash,
-      contract.verificationEvidenceHash,
-      contract.policyHash,
-      lens,
-      candidate.project_path,
-      nowIso,
-      nowIso
-    );
-    if (inserted.changes === 1) {
-      event(deps.db, candidate.fleet_run_id, "task_review_queued", {
-        taskId: candidate.task_id,
-        attempt: candidate.current_attempt,
-        headSha: candidate.task_head_sha,
-        verificationId: contract.verification.id,
-        verificationEvidenceHash: contract.verificationEvidenceHash,
-        policyHash: contract.policyHash,
+  transaction(deps.db, () => {
+    for (const lens of FLEET_PLAN_REVIEW_LENSES) {
+      const inserted = statement.run(
+        deps.randomId(),
+        candidate.fleet_run_id,
+        candidate.task_id,
+        candidate.verification_worker_id,
+        candidate.current_attempt,
+        candidate.task_base_sha,
+        candidate.task_head_sha,
+        contract.verification.id,
+        contract.verification.spec_hash,
+        contract.verificationEvidenceHash,
+        contract.policyHash,
         lens,
-      });
+        candidate.project_path,
+        nowIso,
+        nowIso
+      );
+      if (inserted.changes === 1) {
+        event(deps.db, candidate.fleet_run_id, "task_review_queued", {
+          taskId: candidate.task_id,
+          attempt: candidate.current_attempt,
+          headSha: candidate.task_head_sha,
+          verificationId: contract.verification.id,
+          verificationEvidenceHash: contract.verificationEvidenceHash,
+          policyHash: contract.policyHash,
+          lens,
+        });
+      }
     }
-  }
+  });
 }
 
 function exactReviewRows(
@@ -744,30 +913,65 @@ function queueReviewResult(
     bytes: number | null;
     error?: string;
     persistArtifacts?: boolean;
+    launchFailureCount?: number;
+    preserveExternalState?: boolean;
   }
 ): boolean {
   const nowIso = deps.now().toISOString();
+  const safeError = result.error ? redactedText(result.error, 1_000) : null;
+  const safeResultFindings = result.findings
+    .slice(0, FINDING_MAX_COUNT)
+    .map(sanitizedFinding);
   const findings =
     result.verdict === "changes_requested" &&
-    !result.findings.some((finding) => finding.severity === "blocker")
-      ? [...result.findings, failureFinding(result.error ?? "review failed")]
-      : result.findings;
+    !safeResultFindings.some((finding) => finding.severity === "blocker")
+      ? [
+          ...safeResultFindings.slice(0, FINDING_MAX_COUNT - 1),
+          failureFinding(safeError ?? "review failed"),
+        ]
+      : safeResultFindings;
   return transaction(deps.db, () => {
-    const changed = deps.db
-      .prepare(
-        `UPDATE fleet_task_reviews
-         SET state = 'cleanup_pending', result_verdict = ?, result_bytes = ?,
-             findings_json = ?, error = ?, updated_at = ?
-         WHERE id = ? AND state IN ('pending', 'spawning', 'running')`
-      )
-      .run(
-        result.verdict,
-        result.bytes,
-        JSON.stringify(findings),
-        result.error?.slice(0, 1_000) ?? null,
-        nowIso,
-        row.id
-      );
+    const changed = result.preserveExternalState
+      ? deps.db
+          .prepare(
+            `UPDATE fleet_task_reviews
+             SET state = ?, verdict = ?, result_verdict = ?, result_bytes = ?,
+                 findings_json = ?, error = ?,
+                 launch_failure_count = COALESCE(?, launch_failure_count),
+                 retry_not_before = NULL,
+                 completed_at = COALESCE(completed_at, ?), updated_at = ?
+             WHERE id = ? AND state IN ('pending', 'spawning', 'running')`
+          )
+          .run(
+            result.verdict,
+            result.verdict,
+            result.verdict,
+            result.bytes,
+            JSON.stringify(findings),
+            safeError,
+            result.launchFailureCount ?? null,
+            nowIso,
+            nowIso,
+            row.id
+          )
+      : deps.db
+          .prepare(
+            `UPDATE fleet_task_reviews
+             SET state = 'cleanup_pending', result_verdict = ?, result_bytes = ?,
+                 findings_json = ?, error = ?,
+                 launch_failure_count = COALESCE(?, launch_failure_count),
+                 retry_not_before = NULL, updated_at = ?
+             WHERE id = ? AND state IN ('pending', 'spawning', 'running')`
+          )
+          .run(
+            result.verdict,
+            result.bytes,
+            JSON.stringify(findings),
+            safeError,
+            result.launchFailureCount ?? null,
+            nowIso,
+            row.id
+          );
     if (changed.changes !== 1) return false;
     if (result.persistArtifacts !== false) {
       artifact(deps.db, {
@@ -830,6 +1034,57 @@ function queueReviewResult(
       verificationEvidenceHash: row.verification_evidence_hash,
       policyHash: row.policy_hash,
     });
+    if (result.preserveExternalState) {
+      finishFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "task_review",
+        ownerId: row.request_id,
+        sessionCreated: false,
+        now: deps.now(),
+      });
+      event(deps.db, row.fleet_run_id, "task_review_completed", {
+        reviewId: row.id,
+        taskId: row.task_id,
+        lens: row.lens,
+        reviewerSessionId: row.reviewer_session_id || null,
+        verdict: result.verdict,
+        preservedExternalState: true,
+      });
+    }
+    return true;
+  });
+}
+
+function queueReviewLaunchRetry(
+  deps: FleetTaskReviewDeps,
+  row: FleetTaskReviewRow,
+  input: { failureCount: number; retryNotBefore: string; error: string }
+): boolean {
+  const nowIso = deps.now().toISOString();
+  return transaction(deps.db, () => {
+    const changed = deps.db
+      .prepare(
+        `UPDATE fleet_task_reviews
+         SET state = 'cleanup_pending', result_verdict = NULL,
+             result_bytes = NULL, findings_json = '[]', error = ?,
+             launch_failure_count = ?, retry_not_before = ?, updated_at = ?
+         WHERE id = ? AND state = 'spawning'`
+      )
+      .run(
+        redactedText(input.error, 1_000),
+        input.failureCount,
+        input.retryNotBefore,
+        nowIso,
+        row.id
+      );
+    if (changed.changes !== 1) return false;
+    event(deps.db, row.fleet_run_id, "task_review_retry_scheduled", {
+      reviewId: row.id,
+      taskId: row.task_id,
+      lens: row.lens,
+      failureCount: input.failureCount,
+      retryNotBefore: input.retryNotBefore,
+    });
     return true;
   });
 }
@@ -879,7 +1134,15 @@ async function cleanupReview(
   deps: FleetTaskReviewDeps,
   row: FleetTaskReviewRow
 ): Promise<boolean> {
-  if (row.reviewer_session_id) {
+  const foreignSessionOwner = Boolean(
+    row.reviewer_session_id &&
+    sessionOwnedByAnotherFleetAccount(deps.db, {
+      runId: row.fleet_run_id,
+      ownerId: row.request_id,
+      sessionId: row.reviewer_session_id,
+    })
+  );
+  if (row.reviewer_session_id && !foreignSessionOwner) {
     const stopped = await deps
       .stopSession(
         row.reviewer_session_id,
@@ -889,12 +1152,13 @@ async function cleanupReview(
     if (!stopped) return false;
   }
   if (
+    !foreignSessionOwner &&
     (row.reviewer_worktree_path || row.reviewer_branch_name) &&
     !ownedReviewBranch(row)
   ) {
     return false;
   }
-  if (row.reviewer_worktree_path && row.project_path) {
+  if (!foreignSessionOwner && row.reviewer_worktree_path && row.project_path) {
     try {
       await deps.removeWorktree(
         row.reviewer_worktree_path,
@@ -904,7 +1168,11 @@ async function cleanupReview(
     } catch {
       return false;
     }
-  } else if (row.reviewer_branch_name && row.project_path) {
+  } else if (
+    !foreignSessionOwner &&
+    row.reviewer_branch_name &&
+    row.project_path
+  ) {
     try {
       await deps.git(
         row.project_path,
@@ -935,28 +1203,67 @@ async function cleanupReview(
   }
   const verdict = row.result_verdict ?? "changes_requested";
   const nowIso = deps.now().toISOString();
-  const changed = deps.db
-    .prepare(
-      `UPDATE fleet_task_reviews
-       SET state = ?, verdict = ?, completed_at = COALESCE(completed_at, ?),
-           updated_at = ?
-       WHERE id = ? AND state = 'cleanup_pending'`
-    )
-    .run(verdict, verdict, nowIso, nowIso, row.id);
-  if (changed.changes === 1) {
-    event(deps.db, row.fleet_run_id, "task_review_completed", {
-      reviewId: row.id,
-      taskId: row.task_id,
-      attempt: row.attempt,
-      headSha: row.head_sha,
-      lens: row.lens,
-      reviewerSessionId: row.reviewer_session_id || null,
-      verdict,
-      verificationEvidenceHash: row.verification_evidence_hash,
-      policyHash: row.policy_hash,
+  return transaction(deps.db, () => {
+    finishFleetPaidSession(deps.db, {
+      runId: row.fleet_run_id,
+      ownerType: "task_review",
+      ownerId: row.request_id,
+      sessionCreated:
+        !foreignSessionOwner &&
+        Boolean(row.reviewer_session_id) &&
+        (row.error !== TASK_REVIEW_UNATTENDED_PROVIDER_ERROR ||
+          taskReviewSessionWasActivated(deps.db, row)),
+      now: deps.now(),
     });
-  }
-  return changed.changes === 1;
+    if (row.retry_not_before) {
+      const changed = deps.db
+        .prepare(
+          `UPDATE fleet_task_reviews
+           SET state = 'pending', provider = NULL, model = NULL,
+               reviewer_session_id = '', request_id = '', nonce_hash = '',
+               result_path = '', result_verdict = NULL, result_bytes = NULL,
+               project_path = NULL, reviewer_worktree_path = NULL,
+               reviewer_branch_name = '', findings_json = '[]',
+               started_at = NULL, deadline_at = NULL, completed_at = NULL,
+               updated_at = ?
+           WHERE id = ? AND state = 'cleanup_pending'
+             AND retry_not_before = ?`
+        )
+        .run(nowIso, row.id, row.retry_not_before);
+      if (changed.changes === 1) {
+        event(deps.db, row.fleet_run_id, "task_review_retry_ready", {
+          reviewId: row.id,
+          taskId: row.task_id,
+          lens: row.lens,
+          failureCount: row.launch_failure_count,
+          retryNotBefore: row.retry_not_before,
+        });
+      }
+      return changed.changes === 1;
+    }
+    const changed = deps.db
+      .prepare(
+        `UPDATE fleet_task_reviews
+         SET state = ?, verdict = ?, completed_at = COALESCE(completed_at, ?),
+             updated_at = ?
+         WHERE id = ? AND state = 'cleanup_pending'`
+      )
+      .run(verdict, verdict, nowIso, nowIso, row.id);
+    if (changed.changes === 1) {
+      event(deps.db, row.fleet_run_id, "task_review_completed", {
+        reviewId: row.id,
+        taskId: row.task_id,
+        attempt: row.attempt,
+        headSha: row.head_sha,
+        lens: row.lens,
+        reviewerSessionId: row.reviewer_session_id || null,
+        verdict,
+        verificationEvidenceHash: row.verification_evidence_hash,
+        policyHash: row.policy_hash,
+      });
+    }
+    return changed.changes === 1;
+  });
 }
 
 async function recoverSpawningReview(
@@ -972,21 +1279,96 @@ async function recoverSpawningReview(
     )
     .get(row.reviewer_branch_name, row.result_path) as Session | undefined;
   if (session?.worktree_path) {
+    const rejected = rejectIneligibleTaskReviewSession(deps, row, session);
+    if (rejected.state !== "spawning") return rejected;
+    let selectedProvider: FleetAgentProviderId;
+    let selectedModel = row.model;
+    try {
+      const recoveredProvider = provider(session.agent_type ?? "");
+      selectedProvider = provider(row.provider ?? recoveredProvider);
+      if (selectedProvider !== recoveredProvider) {
+        throw new Error("recovered provider does not match persisted binding");
+      }
+      if (!row.provider) {
+        selectedModel = session.model?.trim() || null;
+        deps.db
+          .prepare(
+            `UPDATE fleet_task_reviews SET provider = ?, model = ?, updated_at = ?
+             WHERE id = ? AND state = 'spawning' AND request_id = ?
+               AND provider IS NULL`
+          )
+          .run(
+            selectedProvider,
+            selectedModel,
+            deps.now().toISOString(),
+            row.id,
+            row.request_id
+          );
+      }
+    } catch {
+      queueReviewResult(deps, row, {
+        verdict: "changes_requested",
+        findings: [
+          failureFinding("persisted task reviewer provider is invalid"),
+        ],
+        bytes: null,
+        error: "persisted task reviewer provider is invalid",
+      });
+      return (deps.db
+        .prepare(`SELECT * FROM fleet_task_reviews WHERE id = ?`)
+        .get(row.id) ?? row) as FleetTaskReviewRow;
+    }
+    const activated = activateFleetPaidSession(deps.db, {
+      runId: row.fleet_run_id,
+      ownerType: "task_review",
+      ownerId: row.request_id,
+      taskId: row.task_id,
+      session,
+      provider: selectedProvider,
+      model: selectedModel,
+      now: deps.now(),
+    });
     deps.db
       .prepare(
         `UPDATE fleet_task_reviews
-         SET state = 'running', reviewer_session_id = ?,
-             reviewer_worktree_path = ?, reviewer_branch_name = ?, updated_at = ?
+         SET state = ?, reviewer_session_id = ?,
+             reviewer_worktree_path = ?, reviewer_branch_name = ?,
+             launch_failure_count = ?, retry_not_before = ?, updated_at = ?
          WHERE id = ? AND state = 'spawning' AND request_id = ?`
       )
       .run(
+        activated ? "running" : "spawning",
         session.id,
         session.worktree_path,
         session.branch_name ?? row.reviewer_branch_name,
+        activated ? 0 : row.launch_failure_count,
+        activated ? null : row.retry_not_before,
         deps.now().toISOString(),
         row.id,
         row.request_id
       );
+    if (!activated) {
+      const latest = deps.db
+        .prepare(`SELECT * FROM fleet_task_reviews WHERE id = ?`)
+        .get(row.id) as FleetTaskReviewRow;
+      const foreignSessionOwner = sessionOwnedByAnotherFleetAccount(deps.db, {
+        runId: row.fleet_run_id,
+        ownerId: row.request_id,
+        sessionId: session.id,
+      });
+      const message = foreignSessionOwner
+        ? "recovered task reviewer session is owned by another Fleet account"
+        : "recovered task reviewer admission is no longer valid";
+      queueReviewResult(deps, latest, {
+        verdict: "changes_requested",
+        findings: [failureFinding(message)],
+        bytes: null,
+        error: message,
+        preserveExternalState: foreignSessionOwner,
+      });
+    } else {
+      clearFleetProviderCooldown(deps.db, selectedProvider);
+    }
   } else if (row.project_path) {
     try {
       const worktrees = (
@@ -1031,6 +1413,21 @@ async function startReview(
   contract: TaskReviewContract,
   row: FleetTaskReviewRow
 ): Promise<void> {
+  if (!fleetProviderRetryIsDue(row.retry_not_before, deps.now())) return;
+  const launchApprovalMode = approvalMode(contract.policy);
+  if (launchApprovalMode === "prompt") {
+    deps.db
+      .prepare(
+        `UPDATE fleet_task_reviews SET error = ?, updated_at = ?
+         WHERE id = ? AND state = 'pending' AND reviewer_session_id = ''`
+      )
+      .run(
+        "task reviewer requires explicit unconfined-agent authorization until strong Fleet isolation is available",
+        deps.now().toISOString(),
+        row.id
+      );
+    return;
+  }
   const requestId = deps.randomId();
   const nonce = deps.randomNonce();
   const resultPath = await deps.prepareResultPath({
@@ -1044,34 +1441,138 @@ async function startReview(
   const branchName = generateBranchName(branchFeature);
   const started = deps.now();
   const deadline = new Date(started.getTime() + REVIEW_TIMEOUT_MS);
-  const claimed = deps.db
-    .prepare(
-      `UPDATE fleet_task_reviews
-       SET state = 'spawning', request_id = ?, nonce_hash = ?, result_path = ?,
-           project_path = ?, reviewer_branch_name = ?, started_at = ?,
-           deadline_at = ?, error = NULL, updated_at = ?
-       WHERE id = ? AND state = 'pending' AND reviewer_session_id = ''`
-    )
-    .run(
-      requestId,
-      hashFleetTaskRuntimeNonce(nonce),
-      resultPath,
-      contract.candidate.project_path,
-      branchName,
-      started.toISOString(),
-      deadline.toISOString(),
-      started.toISOString(),
-      row.id
+  const run = queries.getFleetRun(deps.db).get(row.fleet_run_id) as
+    FleetRunRow | undefined;
+  if (!run) return;
+  let selection;
+  try {
+    selection = allocateFleetAuxiliaryProvider({
+      availableProviders: deps.installedProviders(),
+      preferredProvider: provider(contract.provider),
+      preferredModel: contract.candidate.run_model,
+    });
+  } catch {
+    deps.db
+      .prepare(
+        `UPDATE fleet_task_reviews SET error = ?, updated_at = ?
+         WHERE id = ? AND state = 'pending' AND reviewer_session_id = ''`
+      )
+      .run(
+        "task reviewer is waiting for an installed agent provider",
+        started.toISOString(),
+        row.id
+      );
+    return;
+  }
+  const launchClaim = transaction(deps.db, () => {
+    const assigned = deps.db
+      .prepare(
+        `UPDATE fleet_task_reviews SET provider = ?, model = ?, updated_at = ?
+         WHERE id = ? AND state = 'pending' AND reviewer_session_id = ''
+           AND request_id = ''`
+      )
+      .run(selection.provider, selection.model, started.toISOString(), row.id);
+    if (assigned.changes !== 1) {
+      return { admitted: true as const, claimed: false as const };
+    }
+    const admission = reserveFleetPaidSession(deps.db, {
+      run,
+      ownerType: "task_review",
+      ownerId: requestId,
+      taskId: row.task_id,
+      taskType: "review",
+      provider: selection.provider,
+      model: selection.model,
+      repositoryKey:
+        run.repo_id ??
+        run.project_id ??
+        contract.candidate.project_path ??
+        row.fleet_run_id,
+      now: started,
+      leaseExpiresAt: new Date(
+        started.getTime() + SPAWN_RECOVERY_GRACE_MS
+      ).toISOString(),
+    });
+    if (!admission.admitted) {
+      return {
+        admitted: false as const,
+        reason: admission.reason,
+        retryAt: admission.retryAt,
+      };
+    }
+    const claimed = deps.db
+      .prepare(
+        `UPDATE fleet_task_reviews
+         SET state = 'spawning', request_id = ?, nonce_hash = ?, result_path = ?,
+             project_path = ?, reviewer_branch_name = ?, started_at = ?,
+             deadline_at = ?, retry_not_before = NULL, error = NULL,
+             updated_at = ?
+         WHERE id = ? AND state = 'pending' AND reviewer_session_id = ''
+           AND request_id = '' AND provider = ? AND model IS ?`
+      )
+      .run(
+        requestId,
+        hashFleetTaskRuntimeNonce(nonce),
+        resultPath,
+        contract.candidate.project_path,
+        branchName,
+        started.toISOString(),
+        deadline.toISOString(),
+        started.toISOString(),
+        row.id,
+        selection.provider,
+        selection.model
+      );
+    if (claimed.changes !== 1) {
+      finishFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "task_review",
+        ownerId: requestId,
+        sessionCreated: false,
+        now: started,
+      });
+      return { admitted: true as const, claimed: false as const };
+    }
+    event(
+      deps.db,
+      row.fleet_run_id,
+      "task_review_spawn_requested",
+      {
+        reviewId: row.id,
+        taskId: row.task_id,
+        requestId,
+        lens: row.lens,
+        headSha: row.head_sha,
+        branchName,
+        provider: selection.provider,
+        model: selection.model,
+      },
+      started.toISOString()
     );
-  if (claimed.changes !== 1) return;
-  event(deps.db, row.fleet_run_id, "task_review_spawn_requested", {
-    reviewId: row.id,
-    taskId: row.task_id,
-    requestId,
-    lens: row.lens,
-    headSha: row.head_sha,
-    branchName,
+    return { admitted: true as const, claimed: true as const };
   });
+  if (!launchClaim.admitted) {
+    const message =
+      launchClaim.reason === "budget"
+        ? "task reviewer is waiting for budget capacity"
+        : `task reviewer is waiting for runtime capacity${
+            launchClaim.retryAt ? ` until ${launchClaim.retryAt}` : ""
+          }`;
+    deps.db
+      .prepare(
+        `UPDATE fleet_task_reviews SET error = ?,
+             retry_not_before = COALESCE(?, retry_not_before), updated_at = ?
+         WHERE id = ? AND state = 'pending' AND reviewer_session_id = ''`
+      )
+      .run(
+        redactedText(message, 1_000),
+        launchClaim.retryAt,
+        started.toISOString(),
+        row.id
+      );
+    return;
+  }
+  if (!launchClaim.claimed) return;
   let spawned: ReviewSpawnResult | null = null;
   try {
     spawned = await deps.spawnReview({
@@ -1089,12 +1590,18 @@ async function startReview(
         nonce: "[redacted ephemeral nonce]",
         resultPath,
       }),
+      resultPath,
       branchFeature,
-      approvalMode: approvalMode(contract.policy),
+      approvalMode: launchApprovalMode,
+      provider: selection.provider,
+      model: selection.model,
     });
+    const session = queries.getSession(deps.db).get(spawned.id) as
+      Session | undefined;
     if (!spawned.worktree_path || !spawned.branch_name) {
       throw new Error("task reviewer started without an isolated worktree");
     }
+    const launched = spawned;
     const duplicate = deps.db
       .prepare(
         `SELECT id FROM fleet_task_reviews
@@ -1110,47 +1617,94 @@ async function startReview(
         row.verification_id,
         row.verification_evidence_hash,
         row.policy_hash,
-        spawned.id,
+        launched.id,
         row.id
       );
     if (duplicate) {
       throw new Error("task reviewers must use four distinct sessions");
     }
-    const updated = deps.db
-      .prepare(
-        `UPDATE fleet_task_reviews
-         SET state = 'running', reviewer_session_id = ?,
-             reviewer_worktree_path = ?, reviewer_branch_name = ?, updated_at = ?
-         WHERE id = ? AND state = 'spawning' AND request_id = ?`
-      )
-      .run(
-        spawned.id,
-        spawned.worktree_path,
-        spawned.branch_name,
-        deps.now().toISOString(),
-        row.id,
-        requestId
-      );
-    if (updated.changes !== 1) {
-      await deps.stopSession(spawned.id, "failed").catch(() => false);
-      await deps
-        .removeWorktree(
-          spawned.worktree_path,
-          contract.candidate.project_path!,
-          true
+    const updated = transaction(deps.db, () => {
+      const nowIso = deps.now().toISOString();
+      if (
+        session &&
+        !activateFleetPaidSession(deps.db, {
+          runId: row.fleet_run_id,
+          ownerType: "task_review",
+          ownerId: requestId,
+          taskId: row.task_id,
+          session,
+          provider: selection.provider,
+          model: selection.model,
+          now: deps.now(),
+        })
+      ) {
+        throw new Error(
+          "task reviewer session is already owned by another Fleet cost account"
+        );
+      }
+      const changed = deps.db
+        .prepare(
+          `UPDATE fleet_task_reviews
+           SET state = 'running', reviewer_session_id = ?,
+               reviewer_worktree_path = ?, reviewer_branch_name = ?,
+               launch_failure_count = 0, retry_not_before = NULL, updated_at = ?
+           WHERE id = ? AND state = 'spawning' AND request_id = ?`
         )
-        .catch(() => undefined);
+        .run(
+          launched.id,
+          launched.worktree_path,
+          launched.branch_name,
+          nowIso,
+          row.id,
+          requestId
+        );
+      if (changed.changes === 1) {
+        event(
+          deps.db,
+          row.fleet_run_id,
+          "task_review_started",
+          {
+            reviewId: row.id,
+            taskId: row.task_id,
+            requestId,
+            lens: row.lens,
+            reviewerSessionId: launched.id,
+            headSha: row.head_sha,
+            branchName: launched.branch_name,
+            provider: selection.provider,
+            model: selection.model,
+          },
+          nowIso
+        );
+      }
+      return changed;
+    });
+    if (updated.changes !== 1) {
+      const foreignSessionOwner = sessionOwnedByAnotherFleetAccount(deps.db, {
+        runId: row.fleet_run_id,
+        ownerId: requestId,
+        sessionId: launched.id,
+      });
+      if (!foreignSessionOwner) {
+        await deps.stopSession(launched.id, "failed").catch(() => false);
+        await deps
+          .removeWorktree(
+            launched.worktree_path!,
+            contract.candidate.project_path!,
+            true
+          )
+          .catch(() => undefined);
+      }
+      finishFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "task_review",
+        ownerId: requestId,
+        sessionCreated: !foreignSessionOwner,
+        now: deps.now(),
+      });
       return;
     }
-    event(deps.db, row.fleet_run_id, "task_review_started", {
-      reviewId: row.id,
-      taskId: row.task_id,
-      requestId,
-      lens: row.lens,
-      reviewerSessionId: spawned.id,
-      headSha: row.head_sha,
-      branchName: spawned.branch_name,
-    });
+    clearFleetProviderCooldown(deps.db, selection.provider);
   } catch (error) {
     const sessionId =
       spawned?.id ??
@@ -1159,6 +1713,14 @@ async function startReview(
     const worktreePath =
       spawned?.worktree_path ??
       (error instanceof WorkerSpawnError ? error.worktreePath : null);
+    const foreignSessionOwner = Boolean(
+      sessionId &&
+      sessionOwnedByAnotherFleetAccount(deps.db, {
+        runId: row.fleet_run_id,
+        ownerId: requestId,
+        sessionId,
+      })
+    );
     deps.db
       .prepare(
         `UPDATE fleet_task_reviews
@@ -1172,24 +1734,61 @@ async function startReview(
         row.id,
         requestId
       );
-    if (sessionId) {
-      const stopped = await deps
-        .stopSession(sessionId, "failed")
-        .catch(() => false);
-      if (!stopped) return;
+    const recoveredSession = sessionId
+      ? (queries.getSession(deps.db).get(sessionId) as Session | undefined)
+      : undefined;
+    const ambiguousExternalState =
+      foreignSessionOwner || Boolean(sessionId && !recoveredSession);
+    if (recoveredSession && !foreignSessionOwner) {
+      activateFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "task_review",
+        ownerId: requestId,
+        taskId: row.task_id,
+        session: recoveredSession,
+        provider: selection.provider,
+        model: selection.model,
+        now: deps.now(),
+      });
+    } else if (!sessionId && !worktreePath) {
+      finishFleetPaidSession(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "task_review",
+        ownerId: requestId,
+        sessionCreated: false,
+        now: deps.now(),
+      });
     }
     const latest = deps.db
       .prepare(`SELECT * FROM fleet_task_reviews WHERE id = ?`)
       .get(row.id) as FleetTaskReviewRow;
-    const message = (
-      error instanceof Error ? error.message : "task reviewer failed to start"
-    ).slice(0, 1_000);
-    queueReviewResult(deps, latest, {
-      verdict: "changes_requested",
-      findings: [failureFinding(message)],
-      bytes: null,
-      error: message,
+    const message = redactedText(
+      error instanceof Error ? error.message : "task reviewer failed to start",
+      1_000
+    );
+    const retry = decideFleetAuxiliaryLaunchRetry(deps.db, {
+      provider: selection.provider,
+      previousFailureCount: latest.launch_failure_count,
+      error,
+      now: deps.now(),
+      safeToRetry: spawned === null && !ambiguousExternalState,
     });
+    if (retry.retry && retry.retryNotBefore) {
+      queueReviewLaunchRetry(deps, latest, {
+        failureCount: retry.failureCount,
+        retryNotBefore: retry.retryNotBefore,
+        error: message,
+      });
+    } else {
+      queueReviewResult(deps, latest, {
+        verdict: "changes_requested",
+        findings: [failureFinding(message)],
+        bytes: null,
+        error: message,
+        launchFailureCount: retry.failureCount,
+        preserveExternalState: ambiguousExternalState,
+      });
+    }
   }
 }
 
@@ -1357,6 +1956,13 @@ async function reconcileReviewRow(
     }
   }
   if (row.state === "running") {
+    const session = row.reviewer_session_id
+      ? (queries.getSession(deps.db).get(row.reviewer_session_id) as
+          Session | undefined)
+      : undefined;
+    row = rejectIneligibleTaskReviewSession(deps, row, session);
+  }
+  if (row.state === "running") {
     await pollRunningReview(deps, row);
     row = deps.db
       .prepare(`SELECT * FROM fleet_task_reviews WHERE id = ?`)
@@ -1422,6 +2028,7 @@ function markReviewNeedsInspection(
 ): boolean {
   const candidate = contract.candidate;
   const nowIso = deps.now().toISOString();
+  const safeReason = redactedText(reason, 1_000);
   const changed = deps.db
     .prepare(
       `UPDATE fleet_tasks
@@ -1432,13 +2039,19 @@ function markReviewNeedsInspection(
            updated_at = ?
        WHERE id = ? AND fleet_run_id = ? AND status = 'reviewing'
          AND current_attempt = ? AND head_sha = ? AND verification_id = ?
-         AND verification_status = 'pass' AND verified_head_sha = ?`
+         AND verification_status = 'pass' AND verified_head_sha = ?
+         AND EXISTS (
+           SELECT 1 FROM fleet_runs r
+           WHERE r.id = fleet_tasks.fleet_run_id
+             AND r.status IN ('running','reviewing','merging')
+             AND r.desired_state = 'running'
+         )`
     )
     .run(
       candidate.task_head_sha,
       contract.verificationEvidenceHash,
       nowIso,
-      reason.slice(0, 1_000),
+      safeReason,
       nowIso,
       candidate.task_id,
       candidate.fleet_run_id,
@@ -1454,7 +2067,7 @@ function markReviewNeedsInspection(
       headSha: candidate.task_head_sha,
       verificationEvidenceHash: contract.verificationEvidenceHash,
       policyHash: contract.policyHash,
-      reason,
+      reason: safeReason,
     });
   }
   return changed.changes === 1;
@@ -1482,7 +2095,13 @@ function queueAutomaticFix(
          WHERE id = ? AND fleet_run_id = ? AND status = 'reviewing'
            AND current_attempt = ? AND head_sha = ? AND verification_id = ?
            AND verification_status = 'pass' AND verified_head_sha = ?
-           AND fix_rounds = ?`
+           AND fix_rounds = ?
+           AND EXISTS (
+             SELECT 1 FROM fleet_runs r
+             WHERE r.id = fleet_tasks.fleet_run_id
+               AND r.status IN ('running','reviewing','merging')
+               AND r.desired_state = 'running'
+           )`
       )
       .run(
         fixId,
@@ -1582,7 +2201,13 @@ function finalizeReviews(
        WHERE id = ? AND fleet_run_id = ? AND status = 'reviewing'
          AND current_attempt = ? AND head_sha = ? AND verification_id = ?
          AND verification_status = 'pass' AND verified_head_sha = ?
-         AND verification_spec_hash = ?`
+         AND verification_spec_hash = ?
+         AND EXISTS (
+           SELECT 1 FROM fleet_runs r
+           WHERE r.id = fleet_tasks.fleet_run_id
+             AND r.status IN ('running','reviewing','merging')
+             AND r.desired_state = 'running'
+         )`
     )
     .run(
       candidate.task_head_sha,
@@ -1672,7 +2297,8 @@ async function cleanupOrphanedRuntimeRows(
            t.id IS NULL OR t.status <> 'reviewing' OR
            t.current_attempt <> tr.attempt OR t.head_sha <> tr.head_sha OR
            t.verification_id <> tr.verification_id OR
-           r.id IS NULL OR r.status <> 'running' OR r.desired_state <> 'running'
+           r.id IS NULL OR r.status NOT IN ('running','reviewing','merging') OR
+           r.desired_state <> 'running'
          )
        ORDER BY tr.updated_at ASC LIMIT ?`
     )
@@ -1704,10 +2330,13 @@ async function cleanupOrphanedRuntimeRows(
     .prepare(
       `SELECT f.* FROM fleet_task_fixes f
        LEFT JOIN fleet_tasks t ON t.id = f.task_id
-       WHERE f.state IN ('pending','spawning','running')
+       LEFT JOIN fleet_runs r ON r.id = f.fleet_run_id
+       WHERE f.state IN ('pending','spawning','running','cleanup_pending')
          AND (
            t.id IS NULL OR t.status <> 'fixing' OR t.active_fix_id <> f.id OR
-           t.current_attempt <> f.attempt OR t.head_sha <> f.old_head_sha
+           t.current_attempt <> f.attempt OR t.head_sha <> f.old_head_sha OR
+           r.id IS NULL OR r.status NOT IN ('running','reviewing','merging') OR
+           r.desired_state <> 'running'
          )
        ORDER BY f.updated_at ASC LIMIT ?`
     )
@@ -1751,19 +2380,27 @@ export async function reconcileFleetTaskReviews(
   options: ReconcileFleetTaskReviewOptions = {}
 ): Promise<number> {
   const deps = dependencies(overrides);
+  assertFleetLaunchReady(deps.db, options.runId);
   if (reconcileLock.has("global")) return 0;
   reconcileLock.add("global");
   let processed = 0;
   try {
     const scoped = Boolean(options.runId || options.taskId);
     if (!scoped) await cleanupOrphanedRuntimeRows(deps);
+    reconcileFleetTaskFixSettlements(deps);
 
     const fixes = (
       deps.db
         .prepare(
-          `SELECT * FROM fleet_task_fixes
-         WHERE state IN ('pending','spawning','running')
-         ORDER BY updated_at ASC, created_at ASC LIMIT ?`
+          `SELECT fix.* FROM fleet_task_fixes fix
+           JOIN fleet_runs run ON run.id = fix.fleet_run_id
+           WHERE fix.state IN ('pending','spawning','running','cleanup_pending')
+             AND (fix.state <> 'pending' OR (
+               run.status IN ('running','reviewing','merging')
+               AND run.desired_state = 'running'
+               AND run.recovery_required = 0
+             ))
+           ORDER BY fix.updated_at ASC, fix.created_at ASC LIMIT ?`
         )
         .all(ACTIVE_LIMIT) as FleetTaskFixRow[]
     ).filter(

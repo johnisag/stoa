@@ -61,6 +61,25 @@ export interface FleetWorkerActualCost {
   sampleCount: number;
 }
 
+export interface FleetCostWatermark {
+  peakInputTokens: number;
+  peakOutputTokens: number;
+  peakCacheReadTokens: number;
+  peakCacheWriteTokens: number;
+  observedCostUsd: number | null;
+  fallbackCostUsd: number;
+  chargedCostUsd: number;
+  fallbackTokens: number;
+  chargedTokens: number;
+  confidence: FleetCostConfidence;
+}
+
+export interface FleetCostWatermarkAdvance {
+  watermark: FleetCostWatermark;
+  chargedUsdDelta: number;
+  chargedTokensDelta: number;
+}
+
 export interface FleetBudgetDecision {
   allowed: boolean;
   warning: boolean;
@@ -219,7 +238,8 @@ export function estimateFleetTaskReservation(input: {
       .map((sample) => finiteNonNegative(sample.actualUsd))
       .filter((value): value is number => value != null)
   );
-  const providerFallback = provider === "claude" ? 0.5 : 0.35;
+  const providerFallback =
+    provider === "claude" ? 0.5 : provider === "codex" ? 0.25 : 0.35;
   const usd = bounded(
     Math.max(
       pricedUsd == null ? providerFallback : pricedUsd * HISTORY_PADDING,
@@ -314,6 +334,94 @@ export function reconcileFleetWorkerActualCost(
   };
 }
 
+/**
+ * Advance one durable cumulative watermark monotonically. Replays and transient
+ * lower samples produce zero deltas; a terminal fallback is charged only once,
+ * and a later observed peak adds only the amount above that fallback.
+ */
+export function advanceFleetCostWatermark(input: {
+  previous?: Partial<FleetCostWatermark> | null;
+  sample?: FleetSessionCostSample | null;
+  terminalFallbackUsd?: number | null;
+  terminalFallbackTokens?: number | null;
+}): FleetCostWatermarkAdvance {
+  const previous = input.previous ?? {};
+  const previousChargedUsd = finiteNonNegative(previous.chargedCostUsd) ?? 0;
+  const previousChargedTokens = finiteNonNegative(previous.chargedTokens) ?? 0;
+  const sample = input.sample;
+  const peakInputTokens = Math.max(
+    finiteNonNegative(previous.peakInputTokens) ?? 0,
+    finiteNonNegative(sample?.input_tokens) ?? 0
+  );
+  const peakOutputTokens = Math.max(
+    finiteNonNegative(previous.peakOutputTokens) ?? 0,
+    finiteNonNegative(sample?.output_tokens) ?? 0
+  );
+  const peakCacheReadTokens = Math.max(
+    finiteNonNegative(previous.peakCacheReadTokens) ?? 0,
+    finiteNonNegative(sample?.cache_read_tokens) ?? 0
+  );
+  const peakCacheWriteTokens = Math.max(
+    finiteNonNegative(previous.peakCacheWriteTokens) ?? 0,
+    finiteNonNegative(sample?.cache_write_tokens) ?? 0
+  );
+  const previousObserved = finiteNonNegative(previous.observedCostUsd);
+  const sampleCost = finiteNonNegative(sample?.cost_usd);
+  const observedCostUsd =
+    previousObserved == null && sampleCost == null
+      ? null
+      : Math.max(previousObserved ?? 0, sampleCost ?? 0);
+  const fallbackCostUsd = Math.max(
+    finiteNonNegative(previous.fallbackCostUsd) ?? 0,
+    finiteNonNegative(input.terminalFallbackUsd) ?? 0
+  );
+  const fallbackTokens = Math.max(
+    finiteNonNegative(previous.fallbackTokens) ?? 0,
+    finiteNonNegative(input.terminalFallbackTokens) ?? 0
+  );
+  const observedTokens =
+    peakInputTokens +
+    peakOutputTokens +
+    peakCacheReadTokens +
+    peakCacheWriteTokens;
+  const chargedCostUsd = Math.max(
+    previousChargedUsd,
+    fallbackCostUsd,
+    observedCostUsd ?? 0
+  );
+  const chargedTokens = Math.max(
+    previousChargedTokens,
+    fallbackTokens,
+    observedTokens
+  );
+  const hasObservedCost = observedCostUsd != null;
+  const hasObservedTokens = observedTokens > 0;
+  const confidence: FleetCostConfidence =
+    hasObservedCost && hasObservedTokens
+      ? "high"
+      : hasObservedCost || hasObservedTokens
+        ? "medium"
+        : fallbackCostUsd > 0 || fallbackTokens > 0
+          ? "low"
+          : "unknown";
+  return {
+    watermark: {
+      peakInputTokens,
+      peakOutputTokens,
+      peakCacheReadTokens,
+      peakCacheWriteTokens,
+      observedCostUsd,
+      fallbackCostUsd,
+      chargedCostUsd,
+      fallbackTokens,
+      chargedTokens,
+      confidence,
+    },
+    chargedUsdDelta: Math.max(0, chargedCostUsd - previousChargedUsd),
+    chargedTokensDelta: Math.max(0, chargedTokens - previousChargedTokens),
+  };
+}
+
 function stopAction(mode: FleetBudgetStopMode): FleetBudgetStopAction {
   if (mode === "hard-stop") return "interrupt-active";
   if (mode === "ask-operator") return "ask-operator";
@@ -357,10 +465,10 @@ export function evaluateFleetBudget(input: {
   }
 
   const usdExceeded =
-    input.config.budgetUsd != null && projectedUsd >= input.config.budgetUsd;
+    input.config.budgetUsd != null && projectedUsd > input.config.budgetUsd;
   const tokensExceeded =
     input.config.budgetTokens != null &&
-    projectedTokens >= input.config.budgetTokens;
+    projectedTokens > input.config.budgetTokens;
   const hardLimitReached = usdExceeded || tokensExceeded;
   const warningAt = Math.min(1, Math.max(0.01, input.config.warningThreshold));
   const warning =

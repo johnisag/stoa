@@ -203,6 +203,23 @@ describe("Fleet automation decisions", () => {
         claimPaths: [".github/workflows/release.yml"],
       })
     ).toMatchObject({ reason: "plan touches sensitive paths" });
+    for (const claimPath of [
+      "src/auth/session.ts",
+      "package-lock.json",
+      "db/migrations/001-add-user.sql",
+      "db/schema/user.sql",
+      "AGENTS.md",
+      ".codex/skills/release/SKILL.md",
+      ".agents/skills/review/SKILL.md",
+      "package.json",
+      "vite.config.ts",
+      ".env.production",
+    ]) {
+      expect(
+        evaluateAutomaticApproval({ ...base, claimPaths: [claimPath] }),
+        claimPath
+      ).toMatchObject({ reason: "plan touches sensitive paths" });
+    }
     expect(
       evaluateAutomaticApproval({
         ...base,
@@ -255,18 +272,16 @@ describe("Fleet automation decisions", () => {
     ).toEqual({ action: "start" });
   });
 
-  it("requires the full start/fix contract before automatic merge", () => {
+  it("requires automatic start but not automatic-fix authority before merge", () => {
     expect(evaluateAutomaticMerge(policy({ automaticMerge: true }))).toEqual({
       action: "wait",
-      reason: "automatic merge prerequisites are not enabled",
+      reason: "automatic start is not enabled",
     });
     expect(
       evaluateAutomaticMerge(
         policy({
           automaticMerge: true,
           automaticStart: true,
-          automaticFixes: true,
-          maxAutomaticFixRounds: 1,
         })
       )
     ).toEqual({ action: "merge" });
@@ -305,6 +320,22 @@ function createPlannedAutomationRun(automaticStart: boolean) {
   });
   if ("error" in planned) throw new Error(planned.error);
   return planned.run.run.id;
+}
+
+function createPlanningAutomationRun(allowUnconfinedAgents = true) {
+  const created = createDraftFleetRun({
+    name: "Planning intent",
+    goal: "Generate one durable plan",
+    repoId: "fleet-auto-repo",
+    provider: "codex",
+    automationPolicy: {
+      automaticPlanning: true,
+      plannerTaskCap: 12,
+      allowUnconfinedAgents,
+    },
+  });
+  if ("error" in created) throw new Error(created.error);
+  return created;
 }
 
 function insertExactCleanReviews(runId: string): string {
@@ -348,15 +379,67 @@ function insertExactCleanReviews(runId: string): string {
 }
 
 describe("reconcileFleetAutomation", () => {
-  it("consumes a durable planning grant once across repeated reconciles", async () => {
-    const created = createDraftFleetRun({
-      name: "Planning intent",
-      goal: "Generate one durable plan",
-      repoId: "fleet-auto-repo",
-      provider: "codex",
-      automationPolicy: { automaticPlanning: true, plannerTaskCap: 12 },
+  it("does not launch an automatic planner without confinement or explicit consent", async () => {
+    const created = createPlanningAutomationRun(false);
+    const startPlanner = vi.fn(async () => ({ run: created.run }));
+
+    await reconcileFleetAutomation(40, {
+      db: db(),
+      startPlanner,
+      resolveBaseSha: async () => BASE_SHA,
+      schedulerReady: () => true,
+      confinementAvailable: () => false,
     });
-    if ("error" in created) throw new Error(created.error);
+
+    expect(startPlanner).not.toHaveBeenCalled();
+    expect(
+      db()
+        .prepare(
+          "SELECT status FROM fleet_action_authorizations WHERE fleet_run_id = ? AND action = 'planning'"
+        )
+        .get(created.run.run.id)
+    ).toEqual({ status: "authorized" });
+  });
+
+  it("does not spin an idle planner before its durable retry deadline", async () => {
+    const created = createPlanningAutomationRun();
+    const runId = created.run.run.id;
+    const row = queries.getFleetRun(db()).get(runId) as FleetRunRow;
+    const settings = JSON.parse(row.settings_json);
+    settings.planner = {
+      state: "idle",
+      failureCount: 1,
+      retryNotBefore: "2026-08-01T12:00:05.000Z",
+    };
+    db()
+      .prepare(
+        `UPDATE fleet_runs SET settings_json = ?, automation_base_sha = ? WHERE id = ?`
+      )
+      .run(JSON.stringify(settings), BASE_SHA, runId);
+    const startPlanner = vi.fn(async () => ({ run: created.run }));
+    const common = {
+      db: db(),
+      startPlanner,
+      resolveBaseSha: async () => BASE_SHA,
+      schedulerReady: () => false,
+      confinementAvailable: () => false,
+    };
+
+    await reconcileFleetAutomation(40, {
+      ...common,
+      now: () => new Date("2026-08-01T12:00:04.999Z"),
+    });
+    expect(startPlanner).not.toHaveBeenCalled();
+
+    await reconcileFleetAutomation(40, {
+      ...common,
+      now: () => new Date("2026-08-01T12:00:05.000Z"),
+    });
+    expect(startPlanner).toHaveBeenCalledTimes(1);
+  });
+
+  it("consumes a durable planning grant once across repeated reconciles", async () => {
+    const created = createPlanningAutomationRun();
     const startPlanner = vi.fn(async () => ({ run: created.run }));
     const overrides = {
       db: db(),
@@ -382,6 +465,132 @@ describe("reconcileFleetAutomation", () => {
         )
         .get(created.run.run.id)
     ).toEqual({ status: "consumed", base_sha: BASE_SHA });
+  });
+
+  it("redacts automation failures consistently across state and audit evidence", async () => {
+    const created = createPlanningAutomationRun();
+    const runId = created.run.run.id;
+    const secret = "automation-failure-canary";
+
+    await reconcileFleetAutomation(40, {
+      db: db(),
+      startPlanner: vi.fn(async () => ({
+        error: `password: "${secret}"`,
+      })),
+      resolveBaseSha: async () => BASE_SHA,
+      schedulerReady: () => false,
+      confinementAvailable: () => false,
+    });
+
+    const run = db()
+      .prepare(`SELECT automation_last_error FROM fleet_runs WHERE id = ?`)
+      .get(runId) as { automation_last_error: string };
+    const authorization = db()
+      .prepare(
+        `SELECT attempt_count, last_error FROM fleet_action_authorizations
+         WHERE fleet_run_id = ? AND action = 'planning'`
+      )
+      .get(runId) as { attempt_count: number; last_error: string };
+    const audit = db()
+      .prepare(
+        `SELECT payload FROM fleet_events
+         WHERE fleet_run_id = ? AND event_type = 'automation_action_failed'`
+      )
+      .get(runId) as { payload: string };
+    const persisted = JSON.stringify({ run, authorization, audit });
+
+    expect(persisted).not.toContain(secret);
+    expect(run.automation_last_error).toContain("[REDACTED]");
+    expect(authorization).toMatchObject({
+      attempt_count: 1,
+      last_error: run.automation_last_error,
+    });
+    expect(JSON.parse(audit.payload)).toMatchObject({
+      action: "planning",
+      error: run.automation_last_error,
+    });
+  });
+
+  it("rolls back base binding when its required audit event is over quota", async () => {
+    const created = createPlanningAutomationRun();
+    const runId = created.run.run.id;
+    db()
+      .prepare(`UPDATE fleet_runs SET resource_limits_json = ? WHERE id = ?`)
+      .run(JSON.stringify({ eventBytesTotal: 1 }), runId);
+    const startPlanner = vi.fn(async () => ({ run: created.run }));
+
+    await expect(
+      reconcileFleetAutomation(40, {
+        db: db(),
+        startPlanner,
+        resolveBaseSha: async () => BASE_SHA,
+        schedulerReady: () => false,
+        confinementAvailable: () => false,
+      })
+    ).rejects.toThrow(/event_bytes_total quota exceeded/);
+
+    expect(startPlanner).not.toHaveBeenCalled();
+    expect(
+      db()
+        .prepare(
+          `SELECT automation_base_sha, automation_last_error
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual({ automation_base_sha: null, automation_last_error: null });
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_events
+           WHERE fleet_run_id = ? AND event_type IN
+             ('automation_base_bound', 'automation_action_failed')`
+        )
+        .get(runId)
+    ).toEqual({ n: 0 });
+  });
+
+  it("rolls back failure state when the failure audit event is over quota", async () => {
+    const created = createPlanningAutomationRun();
+    const runId = created.run.run.id;
+    db()
+      .prepare(
+        `UPDATE fleet_runs
+       SET automation_base_sha = ?, resource_limits_json = ?
+       WHERE id = ?`
+      )
+      .run(BASE_SHA, JSON.stringify({ eventBytesTotal: 1 }), runId);
+
+    await expect(
+      reconcileFleetAutomation(40, {
+        db: db(),
+        startPlanner: vi.fn(async () => ({ error: "planner refused" })),
+        resolveBaseSha: async () => BASE_SHA,
+        schedulerReady: () => false,
+        confinementAvailable: () => false,
+      })
+    ).rejects.toThrow(/event_bytes_total quota exceeded/);
+
+    expect(
+      db()
+        .prepare(`SELECT automation_last_error FROM fleet_runs WHERE id = ?`)
+        .get(runId)
+    ).toEqual({ automation_last_error: null });
+    expect(
+      db()
+        .prepare(
+          `SELECT attempt_count, last_error FROM fleet_action_authorizations
+           WHERE fleet_run_id = ? AND action = 'planning'`
+        )
+        .get(runId)
+    ).toEqual({ attempt_count: 0, last_error: null });
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_events
+           WHERE fleet_run_id = ? AND event_type = 'automation_action_failed'`
+        )
+        .get(runId)
+    ).toEqual({ n: 0 });
   });
 
   it("auto-approves exact critic evidence and CAS-starts only when safe", async () => {

@@ -429,6 +429,10 @@ export function classifySensitiveFleetPath(
     return "environment_or_secret";
   }
   if (
+    lower === ".codex" ||
+    lower.startsWith(".codex/") ||
+    lower === ".agents" ||
+    lower.startsWith(".agents/") ||
     [
       "package-lock.json",
       "npm-shrinkwrap.json",

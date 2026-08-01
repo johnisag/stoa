@@ -1,8 +1,7 @@
 /**
  * Locks the conductor session-id resolution the orchestration MCP server uses.
- * Claude/Codex deliver the id via env; Hermes (which strips env vars from MCP
- * children) via a `.stoa-conductor` marker file in the server's cwd. Pure
- * fs/string logic — runs on the 3-OS matrix.
+ * Providers deliver the id through a per-process env mapping; the marker is a
+ * compatibility fallback. Pure fs/string logic — runs on the 3-OS matrix.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
@@ -12,6 +11,7 @@ import {
   resolveConductorSessionId,
   pickConductorId,
   CONDUCTOR_MARKER_FILE,
+  INVALID_CONDUCTOR_SESSION_ID,
 } from "@/lib/conductor-marker";
 
 describe("pickConductorId", () => {
@@ -26,6 +26,11 @@ describe("pickConductorId", () => {
     expect(pickConductorId("arg-id", "")).toBe("arg-id");
     expect(pickConductorId("arg-id", null)).toBe("arg-id");
     expect(pickConductorId("arg-id", undefined)).toBe("arg-id");
+  });
+  it("does not let an explicit id bypass a present-but-invalid binding", () => {
+    expect(
+      pickConductorId("attacker-supplied", INVALID_CONDUCTOR_SESSION_ID)
+    ).toBeNull();
   });
   it("trims whitespace and returns null when neither is present", () => {
     expect(pickConductorId("  ", "  ")).toBeNull();
@@ -63,10 +68,39 @@ describe("resolveConductorSessionId", () => {
     expect(resolveConductorSessionId(dir, {})).toBe("");
   });
 
-  it("treats a blank env value as unset and uses the marker", () => {
+  it("treats a present-but-blank mapped binding as invalid, not marker fallback", () => {
     writeFileSync(path.join(dir, CONDUCTOR_MARKER_FILE), "marker-wins\n");
+    const resolved = resolveConductorSessionId(dir, {
+      CONDUCTOR_SESSION_ID: "   ",
+    });
+    expect(resolved).toBe(INVALID_CONDUCTOR_SESSION_ID);
+    expect(pickConductorId("explicit-bypass", resolved)).toBeNull();
+  });
+
+  it("fails closed when provider interpolation leaves a literal placeholder", () => {
+    const unresolved = resolveConductorSessionId(dir, {
+      CONDUCTOR_SESSION_ID: "${STOA_CONDUCTOR_SESSION_ID}",
+    });
+    expect(unresolved).toBe(INVALID_CONDUCTOR_SESSION_ID);
+    expect(pickConductorId("explicit-bypass", unresolved)).toBeNull();
+  });
+
+  it("uses Stoa's direct process binding when provider interpolation is literal", () => {
     expect(
-      resolveConductorSessionId(dir, { CONDUCTOR_SESSION_ID: "   " })
-    ).toBe("marker-wins");
+      resolveConductorSessionId(dir, {
+        CONDUCTOR_SESSION_ID: "${STOA_CONDUCTOR_SESSION_ID}",
+        STOA_CONDUCTOR_SESSION_ID: "session-from-process",
+      })
+    ).toBe("session-from-process");
+  });
+
+  it("fails closed on an ambiguous multi-line compatibility marker", () => {
+    writeFileSync(
+      path.join(dir, CONDUCTOR_MARKER_FILE),
+      "session-one\nsession-two\n"
+    );
+    const resolved = resolveConductorSessionId(dir, {});
+    expect(resolved).toBe(INVALID_CONDUCTOR_SESSION_ID);
+    expect(pickConductorId("explicit-bypass", resolved)).toBeNull();
   });
 });

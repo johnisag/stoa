@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  advanceFleetCostWatermark,
   estimateFleetTaskReservation,
   evaluateFleetBudget,
   reconcileFleetWorkerActualCost,
@@ -103,6 +104,50 @@ describe("Fleet budgets", () => {
       tokens: 200,
       confidence: "high",
       sampleCount: 3,
+    });
+  });
+
+  it("advances durable charged watermarks idempotently across fallback and later samples", () => {
+    const fallback = advanceFleetCostWatermark({
+      terminalFallbackUsd: 1,
+      terminalFallbackTokens: 100_000,
+    });
+    expect(fallback).toMatchObject({
+      chargedUsdDelta: 1,
+      chargedTokensDelta: 100_000,
+      watermark: { confidence: "low", chargedCostUsd: 1 },
+    });
+    const replay = advanceFleetCostWatermark({
+      previous: fallback.watermark,
+      terminalFallbackUsd: 1,
+      terminalFallbackTokens: 100_000,
+    });
+    expect(replay).toMatchObject({
+      chargedUsdDelta: 0,
+      chargedTokensDelta: 0,
+    });
+    const observed = advanceFleetCostWatermark({
+      previous: replay.watermark,
+      sample: sample("2026-08-02", 1.5, 125_000),
+    });
+    expect(observed).toMatchObject({
+      chargedUsdDelta: 0.5,
+      chargedTokensDelta: 25_000,
+      watermark: {
+        observedCostUsd: 1.5,
+        chargedCostUsd: 1.5,
+        chargedTokens: 125_000,
+        confidence: "high",
+      },
+    });
+    const dip = advanceFleetCostWatermark({
+      previous: observed.watermark,
+      sample: sample("2026-08-03", 0.9, 90_000),
+    });
+    expect(dip).toMatchObject({
+      chargedUsdDelta: 0,
+      chargedTokensDelta: 0,
+      watermark: { chargedCostUsd: 1.5, chargedTokens: 125_000 },
     });
   });
 

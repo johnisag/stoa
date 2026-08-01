@@ -1,14 +1,16 @@
 /**
  * Fleet board (#5) — pure lane assignment + composition. The board is a kanban of
  * the AUTONOMOUS fleet (dispatch rows + session ceremonies) across lifecycle lanes.
- * Composed CLIENT-SIDE from three existing read models (the verdict inbox + the
- * dispatch board + the pending backlog); this module is the only new LOGIC, kept
- * pure so it's unit-tested. No plain interactive sessions (they have no lifecycle
- * to map and live in the sidebar already), no scheduled rows (future-dated).
+ * Composed CLIENT-SIDE from existing read models (the verdict inbox, dispatch
+ * board, pending backlog, and durable Fleet runs); this module is the only new
+ * LOGIC, kept pure so it's unit-tested. No plain interactive sessions (they have
+ * no lifecycle to map and live in the sidebar already), no scheduled rows
+ * (future-dated).
  */
 import type { InboxItem } from "@/lib/verdict-inbox";
 import { needsMe } from "@/lib/verdict-inbox-selectors";
 import type { IssueDispatch } from "@/lib/dispatch/types";
+import type { FleetRunDto } from "@/lib/fleet/types";
 
 export type LaneId =
   "queued" | "working" | "in_review" | "verified" | "merged" | "failed";
@@ -28,11 +30,33 @@ export interface FleetCard {
   /** `${type}:${id}` — react key + dedupe key. */
   key: string;
   lane: LaneId;
-  /** 'inbox' → render the rich InboxCard (verdict/findings/actions); 'dispatch' →
-   * a light card (queued/working/merged rows have no inbox item). */
-  source: "inbox" | "dispatch";
+  /** 'inbox' → rich verdict card; 'dispatch' → light issue card; 'fleet' →
+   * durable run card with a lazy task drilldown. */
+  source: "inbox" | "dispatch" | "fleet";
   inbox?: InboxItem;
   dispatch?: IssueDispatch;
+  fleetRun?: FleetRunDto;
+}
+
+/** Map Fleet Management's durable run state onto the shared delivery board. */
+export function laneForFleetRun(run: FleetRunDto): LaneId {
+  switch (run.status) {
+    case "draft":
+    case "planned":
+      return "queued";
+    case "running":
+    case "paused":
+      return "working";
+    case "reviewing":
+      return "in_review";
+    case "merging":
+      return "working";
+    case "completed":
+      return "merged";
+    case "failed":
+    case "canceled":
+      return "failed";
+  }
 }
 
 /** Lane for a unified inbox item (a pr_open/failed dispatch row, or any non-merged
@@ -97,7 +121,8 @@ export function laneForDispatch(d: IssueDispatch): LaneId {
 export function composeFleetCards(
   board: IssueDispatch[],
   pending: IssueDispatch[],
-  inbox: InboxItem[]
+  inbox: InboxItem[],
+  fleetRuns: FleetRunDto[] = []
 ): FleetCard[] {
   const map = new Map<string, FleetCard>();
   for (const d of board) {
@@ -118,6 +143,15 @@ export function composeFleetCards(
   for (const i of inbox) {
     const key = `${i.type}:${i.id}`;
     map.set(key, { key, lane: laneForInboxItem(i), source: "inbox", inbox: i });
+  }
+  for (const run of fleetRuns) {
+    const key = `fleet:${run.id}`;
+    map.set(key, {
+      key,
+      lane: laneForFleetRun(run),
+      source: "fleet",
+      fleetRun: run,
+    });
   }
   return [...map.values()];
 }

@@ -6,6 +6,7 @@ import {
 } from "@/lib/fleet/http";
 import {
   previewFleetCleanup,
+  previewFleetDestructiveAction,
   requestFleetCleanup,
 } from "@/lib/fleet/lifecycle";
 
@@ -17,14 +18,26 @@ export async function GET(
   if (denied) return denied;
   const { id } = await params;
   try {
-    const result = await previewFleetCleanup(id);
+    const [result, impact] = await Promise.all([
+      previewFleetCleanup(id),
+      previewFleetDestructiveAction(id, {}, "cleanup"),
+    ]);
     if ("error" in result) {
       return NextResponse.json(
         { error: result.error },
         { status: result.status }
       );
     }
-    return NextResponse.json(result);
+    if ("error" in impact) {
+      return NextResponse.json(
+        { error: impact.error },
+        { status: impact.status }
+      );
+    }
+    return NextResponse.json(
+      { ...result, impact },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (error) {
     console.error("[fleet] cleanup preview failed:", error);
     return NextResponse.json(
@@ -46,7 +59,11 @@ export async function POST(
     return NextResponse.json({ error: body.error }, { status: body.status });
   }
   try {
-    const result = await requestFleetCleanup(id, body.body);
+    const input =
+      body.body && typeof body.body === "object"
+        ? { ...(body.body as Record<string, unknown>), actor: "operator" }
+        : { actor: "operator" };
+    const result = await requestFleetCleanup(id, input);
     if ("error" in result) {
       return NextResponse.json(
         { error: result.error },

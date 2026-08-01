@@ -41,4 +41,27 @@ describe("allocateFleetAgents", () => {
       })
     ).toThrow("no installed agent provider");
   });
+
+  it("excludes providers without a verified unattended mode", () => {
+    expect(
+      allocateFleetAgents({
+        tasks: [{ suggestedProvider: "kilo" }, {}],
+        availableProviders: ["kilo", "codex"],
+        defaultProvider: "kilo",
+        defaultModel: "kilo/model",
+      })
+    ).toEqual([
+      { provider: "codex", model: null },
+      { provider: "codex", model: null },
+    ]);
+
+    expect(() =>
+      allocateFleetAgents({
+        tasks: [{}],
+        availableProviders: ["kilo", "shell"],
+        defaultProvider: "kilo",
+        defaultModel: null,
+      })
+    ).toThrow("no installed agent provider");
+  });
 });

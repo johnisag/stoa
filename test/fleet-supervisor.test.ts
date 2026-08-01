@@ -336,7 +336,11 @@ describe("Fleet supervisor", () => {
   it("appends only an immutable advisory artifact and event", () => {
     const snapshot = getFleetSupervisorSnapshot(RUN_ID, db);
     if (!snapshot) throw new Error("missing test snapshot");
-    const before = snapshotFleetTables(db, ["fleet_artifacts", "fleet_events"]);
+    const before = snapshotFleetTables(db, [
+      "fleet_artifacts",
+      "fleet_events",
+      "fleet_resource_usage_buckets",
+    ]);
     const artifactCount = db
       .prepare(`SELECT COUNT(*) AS count FROM fleet_artifacts`)
       .get() as { count: number };
@@ -359,7 +363,11 @@ describe("Fleet supervisor", () => {
       advisoryOnly: true,
     });
     expect(
-      snapshotFleetTables(db, ["fleet_artifacts", "fleet_events"])
+      snapshotFleetTables(db, [
+        "fleet_artifacts",
+        "fleet_events",
+        "fleet_resource_usage_buckets",
+      ])
     ).toEqual(before);
     expect(
       (

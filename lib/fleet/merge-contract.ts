@@ -6,6 +6,7 @@ export interface FleetPrStatus {
   number: number;
   url: string;
   state: string | null;
+  baseSha: string | null;
   headSha: string | null;
   mergeSha: string | null;
   mergeable: string | null;
@@ -29,28 +30,35 @@ export function fleetIntegrationIdentity(runId: string): {
 export function summarizeGitHubChecks(value: unknown): FleetPrStatus["checks"] {
   if (!Array.isArray(value) || value.length === 0) return "none";
   let pending = false;
+  const passing = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+  const inProgress = new Set([
+    "",
+    "PENDING",
+    "QUEUED",
+    "IN_PROGRESS",
+    "EXPECTED",
+    "REQUESTED",
+    "WAITING",
+  ]);
   for (const item of value) {
     const row =
       item && typeof item === "object" ? (item as Record<string, unknown>) : {};
     const conclusion = String(row.conclusion ?? "").toUpperCase();
     const state = String(row.state ?? row.status ?? "").toUpperCase();
-    if (
-      [
-        "FAILURE",
-        "ERROR",
-        "CANCELLED",
-        "TIMED_OUT",
-        "ACTION_REQUIRED",
-      ].includes(conclusion || state)
-    ) {
-      return "failing";
+    if (conclusion) {
+      // GitHub can add new terminal conclusions. Only explicitly accepted
+      // outcomes may authorize a merge; every other conclusion fails closed.
+      if (!passing.has(conclusion)) return "failing";
+      continue;
     }
-    if (
-      !["SUCCESS", "NEUTRAL", "SKIPPED"].includes(conclusion) &&
-      !["SUCCESS", "COMPLETED"].includes(state)
-    ) {
+    if (passing.has(state)) continue;
+    if (inProgress.has(state)) {
       pending = true;
+      continue;
     }
+    // COMPLETED without a conclusion, known failures, and unknown terminal
+    // states are all unsafe to interpret as success.
+    return "failing";
   }
   return pending ? "pending" : "passing";
 }
@@ -73,6 +81,7 @@ export function parseFleetPrStatus(value: string): FleetPrStatus | null {
       number,
       url: parsedUrl.toString(),
       state: typeof parsed.state === "string" ? parsed.state : null,
+      baseSha: typeof parsed.baseRefOid === "string" ? parsed.baseRefOid : null,
       headSha: typeof parsed.headRefOid === "string" ? parsed.headRefOid : null,
       mergeSha: typeof mergeCommit === "string" ? mergeCommit : null,
       mergeable: typeof parsed.mergeable === "string" ? parsed.mergeable : null,
@@ -94,7 +103,7 @@ export function buildFleetPrViewArgs(
     "--repo",
     repoSlug,
     "--json",
-    "number,url,state,headRefOid,mergeCommit,mergeable,statusCheckRollup",
+    "number,url,state,baseRefOid,headRefOid,mergeCommit,mergeable,statusCheckRollup",
   ];
 }
 

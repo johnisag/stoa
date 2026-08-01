@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { FLEET_REDACTED_VALUE, redactFleetText } from "@/lib/fleet/redaction";
+import {
+  FLEET_REDACTED_VALUE,
+  redactAndCapFleetText,
+  redactFleetText,
+} from "@/lib/fleet/redaction";
 
 describe("Fleet durable-content redaction", () => {
+  it("is idempotent for already-redacted named assignments", () => {
+    const once = redactFleetText(
+      "password=sk-ABCDEFGHIJKLMNOPQRST api_key=[REDACTED]"
+    ).text;
+    const twice = redactFleetText(once).text;
+    expect(once).toBe("password=[REDACTED] api_key=[REDACTED]");
+    expect(twice).toBe(once);
+  });
+
   it("redacts named credentials and common token formats", () => {
     const secrets = [
       "api_key=top-secret-value",
@@ -38,6 +51,18 @@ describe("Fleet durable-content redaction", () => {
     );
   });
 
+  it("redacts an unterminated private key through end of input", () => {
+    const input = [
+      "safe prefix",
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "partial-secret-material",
+    ].join("\n");
+
+    expect(redactFleetText(input).text).toBe(
+      `safe prefix\n${FLEET_REDACTED_VALUE}`
+    );
+  });
+
   it("preserves exact Git SHA evidence and ordinary prose", () => {
     const sha1 = "a".repeat(40);
     const sha256 = "b".repeat(64);
@@ -48,5 +73,19 @@ describe("Fleet durable-content redaction", () => {
       redacted: false,
       replacementCount: 0,
     });
+  });
+
+  it("redacts before a UTF-8 byte cap and never persists a partial secret", () => {
+    const secret = `api_key=${"s".repeat(300)}`;
+    const result = redactAndCapFleetText(`before ${secret} after 😀`, 32);
+
+    expect(result.redacted).toBe(true);
+    expect(result.truncated).toBe(true);
+    expect(result.text).toContain("api_key=[REDACTED]");
+    expect(result.text).not.toContain("ssss");
+
+    const unicode = redactAndCapFleetText("😀😀", 5);
+    expect(unicode.text).toBe("😀");
+    expect(Buffer.byteLength(unicode.text, "utf8")).toBeLessThanOrEqual(5);
   });
 });

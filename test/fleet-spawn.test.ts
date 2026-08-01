@@ -7,9 +7,45 @@ vi.mock("@/lib/orchestration", () => ({
 }));
 
 import { spawnFleetWorker } from "@/lib/fleet/spawn";
+import {
+  DEFAULT_FLEET_AUTOMATION_POLICY,
+  fleetAutomationPolicyJson,
+} from "@/lib/fleet/automation-policy";
 import type { FleetRunRow, FleetTaskRow } from "@/lib/fleet/types";
 
+const AUTHORIZED_AUTOMATION_POLICY = fleetAutomationPolicyJson({
+  ...DEFAULT_FLEET_AUTOMATION_POLICY,
+  allowUnconfinedAgents: true,
+});
+
 describe("fleet spawn wrapper", () => {
+  it("fails closed before launching a stale Kilo Fleet task", async () => {
+    spawnWorker.mockClear();
+    await expect(
+      spawnFleetWorker({
+        run: {
+          id: "run-kilo",
+          name: "Fleet",
+          goal: "Ship",
+          provider: "kilo",
+          automation_policy_json: AUTHORIZED_AUTOMATION_POLICY,
+        } as FleetRunRow,
+        task: {
+          id: "task-kilo",
+          title: "Stale Kilo task",
+          task_type: "task",
+          agent_type: "kilo",
+        } as FleetTaskRow,
+        workingDirectory: "C:\\repo",
+        claims: ["lib"],
+        dependencies: [],
+        attempt: 1,
+        spawnRequestId: "run-kilo:task-kilo:1",
+      })
+    ).rejects.toThrow("Fleet provider cannot run unattended: kilo");
+    expect(spawnWorker).not.toHaveBeenCalled();
+  });
+
   it("uses stable distinct branch names and the resolved base branch", async () => {
     spawnWorker.mockImplementation(async (options) => ({
       id: `session-${options.branchName}`,
@@ -22,6 +58,7 @@ describe("fleet spawn wrapper", () => {
       goal: "Ship",
       provider: "codex",
       model: null,
+      automation_policy_json: AUTHORIZED_AUTOMATION_POLICY,
     } as FleetRunRow;
     const makeTask = (id: string) =>
       ({
@@ -59,7 +96,11 @@ describe("fleet spawn wrapper", () => {
       worktree_path: "C:\\wt\\review",
     });
     await spawnFleetWorker({
-      run: { id: "run-1", provider: "codex" } as FleetRunRow,
+      run: {
+        id: "run-1",
+        provider: "codex",
+        automation_policy_json: AUTHORIZED_AUTOMATION_POLICY,
+      } as FleetRunRow,
       task: {
         id: "review-1",
         title: "Review",
@@ -90,6 +131,7 @@ describe("fleet spawn wrapper", () => {
         name: "Fleet",
         goal: "Ship",
         provider: "codex",
+        automation_policy_json: AUTHORIZED_AUTOMATION_POLICY,
       } as FleetRunRow,
       task: {
         id: "task-1",

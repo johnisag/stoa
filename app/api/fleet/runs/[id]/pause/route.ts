@@ -21,7 +21,7 @@ export async function POST(
       body.body && typeof body.body === "object"
         ? { ...(body.body as Record<string, unknown>), actor: "operator" }
         : { actor: "operator" };
-    const result = pauseFleetRun(id, input);
+    const result = await pauseFleetRun(id, input);
     if ("error" in result)
       return NextResponse.json(
         { error: result.error },

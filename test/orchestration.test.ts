@@ -93,13 +93,17 @@ vi.mock("@/lib/db", async (importOriginal) => {
 
 import { randomUUID } from "crypto";
 import { readFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
 import {
   spawnWorker,
   getWorkers,
   getWorkersSummary,
   killWorker,
+  validateFleetSandboxWritableRoots,
 } from "@/lib/orchestration";
+import { stoaHomeDir } from "@/lib/platform";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
@@ -308,11 +312,19 @@ describe("spawnWorker — conductor FK guard", () => {
     expect(script).toContain("--dangerously-skip-permissions");
   });
 
-  it("keeps a reviewer checkout read-only while allowing external Fleet state", async () => {
+  it("hides Stoa authority while exposing only an exact Fleet result directory", async () => {
     process.env.STOA_SANDBOX = "1";
     state.sandboxPath = "/usr/bin/bwrap";
     const conductor = addSession();
     const reviewerWorktree = "/tmp/read-only-reviewer";
+    const resultDirectory = join(
+      stoaHomeDir(),
+      "fleet-task-runtime",
+      "run-1",
+      "task-1",
+      "1",
+      "reviews"
+    );
 
     await spawnWorker({
       conductorSessionId: conductor,
@@ -320,6 +332,7 @@ describe("spawnWorker — conductor FK guard", () => {
       workingDirectory: reviewerWorktree,
       useWorktree: false,
       readOnlyWorktree: true,
+      fleetWritableRoots: [resultDirectory],
       agentType: "claude",
     });
 
@@ -331,6 +344,65 @@ describe("spawnWorker — conductor FK guard", () => {
     expect(script).not.toContain(
       `--bind '${reviewerWorktree}' '${reviewerWorktree}'`
     );
+    expect(script).toContain(`--tmpfs '${stoaHomeDir()}'`);
+    expect(script).not.toContain(
+      `--bind '${stoaHomeDir()}' '${stoaHomeDir()}'`
+    );
+    expect(script).toContain(
+      `--bind '${resultDirectory}' '${resultDirectory}'`
+    );
+    expect(script).toContain("--unsetenv STOA_TOKEN");
+  });
+
+  it("rejects broad or foreign Fleet sandbox writable roots", () => {
+    const authorityRoot = join(tmpdir(), "stoa-authority-test");
+    expect(() =>
+      validateFleetSandboxWritableRoots([authorityRoot], authorityRoot)
+    ).toThrow(/exact server-owned attempt directory/);
+    expect(() =>
+      validateFleetSandboxWritableRoots(
+        [join(authorityRoot, "fleet", "run-only")],
+        authorityRoot
+      )
+    ).toThrow(/exact server-owned attempt directory/);
+    expect(() =>
+      validateFleetSandboxWritableRoots(
+        [join(tmpdir(), "foreign", "run", "task", "1")],
+        authorityRoot
+      )
+    ).toThrow(/exact server-owned attempt directory/);
+    expect(
+      validateFleetSandboxWritableRoots(
+        [join(authorityRoot, "fleet", "run", "task", "1")],
+        authorityRoot
+      )
+    ).toEqual([join(authorityRoot, "fleet", "run", "task", "1")]);
+  });
+
+  it("withholds prompt bypass when Fleet asks for unavailable strong isolation", async () => {
+    process.env.STOA_SANDBOX = "1";
+    state.sandboxPath = "/usr/bin/bwrap";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const conductor = addSession();
+
+    await spawnWorker({
+      conductorSessionId: conductor,
+      task: "strongly isolated Fleet task",
+      workingDirectory: "/repo",
+      useWorktree: false,
+      approvalMode: "sandboxed-auto",
+      requireStrongIsolation: true,
+      agentType: "claude",
+    });
+
+    const createArg = (backendCreate.mock.calls as unknown[][])[0]?.[0] as
+      { binary: string; args: string[] } | undefined;
+    expect(createArg!.binary).toBe("claude");
+    expect(createArg!.args).not.toContain("--dangerously-skip-permissions");
+    expect(warn).toHaveBeenCalledWith(
+      "[sandbox] Fleet strong isolation is unavailable; running without prompt bypass"
+    );
+    warn.mockRestore();
   });
 
   it("warns when STOA_SANDBOX is requested but no primitive is available", async () => {

@@ -159,3 +159,51 @@ describe("PtyBackend control bytes", () => {
     expect(writes).toEqual([["s1", "\x1b[200~hi\x1b[201~"]]);
   });
 });
+
+describe("PtyBackend create environment", () => {
+  it("forwards the environment on a direct argv spawn", async () => {
+    const spawns: import("@/lib/session-backend/pty/registry").SpawnSpec[] = [];
+    const spy = {
+      spawn: async (
+        _key: string,
+        spec: import("@/lib/session-backend/pty/registry").SpawnSpec
+      ) => void spawns.push(spec),
+    } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
+
+    await new PtyBackend(spy).create({
+      name: "conductor",
+      cwd: process.cwd(),
+      command: "ignored",
+      binary: "node",
+      args: ["script.js"],
+      env: { STOA_CONDUCTOR_SESSION_ID: "session-1" },
+    });
+
+    expect(spawns).toHaveLength(1);
+    expect(spawns[0].env).toEqual({
+      STOA_CONDUCTOR_SESSION_ID: "session-1",
+    });
+  });
+
+  it("forwards the environment on the shell fallback too", async () => {
+    const spawns: import("@/lib/session-backend/pty/registry").SpawnSpec[] = [];
+    const spy = {
+      spawn: async (
+        _key: string,
+        spec: import("@/lib/session-backend/pty/registry").SpawnSpec
+      ) => void spawns.push(spec),
+    } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
+
+    await new PtyBackend(spy).create({
+      name: "conductor-fallback",
+      cwd: process.cwd(),
+      command: "agent --flag",
+      env: { STOA_CONDUCTOR_SESSION_ID: "session-2" },
+    });
+
+    expect(spawns).toHaveLength(1);
+    expect(spawns[0].env).toEqual({
+      STOA_CONDUCTOR_SESSION_ID: "session-2",
+    });
+  });
+});

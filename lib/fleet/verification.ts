@@ -10,12 +10,24 @@ import {
   type VerifyResult,
   type VerifyStatus,
 } from "@/lib/verification/runner";
-import { boundedFleetArtifactJson } from "./report-runtime";
+import {
+  boundedFleetArtifactJson,
+  FLEET_RUNTIME_ARTIFACT_MAX_BYTES,
+} from "./report-runtime";
+import { redactAndCapFleetText } from "./redaction";
+import { insertFleetArtifact, prepareFleetArtifactBody } from "./durable-write";
+import {
+  acquireFleetRuntimeResources,
+  fleetResourceLimitsForRun,
+  releaseFleetRuntimeResources,
+} from "./resource-runtime";
 import type {
+  FleetRunRow,
   FleetTaskStatus,
   FleetVerificationRow,
   FleetVerificationStatus,
 } from "./types";
+import { assertFleetLaunchReady } from "./recovery-gate";
 
 const FLEET_VERIFICATION_SPEC_VERSION = 1;
 const FULL_GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -34,6 +46,8 @@ export const FLEET_VERIFICATION_LEASE_MS = Math.min(
 
 const verificationOwner = randomUUID();
 const verificationInFlight = new Set<string>();
+
+class FleetVerificationCapacityUnavailable extends Error {}
 
 export interface FleetVerificationCandidate {
   task_id: string;
@@ -131,7 +145,15 @@ function cappedPositiveInteger(
 export function parseFleetVerificationSpec(
   value: string | null | undefined
 ): FleetVerificationSpecResult {
-  const command = typeof value === "string" ? value.trim() : "";
+  const originalCommand = typeof value === "string" ? value.trim() : "";
+  const commandRedaction = redactAndCapFleetText(
+    originalCommand,
+    FLEET_VERIFICATION_COMMAND_MAX * 4
+  );
+  const command = commandRedaction.text.slice(
+    0,
+    FLEET_VERIFICATION_COMMAND_MAX
+  );
   if (!command) {
     return {
       ok: false,
@@ -143,7 +165,19 @@ export function parseFleetVerificationSpec(
       error: "a verification command is required for a write task",
     };
   }
-  if (command.length > FLEET_VERIFICATION_COMMAND_MAX) {
+  if (commandRedaction.redacted) {
+    return {
+      ok: false,
+      command,
+      specHash: stableHash({
+        version: FLEET_VERIFICATION_SPEC_VERSION,
+        invalid: "credential_shaped_command",
+        command,
+      }),
+      error: "the verification command contains credential-shaped text",
+    };
+  }
+  if (originalCommand.length > FLEET_VERIFICATION_COMMAND_MAX) {
     return {
       ok: false,
       command,
@@ -292,6 +326,10 @@ function writePreconditionFailure(
   candidate: FleetVerificationCandidate,
   input: { code: string; message: string; nowIso: string }
 ): boolean {
+  const safeMessage = redactAndCapFleetText(
+    input.message,
+    FLEET_VERIFICATION_ERROR_MAX
+  ).text;
   const artifactId = `fleet-verify-precondition-${stableHash({
     taskId: candidate.task_id,
     attempt: candidate.current_attempt,
@@ -306,7 +344,7 @@ function writePreconditionFailure(
     baseSha: candidate.task_base_sha,
     headSha: candidate.task_head_sha,
     code: input.code,
-    error: input.message,
+    error: safeMessage,
   });
   return transaction(db, () => {
     const changed = db
@@ -325,26 +363,26 @@ function writePreconditionFailure(
         candidate.fleet_run_id
       );
     if (changed.changes !== 1) return false;
-    db.prepare(
-      `INSERT OR IGNORE INTO fleet_artifacts
-       (id, fleet_run_id, task_id, worker_id, attempt, plan_hash, base_sha,
-        head_sha, content_hash, metadata_json, byte_count, artifact_type,
-        title, body, severity, actor, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, 'verification_precondition',
-        'Verification precondition failed', ?, 'blocker', 'verifier', ?)`
-    ).run(
-      artifactId,
-      candidate.fleet_run_id,
-      candidate.task_id,
-      candidate.worker_id,
-      candidate.current_attempt,
-      candidate.approved_plan_hash,
-      candidate.task_base_sha,
-      candidate.task_head_sha,
-      evidence.contentHash,
-      evidence.bytes,
-      evidence.body,
-      input.nowIso
+    insertFleetArtifact(
+      db,
+      {
+        id: artifactId,
+        runId: candidate.fleet_run_id,
+        taskId: candidate.task_id,
+        workerId: candidate.worker_id,
+        attempt: candidate.current_attempt,
+        planHash: candidate.approved_plan_hash,
+        baseSha: candidate.task_base_sha,
+        headSha: candidate.task_head_sha,
+        contentHash: evidence.contentHash,
+        artifactType: "verification_precondition",
+        title: "Verification precondition failed",
+        body: evidence.body,
+        severity: "blocker",
+        actor: "verifier",
+        createdAt: input.nowIso,
+      },
+      { orIgnore: true }
     );
     queries.createFleetEvent(db).run(
       candidate.fleet_run_id,
@@ -407,14 +445,16 @@ export function claimFleetVerificationAttempt(input: {
   owner: string;
   now: Date;
   leaseMs?: number;
+  repositoryKey?: string;
 }): boolean {
   const nowIso = input.now.toISOString();
   const leaseMs = input.leaseMs ?? FLEET_VERIFICATION_LEASE_MS;
   const leaseExpiresAt = new Date(input.now.getTime() + leaseMs).toISOString();
-  return transaction(input.db, () => {
-    const claimed = input.db
-      .prepare(
-        `UPDATE fleet_verifications SET status = 'running', lease_owner = ?,
+  try {
+    return transaction(input.db, () => {
+      const claimed = input.db
+        .prepare(
+          `UPDATE fleet_verifications SET status = 'running', lease_owner = ?,
          lease_expires_at = ?, run_count = run_count + 1,
          started_at = COALESCE(started_at, ?), updated_at = ?, error = NULL
          WHERE id = ? AND task_id = ? AND attempt = ? AND head_sha = ?
@@ -422,45 +462,85 @@ export function claimFleetVerificationAttempt(input: {
              status = 'pending' OR
              (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
            )`
-      )
-      .run(
-        input.owner,
-        leaseExpiresAt,
-        nowIso,
-        nowIso,
-        input.verificationId,
-        input.taskId,
-        input.attempt,
-        input.headSha,
-        input.specHash,
-        nowIso
-      );
-    if (claimed.changes !== 1) return false;
-    const taskClaimed = input.db
-      .prepare(
-        `UPDATE fleet_tasks SET verification_id = ?, verification_status = 'running',
+        )
+        .run(
+          input.owner,
+          leaseExpiresAt,
+          nowIso,
+          nowIso,
+          input.verificationId,
+          input.taskId,
+          input.attempt,
+          input.headSha,
+          input.specHash,
+          nowIso
+        );
+      if (claimed.changes !== 1) return false;
+      const taskClaimed = input.db
+        .prepare(
+          `UPDATE fleet_tasks SET verification_id = ?, verification_status = 'running',
          verification_spec_hash = ?, verified_head_sha = NULL,
          verification_started_at = COALESCE(verification_started_at, ?),
          verification_completed_at = NULL, updated_at = ?
          WHERE id = ? AND status = 'verifying' AND current_attempt = ?
            AND head_sha = ?`
-      )
-      .run(
-        input.verificationId,
-        input.specHash,
-        nowIso,
-        nowIso,
-        input.taskId,
-        input.attempt,
-        input.headSha
-      );
-    if (taskClaimed.changes !== 1) {
-      throw new Error(
-        "verification task changed while its attempt was claimed"
-      );
-    }
-    return true;
-  });
+        )
+        .run(
+          input.verificationId,
+          input.specHash,
+          nowIso,
+          nowIso,
+          input.taskId,
+          input.attempt,
+          input.headSha
+        );
+      if (taskClaimed.changes !== 1) {
+        throw new Error(
+          "verification task changed while its attempt was claimed"
+        );
+      }
+      releaseFleetRuntimeResources(input.db, {
+        ownerType: "verification",
+        ownerId: input.verificationId,
+        now: input.now,
+      });
+      const run = input.db
+        .prepare(
+          `SELECT r.* FROM fleet_runs r
+         JOIN fleet_verifications v ON v.fleet_run_id = r.id
+         WHERE v.id = ?`
+        )
+        .get(input.verificationId) as FleetRunRow | undefined;
+      if (!run) throw new Error("verification run changed while claiming");
+      const resources = acquireFleetRuntimeResources(input.db, {
+        runId: run.id,
+        ownerType: "verification",
+        ownerId: input.verificationId,
+        resources: [
+          { kind: "verifier", key: "host", units: 1 },
+          {
+            kind: "git_operation",
+            key:
+              input.repositoryKey ??
+              run.repo_id ??
+              run.project_id ??
+              `run:${run.id}`,
+            units: 1,
+          },
+        ],
+        limits: fleetResourceLimitsForRun(run),
+        now: input.now,
+        leaseExpiresAt,
+      });
+      if (!resources.admitted) {
+        throw new FleetVerificationCapacityUnavailable();
+      }
+      return true;
+    });
+  } catch (error) {
+    if (error instanceof FleetVerificationCapacityUnavailable) return false;
+    throw error;
+  }
 }
 
 function taskOutcome(status: FleetVerificationStatus): {
@@ -489,6 +569,10 @@ function finalizeVerification(input: {
   const outcome = taskOutcome(input.status);
   const failureCode = input.errorCode ?? outcome.failureCode;
   const artifactId = `${input.row.id}:result`;
+  const sanitizedOutput = redactAndCapFleetText(
+    input.output,
+    FLEET_RUNTIME_ARTIFACT_MAX_BYTES - 16 * 1024
+  ).text;
   const evidence = boundedFleetArtifactJson({
     schemaVersion: 1,
     verificationId: input.row.id,
@@ -499,9 +583,13 @@ function finalizeVerification(input: {
     headSha: input.row.head_sha,
     specHash: input.row.spec_hash,
     status: input.status,
-    output: input.output,
+    output: sanitizedOutput,
     errorCode: failureCode,
   });
+  // The durable writer performs its own final sanitation pass. Hash the exact
+  // body that pass will store so verification evidence cannot drift from the
+  // artifact row even when upstream text already contains redaction markers.
+  const persistedEvidence = prepareFleetArtifactBody(evidence.body);
   return transaction(input.db, () => {
     const finished = input.db
       .prepare(
@@ -514,9 +602,9 @@ function finalizeVerification(input: {
       .run(
         input.status,
         artifactId,
-        evidence.contentHash,
+        persistedEvidence.contentHash,
         input.status === "error"
-          ? input.output.slice(-FLEET_VERIFICATION_ERROR_MAX)
+          ? sanitizedOutput.slice(-FLEET_VERIFICATION_ERROR_MAX)
           : null,
         input.nowIso,
         input.nowIso,
@@ -528,35 +616,37 @@ function finalizeVerification(input: {
         input.row.spec_hash
       );
     if (finished.changes !== 1) return false;
-    input.db
-      .prepare(
-        `INSERT OR IGNORE INTO fleet_artifacts
-         (id, fleet_run_id, task_id, worker_id, attempt, plan_hash, base_sha,
-          head_sha, content_hash, metadata_json, byte_count, artifact_type,
-          title, body, severity, actor, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verification_result',
-          'Verification result', ?, ?, 'verifier', ?)`
-      )
-      .run(
-        artifactId,
-        input.row.fleet_run_id,
-        input.row.task_id,
-        input.row.worker_id,
-        input.row.attempt,
-        input.candidate.approved_plan_hash,
-        input.row.base_sha,
-        input.row.head_sha,
-        evidence.contentHash,
-        JSON.stringify({
+    releaseFleetRuntimeResources(input.db, {
+      ownerType: "verification",
+      ownerId: input.row.id,
+      now: new Date(input.nowIso),
+    });
+    insertFleetArtifact(
+      input.db,
+      {
+        id: artifactId,
+        runId: input.row.fleet_run_id,
+        taskId: input.row.task_id,
+        workerId: input.row.worker_id,
+        attempt: input.row.attempt,
+        planHash: input.candidate.approved_plan_hash,
+        baseSha: input.row.base_sha,
+        headSha: input.row.head_sha,
+        contentHash: persistedEvidence.contentHash,
+        metadataJson: JSON.stringify({
           verificationId: input.row.id,
           status: input.status,
           specHash: input.row.spec_hash,
         }),
-        evidence.bytes,
-        evidence.body,
-        input.status === "pass" ? "info" : "blocker",
-        input.nowIso
-      );
+        artifactType: "verification_result",
+        title: "Verification result",
+        body: evidence.body,
+        severity: input.status === "pass" ? "info" : "blocker",
+        actor: "verifier",
+        createdAt: input.nowIso,
+      },
+      { orIgnore: true }
+    );
     const taskUpdated = input.db
       .prepare(
         `UPDATE fleet_tasks SET status = ?, failure_code = ?, verification_id = ?,
@@ -613,8 +703,8 @@ function applyTerminalAttempt(
 ): boolean {
   if (!["pass", "fail", "error"].includes(row.status)) return false;
   const outcome = taskOutcome(row.status);
-  return (
-    db
+  return transaction(db, () => {
+    const changed = db
       .prepare(
         `UPDATE fleet_tasks SET status = ?, failure_code = ?, verification_id = ?,
          verification_status = ?, verification_spec_hash = ?,
@@ -640,8 +730,22 @@ function applyTerminalAttempt(
         candidate.fleet_run_id,
         candidate.current_attempt,
         row.head_sha
-      ).changes === 1
-  );
+      );
+    if (changed.changes !== 1) return false;
+    queries.createFleetEvent(db).run(
+      candidate.fleet_run_id,
+      "verification_terminal_result_applied",
+      "verifier",
+      JSON.stringify({
+        verificationId: row.id,
+        taskId: candidate.task_id,
+        attempt: row.attempt,
+        headSha: row.head_sha,
+        status: row.status,
+      })
+    );
+    return true;
+  });
 }
 
 async function executeVerification(
@@ -734,7 +838,7 @@ async function executeVerification(
       status: "error",
       output:
         error instanceof Error
-          ? error.message.slice(-FLEET_VERIFICATION_ERROR_MAX)
+          ? error.message
           : "verification execution failed",
     };
   }
@@ -759,6 +863,7 @@ export async function reconcileFleetVerifications(
   options: ReconcileFleetVerificationOptions = {}
 ): Promise<number> {
   const runtime = deps(overrides);
+  assertFleetLaunchReady(runtime.db, options.runId);
   const owner = options.owner ?? verificationOwner;
   const maxPerTick = cappedPositiveInteger(
     options.maxPerTick,
@@ -820,6 +925,7 @@ export async function reconcileFleetVerifications(
           specHash: row.spec_hash,
           owner,
           now,
+          repositoryKey: candidate.task_worktree_path ?? undefined,
         })
       ) {
         finalizeVerification({
@@ -853,6 +959,7 @@ export async function reconcileFleetVerifications(
       specHash: row.spec_hash,
       owner,
       now,
+      repositoryKey: candidate.task_worktree_path ?? undefined,
     });
     if (!claimed) continue;
 

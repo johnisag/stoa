@@ -10,7 +10,14 @@ import {
   adaptFleetSource,
   adaptFleetTextSource,
 } from "@/lib/fleet/sources";
-import { fleetSourceDraftToPlan } from "@/lib/fleet/source-plan";
+import {
+  allocateFleetSourcePlan,
+  fleetSourceDraftToPlan,
+} from "@/lib/fleet/source-plan";
+import { evaluateAutomaticApproval } from "@/lib/fleet/automation";
+import { DEFAULT_FLEET_AUTOMATION_POLICY } from "@/lib/fleet/automation-policy";
+import { parseFleetVerificationSpec } from "@/lib/fleet/verification";
+import type { FleetReviewEvidenceRow } from "@/lib/fleet/types";
 
 function expectDraft(result: ReturnType<typeof adaptFleetSource>) {
   expect(result.ok).toBe(true);
@@ -47,6 +54,7 @@ const pipeline: PipelineSpec = {
       task: "Use {{steps.scan.output}} and implement the feature.",
       dependsOn: ["scan"],
       exitCriteria: "Tests pass on Windows, macOS, and Linux.",
+      outputFile: "lib/feature.ts",
     },
   ],
 };
@@ -82,6 +90,38 @@ describe("Fleet source adapters", () => {
     expect(executable.planText).toContain("Depends on: inspect-code");
   });
 
+  it("allocates unavailable source providers deterministically and clears their models", () => {
+    const draft = expectDraft(
+      adaptFleetTextSource({
+        kind: "text",
+        text: ["- First", "- Second", "- Third"].join("\n"),
+        provider: "hermes",
+        model: "kimi-k3",
+        verifyCommand: "npm test",
+      })
+    );
+
+    const allocated = allocateFleetSourcePlan(fleetSourceDraftToPlan(draft), {
+      // Caller order is intentionally reversed; registry order remains the
+      // stable allocation order across readiness-probe implementations.
+      availableProviders: ["kimi", "codex"],
+      preferredProvider: "hermes",
+      preferredModel: "kimi-k3",
+    });
+
+    expect(allocated).toMatchObject({ provider: "codex", model: null });
+    expect(
+      allocated.plan.tasks.map((task) => ({
+        provider: task.agentType,
+        model: task.model,
+      }))
+    ).toEqual([
+      { provider: "codex", model: null },
+      { provider: "kimi", model: null },
+      { provider: "codex", model: null },
+    ]);
+  });
+
   it("preserves source execution-target hints for service-level binding", () => {
     const draft = expectDraft(
       adaptFleetTextSource({
@@ -90,6 +130,7 @@ describe("Fleet source adapters", () => {
         repoId: "repo-fleet",
         workingDirectory: "C:\\projects\\repo",
         baseBranch: "main",
+        verifyCommand: "npm test",
       })
     );
 
@@ -163,12 +204,17 @@ describe("Fleet source adapters", () => {
 
   it("maps a PipelineSpec, its JSON form, and a BuilderDoc equivalently", () => {
     const fromObject = expectDraft(
-      adaptFleetPipelineSource({ kind: "pipeline", spec: pipeline })
+      adaptFleetPipelineSource({
+        kind: "pipeline",
+        spec: pipeline,
+        verifyCommand: "npm test",
+      })
     );
     const fromJson = expectDraft(
       adaptFleetPipelineSource({
         kind: "pipeline",
         spec: JSON.stringify(pipeline),
+        verifyCommand: "npm test",
       })
     );
     const doc: BuilderDoc = {
@@ -184,7 +230,11 @@ describe("Fleet source adapters", () => {
       notes: [{ id: "note", text: "not executable", x: 0, y: 0 }],
     };
     const fromBuilder = expectDraft(
-      adaptFleetBuilderSource({ kind: "builder", workflow: doc })
+      adaptFleetBuilderSource({
+        kind: "builder",
+        workflow: doc,
+        verifyCommand: "npm test",
+      })
     );
 
     expect(fromJson).toEqual(fromObject);
@@ -202,6 +252,7 @@ describe("Fleet source adapters", () => {
       provider: "codex",
       model: "gpt-5.5",
       acceptanceCriteria: "Tests pass on Windows, macOS, and Linux.",
+      verifyCommand: "npm test",
     });
   });
 
@@ -224,7 +275,11 @@ describe("Fleet source adapters", () => {
     };
 
     const draft = expectDraft(
-      adaptFleetBuilderSource({ kind: "builder", workflow })
+      adaptFleetBuilderSource({
+        kind: "builder",
+        workflow,
+        verifyCommand: "npm test",
+      })
     );
 
     expect(draft.provenance).toEqual({
@@ -248,6 +303,7 @@ describe("Fleet source adapters", () => {
         name: "Issue split",
         tasks: sourceTasks,
         dependencies: [[], [0]],
+        verifyCommand: "npm test",
         repo: {
           id: "repo-1",
           repo_path: "C:\\projects\\repo",
@@ -265,6 +321,9 @@ describe("Fleet source adapters", () => {
     expect(draft.tasks[0].fileClaims).toEqual([
       { path: "lib/api", access: "write" },
     ]);
+    expect(draft.tasks.every((task) => task.verifyCommand === "npm test")).toBe(
+      true
+    );
     expect(draft.repository).toEqual({
       repoId: "repo-1",
       projectId: "project-1",
@@ -299,6 +358,7 @@ describe("Fleet source adapters", () => {
         dependencies: { "dispatch-b": ["dispatch-a"] },
         provider: "hermes",
         model: "moonshot/kimi-k3",
+        verifyCommand: "npm test",
       })
     );
 
@@ -313,9 +373,188 @@ describe("Fleet source adapters", () => {
       { path: "lib/base", access: "write" },
     ]);
   });
+
+  it("carries every source kind through automatic approval and exact verification parsing", () => {
+    const builder: BuilderDoc = {
+      name: pipeline.name,
+      workingDirectory: pipeline.workingDirectory,
+      projectId: null,
+      worktreePath: null,
+      nodes: pipeline.steps.map((step, index) => ({ step, x: index, y: 0 })),
+      notes: [],
+    };
+    const command = "npm test && npm run build";
+    const results = [
+      adaptFleetTextSource({
+        kind: "text",
+        text: "- Implement source import [files: lib/source.ts]",
+        claimMode: "write",
+        verifyCommand: command,
+      }),
+      adaptFleetPipelineSource({
+        kind: "pipeline",
+        spec: pipeline,
+        verifyCommand: command,
+      }),
+      adaptFleetBuilderSource({
+        kind: "builder",
+        workflow: builder,
+        verifyCommand: command,
+      }),
+      adaptFleetDispatchPlannerSource({
+        kind: "dispatch_planner",
+        tasks: [
+          { title: "Implement", body: "Build it", claims: ["lib/api.ts"] },
+        ],
+        verifyCommand: command,
+      }),
+      adaptFleetDispatchIssueSource({
+        kind: "dispatch_issue",
+        issues: [
+          {
+            id: "dispatch-1",
+            issue_number: 1,
+            issue_title: "Implement",
+            file_claims: '["lib/issue.ts"]',
+          },
+        ],
+        verifyCommand: command,
+      }),
+    ];
+    const lenses = [
+      "correctness_security",
+      "conventions_cross_platform",
+      "simplicity_ux",
+      "adversarial_red_team",
+    ] as const;
+    const reviews: FleetReviewEvidenceRow[] = lenses.map((lens, index) => ({
+      id: `review-${index}`,
+      fleet_run_id: "run",
+      subject_type: "plan",
+      subject_hash: "plan-hash",
+      policy_hash: "policy-hash",
+      execution_hash: "execution-hash",
+      base_sha: "base-sha",
+      lens,
+      reviewer_session_id: `reviewer-${index}`,
+      verdict: "clean",
+      created_at: "2026-08-01T00:00:00.000Z",
+    }));
+
+    for (const result of results) {
+      const draft = expectDraft(result);
+      const writeTasks = draft.tasks.filter(
+        (task) => task.claimMode === "write"
+      );
+      expect(writeTasks.length).toBeGreaterThan(0);
+      expect(
+        writeTasks.every(
+          (task) =>
+            task.verifyCommand === command &&
+            parseFleetVerificationSpec(task.verifyCommand).ok
+        )
+      ).toBe(true);
+      expect(
+        evaluateAutomaticApproval({
+          policy: {
+            ...DEFAULT_FLEET_AUTOMATION_POLICY,
+            automaticPlanApproval: true,
+          },
+          policyHashMatches: true,
+          authorized: true,
+          desiredState: "running",
+          status: "draft",
+          approvalState: "needs_approval",
+          reviewPolicy: "four_agent",
+          planHash: "plan-hash",
+          executionHash: "execution-hash",
+          baseSha: "base-sha",
+          currentBaseSha: "base-sha",
+          plannerState: "idle",
+          graphHashMatches: true,
+          blockerCount: 0,
+          unverifiedWriteTaskCount: writeTasks.filter(
+            (task) => !parseFleetVerificationSpec(task.verifyCommand).ok
+          ).length,
+          claimPaths: writeTasks.flatMap((task) =>
+            task.fileClaims.map((claim) => claim.path)
+          ),
+          reviews,
+        })
+      ).toEqual({ action: "plan_approval" });
+    }
+  });
 });
 
 describe("Fleet source adapter validation", () => {
+  it("rejects missing or unsafe verification defaults before write-plan persistence", () => {
+    const doc: BuilderDoc = {
+      name: pipeline.name,
+      workingDirectory: pipeline.workingDirectory,
+      projectId: null,
+      worktreePath: null,
+      nodes: pipeline.steps.map((step, index) => ({ step, x: index, y: 0 })),
+      notes: [],
+    };
+    const missing = [
+      adaptFleetTextSource({
+        kind: "text",
+        text: "- Implement [files: lib/text.ts]",
+      }),
+      adaptFleetPipelineSource({ kind: "pipeline", spec: pipeline }),
+      adaptFleetBuilderSource({ kind: "builder", workflow: doc }),
+      adaptFleetDispatchPlannerSource({
+        kind: "dispatch_planner",
+        tasks: [{ title: "Implement", claims: ["lib/planner.ts"] }],
+      }),
+      adaptFleetDispatchIssueSource({
+        kind: "dispatch_issue",
+        issues: [
+          {
+            id: "issue",
+            issue_title: "Implement",
+            file_claims: '["lib/issue.ts"]',
+          },
+        ],
+      }),
+    ];
+    for (const result of missing)
+      expectErrorCode(result, "missing_verify_command");
+
+    const unsafe = "npm test | tee verify.log";
+    const unsafeResults = [
+      adaptFleetPipelineSource({
+        kind: "pipeline",
+        spec: pipeline,
+        verifyCommand: unsafe,
+      }),
+      adaptFleetBuilderSource({
+        kind: "builder",
+        workflow: doc,
+        verifyCommand: unsafe,
+      }),
+      adaptFleetDispatchPlannerSource({
+        kind: "dispatch_planner",
+        tasks: [{ title: "Implement", claims: ["lib/planner.ts"] }],
+        verifyCommand: unsafe,
+      }),
+      adaptFleetDispatchIssueSource({
+        kind: "dispatch_issue",
+        issues: [
+          {
+            id: "issue",
+            issue_title: "Implement",
+            file_claims: '["lib/issue.ts"]',
+          },
+        ],
+        verifyCommand: unsafe,
+      }),
+    ];
+    for (const result of unsafeResults) {
+      expectErrorCode(result, "unsafe_verify_command");
+    }
+  });
+
   it("reuses Pipeline DAG validation and rejects cycles", () => {
     const cyclic: PipelineSpec = {
       ...pipeline,
@@ -326,7 +565,11 @@ describe("Fleet source adapter validation", () => {
     };
 
     expectErrorCode(
-      adaptFleetPipelineSource({ kind: "pipeline", spec: cyclic }),
+      adaptFleetPipelineSource({
+        kind: "pipeline",
+        spec: cyclic,
+        verifyCommand: "npm test",
+      }),
       "invalid_pipeline"
     );
   });
@@ -342,6 +585,7 @@ describe("Fleet source adapter validation", () => {
         kind: "dispatch_planner",
         tasks,
         dependencies: [[1], [0]],
+        verifyCommand: "npm test",
       }),
       "dependency_cycle"
     );
@@ -350,6 +594,7 @@ describe("Fleet source adapter validation", () => {
         kind: "dispatch_planner",
         tasks,
         dependencies: [[], [2]],
+        verifyCommand: "npm test",
       }),
       "unknown_dependency"
     );
@@ -358,6 +603,7 @@ describe("Fleet source adapter validation", () => {
         kind: "dispatch_planner",
         tasks,
         dependencies: [[], [0, 0]],
+        verifyCommand: "npm test",
       }),
       "duplicate_dependency"
     );
@@ -366,6 +612,7 @@ describe("Fleet source adapter validation", () => {
         kind: "dispatch_issue",
         issues: [{ id: "a", issue_number: 1, issue_title: "A" }],
         dependencies: { a: ["missing"] },
+        verifyCommand: "npm test",
       }),
       "unknown_dependency"
     );
@@ -401,6 +648,7 @@ describe("Fleet source adapter validation", () => {
       adaptFleetDispatchPlannerSource({
         kind: "dispatch_planner",
         tasks: [{ title: "Escape", body: "bad", claims: ["../outside"] }],
+        verifyCommand: "npm test",
       }),
       "invalid_claim"
     );
@@ -408,6 +656,7 @@ describe("Fleet source adapter validation", () => {
       adaptFleetDispatchPlannerSource({
         kind: "dispatch_planner",
         tasks: [{ title: "Glob", body: "bad", claims: ["lib/**/*.ts"] }],
+        verifyCommand: "npm test",
       }),
       "invalid_claim"
     );

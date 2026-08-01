@@ -2,7 +2,8 @@
  * Sandbox writable-root policy (#27) — PURE. Computes the set of directories a
  * confined agent must be able to WRITE: its worktree(s), the git internals a
  * linked worktree needs (index/refs/objects live in the main repo's git-common
- * dir), and Stoa's own state dir (~/.stoa — the DB, snapshot refs, worktrees).
+ * dir), its provider state, and exact Fleet attempt output directories. Stoa's
+ * authority directory is never granted as a writable root.
  *
  * The git-common-dir (async `git rev-parse --git-common-dir`) is resolved by the
  * caller and passed in, so this stays a pure, deterministic transform. The result
@@ -20,8 +21,8 @@ export interface RwRootsInput {
    *  which Stoa reads for cost/resume/fork/checkpoints). A read-only home would
    *  break it, so it MUST be writable. Null when unknown. */
   agentConfigDir?: string | null;
-  /** Stoa's state dir (~/.stoa) — the DB + snapshot refs + worktrees base. */
-  stoaHome: string;
+  /** Exact server-created Fleet attempt directories (never the Stoa home). */
+  fleetWritableRoots?: string[];
 }
 
 export function computeRwRoots(input: RwRootsInput): string[] {
@@ -35,6 +36,6 @@ export function computeRwRoots(input: RwRootsInput): string[] {
   for (const p of input.worktreePaths) add(p);
   add(input.gitCommonDir);
   add(input.agentConfigDir);
-  add(input.stoaHome);
+  for (const p of input.fleetWritableRoots ?? []) add(p);
   return roots;
 }

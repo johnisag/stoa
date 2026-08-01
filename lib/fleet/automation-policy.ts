@@ -104,16 +104,8 @@ export function normalizeFleetAutomationPolicy(
   if (policy.automaticFixes && !policy.automaticStart) {
     return { error: "automatic fixes require automatic start" };
   }
-  if (
-    policy.automaticMerge &&
-    (!policy.automaticStart ||
-      !policy.automaticFixes ||
-      policy.maxAutomaticFixRounds < 1)
-  ) {
-    return {
-      error:
-        "automatic merge requires automatic start and at least one automatic fix round",
-    };
+  if (policy.automaticMerge && !policy.automaticStart) {
+    return { error: "automatic merge requires automatic start" };
   }
 
   return { policy };

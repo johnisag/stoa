@@ -69,6 +69,11 @@ export async function POST(
     typeof body.expectedPlanHash !== "string" ||
     !PLAN_HASH.test(body.expectedPlanHash) ||
     !(
+      body.expectedExecutionHash === undefined ||
+      (typeof body.expectedExecutionHash === "string" &&
+        PLAN_HASH.test(body.expectedExecutionHash))
+    ) ||
+    !(
       body.expectedBaseSha === null ||
       (typeof body.expectedBaseSha === "string" &&
         GIT_SHA.test(body.expectedBaseSha))
@@ -95,12 +100,19 @@ export async function POST(
     {},
     {
       planHash: body.expectedPlanHash,
+      executionHash:
+        typeof body.expectedExecutionHash === "string"
+          ? body.expectedExecutionHash
+          : undefined,
       baseSha: body.expectedBaseSha,
       integrationHeadSha: body.expectedIntegrationHeadSha,
     }
   );
   if ("error" in requested) {
-    return NextResponse.json({ error: requested.error }, { status: 409 });
+    return NextResponse.json(
+      { error: requested.error },
+      { status: requested.status ?? 409 }
+    );
   }
   await reconcileFleetMerges({}, id);
   return NextResponse.json(getFleetMergeStatus(id), { status: 202 });

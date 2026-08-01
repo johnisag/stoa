@@ -203,6 +203,19 @@ describe("Fleet verification command contract", () => {
     }
   });
 
+  it("rejects credential-shaped commands without duplicating the credential", () => {
+    const canary = "sk-VERIFYCOMMANDCANARY012345";
+    const parsed = parseFleetVerificationSpec(
+      `node scripts/check.js --token ${canary}`
+    );
+    expect(parsed).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("credential-shaped"),
+    });
+    expect(JSON.stringify(parsed)).not.toContain(canary);
+    expect(JSON.stringify(parsed)).toContain("[REDACTED]");
+  });
+
   it("uses the shared Windows command-shim direct argv seam", () => {
     expect(spawnArgs("C:\\tools\\npm.cmd", ["test"], true)).toEqual({
       file: process.env.ComSpec || "cmd.exe",
@@ -300,6 +313,43 @@ describe("Fleet verification outcomes", () => {
       });
     }
   );
+
+  it("redacts verification errors and evidence before durable hashing", async () => {
+    const canary = "sk-VERIFYOUTPUTCANARY012345";
+    const { taskId } = addTask();
+    await reconcileAndWait({
+      run: async () => ({
+        status: "error",
+        output: `verification failed password=${canary}`,
+      }),
+    });
+
+    const verification = db
+      .prepare(
+        `SELECT error, output_hash, output_artifact_id
+         FROM fleet_verifications WHERE task_id = ?`
+      )
+      .get(taskId) as {
+      error: string;
+      output_hash: string;
+      output_artifact_id: string;
+    };
+    const artifact = db
+      .prepare(
+        `SELECT title, body, content_hash FROM fleet_artifacts WHERE id = ?`
+      )
+      .get(verification.output_artifact_id) as {
+      title: string;
+      body: string;
+      content_hash: string;
+    };
+    const events = db.prepare(`SELECT payload FROM fleet_events`).all();
+    expect(JSON.stringify({ verification, artifact, events })).not.toContain(
+      canary
+    );
+    expect(JSON.stringify({ verification, artifact })).toContain("[REDACTED]");
+    expect(verification.output_hash).toBe(artifact.content_hash);
+  });
 
   it.each([
     [null, "verification_command_required"],
@@ -436,6 +486,48 @@ describe("Fleet verification outcomes", () => {
 });
 
 describe("Fleet verification durability and bounds", () => {
+  it("rolls back terminal replay when its required audit event is rejected", async () => {
+    const { taskId } = addTask();
+    const attempt = addPendingAttempt(taskId);
+    db.prepare(
+      `UPDATE fleet_verifications
+       SET status = 'pass', started_at = ?, completed_at = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(NOW.toISOString(), NOW.toISOString(), NOW.toISOString(), attempt.id);
+    db.prepare(
+      `UPDATE fleet_runs SET resource_limits_json = ? WHERE id = 'run-1'`
+    ).run(JSON.stringify({ eventBytesTotal: 1 }));
+
+    await expect(
+      reconcileFleetVerifications(
+        {
+          db,
+          now: () => NOW,
+          run: async () => ({ status: "pass", output: "" }),
+          readHead: async () => HEAD,
+          readStatus: async () => "",
+          launch: () => undefined,
+        },
+        { owner: "replay-owner" }
+      )
+    ).rejects.toThrow(/event_bytes_total/);
+    expect(
+      db
+        .prepare(
+          `SELECT status, verification_id, verification_status
+           FROM fleet_tasks WHERE id = ?`
+        )
+        .get(taskId)
+    ).toEqual({
+      status: "verifying",
+      verification_id: null,
+      verification_status: null,
+    });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM fleet_events`).get()).toEqual({
+      n: 0,
+    });
+  });
+
   it("prevents duplicate execution while a claimed attempt is in flight", async () => {
     const { taskId } = addTask();
     let resolveRun: ((result: VerifyResult) => void) | undefined;
@@ -468,6 +560,18 @@ describe("Fleet verification durability and bounds", () => {
     ).toBe(1);
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     expect(
+      db
+        .prepare(
+          `SELECT resource_type FROM fleet_runtime_leases
+           WHERE owner_type = 'verification' AND status = 'reserved'
+           ORDER BY resource_type`
+        )
+        .all()
+    ).toEqual([
+      { resource_type: "git_operation" },
+      { resource_type: "verifier" },
+    ]);
+    expect(
       await reconcileFleetVerifications(runtime, {
         owner: "process-b",
         maxConcurrent: 2,
@@ -484,6 +588,14 @@ describe("Fleet verification durability and bounds", () => {
     resolveRun?.({ status: "pass", output: "" });
     await Promise.all(tasks);
     expect(run).toHaveBeenCalledTimes(1);
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_runtime_leases
+           WHERE owner_type = 'verification' AND status = 'reserved'`
+        )
+        .get()
+    ).toEqual({ n: 0 });
   });
 
   it("uses compare-and-swap leases and recovers an expired running attempt", async () => {

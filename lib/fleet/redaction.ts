@@ -2,8 +2,8 @@
  * Bounded-pattern redaction for Fleet content that is about to become durable.
  *
  * This is defense in depth, not a credential detector or permission boundary.
- * Fleet callers still cap input before reaching this function and must avoid
- * collecting secrets in the first place. The rules intentionally target
+ * Fleet callers must redact before applying any cap and must avoid collecting
+ * secrets in the first place. The rules intentionally target
  * credential-shaped values and named assignments without redacting Git SHAs or
  * ordinary hashes used by Fleet's exact-head evidence.
  */
@@ -14,6 +14,10 @@ export interface FleetRedactionResult {
   text: string;
   redacted: boolean;
   replacementCount: number;
+}
+
+export interface FleetCappedRedactionResult extends FleetRedactionResult {
+  truncated: boolean;
 }
 
 type Replacement = (...match: string[]) => string;
@@ -47,6 +51,7 @@ export function redactFleetText(value: string): FleetRedactionResult {
     /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
     FLEET_REDACTED_VALUE
   );
+  apply(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*$/g, FLEET_REDACTED_VALUE);
   apply(/\bstoa_fleet_v1_[A-Za-z0-9_-]{43}\b/g, FLEET_REDACTED_VALUE);
   apply(/\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}\b/g, FLEET_REDACTED_VALUE);
   apply(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, FLEET_REDACTED_VALUE);
@@ -74,7 +79,10 @@ export function redactFleetText(value: string): FleetRedactionResult {
       `${prefix}${quote}${FLEET_REDACTED_VALUE}${quote}`
   );
   apply(
-    new RegExp(`(\\b${secretName}\\b\\s*[:=]\\s*)([^\\s,;}{\\]]{6,})`, "gi"),
+    new RegExp(
+      `(\\b${secretName}\\b\\s*[:=]\\s*)(?!\\[REDACTED\\])([^\\s,;}{\\]"']{6,})`,
+      "gi"
+    ),
     (_match, prefix) => `${prefix}${FLEET_REDACTED_VALUE}`
   );
 
@@ -82,5 +90,31 @@ export function redactFleetText(value: string): FleetRedactionResult {
     text,
     redacted: replacementCount > 0,
     replacementCount,
+  };
+}
+
+/**
+ * Redact the complete value before applying a UTF-8 byte cap. Redacting first is
+ * important: truncating a credential-shaped value can otherwise turn it into a
+ * partial secret that no longer matches the redaction rules.
+ */
+export function redactAndCapFleetText(
+  value: string,
+  maxBytes: number
+): FleetCappedRedactionResult {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new Error("Fleet redaction byte cap must be a non-negative integer");
+  }
+  const redacted = redactFleetText(value);
+  const encoded = Buffer.from(redacted.text, "utf8");
+  if (encoded.byteLength <= maxBytes) {
+    return { ...redacted, truncated: false };
+  }
+  let end = maxBytes;
+  while (end > 0 && (encoded[end] & 0xc0) === 0x80) end--;
+  return {
+    ...redacted,
+    text: encoded.subarray(0, end).toString("utf8"),
+    truncated: true,
   };
 }

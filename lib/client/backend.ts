@@ -8,7 +8,10 @@
  * structured spawn params the pty attach protocol needs from a Session.
  */
 
-import { buildAgentArgsForSession } from "@/lib/session-launch";
+import {
+  buildAgentArgsForSession,
+  sessionLaunchEnv,
+} from "@/lib/session-launch";
 import type { Session } from "@/lib/db";
 
 let cached: "pty" | "tmux" | null = null;
@@ -36,6 +39,7 @@ export interface SessionSpawn {
   binary: string;
   args: string[];
   cwd: string;
+  env: Record<string, string>;
 }
 
 /**
@@ -64,5 +68,5 @@ export function buildSpawnForSession(
   // native-fork parent resolution all live there so no launch path can drift or
   // skip the clamp. A shell session yields an empty argv.
   const { binary, args } = buildAgentArgsForSession(session, opts);
-  return { binary, args, cwd };
+  return { binary, args, cwd, env: sessionLaunchEnv(session) };
 }

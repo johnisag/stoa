@@ -40,6 +40,24 @@ import { resolveNativeForkParentId } from "./fork";
 import { coerceApprovalMode } from "./sandbox/types";
 import type { Session } from "./db";
 
+/** Process-local identity consumed by the orchestration MCP server. */
+export const STOA_CONDUCTOR_SESSION_ENV = "STOA_CONDUCTOR_SESSION_ID";
+
+/**
+ * Environment attached to a persisted session launch.
+ *
+ * `mcp_launch_args` is the durable conductor discriminator. Providers whose MCP
+ * configuration lives in a file (and Hermes, whose registration is global) use
+ * an intentionally empty JSON array as their conductor sentinel, so checking
+ * truthiness here would silently drop their identity. Only SQL NULL means the
+ * session is not a conductor.
+ */
+export function sessionLaunchEnv(session: Session): Record<string, string> {
+  return session.mcp_launch_args !== null
+    ? { [STOA_CONDUCTOR_SESSION_ENV]: session.id }
+    : {};
+}
+
 /** Per-call overrides layered on top of what the Session row itself dictates. */
 export interface SessionLaunchOptions {
   /** First-launch prompt to send. Omitted on a re-attach so it isn't resent. */

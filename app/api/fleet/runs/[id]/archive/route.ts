@@ -18,7 +18,11 @@ export async function POST(
     return NextResponse.json({ error: body.error }, { status: body.status });
   }
   try {
-    const result = archiveFleetRun(id, body.body);
+    const input =
+      body.body && typeof body.body === "object"
+        ? { ...(body.body as Record<string, unknown>), actor: "operator" }
+        : { actor: "operator" };
+    const result = archiveFleetRun(id, input);
     if ("error" in result) {
       return NextResponse.json(
         { error: result.error },

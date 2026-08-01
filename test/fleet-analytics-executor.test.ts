@@ -97,6 +97,10 @@ describe("Fleet historical analytics", () => {
         configuredUsd: 5,
         reservedUsd: 0.5,
         spentUsd: 3.25,
+        configuredTokens: 0,
+        reservedTokens: 0,
+        spentTokens: 0,
+        confidence: { unknown: 2 },
       },
     });
   });

@@ -7,8 +7,10 @@ import {
 } from "@/lib/fleet/automation-policy";
 import { generateBranchName } from "@/lib/git";
 import type { FleetGitState } from "@/lib/fleet/git-state";
+import type { FleetAgentProviderId } from "@/lib/fleet/auxiliary-provider";
 import { hashFleetAutomationPolicy } from "@/lib/fleet/hash";
 import { toFleetTaskDto } from "@/lib/fleet/engine";
+import { reserveFleetPaidSession } from "@/lib/fleet/session-admission";
 import {
   FLEET_PLAN_REVIEW_LENSES,
   type FleetPlanReviewFinding,
@@ -22,6 +24,8 @@ import {
 } from "@/lib/fleet/task-review";
 import type {
   FleetAutomationPolicy,
+  FleetRunRow,
+  FleetTaskFixRow,
   FleetTaskRow,
   FleetTaskReviewRow,
   FleetVerificationRow,
@@ -249,7 +253,8 @@ function gitState(input: {
 
 function resultForRow(
   row: FleetTaskReviewRow,
-  verdict: "clean" | "changes_requested"
+  verdict: "clean" | "changes_requested",
+  findingCanary?: string
 ): string {
   const findings: FleetPlanReviewFinding[] =
     verdict === "clean"
@@ -257,8 +262,12 @@ function resultForRow(
       : [
           {
             severity: "blocker",
-            title: "Broken edge case",
-            body: "Handle the exact failure before merge.",
+            title: findingCanary
+              ? `Broken ${findingCanary}`
+              : "Broken edge case",
+            body: findingCanary
+              ? `Handle ${findingCanary} before merge.`
+              : "Handle the exact failure before merge.",
           },
         ];
   return JSON.stringify({
@@ -286,6 +295,10 @@ function runtime(
     verdict?: (lens: string) => "clean" | "changes_requested";
     mutate?: (row: FleetTaskReviewRow) => boolean;
     newHead?: string;
+    findingCanary?: string;
+    installedProviders?: FleetAgentProviderId[];
+    now?: Date;
+    idPrefix?: string;
   } = {}
 ): {
   deps: Partial<FleetTaskReviewDeps>;
@@ -332,9 +345,10 @@ function runtime(
     delivered,
     deps: {
       db,
-      now: () => new Date("2026-01-01T00:10:00.000Z"),
-      randomId: () => `runtime-${++id}`,
+      now: () => input.now ?? new Date("2026-01-01T00:10:00.000Z"),
+      randomId: () => `${input.idPrefix ?? "runtime"}-${++id}`,
       randomNonce: () => REVIEW_NONCE,
+      installedProviders: () => input.installedProviders ?? ["codex"],
       prepareResultPath: async ({ kind, requestId }) =>
         `C:\\fleet-task-runtime\\${kind}\\${requestId}.json`,
       readResult: async (path) => {
@@ -368,7 +382,11 @@ function runtime(
         const row = db
           .prepare(`SELECT * FROM fleet_task_reviews WHERE result_path = ?`)
           .get(path) as FleetTaskReviewRow;
-        const text = resultForRow(row, input.verdict?.(row.lens) ?? "clean");
+        const text = resultForRow(
+          row,
+          input.verdict?.(row.lens) ?? "clean",
+          input.findingCanary
+        );
         return { ok: true as const, text, bytes: Buffer.byteLength(text) };
       },
       removeResult: async () => true,
@@ -413,6 +431,25 @@ function runtime(
 }
 
 describe("Fleet exact-SHA task review and automatic fix runtime", () => {
+  it.each(["reviewing", "merging"] as const)(
+    "keeps review admission, orphan checks, and final CAS active in the %s phase",
+    async (runStatus) => {
+      const { db } = setupDb();
+      db.prepare(`UPDATE fleet_runs SET status = ? WHERE id = ?`).run(
+        runStatus,
+        RUN_ID
+      );
+      const harness = runtime(db);
+
+      await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+      expect(harness.spawnReview).toHaveBeenCalledTimes(4);
+      await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+      expect(
+        db.prepare(`SELECT status FROM fleet_tasks WHERE id = ?`).get(TASK_ID)
+      ).toEqual({ status: "ready_to_merge" });
+    }
+  );
+
   it("scopes an operator-triggered review pass to the exact run and task", async () => {
     const { db } = setupDb();
     const harness = runtime(db);
@@ -428,6 +465,46 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
     expect(
       db.prepare(`SELECT COUNT(*) AS n FROM fleet_task_reviews`).get()
     ).toEqual({ n: 0 });
+  });
+
+  it("rolls back paid admission when the required spawn audit cannot persist", async () => {
+    const { db } = setupDb();
+    const harness = runtime(db);
+    db.exec(`
+      CREATE TRIGGER reject_task_review_spawn_audit
+      BEFORE INSERT ON fleet_events
+      WHEN NEW.event_type = 'task_review_spawn_requested'
+      BEGIN
+        SELECT RAISE(ABORT, 'rejected task review spawn audit');
+      END
+    `);
+
+    await expect(
+      reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 })
+    ).rejects.toThrow(/rejected task review spawn audit/);
+    expect(harness.spawnReview).not.toHaveBeenCalled();
+    expect(
+      db
+        .prepare(
+          `SELECT state, COUNT(*) AS count
+           FROM fleet_task_reviews GROUP BY state`
+        )
+        .all()
+    ).toEqual([{ state: "pending", count: 4 }]);
+    expect(
+      db.prepare(`SELECT COUNT(*) AS count FROM fleet_cost_accounts`).get()
+    ).toEqual({ count: 0 });
+    expect(
+      db.prepare(`SELECT COUNT(*) AS count FROM fleet_runtime_leases`).get()
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_events
+           WHERE event_type = 'task_review_spawn_requested'`
+        )
+        .get()
+    ).toEqual({ count: 0 });
   });
 
   it("binds result parsers to nonce/head/evidence and rejects a no-change fix", () => {
@@ -548,6 +625,226 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
     expect(new Set(rows.map((row) => row.reviewer_session_id)).size).toBe(4);
     expect(rows.every((row) => row.state === "clean")).toBe(true);
     expect(harness.removeWorktree).toHaveBeenCalledTimes(4);
+  });
+
+  it("retries a transient task-review launch after restart without spinning", async () => {
+    const { db } = setupDb();
+    const harness = runtime(db);
+    harness.spawnReview.mockRejectedValueOnce(
+      new Error("429 too many requests")
+    );
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    let retry = db
+      .prepare(
+        `SELECT * FROM fleet_task_reviews
+         WHERE state = 'pending' AND launch_failure_count = 1`
+      )
+      .get() as FleetTaskReviewRow;
+    expect(retry).toMatchObject({
+      retry_not_before: "2026-01-01T00:10:05.000Z",
+      findings_json: "[]",
+    });
+    expect(harness.spawnReview).toHaveBeenCalledTimes(1);
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(harness.spawnReview).toHaveBeenCalledTimes(1);
+
+    const restarted = runtime(db, {
+      now: new Date("2026-01-01T00:10:05.000Z"),
+      idPrefix: "review-restart",
+    });
+    await reconcileFleetTaskReviews(restarted.deps, { maxTasks: 1 });
+    retry = db
+      .prepare(`SELECT * FROM fleet_task_reviews WHERE id = ?`)
+      .get(retry.id) as FleetTaskReviewRow;
+    expect(retry).toMatchObject({
+      state: "running",
+      launch_failure_count: 0,
+      retry_not_before: null,
+    });
+    expect(restarted.spawnReview).toHaveBeenCalledTimes(4);
+  });
+
+  it("falls back across all review lanes and the fixer without leaking a foreign model", async () => {
+    const { db } = setupDb({ automaticFixes: true });
+    db.prepare(
+      `UPDATE fleet_runs SET provider = 'hermes', model = 'kimi-k3'
+       WHERE id = ?`
+    ).run(RUN_ID);
+    const harness = runtime(db, {
+      installedProviders: ["codex"],
+      verdict: (lens) =>
+        lens === "correctness_security" ? "changes_requested" : "clean",
+      newHead: NEW_HEAD_SHA,
+    });
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(harness.spawnReview).toHaveBeenCalledTimes(4);
+    for (const [request] of harness.spawnReview.mock.calls) {
+      expect(request).toMatchObject({ provider: "codex", model: null });
+    }
+    expect(
+      db
+        .prepare(
+          `SELECT provider, model, COUNT(*) AS count
+           FROM fleet_task_reviews GROUP BY provider, model`
+        )
+        .all()
+    ).toEqual([{ provider: "codex", model: null, count: 4 }]);
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(harness.spawnFix).toHaveBeenCalledTimes(1);
+    expect(harness.spawnFix.mock.calls[0][0]).toMatchObject({
+      provider: "codex",
+      model: null,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT provider, model FROM fleet_task_fixes WHERE task_id = ?`
+        )
+        .get(TASK_ID)
+    ).toEqual({ provider: "codex", model: null });
+    expect(
+      db
+        .prepare(
+          `SELECT owner_type, provider, model FROM fleet_cost_accounts
+           WHERE owner_type IN ('task_review', 'fixer')
+           ORDER BY owner_type, owner_id`
+        )
+        .all()
+    ).toEqual([
+      { owner_type: "fixer", provider: "codex", model: null },
+      ...Array.from({ length: 4 }, () => ({
+        owner_type: "task_review",
+        provider: "codex",
+        model: null,
+      })),
+    ]);
+  });
+
+  it("runs four task-review lanes in retryable waves when provider capacity is two", async () => {
+    const { db } = setupDb();
+    db.prepare(`UPDATE fleet_runs SET provider_caps_json = ? WHERE id = ?`).run(
+      JSON.stringify({ codex: 2 }),
+      RUN_ID
+    );
+    const harness = runtime(db);
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(harness.spawnReview).toHaveBeenCalledTimes(2);
+    expect(
+      db
+        .prepare(
+          `SELECT state, COUNT(*) AS count FROM fleet_task_reviews
+           GROUP BY state ORDER BY state`
+        )
+        .all()
+    ).toEqual([
+      { state: "pending", count: 2 },
+      { state: "running", count: 2 },
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_task_reviews
+           WHERE state = 'pending' AND error LIKE '%waiting for runtime capacity%'`
+        )
+        .get()
+    ).toEqual({ count: 2 });
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(harness.spawnReview).toHaveBeenCalledTimes(4);
+    expect(
+      db
+        .prepare(
+          `SELECT state, COUNT(*) AS count FROM fleet_task_reviews
+           GROUP BY state ORDER BY state`
+        )
+        .all()
+    ).toEqual([
+      { state: "clean", count: 2 },
+      { state: "running", count: 2 },
+    ]);
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(
+      db
+        .prepare(`SELECT status, review_status FROM fleet_tasks WHERE id = ?`)
+        .get(TASK_ID)
+    ).toEqual({ status: "ready_to_merge", review_status: "clean" });
+    expect(
+      db
+        .prepare(
+          `SELECT state, COUNT(*) AS count FROM fleet_task_reviews GROUP BY state`
+        )
+        .all()
+    ).toEqual([{ state: "clean", count: 4 }]);
+  });
+
+  it("keeps budget-denied task reviews pending and starts them after a budget increase", async () => {
+    const { db } = setupDb();
+    db.prepare(`UPDATE fleet_runs SET budget_usd = 0.1 WHERE id = ?`).run(
+      RUN_ID
+    );
+    const harness = runtime(db);
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(harness.spawnReview).not.toHaveBeenCalled();
+    expect(
+      db
+        .prepare(
+          `SELECT state, COUNT(*) AS count FROM fleet_task_reviews
+           WHERE error LIKE '%waiting for budget capacity%' GROUP BY state`
+        )
+        .all()
+    ).toEqual([{ state: "pending", count: 4 }]);
+
+    db.prepare(`UPDATE fleet_runs SET budget_usd = 10 WHERE id = ?`).run(
+      RUN_ID
+    );
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(harness.spawnReview).toHaveBeenCalledTimes(4);
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(
+      db
+        .prepare(`SELECT status, review_status FROM fleet_tasks WHERE id = ?`)
+        .get(TASK_ID)
+    ).toEqual({ status: "ready_to_merge", review_status: "clean" });
+  });
+
+  it("redacts task-review findings before reviews, artifacts, and fixes persist", async () => {
+    const canary = "sk-TASKREVIEWCANARY012345";
+    const { db } = setupDb({ automaticFixes: true });
+    const harness = runtime(db, {
+      verdict: (lens) =>
+        lens === "correctness_security" ? "changes_requested" : "clean",
+      findingCanary: canary,
+    });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+
+    const reviews = db
+      .prepare(`SELECT findings_json, error FROM fleet_task_reviews`)
+      .all();
+    const artifacts = db
+      .prepare(
+        `SELECT title, body FROM fleet_artifacts
+         WHERE artifact_type IN ('task_review_result', 'task_review_finding')`
+      )
+      .all();
+    const fixes = db
+      .prepare(`SELECT findings_json, error FROM fleet_task_fixes`)
+      .all();
+    const events = db.prepare(`SELECT payload FROM fleet_events`).all();
+    expect(JSON.stringify({ reviews, artifacts, fixes, events })).not.toContain(
+      canary
+    );
+    expect(JSON.stringify({ reviews, artifacts, fixes })).toContain(
+      "[REDACTED]"
+    );
   });
 
   it("keeps four exact-head task review lanes for existing manual-policy runs", async () => {
@@ -727,6 +1024,480 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
     ).toEqual({ status: "needs_inspection" });
   });
 
+  it("fails closed when restart recovery finds a Kilo task reviewer", async () => {
+    const { db } = setupDb();
+    const harness = runtime(db);
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    const row = db
+      .prepare(
+        `SELECT * FROM fleet_task_reviews
+         WHERE task_id = ? AND lens = 'correctness_security'`
+      )
+      .get(TASK_ID) as FleetTaskReviewRow;
+    db.prepare(
+      `UPDATE fleet_task_reviews
+       SET state = 'spawning', provider = 'kilo', reviewer_session_id = '',
+           reviewer_worktree_path = NULL
+       WHERE id = ?`
+    ).run(row.id);
+    db.prepare(
+      `UPDATE fleet_cost_accounts SET provider = 'kilo'
+       WHERE fleet_run_id = ? AND owner_type = 'task_review' AND owner_id = ?`
+    ).run(RUN_ID, row.request_id);
+    db.prepare(
+      `UPDATE fleet_runtime_leases SET resource_key = 'kilo'
+       WHERE fleet_run_id = ? AND owner_type = 'task_review' AND owner_id = ?
+         AND resource_type = 'provider'`
+    ).run(RUN_ID, row.request_id);
+    db.prepare(
+      `INSERT INTO sessions
+       (id, name, tmux_name, agent_type, model, status, working_directory,
+        worker_task, worker_status, worktree_path, branch_name, created_at,
+        updated_at)
+       VALUES ('recovered-kilo-reviewer', 'review', 'kilo-review', 'kilo', '',
+         'running', ?, ?, 'running', ?, ?, ?, ?)`
+    ).run(
+      "C:\\recovered-kilo-review",
+      `Persisted prompt ${row.result_path}`,
+      "C:\\recovered-kilo-review",
+      row.reviewer_branch_name,
+      "2026-01-01T00:09:00.000Z",
+      "2026-01-01T00:09:00.000Z"
+    );
+    const stopSession = vi.fn(async () => true);
+
+    await reconcileFleetTaskReviews(
+      { ...harness.deps, stopSession },
+      { maxTasks: 1 }
+    );
+
+    expect(stopSession).toHaveBeenCalledWith(
+      "recovered-kilo-reviewer",
+      "failed"
+    );
+    expect(harness.removeWorktree).toHaveBeenCalledWith(
+      "C:\\recovered-kilo-review",
+      PROJECT_PATH,
+      true
+    );
+    expect(
+      db
+        .prepare(
+          `SELECT state, reviewer_session_id, error,
+                  completed_at IS NOT NULL AS completed
+           FROM fleet_task_reviews WHERE id = ?`
+        )
+        .get(row.id)
+    ).toEqual({
+      state: "changes_requested",
+      reviewer_session_id: "recovered-kilo-reviewer",
+      error: "persisted task reviewer provider cannot run unattended",
+      completed: 1,
+    });
+    expect(
+      db.prepare(`SELECT status FROM fleet_tasks WHERE id = ?`).get(TASK_ID)
+    ).toEqual({ status: "needs_inspection" });
+    expect(
+      db
+        .prepare(
+          `SELECT session_id,
+                  reservation_released_at IS NOT NULL AS released,
+                  terminal_at IS NOT NULL AS terminal
+           FROM fleet_cost_accounts
+           WHERE fleet_run_id = ? AND owner_type = 'task_review'
+             AND owner_id = ?`
+        )
+        .get(RUN_ID, row.request_id)
+    ).toEqual({ session_id: null, released: 1, terminal: 1 });
+  });
+
+  it("rolls back fixer admission when the pending-row claim cannot persist", async () => {
+    const { db } = setupDb({ automaticFixes: true });
+    const harness = runtime(db, {
+      verdict: (lens) =>
+        lens === "correctness_security" ? "changes_requested" : "clean",
+    });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(db.prepare(`SELECT state FROM fleet_task_fixes`).get()).toEqual({
+      state: "pending",
+    });
+    db.exec(`
+      CREATE TRIGGER reject_fixer_claim
+      BEFORE UPDATE ON fleet_task_fixes
+      WHEN NEW.state = 'spawning'
+      BEGIN
+        SELECT RAISE(ABORT, 'rejected fixer claim');
+      END
+    `);
+
+    await expect(
+      reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 })
+    ).rejects.toThrow(/rejected fixer claim/);
+
+    expect(db.prepare(`SELECT state FROM fleet_task_fixes`).get()).toEqual({
+      state: "pending",
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_cost_accounts
+           WHERE owner_type = 'fixer'`
+        )
+        .get()
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_runtime_leases
+           WHERE owner_type = 'fixer'`
+        )
+        .get()
+    ).toEqual({ count: 0 });
+  });
+
+  it("settles a rejected fixer activation when the spawned session is already gone", async () => {
+    const { db } = setupDb({ automaticFixes: true });
+    const harness = runtime(db, {
+      verdict: (lens) =>
+        lens === "correctness_security" ? "changes_requested" : "clean",
+    });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    const spawnFix = harness.deps.spawnFix!;
+
+    await reconcileFleetTaskReviews(
+      {
+        ...harness.deps,
+        spawnFix: async (input) => {
+          const spawned = await spawnFix(input);
+          db.prepare(
+            `UPDATE fleet_runtime_leases SET lease_expires_at = ?
+             WHERE owner_type = 'fixer' AND status = 'reserved'`
+          ).run("2025-01-01T00:00:00.000Z");
+          return spawned;
+        },
+        stopSession: async () => false,
+        sessionExists: async () => false,
+      },
+      { maxTasks: 1 }
+    );
+
+    expect(db.prepare(`SELECT state FROM fleet_task_fixes`).get()).toEqual({
+      state: "failed",
+    });
+    expect(
+      db.prepare(`SELECT status FROM fleet_tasks WHERE id = ?`).get(TASK_ID)
+    ).toEqual({ status: "needs_inspection" });
+    expect(
+      db
+        .prepare(
+          `SELECT reservation_released_at IS NOT NULL AS released,
+                  terminal_at IS NOT NULL AS terminal
+           FROM fleet_cost_accounts WHERE owner_type = 'fixer'`
+        )
+        .get()
+    ).toEqual({ released: 1, terminal: 1 });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_runtime_leases
+           WHERE owner_type = 'fixer' AND status = 'reserved'`
+        )
+        .get()
+    ).toEqual({ count: 0 });
+  });
+
+  it("rolls back terminal fixer state until cost and resource settlement succeeds", async () => {
+    const { db } = setupDb({ automaticFixes: true });
+    const harness = runtime(db, {
+      verdict: (lens) =>
+        lens === "correctness_security" ? "changes_requested" : "clean",
+      newHead: NEW_HEAD_SHA,
+    });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(db.prepare(`SELECT state FROM fleet_task_fixes`).get()).toEqual({
+      state: "running",
+    });
+    db.exec(`
+      CREATE TRIGGER reject_fixer_settlement
+      BEFORE UPDATE ON fleet_cost_accounts
+      WHEN OLD.owner_type = 'fixer'
+        AND OLD.reservation_released_at IS NULL
+        AND NEW.reservation_released_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'rejected fixer settlement');
+      END
+    `);
+
+    await expect(
+      reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 })
+    ).rejects.toThrow(/rejected fixer settlement/);
+
+    expect(db.prepare(`SELECT state FROM fleet_task_fixes`).get()).toEqual({
+      state: "running",
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT status, head_sha, active_fix_id FROM fleet_tasks WHERE id = ?`
+        )
+        .get(TASK_ID)
+    ).toMatchObject({
+      status: "fixing",
+      head_sha: HEAD_SHA,
+      active_fix_id: expect.any(String),
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT reservation_released_at FROM fleet_cost_accounts
+           WHERE owner_type = 'fixer'`
+        )
+        .get()
+    ).toEqual({ reservation_released_at: null });
+    db.exec(`DROP TRIGGER reject_fixer_settlement`);
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+
+    expect(db.prepare(`SELECT state FROM fleet_task_fixes`).get()).toEqual({
+      state: "completed",
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT reservation_released_at IS NOT NULL AS released
+           FROM fleet_cost_accounts WHERE owner_type = 'fixer'`
+        )
+        .get()
+    ).toEqual({ released: 1 });
+  });
+
+  it("settles a terminal fixer reservation stranded before restart", async () => {
+    const { db, policyHash } = setupDb({ automaticFixes: true });
+    const harness = runtime(db);
+    const now = new Date("2026-01-01T00:10:00.000Z");
+    const run = db
+      .prepare(`SELECT * FROM fleet_runs WHERE id = ?`)
+      .get(RUN_ID) as FleetRunRow;
+    expect(
+      reserveFleetPaidSession(db, {
+        run,
+        ownerType: "fixer",
+        ownerId: "stranded-fix-request",
+        taskId: TASK_ID,
+        taskType: "fix",
+        provider: "codex",
+        model: null,
+        repositoryKey: "path:c:/repo",
+        now,
+        leaseExpiresAt: new Date(now.getTime() + 90_000).toISOString(),
+      })
+    ).toMatchObject({ admitted: true });
+    db.prepare(
+      `INSERT INTO fleet_task_fixes
+       (id, fleet_run_id, task_id, attempt, round, old_head_sha, policy_hash,
+        verification_evidence_hash, state, request_id, completed_at, updated_at)
+       VALUES ('stranded-fix', ?, ?, 1, 1, ?, ?, 'evidence', 'failed',
+         'stranded-fix-request', ?, ?)`
+    ).run(
+      RUN_ID,
+      TASK_ID,
+      HEAD_SHA,
+      policyHash,
+      now.toISOString(),
+      now.toISOString()
+    );
+
+    await reconcileFleetTaskReviews(harness.deps, {
+      runId: "different-run",
+      maxTasks: 1,
+    });
+
+    expect(
+      db
+        .prepare(
+          `SELECT reservation_released_at IS NOT NULL AS released,
+                  terminal_at IS NOT NULL AS terminal
+           FROM fleet_cost_accounts
+           WHERE owner_type = 'fixer' AND owner_id = 'stranded-fix-request'`
+        )
+        .get()
+    ).toEqual({ released: 1, terminal: 1 });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_runtime_leases
+           WHERE owner_type = 'fixer' AND owner_id = 'stranded-fix-request'
+             AND status = 'reserved'`
+        )
+        .get()
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT reserved_budget_usd, reserved_budget_tokens
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(RUN_ID)
+    ).toEqual({ reserved_budget_usd: 0, reserved_budget_tokens: 0 });
+  });
+
+  it("retries a transient fixer launch after restart without abandoning the task", async () => {
+    const { db } = setupDb({ automaticFixes: true });
+    const harness = runtime(db, {
+      verdict: (lens) =>
+        lens === "correctness_security" ? "changes_requested" : "clean",
+    });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    harness.spawnFix.mockRejectedValueOnce(new Error("429 too many requests"));
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    let retry = db
+      .prepare(`SELECT * FROM fleet_task_fixes WHERE task_id = ?`)
+      .get(TASK_ID) as FleetTaskFixRow;
+    expect(retry).toMatchObject({
+      state: "pending",
+      launch_failure_count: 1,
+      retry_not_before: "2026-01-01T00:10:05.000Z",
+    });
+    expect(
+      db.prepare(`SELECT status FROM fleet_tasks WHERE id = ?`).get(TASK_ID)
+    ).toEqual({ status: "fixing" });
+    expect(harness.spawnFix).toHaveBeenCalledTimes(1);
+
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    expect(harness.spawnFix).toHaveBeenCalledTimes(1);
+
+    const restarted = runtime(db, {
+      now: new Date("2026-01-01T00:10:05.000Z"),
+      idPrefix: "fix-restart",
+    });
+    await reconcileFleetTaskReviews(restarted.deps, { maxTasks: 1 });
+    retry = db
+      .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
+      .get(retry.id) as FleetTaskFixRow;
+    expect(retry).toMatchObject({
+      state: "running",
+      launch_failure_count: 0,
+      retry_not_before: null,
+    });
+    expect(restarted.spawnFix).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when restart recovery finds a Kilo automatic fixer", async () => {
+    const { db } = setupDb({ automaticFixes: true });
+    const harness = runtime(db, {
+      verdict: (lens) =>
+        lens === "correctness_security" ? "changes_requested" : "clean",
+    });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
+    const row = db
+      .prepare(`SELECT * FROM fleet_task_fixes WHERE task_id = ?`)
+      .get(TASK_ID) as FleetTaskFixRow;
+    const run = db
+      .prepare(`SELECT * FROM fleet_runs WHERE id = ?`)
+      .get(RUN_ID) as FleetRunRow;
+    const requestId = "recovered-kilo-fix-request";
+    const resultPath = "C:\\fleet-task-runtime\\fixes\\recovered-kilo-fix.json";
+    const now = new Date("2026-01-01T00:10:00.000Z");
+    expect(
+      reserveFleetPaidSession(db, {
+        run,
+        ownerType: "fixer",
+        ownerId: requestId,
+        taskId: TASK_ID,
+        taskType: "fix",
+        provider: "kilo",
+        model: null,
+        repositoryKey: "path:c:/repo",
+        now,
+        leaseExpiresAt: new Date(now.getTime() + 90_000).toISOString(),
+      })
+    ).toMatchObject({ admitted: true });
+    db.prepare(
+      `UPDATE fleet_task_fixes
+       SET state = 'spawning', provider = 'kilo', request_id = ?,
+           nonce_hash = 'recovered', result_path = ?, fixer_session_id = '',
+           started_at = ?, deadline_at = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(
+      requestId,
+      resultPath,
+      now.toISOString(),
+      new Date(now.getTime() + 20 * 60_000).toISOString(),
+      now.toISOString(),
+      row.id
+    );
+    db.prepare(
+      `INSERT INTO sessions
+       (id, name, tmux_name, agent_type, model, status, working_directory,
+        worker_task, worker_status, worktree_path, branch_name, created_at,
+        updated_at)
+       VALUES ('recovered-kilo-fixer', 'fixer', 'kilo-fixer', 'kilo', '',
+         'running', ?, ?, 'running', ?, ?, ?, ?)`
+    ).run(
+      row.worktree_path,
+      `Persisted prompt ${resultPath}`,
+      row.worktree_path,
+      row.branch_name,
+      now.toISOString(),
+      now.toISOString()
+    );
+    const stopSession = vi.fn(async () => true);
+    const removeResult = vi.fn(async () => true);
+
+    await reconcileFleetTaskReviews(
+      { ...harness.deps, stopSession, removeResult },
+      { maxTasks: 1 }
+    );
+
+    expect(harness.spawnFix).not.toHaveBeenCalled();
+    expect(stopSession).toHaveBeenCalledWith("recovered-kilo-fixer", "failed");
+    expect(removeResult).toHaveBeenCalledWith(resultPath);
+    expect(
+      db
+        .prepare(
+          `SELECT state, fixer_session_id, error,
+                  completed_at IS NOT NULL AS completed
+           FROM fleet_task_fixes WHERE id = ?`
+        )
+        .get(row.id)
+    ).toEqual({
+      state: "failed",
+      fixer_session_id: "recovered-kilo-fixer",
+      error: "persisted automatic fixer provider cannot run unattended",
+      completed: 1,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT status, failure_code, active_fix_id FROM fleet_tasks
+           WHERE id = ?`
+        )
+        .get(TASK_ID)
+    ).toEqual({
+      status: "needs_inspection",
+      failure_code: "automatic_fix_failed",
+      active_fix_id: null,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT session_id,
+                  reservation_released_at IS NOT NULL AS released,
+                  terminal_at IS NOT NULL AS terminal
+           FROM fleet_cost_accounts
+           WHERE fleet_run_id = ? AND owner_type = 'fixer' AND owner_id = ?`
+        )
+        .get(RUN_ID, requestId)
+    ).toEqual({ session_id: null, released: 1, terminal: 1 });
+  });
+
   it("uses the owned worktree for one bounded fix, invalidates old evidence, and preserves blockers", async () => {
     const { db } = setupDb({ automaticFixes: true });
     const harness = runtime(db, {
@@ -741,6 +1512,9 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
         .prepare(`SELECT status, fix_rounds FROM fleet_tasks WHERE id = ?`)
         .get(TASK_ID)
     ).toEqual({ status: "fixing", fix_rounds: 1 });
+    db.prepare(`UPDATE fleet_runs SET status = 'merging' WHERE id = ?`).run(
+      RUN_ID
+    );
     const oldBlocker = db
       .prepare(
         `SELECT id, severity, body, metadata_json FROM fleet_artifacts
@@ -797,5 +1571,22 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
     expect(
       db.prepare(`SELECT COUNT(*) AS n FROM fleet_task_fixes`).get()
     ).toEqual({ n: 1 });
+    expect(
+      db
+        .prepare(
+          `SELECT reservation_released_at IS NOT NULL AS released,
+                  terminal_at IS NOT NULL AS terminal
+           FROM fleet_cost_accounts WHERE owner_type = 'fixer'`
+        )
+        .get()
+    ).toEqual({ released: 1, terminal: 1 });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_runtime_leases
+           WHERE owner_type = 'fixer' AND status = 'reserved'`
+        )
+        .get()
+    ).toEqual({ count: 0 });
   });
 });

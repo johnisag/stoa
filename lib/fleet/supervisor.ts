@@ -3,6 +3,11 @@ import type Database from "better-sqlite3";
 import { getDb, queries } from "@/lib/db";
 import { hashFleetExecutionContract } from "./hash";
 import {
+  insertFleetArtifact,
+  insertFleetEvent,
+  prepareFleetArtifactBody,
+} from "./durable-write";
+import {
   approvedExecutionHash,
   inspectFleetMergeReadiness,
 } from "./merge-readiness";
@@ -1112,14 +1117,17 @@ export function appendFleetSupervisorRecommendation(
       };
     }
 
-    const body = JSON.stringify({
-      version: 1,
-      advisoryOnly: true,
-      source: parsed.input.source,
-      summary: parsed.input.summary,
-      actions: parsed.input.actions,
-    });
-    const bodyBytes = Buffer.byteLength(body, "utf8");
+    const preparedBody = prepareFleetArtifactBody(
+      JSON.stringify({
+        version: 1,
+        advisoryOnly: true,
+        source: parsed.input.source,
+        summary: parsed.input.summary,
+        actions: parsed.input.actions,
+      })
+    );
+    const body = preparedBody.body;
+    const bodyBytes = preparedBody.byteCount;
     if (bodyBytes > FLEET_SUPERVISOR_JSON_BODY_MAX) {
       db.exec("ROLLBACK");
       return {
@@ -1127,7 +1135,7 @@ export function appendFleetSupervisorRecommendation(
         status: 413,
       };
     }
-    const contentHash = createHash("sha256").update(body).digest("hex");
+    const contentHash = preparedBody.contentHash;
     const metadata = JSON.stringify({
       version: 1,
       immutable: true,
@@ -1145,34 +1153,26 @@ export function appendFleetSupervisorRecommendation(
     const artifactId = id();
     const createdAt = now().toISOString();
     const actor = `fleet-supervisor:${parsed.input.source}`;
-    db.prepare(
-      `INSERT INTO fleet_artifacts
-       (id, fleet_run_id, task_id, worker_id, attempt, plan_hash, base_sha,
-        head_sha, content_hash, metadata_json, byte_count, artifact_type,
-        title, body, severity, actor, created_at)
-       VALUES (?, ?, NULL, NULL, NULL, ?, ?, NULL, ?, ?, ?,
-        'fleet_supervisor_recommendation',
-        'External Fleet supervisor recommendation', ?, 'info', ?, ?)`
-    ).run(
-      artifactId,
+    insertFleetArtifact(db, {
+      id: artifactId,
       runId,
-      snapshot.bindings.planHash,
-      snapshot.bindings.baseSha,
+      planHash: snapshot.bindings.planHash,
+      baseSha: snapshot.bindings.baseSha,
       contentHash,
-      metadata,
-      bodyBytes,
+      metadataJson: metadata,
+      byteCount: bodyBytes,
+      artifactType: "fleet_supervisor_recommendation",
+      title: "External Fleet supervisor recommendation",
       body,
+      severity: "info",
       actor,
-      createdAt
-    );
-    db.prepare(
-      `INSERT INTO fleet_events
-       (fleet_run_id, event_type, actor, payload, created_at)
-       VALUES (?, 'supervisor_recommendation_appended', ?, ?, ?)`
-    ).run(
+      createdAt,
+    });
+    insertFleetEvent(db, {
       runId,
+      eventType: "supervisor_recommendation_appended",
       actor,
-      JSON.stringify({
+      payload: JSON.stringify({
         artifactId,
         contentHash,
         snapshotHash: snapshot.snapshotHash,
@@ -1185,8 +1185,8 @@ export function appendFleetSupervisorRecommendation(
           baseSha: snapshot.bindings.baseSha,
         },
       }),
-      createdAt
-    );
+      createdAt,
+    });
     db.exec("COMMIT");
     return {
       artifactId,

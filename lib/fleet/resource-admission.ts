@@ -15,7 +15,10 @@ export type FleetResourceKind =
   | "disk_bytes"
   | "output_bytes_per_minute"
   | "artifact_bytes_per_minute"
-  | "event_fanout_per_minute";
+  | "artifact_bytes_total"
+  | "event_bytes_per_minute"
+  | "event_fanout_per_minute"
+  | "event_bytes_total";
 
 export interface FleetResourceLimits {
   pty: number;
@@ -27,7 +30,10 @@ export interface FleetResourceLimits {
   diskBytes: number;
   outputBytesPerMinute: number;
   artifactBytesPerMinute: number;
+  artifactBytesTotal: number;
+  eventBytesPerMinute: number;
   eventFanoutPerMinute: number;
+  eventBytesTotal: number;
   providerCaps: Readonly<Record<string, number>>;
 }
 
@@ -43,6 +49,7 @@ export interface FleetResourceBlock {
   capacity: number;
   used: number;
   requested: number;
+  reason: "capacity" | "invalid-request" | "invalid-usage";
 }
 
 export interface FleetResourceAdmissionDecision {
@@ -55,13 +62,20 @@ export const FLEET_DEFAULT_RESOURCE_LIMITS: FleetResourceLimits = Object.freeze(
     pty: FLEET_DEFAULT_PARALLEL_WORKERS,
     transportHost: FLEET_DEFAULT_PARALLEL_WORKERS,
     verifier: 2,
-    gitOperation: 2,
+    gitOperation: FLEET_DEFAULT_PARALLEL_WORKERS,
     mergeOperation: 1,
-    worktreesPerRepo: 12,
-    diskBytes: 10 * 1024 ** 3,
+    // A 40-task plan preserves its task worktrees until explicit archived-run
+    // cleanup. Leave room for the default six paid review sessions plus the
+    // integration worktree without turning this lifetime ceiling into the
+    // much smaller active-session concurrency limit.
+    worktreesPerRepo: 48,
+    diskBytes: 32 * 1024 ** 3,
     outputBytesPerMinute: 64 * 1024 ** 2,
     artifactBytesPerMinute: 16 * 1024 ** 2,
+    artifactBytesTotal: 512 * 1024 ** 2,
+    eventBytesPerMinute: 16 * 1024 ** 2,
     eventFanoutPerMinute: 2_000,
+    eventBytesTotal: 256 * 1024 ** 2,
     providerCaps: Object.freeze({}),
   }
 );
@@ -72,11 +86,14 @@ const MAXIMA: Omit<FleetResourceLimits, "providerCaps"> = {
   verifier: 16,
   gitOperation: 16,
   mergeOperation: 4,
-  worktreesPerRepo: FLEET_MAX_TOTAL_WORKERS,
+  worktreesPerRepo: 64,
   diskBytes: 1024 ** 4,
   outputBytesPerMinute: 1024 ** 3,
   artifactBytesPerMinute: 1024 ** 3,
+  artifactBytesTotal: 16 * 1024 ** 3,
+  eventBytesPerMinute: 1024 ** 3,
   eventFanoutPerMinute: 100_000,
+  eventBytesTotal: 16 * 1024 ** 3,
 };
 
 function boundedInteger(
@@ -153,29 +170,66 @@ export function normalizeFleetResourceLimits(
       defaults.artifactBytesPerMinute,
       MAXIMA.artifactBytesPerMinute
     ),
+    artifactBytesTotal: boundedInteger(
+      input?.artifactBytesTotal,
+      defaults.artifactBytesTotal,
+      MAXIMA.artifactBytesTotal
+    ),
+    eventBytesPerMinute: boundedInteger(
+      input?.eventBytesPerMinute,
+      defaults.eventBytesPerMinute,
+      MAXIMA.eventBytesPerMinute
+    ),
     eventFanoutPerMinute: boundedInteger(
       input?.eventFanoutPerMinute,
       defaults.eventFanoutPerMinute,
       MAXIMA.eventFanoutPerMinute
     ),
+    eventBytesTotal: boundedInteger(
+      input?.eventBytesTotal,
+      defaults.eventBytesTotal,
+      MAXIMA.eventBytesTotal
+    ),
     providerCaps: providerCaps(input?.providerCaps),
   };
 }
 
-function resourceId(resource: FleetResourceUnits): string {
-  return `${resource.kind}\0${resource.key}`;
+export function canonicalFleetResourceKey(
+  resource: FleetResourceUnits
+): string {
+  const key = resource.key.trim();
+  return resource.kind === "provider" ? key.toLowerCase() : key;
 }
 
-function aggregate(
-  resources: readonly FleetResourceUnits[]
-): Map<string, number> {
+function resourceId(resource: FleetResourceUnits): string {
+  return `${resource.kind}\0${canonicalFleetResourceKey(resource)}`;
+}
+
+function validUnits(units: number): boolean {
+  return Number.isSafeInteger(units) && units > 0;
+}
+
+function aggregate(resources: readonly FleetResourceUnits[]): {
+  totals: Map<string, number>;
+  invalid: FleetResourceUnits[];
+} {
   const totals = new Map<string, number>();
+  const invalid: FleetResourceUnits[] = [];
   for (const resource of resources) {
-    if (!Number.isFinite(resource.units) || resource.units <= 0) continue;
+    if (!canonicalFleetResourceKey(resource) || !validUnits(resource.units)) {
+      invalid.push(resource);
+      continue;
+    }
     const key = resourceId(resource);
-    totals.set(key, (totals.get(key) ?? 0) + resource.units);
+    const total = (totals.get(key) ?? 0) + resource.units;
+    if (!Number.isSafeInteger(total)) {
+      totals.delete(key);
+      invalid.push({ ...resource, units: total });
+      continue;
+    }
+    totals.set(key, total);
   }
-  return totals;
+  return { totals, invalid };
 }
 
 export function fleetResourceCapacity(
@@ -206,8 +260,14 @@ export function fleetResourceCapacity(
       return limits.outputBytesPerMinute;
     case "artifact_bytes_per_minute":
       return limits.artifactBytesPerMinute;
+    case "artifact_bytes_total":
+      return limits.artifactBytesTotal;
+    case "event_bytes_per_minute":
+      return limits.eventBytesPerMinute;
     case "event_fanout_per_minute":
       return limits.eventFanoutPerMinute;
+    case "event_bytes_total":
+      return limits.eventBytesTotal;
   }
 }
 
@@ -221,23 +281,44 @@ export function evaluateFleetResourceAdmission(input: {
   usage: readonly FleetResourceUnits[];
   requested: readonly FleetResourceUnits[];
 }): FleetResourceAdmissionDecision {
-  const used = aggregate(input.usage);
-  const requested = aggregate(input.requested);
+  const usage = aggregate(input.usage);
+  const requests = aggregate(input.requested);
   const blocked: FleetResourceBlock[] = [];
-  for (const [id, requestedUnits] of requested) {
+  for (const invalid of usage.invalid) {
+    blocked.push({
+      kind: invalid.kind,
+      key: canonicalFleetResourceKey(invalid),
+      capacity: 0,
+      used: invalid.units,
+      requested: 0,
+      reason: "invalid-usage",
+    });
+  }
+  for (const invalid of requests.invalid) {
+    blocked.push({
+      kind: invalid.kind,
+      key: canonicalFleetResourceKey(invalid),
+      capacity: 0,
+      used: 0,
+      requested: invalid.units,
+      reason: "invalid-request",
+    });
+  }
+  for (const [id, requestedUnits] of requests.totals) {
     const request = input.requested.find(
       (candidate) => resourceId(candidate) === id
     );
     if (!request) continue;
-    const usedUnits = used.get(id) ?? 0;
+    const usedUnits = usage.totals.get(id) ?? 0;
     const capacity = fleetResourceCapacity(request, input.limits);
     if (usedUnits + requestedUnits > capacity) {
       blocked.push({
         kind: request.kind,
-        key: request.key,
+        key: canonicalFleetResourceKey(request),
         capacity,
         used: usedUnits,
         requested: requestedUnits,
+        reason: "capacity",
       });
     }
   }

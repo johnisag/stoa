@@ -1,7 +1,10 @@
 import type { ParsedFleetPlanTask } from "./plan";
 import { FLEET_PLAN_TEXT_MAX } from "./plan";
+import { PROVIDER_IDS, type ProviderId } from "../providers/registry";
+import { allocateFleetAgents } from "./allocation";
 import type {
   FleetSourceDraftPlanInput,
+  FleetSourceProvider,
   FleetSourceDraftTask,
 } from "./sources";
 
@@ -9,6 +12,12 @@ export interface FleetSourceExecutablePlan {
   tasks: ParsedFleetPlanTask[];
   dependencies: number[][];
   planText: string;
+}
+
+export interface AllocatedFleetSourcePlan {
+  plan: FleetSourceExecutablePlan;
+  provider: FleetSourceProvider;
+  model: string | null;
 }
 
 function sourceTaskType(task: FleetSourceDraftTask): string {
@@ -97,5 +106,70 @@ export function fleetSourceDraftToPlan(
       })
     ),
     planText: renderSourcePlan(draft),
+  };
+}
+
+/**
+ * Bind an imported graph to providers that are actually launchable on this
+ * Stoa host. Provider-owned models survive only when the provider identity is
+ * preserved; a deterministic fallback never inherits a foreign model name.
+ */
+export function allocateFleetSourcePlan(
+  plan: FleetSourceExecutablePlan,
+  input: {
+    availableProviders: readonly ProviderId[];
+    preferredProvider: FleetSourceProvider | null;
+    preferredModel: string | null;
+  }
+): AllocatedFleetSourcePlan {
+  const availableSet = new Set(input.availableProviders);
+  const available = PROVIDER_IDS.filter(
+    (provider): provider is FleetSourceProvider =>
+      provider !== "shell" && availableSet.has(provider)
+  );
+  if (available.length === 0) {
+    throw new Error("no installed agent provider is available");
+  }
+
+  const defaultProvider = input.preferredProvider ?? available[0];
+  const [runAllocation] = allocateFleetAgents({
+    tasks: [{ suggestedProvider: input.preferredProvider }],
+    availableProviders: available,
+    defaultProvider,
+    defaultModel: input.preferredProvider ? input.preferredModel : null,
+  });
+  if (!runAllocation || runAllocation.provider === "shell") {
+    throw new Error("no installed agent provider is available");
+  }
+  const provider = runAllocation.provider;
+  const taskAllocations = allocateFleetAgents({
+    tasks: plan.tasks.map((task) => ({
+      suggestedProvider: task.agentType,
+    })),
+    availableProviders: available,
+    defaultProvider: provider,
+    defaultModel: runAllocation.model,
+  });
+
+  return {
+    provider,
+    model: runAllocation.model,
+    plan: {
+      ...plan,
+      tasks: plan.tasks.map((task, index) => {
+        const allocation = taskAllocations[index];
+        if (!allocation || allocation.provider === "shell") {
+          throw new Error("no installed agent provider is available");
+        }
+        return {
+          ...task,
+          agentType: allocation.provider,
+          model:
+            task.agentType === allocation.provider
+              ? (task.model ?? allocation.model)
+              : allocation.model,
+        };
+      }),
+    },
   };
 }

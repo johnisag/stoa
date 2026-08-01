@@ -42,14 +42,18 @@ function q(name: string): string {
 let pasteCounter = 0;
 
 export class TmuxBackend implements SessionBackend {
-  async create({ name, cwd, command }: CreateOptions): Promise<void> {
+  async create({ name, cwd, command, env }: CreateOptions): Promise<void> {
     const resolvedCwd = expandHome(cwd);
+    const envArgs = Object.entries(env ?? {}).flatMap(([key, value]) => [
+      "-e",
+      `${key}=${value}`,
+    ]);
     await execFileAsync(tmuxBinary, ["set", "-g", "mouse", "on"], {
       windowsHide: true,
     });
     await execFileAsync(
       tmuxBinary,
-      ["new-session", "-d", "-s", name, "-c", resolvedCwd, command],
+      ["new-session", "-d", "-s", name, "-c", resolvedCwd, ...envArgs, command],
       { windowsHide: true }
     );
   }

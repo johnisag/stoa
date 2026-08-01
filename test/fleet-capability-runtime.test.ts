@@ -5,13 +5,26 @@ import { POST as useCapabilityRoute } from "@/app/api/fleet/capabilities/action/
 import { POST as issueCapabilityRoute } from "@/app/api/fleet/capabilities/route";
 import { createSchema } from "@/lib/db/schema";
 import {
+  hashFleetExecutionContract,
+  hashFleetTaskRows,
+} from "@/lib/fleet/hash";
+import {
   claimStoredFleetCapability,
+  executeStoredFleetCapability,
   finalizeStoredFleetCapability,
   issueStoredFleetCapability,
   revokeStoredFleetCapability,
 } from "@/lib/fleet/capability-runtime";
+import type {
+  FleetRunRow,
+  FleetTaskClaimRow,
+  FleetTaskDependencyRow,
+  FleetTaskRow,
+} from "@/lib/fleet/types";
 
 const NOW = 5_000_000;
+const MERGE_BASE_SHA = "a".repeat(40);
+const MERGE_RUN_ID = "merge-run";
 const databases: Database.Database[] = [];
 
 function database() {
@@ -47,11 +60,210 @@ function issued(
   return result;
 }
 
+function exactMergeRows(db: Database.Database) {
+  return {
+    tasks: db
+      .prepare(
+        `SELECT * FROM fleet_tasks WHERE fleet_run_id = ? ORDER BY sort_order`
+      )
+      .all(MERGE_RUN_ID) as FleetTaskRow[],
+    claims: db
+      .prepare(`SELECT * FROM fleet_task_claims WHERE fleet_run_id = ?`)
+      .all(MERGE_RUN_ID) as FleetTaskClaimRow[],
+    dependencies: db
+      .prepare(`SELECT * FROM fleet_task_dependencies WHERE fleet_run_id = ?`)
+      .all(MERGE_RUN_ID) as FleetTaskDependencyRow[],
+  };
+}
+
+function approveCurrentMergeContract(
+  db: Database.Database,
+  updatePlan: boolean
+): { planHash: string; executionHash: string } {
+  const rows = exactMergeRows(db);
+  if (updatePlan) {
+    const planHash = hashFleetTaskRows(rows.tasks, rows.dependencies);
+    db.prepare(
+      `UPDATE fleet_runs SET plan_hash = ?, approved_plan_hash = ? WHERE id = ?`
+    ).run(planHash, planHash, MERGE_RUN_ID);
+    db.prepare(
+      `UPDATE fleet_tasks SET approved_task_hash = ? WHERE fleet_run_id = ?`
+    ).run(planHash, MERGE_RUN_ID);
+  }
+  const run = db
+    .prepare(`SELECT * FROM fleet_runs WHERE id = ?`)
+    .get(MERGE_RUN_ID) as FleetRunRow;
+  const executionHash = hashFleetExecutionContract({ run, ...rows });
+  db.prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`).run(
+    JSON.stringify({ approvedExecutionHash: executionHash }),
+    MERGE_RUN_ID
+  );
+  return { planHash: run.plan_hash!, executionHash };
+}
+
+function seedExactMergeRun(
+  db: Database.Database,
+  recoveryRequired = false
+): { planHash: string; executionHash: string } {
+  db.prepare(
+    `INSERT INTO dispatch_repos
+     (id, repo_path, repo_slug, agent_type, daily_quota, max_concurrency,
+      base_branch, mode, enabled)
+     VALUES ('capability-repo', '/repo', 'owner/repo', 'codex', 10, 4,
+             'main', 'auto', 1)`
+  ).run();
+  db.prepare(
+    `INSERT INTO fleet_runs
+     (id, name, goal, repo_id, status, desired_state, approval_state,
+      automation_base_sha, recovery_required, settings_json)
+     VALUES (?, 'Merge', 'Goal', 'capability-repo', 'running', 'running',
+             'approved', ?, ?, '{}')`
+  ).run(MERGE_RUN_ID, MERGE_BASE_SHA, recoveryRequired ? 1 : 0);
+  db.prepare(
+    `INSERT INTO fleet_tasks
+     (id, fleet_run_id, title, description, status, task_type, sort_order,
+      file_claims_json, working_directory, base_branch, approval_state)
+     VALUES ('merge-task', ?, 'Merge task', 'Exact merge task', 'ready',
+             'implementation', 0, '[]', '/repo', 'main', 'approved')`
+  ).run(MERGE_RUN_ID);
+  return approveCurrentMergeContract(db, true);
+}
+
+function issueMergeCapability(db: Database.Database) {
+  return issued(db, {
+    action: "fleet:merge",
+    runId: MERGE_RUN_ID,
+    payload: { target: "local" },
+  });
+}
+
+function capabilityUseState(db: Database.Database, id: string) {
+  return db
+    .prepare(
+      `SELECT consumed_at_ms, lease_owner, use_count
+       FROM fleet_capabilities WHERE id = ?`
+    )
+    .get(id);
+}
+
 afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 
 describe("durable Fleet capabilities", () => {
+  it("does not consume a launch capability while run recovery is unresolved", async () => {
+    const db = database();
+    seedExactMergeRun(db, true);
+    const result = issueMergeCapability(db);
+    await expect(
+      executeStoredFleetCapability(
+        {
+          token: result.token,
+          scope: result.capability.scope,
+          payload: { target: "local" },
+        },
+        { db, nowMs: NOW + 1 }
+      )
+    ).resolves.toMatchObject({ status: 503 });
+    expect(capabilityUseState(db, result.capability.id)).toEqual({
+      consumed_at_ms: null,
+      lease_owner: null,
+      use_count: 0,
+    });
+  });
+
+  it("rejects an exactly re-approved plan drift before consuming a merge capability", async () => {
+    const db = database();
+    seedExactMergeRun(db);
+    const result = issueMergeCapability(db);
+    db.prepare(
+      `UPDATE fleet_tasks SET title = 'Changed plan' WHERE id = ?`
+    ).run("merge-task");
+    approveCurrentMergeContract(db, true);
+
+    await expect(
+      executeStoredFleetCapability(
+        {
+          token: result.token,
+          scope: result.capability.scope,
+          payload: { target: "local" },
+        },
+        { db, nowMs: NOW + 1 }
+      )
+    ).resolves.toEqual({
+      error: "capability action intent changed",
+      status: 409,
+    });
+    expect(capabilityUseState(db, result.capability.id)).toEqual({
+      consumed_at_ms: null,
+      lease_owner: null,
+      use_count: 0,
+    });
+  });
+
+  it("rejects an exactly re-approved execution drift before consuming a merge capability", async () => {
+    const db = database();
+    seedExactMergeRun(db);
+    const result = issueMergeCapability(db);
+    db.prepare(`UPDATE fleet_runs SET max_concurrency = 2 WHERE id = ?`).run(
+      MERGE_RUN_ID
+    );
+    approveCurrentMergeContract(db, false);
+
+    await expect(
+      executeStoredFleetCapability(
+        {
+          token: result.token,
+          scope: result.capability.scope,
+          payload: { target: "local" },
+        },
+        { db, nowMs: NOW + 1 }
+      )
+    ).resolves.toEqual({
+      error: "capability action intent changed",
+      status: 409,
+    });
+    expect(capabilityUseState(db, result.capability.id)).toEqual({
+      consumed_at_ms: null,
+      lease_owner: null,
+      use_count: 0,
+    });
+  });
+
+  it("uses and consumes a merge capability only for its exact approved contract", async () => {
+    const db = database();
+    seedExactMergeRun(db);
+    const result = issueMergeCapability(db);
+
+    await expect(
+      executeStoredFleetCapability(
+        {
+          token: result.token,
+          scope: result.capability.scope,
+          payload: { target: "local" },
+        },
+        { db, nowMs: NOW + 1 }
+      )
+    ).resolves.toMatchObject({ result: { readiness: {} } });
+    expect(capabilityUseState(db, result.capability.id)).toEqual({
+      consumed_at_ms: NOW + 1,
+      lease_owner: null,
+      use_count: 1,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT merge_request_kind, merge_target, merge_requested_by
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(MERGE_RUN_ID)
+    ).toEqual({
+      merge_request_kind: "manual",
+      merge_target: "local",
+      merge_requested_by: `fleet-capability:${result.capability.id}`,
+    });
+  });
+
   it("persists only a token digest and returns the secret once", () => {
     const db = database();
     const result = issued(db);

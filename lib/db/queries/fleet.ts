@@ -1,4 +1,8 @@
 import type Database from "better-sqlite3";
+import {
+  insertFleetArtifact,
+  insertFleetEvent,
+} from "@/lib/fleet/durable-write";
 import { getStmt } from "./_shared";
 
 export const fleetQueries = {
@@ -34,6 +38,7 @@ export const fleetQueries = {
         r.source_name,
         r.status,
         r.budget_usd,
+        r.budget_tokens,
         substr(r.provider, 1, 40) AS provider,
         substr(r.model, 1, 120) AS model,
         r.max_concurrency,
@@ -70,6 +75,17 @@ export const fleetQueries = {
         r.recovery_required,
         r.reserved_budget_usd,
         r.spent_budget_usd,
+        r.reserved_budget_tokens,
+        r.spent_budget_tokens,
+        r.cost_confidence,
+        r.budget_stop_mode,
+        r.budget_warning_threshold,
+        r.budget_warning_emitted_at,
+        r.budget_hard_limit_at,
+        r.budget_interrupt_deadline_at,
+        r.provider_caps_json,
+        r.resource_limits_json,
+        r.default_max_attempts,
         r.pause_mode,
         r.pause_reason,
         r.cancel_mode,
@@ -256,6 +272,7 @@ export const fleetQueries = {
          LIMIT 1
        )
        WHERE t.status = 'verifying'
+         AND r.recovery_required = 0
        ORDER BY t.updated_at ASC, t.sort_order ASC, t.id ASC
        LIMIT ?`
     ),
@@ -331,12 +348,23 @@ export const fleetQueries = {
          )`
     ),
 
-  createFleetEvent: (db: Database.Database) =>
-    getStmt(
-      db,
-      `INSERT INTO fleet_events (fleet_run_id, event_type, actor, payload)
-       VALUES (?, ?, ?, ?)`
-    ),
+  createFleetEvent: (db: Database.Database) => ({
+    run: (
+      runId: string,
+      eventType: string,
+      actor: string,
+      payload: string | null,
+      options: { controlPlane?: boolean; createdAt?: string } = {}
+    ) =>
+      insertFleetEvent(db, {
+        runId,
+        eventType,
+        actor,
+        payload,
+        createdAt: options.createdAt,
+        controlPlane: options.controlPlane,
+      }),
+  }),
 
   listFleetEventsForRun: (db: Database.Database) =>
     getStmt(
@@ -347,22 +375,30 @@ export const fleetQueries = {
        LIMIT ?`
     ),
 
-  createFleetArtifact: (db: Database.Database) =>
-    getStmt(
-      db,
-      `INSERT INTO fleet_artifacts (
+  createFleetArtifact: (db: Database.Database) => ({
+    run: (
+      id: string,
+      runId: string,
+      taskId: string | null,
+      planHash: string | null,
+      artifactType: string,
+      title: string,
+      body: string,
+      severity: string,
+      actor: string
+    ) =>
+      insertFleetArtifact(db, {
         id,
-        fleet_run_id,
-        task_id,
-        plan_hash,
-        artifact_type,
+        runId,
+        taskId,
+        planHash,
+        artifactType,
         title,
         body,
         severity,
         actor,
-        created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
-    ),
+      }),
+  }),
 
   countFleetBlockerArtifactsForPlan: (db: Database.Database) =>
     getStmt(
@@ -383,7 +419,11 @@ export const fleetQueries = {
   listFleetArtifactsForRun: (db: Database.Database) =>
     getStmt(
       db,
-      `SELECT * FROM fleet_artifacts
+      `SELECT id, fleet_run_id, task_id, worker_id, attempt, plan_hash,
+              base_sha, head_sha, content_hash, metadata_json, byte_count,
+              artifact_type, title, '' AS body, severity, actor,
+              body_pruned_at, created_at
+       FROM fleet_artifacts
        WHERE fleet_run_id = ?
        ORDER BY created_at DESC, id DESC
        LIMIT ?`

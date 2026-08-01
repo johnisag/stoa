@@ -41,7 +41,13 @@ describe("wrapSpawnForSandbox — sandboxed-auto with bwrap", () => {
     const w = wrapSpawnForSandbox(
       SPAWN,
       "sandboxed-auto",
-      { rwRoots: ["/wt/a", "/main/.git", "/home/u/.stoa"], allowNet: true },
+      {
+        rwRoots: ["/wt/a", "/main/.git", "/home/u/.stoa/fleet/run/task/1"],
+        hiddenRoots: ["/home/u/.stoa"],
+        maskedPaths: ["/srv/stoa.db"],
+        unsetEnv: ["STOA_TOKEN"],
+        allowNet: true,
+      },
       { platform: "linux", detect: bwrapPresent }
     );
     expect(w.file).toBe("/usr/bin/bwrap");
@@ -58,6 +64,8 @@ describe("wrapSpawnForSandbox — sandboxed-auto with bwrap", () => {
       "/proc",
       "--tmpfs",
       "/tmp",
+      "--tmpfs",
+      "/home/u/.stoa",
       "--bind",
       "/wt/a",
       "/wt/a",
@@ -65,8 +73,13 @@ describe("wrapSpawnForSandbox — sandboxed-auto with bwrap", () => {
       "/main/.git",
       "/main/.git",
       "--bind",
-      "/home/u/.stoa",
-      "/home/u/.stoa",
+      "/home/u/.stoa/fleet/run/task/1",
+      "/home/u/.stoa/fleet/run/task/1",
+      "--ro-bind",
+      "/dev/null",
+      "/srv/stoa.db",
+      "--unsetenv",
+      "STOA_TOKEN",
       "--",
     ]);
     // The caller composes: [bwrap, ...prefix, originalFile, ...originalArgs].
@@ -126,14 +139,19 @@ describe("wrapSpawnForSandbox — fail-safe fallback (downgrade, never throw)", 
 });
 
 describe("computeRwRoots", () => {
-  it("de-dups and orders worktree(s) + git-common-dir + stoa home", () => {
+  it("de-dups and orders worktree(s), git state, and an exact Fleet output", () => {
     expect(
       computeRwRoots({
         worktreePaths: ["/wt/a", "/wt/b", "/wt/a"],
         gitCommonDir: "/main/.git",
-        stoaHome: "/home/u/.stoa",
+        fleetWritableRoots: ["/home/u/.stoa/fleet/run/task/1"],
       })
-    ).toEqual(["/wt/a", "/wt/b", "/main/.git", "/home/u/.stoa"]);
+    ).toEqual([
+      "/wt/a",
+      "/wt/b",
+      "/main/.git",
+      "/home/u/.stoa/fleet/run/task/1",
+    ]);
   });
 
   it("tolerates a null git-common-dir (non-repo cwd)", () => {
@@ -141,9 +159,8 @@ describe("computeRwRoots", () => {
       computeRwRoots({
         worktreePaths: ["/wt/a"],
         gitCommonDir: null,
-        stoaHome: "/home/u/.stoa",
       })
-    ).toEqual(["/wt/a", "/home/u/.stoa"]);
+    ).toEqual(["/wt/a"]);
   });
 
   it("includes the agent's own state dir rw (so it can write its transcript)", () => {
@@ -154,9 +171,18 @@ describe("computeRwRoots", () => {
         worktreePaths: ["/wt/a"],
         gitCommonDir: "/main/.git",
         agentConfigDir: "/home/u/.claude",
-        stoaHome: "/home/u/.stoa",
       })
-    ).toEqual(["/wt/a", "/main/.git", "/home/u/.claude", "/home/u/.stoa"]);
+    ).toEqual(["/wt/a", "/main/.git", "/home/u/.claude"]);
+  });
+
+  it("never grants the Stoa authority root implicitly", () => {
+    expect(
+      computeRwRoots({
+        worktreePaths: ["/wt/a"],
+        gitCommonDir: "/main/.git",
+        agentConfigDir: "/home/u/.codex",
+      })
+    ).not.toContain("/home/u/.stoa");
   });
 });
 

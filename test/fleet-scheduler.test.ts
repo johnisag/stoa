@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
+import type { Session } from "@/lib/db";
+import { registerFleetCostAccount } from "@/lib/fleet/cost-runtime";
 import {
   reconcileFleetRun,
   reconcileFleetRuns,
   recoverFleetRuns,
+  fleetSessionBackendExists,
   type FleetSchedulerDeps,
 } from "@/lib/fleet/scheduler";
 import {
@@ -30,16 +33,25 @@ function addRun(
     provider?: string;
     recovery?: number;
     budget?: number | null;
+    desiredState?: string;
   } = {}
 ) {
   const id = `run-${++serial}`;
+  const status = overrides.status ?? "running";
   db.prepare(
     `INSERT INTO fleet_runs
-    (id, name, goal, status, approval_state, provider, max_concurrency, recovery_required, budget_usd, settings_json)
-    VALUES (?, 'Fleet', 'Ship safely', ?, 'approved', ?, ?, ?, ?, '{}')`
+    (id, name, goal, status, desired_state, approval_state, provider,
+     max_concurrency, recovery_required, budget_usd, settings_json)
+    VALUES (?, 'Fleet', 'Ship safely', ?, ?, 'approved', ?, ?, ?, ?, '{}')`
   ).run(
     id,
-    overrides.status ?? "running",
+    status,
+    overrides.desiredState ??
+      (["running", "reviewing", "merging"].includes(status)
+        ? "running"
+        : status === "paused"
+          ? "paused"
+          : status),
     overrides.provider ?? "codex",
     overrides.concurrency ?? 6,
     overrides.recovery ?? 0,
@@ -71,6 +83,60 @@ function fakeSpawnResult(taskId: string) {
      VALUES (?, ?, ?, 'running', 'C:\\repo', 'gpt', 'sessions', 'codex')`
   ).run(sessionId, taskId, `codex-${taskId}`);
   return { sessionId, worktreePath: `C:\\wt\\${taskId}` };
+}
+
+function addAuxiliaryCostAccount(
+  runId: string,
+  input: {
+    ownerType?: "planner" | "plan_review" | "task_review" | "fixer";
+    ownerId?: string;
+    reservationUsd?: number;
+    reservationTokens?: number;
+  } = {}
+) {
+  const ownerType = input.ownerType ?? "planner";
+  const ownerId = input.ownerId ?? `${runId}-${ownerType}`;
+  const sessionId = `${ownerId}-session`;
+  db.prepare(
+    `INSERT INTO sessions
+     (id, name, tmux_name, status, worker_status, working_directory,
+      model, group_path, agent_type)
+     VALUES (?, ?, ?, 'running', 'working', 'C:\\repo', 'gpt',
+             'sessions', 'codex')`
+  ).run(sessionId, sessionId, `codex-${sessionId}`);
+  const session = db
+    .prepare(`SELECT * FROM sessions WHERE id = ?`)
+    .get(sessionId) as Session;
+  const reservationUsd = input.reservationUsd ?? 0.25;
+  const reservationTokens = input.reservationTokens ?? 500;
+  expect(
+    registerFleetCostAccount(db, {
+      runId,
+      ownerType,
+      ownerId,
+      session,
+      provider: "codex",
+      model: "gpt",
+      reservation: {
+        usd: reservationUsd,
+        tokens: reservationTokens,
+        confidence: "medium",
+        basis: "provider-default",
+        sampleCount: 0,
+      },
+    })
+  ).toBe(true);
+  db.prepare(
+    `UPDATE fleet_runs SET reserved_budget_usd = reserved_budget_usd + ?,
+     reserved_budget_tokens = reserved_budget_tokens + ? WHERE id = ?`
+  ).run(reservationUsd, reservationTokens, runId);
+  db.prepare(
+    `INSERT INTO fleet_runtime_leases
+     (id, fleet_run_id, owner_type, owner_id, resource_type, resource_key,
+      units, status)
+     VALUES (?, ?, ?, ?, 'pty', 'local', 1, 'reserved')`
+  ).run(`${ownerId}-lease`, runId, ownerType, ownerId);
+  return { ownerType, ownerId, sessionId, session };
 }
 
 function schedulerDeps(
@@ -129,6 +195,681 @@ beforeEach(() => {
 });
 
 describe("fleet scheduler", () => {
+  it("resolves a nullable tmux name through the provider backend key", async () => {
+    const exists = vi.fn(async () => true);
+    await expect(
+      fleetSessionBackendExists(
+        {
+          id: "session-pty",
+          tmux_name: null,
+          agent_type: "codex",
+        } as unknown as Parameters<typeof fleetSessionBackendExists>[0],
+        { exists }
+      )
+    ).resolves.toBe(true);
+    expect(exists).toHaveBeenCalledWith("codex-session-pty");
+  });
+
+  it("delivers one durable interrupt notice and preserves the operator terminal cause", async () => {
+    const runId = addRun({ status: "paused" });
+    const sessionId = `session-interrupt-${runId}`;
+    db.prepare(
+      `INSERT INTO sessions
+       (id, name, tmux_name, status, working_directory, group_path, agent_type,
+        worker_status)
+       VALUES (?, 'Interrupt worker', ?, 'running', 'C:\\repo', 'sessions',
+               'codex', 'running')`
+    ).run(sessionId, `interrupt-${runId}`);
+    db.prepare(
+      `INSERT INTO fleet_workers
+       (id, fleet_run_id, session_id, status, provider, attempt,
+        interrupt_requested_at, interrupt_deadline_at, interrupt_cause)
+       VALUES (?, ?, ?, 'running', 'codex', 1, ?, ?, 'operator_pause')`
+    ).run(
+      `${runId}-worker-interrupt`,
+      runId,
+      sessionId,
+      "2026-08-01T12:00:00.000Z",
+      "2026-08-01T12:00:30.000Z"
+    );
+    let now = new Date("2026-08-01T12:00:00.000Z");
+    let alive = true;
+    const sendMessage = vi.fn(async () => {});
+    const stopSession = vi.fn(async () => {
+      alive = false;
+    });
+    const deps: Partial<FleetSchedulerDeps> = {
+      ...schedulerDeps(),
+      now: () => now,
+      sessionExists: async () => alive,
+      sendMessage,
+      stopSession,
+      sampleCosts: async () => 0,
+    };
+
+    await reconcileFleetRun(runId, deps);
+    await reconcileFleetRun(runId, deps);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(stopSession).not.toHaveBeenCalled();
+    expect(
+      db
+        .prepare(
+          `SELECT interrupt_notice_state, interrupt_stop_state
+           FROM fleet_workers WHERE fleet_run_id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      interrupt_notice_state: "delivered",
+      interrupt_stop_state: "unattempted",
+    });
+
+    now = new Date("2026-08-01T12:00:30.000Z");
+    await reconcileFleetRun(runId, deps);
+    expect(stopSession).toHaveBeenCalledTimes(1);
+    expect(
+      db
+        .prepare(
+          `SELECT interrupt_stop_state, terminal_cause
+           FROM fleet_workers WHERE fleet_run_id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      interrupt_stop_state: "confirmed",
+      terminal_cause: "operator_interrupt_stop_requested",
+    });
+
+    now = new Date("2026-08-01T12:00:31.000Z");
+    await reconcileFleetRun(runId, deps);
+    expect(
+      db
+        .prepare(
+          `SELECT status, terminal_cause FROM fleet_workers
+           WHERE fleet_run_id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      status: "dead",
+      terminal_cause: "operator_interrupt_stop_requested",
+    });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(stopSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails open on a transient session probe and still enforces an expired interrupt", async () => {
+    const runId = addRun({ status: "paused" });
+    const sessionId = `session-interrupt-probe-${runId}`;
+    const workerId = `${runId}-worker-interrupt-probe`;
+    db.prepare(
+      `INSERT INTO sessions
+       (id, name, tmux_name, status, working_directory, group_path, agent_type,
+        worker_status)
+       VALUES (?, 'Interrupt probe worker', ?, 'running', 'C:\\repo',
+               'sessions', 'codex', 'running')`
+    ).run(sessionId, `interrupt-probe-${runId}`);
+    db.prepare(
+      `INSERT INTO fleet_workers
+       (id, fleet_run_id, session_id, status, provider, attempt,
+        interrupt_requested_at, interrupt_deadline_at, interrupt_notice_state,
+        interrupt_cause)
+       VALUES (?, ?, ?, 'running', 'codex', 1, ?, ?, 'delivered',
+               'operator_pause')`
+    ).run(
+      workerId,
+      runId,
+      sessionId,
+      "2026-08-01T12:00:00.000Z",
+      "2026-08-01T12:00:30.000Z"
+    );
+    const sessionExists = vi.fn(async () => {
+      throw new Error("transient backend probe failure");
+    });
+    const stopSession = vi.fn(async () => {});
+
+    await reconcileFleetRun(runId, {
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:30.000Z"),
+      sessionExists,
+      stopSession,
+      sampleCosts: async () => 0,
+    });
+
+    expect(sessionExists).toHaveBeenCalledTimes(1);
+    expect(stopSession).toHaveBeenCalledWith(sessionId, "failed");
+    expect(
+      db
+        .prepare(
+          `SELECT status, interrupt_stop_state, terminal_cause
+           FROM fleet_workers WHERE id = ?`
+        )
+        .get(workerId)
+    ).toEqual({
+      status: "running",
+      interrupt_stop_state: "confirmed",
+      terminal_cause: "operator_interrupt_stop_requested",
+    });
+  });
+
+  it("replays a durably requested interrupt stop after a restart", async () => {
+    const runId = addRun({ status: "paused" });
+    const sessionId = `session-interrupt-replay-${runId}`;
+    const workerId = `${runId}-worker-interrupt-replay`;
+    db.prepare(
+      `INSERT INTO sessions
+       (id, name, tmux_name, status, working_directory, group_path, agent_type,
+        worker_status)
+       VALUES (?, 'Interrupt replay worker', ?, 'running', 'C:\\repo',
+               'sessions', 'codex', 'running')`
+    ).run(sessionId, `interrupt-replay-${runId}`);
+    db.prepare(
+      `INSERT INTO fleet_workers
+       (id, fleet_run_id, session_id, status, provider, attempt,
+        interrupt_requested_at, interrupt_deadline_at, interrupt_notice_state,
+        interrupt_cause)
+       VALUES (?, ?, ?, 'running', 'codex', 1, ?, ?, 'delivered',
+               'operator_pause')`
+    ).run(
+      workerId,
+      runId,
+      sessionId,
+      "2026-08-01T12:00:00.000Z",
+      "2026-08-01T12:00:30.000Z"
+    );
+    let stopAttempts = 0;
+    const firstProcessDeps: Partial<FleetSchedulerDeps> = {
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:30.000Z"),
+      sessionExists: async () => true,
+      stopSession: vi.fn(async () => {
+        stopAttempts += 1;
+        throw new Error("simulated process exit during stop");
+      }),
+      sampleCosts: async () => 0,
+    };
+
+    await reconcileFleetRun(runId, firstProcessDeps);
+    expect(stopAttempts).toBe(1);
+    expect(
+      db
+        .prepare(
+          `SELECT interrupt_stop_state, terminal_cause
+           FROM fleet_workers WHERE id = ?`
+        )
+        .get(workerId)
+    ).toEqual({
+      interrupt_stop_state: "requested",
+      terminal_cause: null,
+    });
+
+    const restartedDeps: Partial<FleetSchedulerDeps> = {
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:31.000Z"),
+      sessionExists: async () => true,
+      stopSession: vi.fn(async () => {
+        stopAttempts += 1;
+      }),
+      sampleCosts: async () => 0,
+    };
+    await reconcileFleetRun(runId, restartedDeps);
+
+    expect(stopAttempts).toBe(2);
+    expect(
+      db
+        .prepare(
+          `SELECT interrupt_stop_state, terminal_cause
+           FROM fleet_workers WHERE id = ?`
+        )
+        .get(workerId)
+    ).toEqual({
+      interrupt_stop_state: "confirmed",
+      terminal_cause: "operator_interrupt_stop_requested",
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_events
+           WHERE fleet_run_id = ?
+             AND event_type = 'worker_interrupt_stop_requested'`
+        )
+        .get(runId)
+    ).toEqual({ count: 1 });
+  });
+
+  it("preserves the interrupt cause when stop succeeds but confirmation is lost", async () => {
+    const runId = addRun({ status: "paused" });
+    const sessionId = `session-interrupt-ambiguous-${runId}`;
+    const workerId = `${runId}-worker-interrupt-ambiguous`;
+    db.prepare(
+      `INSERT INTO sessions
+       (id, name, tmux_name, status, working_directory, group_path, agent_type,
+        worker_status)
+       VALUES (?, 'Ambiguous interrupt worker', ?, 'running', 'C:\\repo',
+               'sessions', 'codex', 'running')`
+    ).run(sessionId, `interrupt-ambiguous-${runId}`);
+    db.prepare(
+      `INSERT INTO fleet_workers
+       (id, fleet_run_id, session_id, status, provider, attempt,
+        interrupt_requested_at, interrupt_deadline_at, interrupt_notice_state,
+        interrupt_cause)
+       VALUES (?, ?, ?, 'running', 'codex', 1, ?, ?, 'delivered',
+               'operator_pause')`
+    ).run(
+      workerId,
+      runId,
+      sessionId,
+      "2026-08-01T12:00:00.000Z",
+      "2026-08-01T12:00:30.000Z"
+    );
+    let alive = true;
+    const stopSession = vi.fn(async () => {
+      alive = false;
+      throw new Error("process exited before stop confirmation was persisted");
+    });
+    const deps: Partial<FleetSchedulerDeps> = {
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:30.000Z"),
+      sessionExists: async () => alive,
+      stopSession,
+      sampleCosts: async () => 0,
+    };
+
+    await reconcileFleetRun(runId, deps);
+    expect(
+      db
+        .prepare(
+          `SELECT status, interrupt_stop_state, terminal_cause
+           FROM fleet_workers WHERE id = ?`
+        )
+        .get(workerId)
+    ).toEqual({
+      status: "running",
+      interrupt_stop_state: "requested",
+      terminal_cause: null,
+    });
+
+    await reconcileFleetRun(runId, deps);
+    expect(stopSession).toHaveBeenCalledTimes(1);
+    expect(
+      db
+        .prepare(
+          `SELECT status, interrupt_stop_state, terminal_cause
+           FROM fleet_workers WHERE id = ?`
+        )
+        .get(workerId)
+    ).toEqual({
+      status: "dead",
+      interrupt_stop_state: "requested",
+      terminal_cause: "operator_interrupt_stop_requested",
+    });
+  });
+
+  it("refuses interrupt side effects for an ambiguously bound active session", async () => {
+    const runId = addRun({ status: "paused" });
+    const otherRunId = addRun({ status: "paused" });
+    const sessionId = `session-duplicate-${runId}`;
+    db.prepare(`DROP INDEX idx_fleet_workers_one_active_session`).run();
+    db.prepare(
+      `INSERT INTO sessions
+       (id, name, tmux_name, status, working_directory, group_path, agent_type,
+        worker_status)
+       VALUES (?, 'Duplicate owner session', ?, 'running', 'C:\\repo',
+               'sessions', 'codex', 'running')`
+    ).run(sessionId, `duplicate-${runId}`);
+    const insertWorker = db.prepare(
+      `INSERT INTO fleet_workers
+       (id, fleet_run_id, session_id, status, provider, attempt,
+        interrupt_requested_at, interrupt_deadline_at, interrupt_cause)
+       VALUES (?, ?, ?, 'running', 'codex', 1, ?, ?, 'operator_pause')`
+    );
+    insertWorker.run(
+      `${runId}-worker-duplicate`,
+      runId,
+      sessionId,
+      "2026-08-01T12:00:00.000Z",
+      "2026-08-01T12:00:30.000Z"
+    );
+    insertWorker.run(
+      `${otherRunId}-worker-duplicate`,
+      otherRunId,
+      sessionId,
+      "2026-08-01T12:00:00.000Z",
+      "2026-08-01T12:00:30.000Z"
+    );
+    const sendMessage = vi.fn(async () => {});
+    const stopSession = vi.fn(async () => {});
+
+    await reconcileFleetRun(runId, {
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:10.000Z"),
+      sessionExists: async () => true,
+      sendMessage,
+      stopSession,
+      sampleCosts: async () => 0,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(stopSession).not.toHaveBeenCalled();
+    expect(
+      db
+        .prepare(
+          `SELECT event_type, payload FROM fleet_events
+           WHERE fleet_run_id = ?
+             AND event_type = 'worker_interrupt_attention_required'`
+        )
+        .get(runId)
+    ).toMatchObject({
+      event_type: "worker_interrupt_attention_required",
+      payload: expect.stringContaining("not bound to exactly one"),
+    });
+  });
+
+  it("samples and hard-stops every auxiliary owner across draft and reviewing phases", async () => {
+    const owners = (
+      [
+        ["planner", "draft", "draft"],
+        ["plan_review", "draft", "draft"],
+        ["task_review", "reviewing", "running"],
+        ["fixer", "reviewing", "running"],
+      ] as const
+    ).map(([ownerType, status, desiredState]) => {
+      const runId = addRun({
+        status,
+        desiredState,
+        budget: 0.1,
+      });
+      db.prepare(
+        `UPDATE fleet_runs SET budget_stop_mode = 'hard-stop' WHERE id = ?`
+      ).run(runId);
+      return {
+        runId,
+        ...addAuxiliaryCostAccount(runId, {
+          ownerType,
+          reservationUsd: 0,
+          reservationTokens: 0,
+        }),
+      };
+    });
+    const sendMessage = vi.fn(async () => {});
+    const sampleCosts = vi.fn(async (sessions: Session[]) => {
+      expect(new Set(sessions.map((session) => session.id))).toEqual(
+        new Set(owners.map((owner) => owner.sessionId))
+      );
+      const insert = db.prepare(
+        `INSERT INTO session_costs
+         (session_key, day, session_id, agent_type, model, input_tokens,
+          output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+          updated_at)
+         VALUES (?, '2026-08-01', ?, 'codex', 'gpt', 1000, 0, 0, 0,
+                 0.2, '2026-08-01T12:00:00.000Z')`
+      );
+      for (const owner of owners) {
+        const identity = db
+          .prepare(
+            `SELECT session_key FROM fleet_cost_accounts
+             WHERE fleet_run_id = ? AND owner_id = ?`
+          )
+          .get(owner.runId, owner.ownerId) as { session_key: string };
+        insert.run(identity.session_key, owner.sessionId);
+      }
+      return sessions.length;
+    });
+
+    await reconcileFleetRuns({
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:00.000Z"),
+      sampleCosts,
+      sendMessage,
+      sessionExists: async () => true,
+    });
+
+    expect(sampleCosts).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(4);
+    for (const owner of owners) {
+      expect(
+        db
+          .prepare(
+            `SELECT status, desired_state, spent_budget_usd,
+                    budget_interrupt_deadline_at
+             FROM fleet_runs WHERE id = ?`
+          )
+          .get(owner.runId)
+      ).toEqual({
+        status: "paused",
+        desired_state: "paused",
+        spent_budget_usd: 0.2,
+        budget_interrupt_deadline_at: "2026-08-01T12:00:30.000Z",
+      });
+      expect(
+        db
+          .prepare(
+            `SELECT interrupt_notice_state, interrupt_stop_state,
+                    interrupt_cause
+             FROM fleet_cost_accounts WHERE fleet_run_id = ?`
+          )
+          .get(owner.runId)
+      ).toEqual({
+        interrupt_notice_state: "delivered",
+        interrupt_stop_state: "unattempted",
+        interrupt_cause: "budget_hard_limit",
+      });
+    }
+  });
+
+  it("claims one auxiliary hard stop across concurrent ticks and replays a transient failure", async () => {
+    const runId = addRun({ status: "paused" });
+    const account = addAuxiliaryCostAccount(runId, {
+      ownerType: "task_review",
+    });
+    db.prepare(
+      `UPDATE fleet_cost_accounts
+       SET interrupt_requested_at = '2026-08-01T12:00:00.000Z',
+           interrupt_deadline_at = '2026-08-01T12:00:30.000Z',
+           interrupt_notice_state = 'delivered',
+           interrupt_cause = 'budget_hard_limit'
+       WHERE fleet_run_id = ? AND owner_id = ?`
+    ).run(runId, account.ownerId);
+    let alive = true;
+    let attempts = 0;
+    const stopSession = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("transient stop failure");
+      alive = false;
+    });
+    const deps: Partial<FleetSchedulerDeps> = {
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:30.000Z"),
+      sampleCosts: async () => 0,
+      sessionExists: async () => alive,
+      stopSession,
+    };
+
+    await Promise.all([
+      reconcileFleetRun(runId, deps),
+      reconcileFleetRun(runId, deps),
+    ]);
+    expect(stopSession).toHaveBeenCalledTimes(1);
+    expect(
+      db
+        .prepare(
+          `SELECT interrupt_stop_state, reservation_released_at
+           FROM fleet_cost_accounts WHERE fleet_run_id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      interrupt_stop_state: "requested",
+      reservation_released_at: null,
+    });
+
+    await reconcileFleetRun(runId, deps);
+    await reconcileFleetRun(runId, deps);
+    expect(stopSession).toHaveBeenCalledTimes(2);
+    const cost = db
+      .prepare(
+        `SELECT interrupt_stop_state, terminal_at, reservation_released_at,
+                charged_cost_usd, charged_tokens
+         FROM fleet_cost_accounts WHERE fleet_run_id = ?`
+      )
+      .get(runId) as {
+      interrupt_stop_state: string;
+      terminal_at: string | null;
+      reservation_released_at: string | null;
+      charged_cost_usd: number;
+      charged_tokens: number;
+    };
+    expect(cost).toMatchObject({
+      interrupt_stop_state: "confirmed",
+      charged_cost_usd: 0.25,
+      charged_tokens: 500,
+    });
+    expect(cost.terminal_at).not.toBeNull();
+    expect(cost.reservation_released_at).not.toBeNull();
+    expect(
+      db
+        .prepare(
+          `SELECT spent_budget_usd, spent_budget_tokens,
+                  reserved_budget_usd, reserved_budget_tokens
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      spent_budget_usd: 0.25,
+      spent_budget_tokens: 500,
+      reserved_budget_usd: 0,
+      reserved_budget_tokens: 0,
+    });
+    expect(
+      db
+        .prepare(`SELECT status FROM fleet_runtime_leases WHERE owner_id = ?`)
+        .get(account.ownerId)
+    ).toEqual({ status: "released" });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_events
+           WHERE fleet_run_id = ?
+             AND event_type = 'auxiliary_interrupt_stop_requested'`
+        )
+        .get(runId)
+    ).toEqual({ count: 1 });
+  });
+
+  it("recovers a completed auxiliary stop without issuing it twice or double charging", async () => {
+    const runId = addRun({ status: "paused" });
+    const account = addAuxiliaryCostAccount(runId, { ownerType: "fixer" });
+    db.prepare(
+      `UPDATE fleet_cost_accounts
+       SET interrupt_requested_at = '2026-08-01T12:00:00.000Z',
+           interrupt_deadline_at = '2026-08-01T12:00:30.000Z',
+           interrupt_notice_state = 'delivered',
+           interrupt_cause = 'budget_hard_limit'
+       WHERE fleet_run_id = ? AND owner_id = ?`
+    ).run(runId, account.ownerId);
+    db.exec(`
+      CREATE TRIGGER reject_auxiliary_stop_confirmation
+      BEFORE UPDATE OF interrupt_stop_state ON fleet_cost_accounts
+      WHEN NEW.interrupt_stop_state = 'confirmed'
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated confirmation crash');
+      END;
+    `);
+    let alive = true;
+    const stopSession = vi.fn(async () => {
+      alive = false;
+    });
+    const deps: Partial<FleetSchedulerDeps> = {
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:30.000Z"),
+      sampleCosts: async () => 0,
+      sessionExists: async () => alive,
+      stopSession,
+    };
+
+    await expect(reconcileFleetRun(runId, deps)).rejects.toThrow(
+      "simulated confirmation crash"
+    );
+    expect(stopSession).toHaveBeenCalledTimes(1);
+    expect(
+      db
+        .prepare(
+          `SELECT interrupt_stop_state, reservation_released_at
+           FROM fleet_cost_accounts WHERE fleet_run_id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      interrupt_stop_state: "requested",
+      reservation_released_at: null,
+    });
+
+    db.exec(`DROP TRIGGER reject_auxiliary_stop_confirmation`);
+    await reconcileFleetRun(runId, deps);
+    await reconcileFleetRun(runId, deps);
+    expect(stopSession).toHaveBeenCalledTimes(1);
+    expect(
+      db
+        .prepare(
+          `SELECT interrupt_stop_state, charged_cost_usd, charged_tokens
+           FROM fleet_cost_accounts WHERE fleet_run_id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      interrupt_stop_state: "confirmed",
+      charged_cost_usd: 0.25,
+      charged_tokens: 500,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT spent_budget_usd, spent_budget_tokens
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual({ spent_budget_usd: 0.25, spent_budget_tokens: 500 });
+  });
+
+  it("refuses to stop an auxiliary session with ambiguous active cost ownership", async () => {
+    const runId = addRun({ status: "paused" });
+    const account = addAuxiliaryCostAccount(runId, {
+      ownerType: "plan_review",
+    });
+    db.prepare(
+      `UPDATE fleet_cost_accounts
+       SET interrupt_requested_at = '2026-08-01T12:00:00.000Z',
+           interrupt_deadline_at = '2026-08-01T12:00:30.000Z',
+           interrupt_notice_state = 'delivered',
+           interrupt_cause = 'budget_hard_limit'
+       WHERE fleet_run_id = ? AND owner_id = ?`
+    ).run(runId, account.ownerId);
+    db.prepare(
+      `INSERT INTO fleet_cost_accounts
+       (id, fleet_run_id, session_id, session_key, owner_type, owner_id,
+        provider, model)
+       VALUES ('ambiguous-cost-owner', ?, ?, 'corrupt-backend-key',
+               'task_review', 'ambiguous-request', 'codex', 'gpt')`
+    ).run(runId, account.sessionId);
+    const stopSession = vi.fn(async () => {});
+
+    await reconcileFleetRun(runId, {
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:30.000Z"),
+      sampleCosts: async () => 0,
+      sessionExists: async () => true,
+      stopSession,
+    });
+
+    expect(stopSession).not.toHaveBeenCalled();
+    expect(
+      db
+        .prepare(
+          `SELECT event_type, payload FROM fleet_events
+           WHERE fleet_run_id = ?
+             AND event_type = 'auxiliary_interrupt_attention_required'`
+        )
+        .get(runId)
+    ).toMatchObject({
+      event_type: "auxiliary_interrupt_attention_required",
+      payload: expect.stringContaining("not bound to exactly one"),
+    });
+  });
+
   it("launches independent tasks and serializes overlapping claims", async () => {
     const runId = addRun();
     addTask(runId, "lib/a.ts", 1);
@@ -152,6 +893,76 @@ describe("fleet scheduler", () => {
       )
       .all(conflictRun) as { status: string }[];
     expect(statuses.map((row) => row.status)).toEqual(["running", "ready"]);
+  });
+
+  it("continues scheduler admission in reviewing and merging phases while honoring desired state", async () => {
+    const reviewing = addRun({ status: "reviewing" });
+    const merging = addRun({ status: "merging" });
+    const pausedIntent = addRun({
+      status: "reviewing",
+      desiredState: "paused",
+    });
+    addTask(reviewing, "lib/reviewing.ts", 1);
+    addTask(merging, "lib/merging.ts", 1);
+    addTask(pausedIntent, "lib/paused-intent.ts", 1);
+    const spawn = vi.fn(async ({ task }) => fakeSpawnResult(task.id));
+
+    expect(await reconcileFleetRuns(schedulerDeps(spawn))).toBe(2);
+    const statuses = Object.fromEntries(
+      (
+        db
+          .prepare(
+            `SELECT fleet_run_id, status FROM fleet_tasks
+             WHERE fleet_run_id IN (?, ?, ?)`
+          )
+          .all(reviewing, merging, pausedIntent) as Array<{
+          fleet_run_id: string;
+          status: string;
+        }>
+      ).map((row) => [row.fleet_run_id, row.status])
+    );
+    expect(statuses).toEqual({
+      [reviewing]: "running",
+      [merging]: "running",
+      [pausedIntent]: "ready",
+    });
+  });
+
+  it("recovers an in-flight worker while the run is presented as reviewing", async () => {
+    const runId = addRun({ status: "reviewing" });
+    const taskId = addTask(runId, "lib/recovery-review.ts", 1);
+    const spawned = fakeSpawnResult(taskId);
+    db.prepare(`UPDATE fleet_tasks SET status = 'spawning' WHERE id = ?`).run(
+      taskId
+    );
+    db.prepare(
+      `INSERT INTO fleet_workers
+       (id, fleet_run_id, task_id, session_id, status, provider, attempt,
+        spawn_request_id, lease_expires_at)
+       VALUES ('reviewing-recovery-worker', ?, ?, ?, 'spawning', 'codex', 1,
+               'reviewing-recovery-request', '2026-08-01T12:01:00.000Z')`
+    ).run(runId, taskId, spawned.sessionId);
+
+    await recoverFleetRuns({
+      ...schedulerDeps(),
+      sessionExists: async () => true,
+      sampleCosts: async () => 0,
+    });
+
+    expect(
+      db
+        .prepare(
+          `SELECT status, recovery_required FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual({ status: "reviewing", recovery_required: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT status, session_id FROM fleet_workers WHERE fleet_run_id = ?`
+        )
+        .get(runId)
+    ).toEqual({ status: "running", session_id: spawned.sessionId });
   });
 
   it("surfaces a task whose blocking dependency failed", async () => {
@@ -241,6 +1052,48 @@ describe("fleet scheduler", () => {
         }
       ).status
     ).toBe("canceled");
+  });
+
+  it("stops and preserves a successful spawn when post-spawn persistence fails", async () => {
+    const runId = addRun();
+    const taskId = addTask(runId, "lib/post-spawn.ts", 1);
+    const spawn = vi.fn(async ({ task }) => fakeSpawnResult(task.id));
+    const stopSession = vi.fn(async () => {});
+    const deps = { ...schedulerDeps(spawn), stopSession };
+    db.exec(`
+      CREATE TRIGGER reject_post_spawn_task_start
+      BEFORE UPDATE OF status ON fleet_tasks
+      WHEN NEW.status = 'running'
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated post-spawn persistence failure');
+      END;
+    `);
+
+    await expect(reconcileFleetRun(runId, deps)).resolves.toBe(1);
+
+    const sessionId = `session-${taskId}`;
+    expect(stopSession).toHaveBeenCalledWith(sessionId);
+    expect(
+      db
+        .prepare(
+          `SELECT status, session_id, worktree_path, terminal_cause
+           FROM fleet_workers WHERE fleet_run_id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      status: "failed",
+      session_id: sessionId,
+      worktree_path: `C:\\wt\\${taskId}`,
+      terminal_cause: "spawn_failed_preserved",
+    });
+    expect(
+      db
+        .prepare(`SELECT status, worktree_path FROM fleet_tasks WHERE id = ?`)
+        .get(taskId)
+    ).toEqual({
+      status: "needs_inspection",
+      worktree_path: `C:\\wt\\${taskId}`,
+    });
   });
 
   it("does not finalize canceled cleanup while its spawn is still in flight", async () => {

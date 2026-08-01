@@ -20,6 +20,7 @@ import type {
   FleetWorkerRow,
 } from "./types";
 import { reconcileFleetVerifications } from "./verification";
+import { fleetLaunchBlockedResult } from "./recovery-gate";
 
 const REQUEST_ID_MAX = 128;
 const ACTOR_MAX = 80;
@@ -88,6 +89,10 @@ interface ReplayRow {
 interface ReplayState {
   eventTypes: Set<string>;
   fingerprint: string;
+}
+
+function requestIdHash(requestId: string): string {
+  return createHash("sha256").update(requestId, "utf8").digest("hex");
 }
 
 function dependencies(
@@ -217,15 +222,17 @@ function replayState(
   requestId: string,
   action: string
 ): ReplayState | null {
+  const digest = requestIdHash(requestId);
   const rows = db
     .prepare(
       `SELECT event_type, payload FROM fleet_events
        WHERE fleet_run_id = ? AND json_valid(payload)
-         AND json_extract(payload, '$.requestId') = ?
+         AND (json_extract(payload, '$.requestIdHash') = ?
+              OR json_extract(payload, '$.requestId') = ?)
          AND json_extract(payload, '$.action') = ?
        ORDER BY id ASC`
     )
-    .all(runId, requestId, action) as ReplayRow[];
+    .all(runId, digest, requestId, action) as ReplayRow[];
   if (rows.length === 0) return null;
   const fingerprints = new Set<string>();
   for (const row of rows) {
@@ -262,7 +269,7 @@ function appendEvent(
     input.actor,
     JSON.stringify({
       action: input.action,
-      requestId: input.requestId,
+      requestIdHash: requestIdHash(input.requestId),
       fingerprint: input.fingerprint,
       ...(input.detail ?? {}),
     })
@@ -402,6 +409,8 @@ export function retryFleetTask(
   const parsed = parseTaskInput(input, { nullableHead: true });
   if ("error" in parsed) return parsed;
   const deps = dependencies(overrides);
+  const recoveryBlocked = fleetLaunchBlockedResult(deps.db, runId);
+  if (recoveryBlocked) return recoveryBlocked;
   const action = "task_retry";
   const actionFingerprint = fingerprint(action, parsed);
   const safeActor = actorValue(actor);
@@ -420,7 +429,7 @@ export function retryFleetTask(
     if (approval) return { error: approval, status: 409 };
     const stale = exactTaskError(task, parsed);
     if (stale) return { error: stale, status: 409 };
-    if (!["running", "paused"].includes(run.status)) {
+    if (!["running", "reviewing", "merging", "paused"].includes(run.status)) {
       return { error: "Fleet run is not active or paused", status: 409 };
     }
     if (!(RETRYABLE_TASK_STATES as readonly string[]).includes(task.status)) {
@@ -539,6 +548,8 @@ async function reconcileTaskAction(
     };
   }
   const deps = dependencies(overrides);
+  const recoveryBlocked = fleetLaunchBlockedResult(deps.db, runId);
+  if (recoveryBlocked) return recoveryBlocked;
   const action = `${kind}_reconcile`;
   const fingerprintInput = {
     ...parsed,
@@ -561,7 +572,7 @@ async function reconcileTaskAction(
     const found = getRunAndTask(deps.db, runId, taskId);
     if ("error" in found) return found;
     const { run, task } = found;
-    if (!["running", "paused"].includes(run.status)) {
+    if (!["running", "reviewing", "merging", "paused"].includes(run.status)) {
       return { error: "Fleet run is not active or paused", status: 409 };
     }
     const approval = approvalError(deps.db, run, task, parsed.expectedPlanHash);

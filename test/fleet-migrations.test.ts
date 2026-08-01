@@ -539,4 +539,455 @@ describe("fleet migrations", () => {
       .all();
     expect(indexes).toHaveLength(3);
   });
+
+  it("migration 66 adds durable cost watermarks and generic resource admission idempotently", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 65);
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_workers (id TEXT PRIMARY KEY);
+    `);
+
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(() => runMigrations(db)).not.toThrow();
+    expectColumns(db, "fleet_runs", [
+      "budget_tokens",
+      "reserved_budget_tokens",
+      "spent_budget_tokens",
+      "cost_confidence",
+      "budget_stop_mode",
+      "budget_warning_threshold",
+      "provider_caps_json",
+      "resource_limits_json",
+      "default_max_attempts",
+    ]);
+    expectColumns(db, "fleet_workers", [
+      "reservation_tokens",
+      "reservation_confidence",
+      "actual_cost_usd",
+      "actual_tokens",
+      "cost_confidence",
+      "cost_reconciled_at",
+      "interrupt_requested_at",
+      "interrupt_deadline_at",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'table'
+           AND name IN ('fleet_cost_accounts', 'fleet_runtime_leases',
+                        'fleet_resource_usage_buckets', 'fleet_provider_cooldowns')`
+        )
+        .all()
+    ).toHaveLength(4);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'index'
+           AND name IN ('idx_fleet_cost_accounts_session',
+                        'idx_fleet_runtime_leases_active',
+                        'idx_fleet_resource_usage_bucket_time',
+                        'idx_fleet_provider_cooldowns_until')`
+        )
+        .all()
+    ).toHaveLength(4);
+  });
+
+  it("migration 67 replaces unsafe global usage buckets with per-run scope", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 66);
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_resource_usage_buckets (
+        resource_type TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        bucket_start_ms INTEGER NOT NULL,
+        units INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (resource_type, resource_key, bucket_start_ms)
+      );
+      INSERT INTO fleet_resource_usage_buckets
+        (resource_type, resource_key, bucket_start_ms, units)
+      VALUES ('event_fanout_per_minute', 'fleet', 1, 10);
+    `);
+
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(hasColumn(db, "fleet_resource_usage_buckets", "fleet_run_id")).toBe(
+      true
+    );
+    expect(
+      db.prepare(`SELECT COUNT(*) AS n FROM fleet_resource_usage_buckets`).get()
+    ).toEqual({ n: 0 });
+  });
+
+  it("migration 68 adds restart-safe rendered status and interrupt state", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 67);
+    db.exec(`CREATE TABLE fleet_workers (id TEXT PRIMARY KEY, status TEXT)`);
+
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(() => runMigrations(db)).not.toThrow();
+    expectColumns(db, "fleet_workers", [
+      "interrupt_notice_state",
+      "interrupt_stop_state",
+      "interrupt_cause",
+      "rendered_status",
+      "rendered_status_summary",
+      "rendered_status_summary_redacted",
+      "rendered_status_replacement_count",
+      "rendered_status_stability_count",
+      "rendered_status_last_captured_at",
+      "rendered_status_next_capture_at",
+      "rendered_status_error",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'index'
+             AND name = 'idx_fleet_workers_rendered_status_due'`
+        )
+        .get()
+    ).toEqual({ name: "idx_fleet_workers_rendered_status_due" });
+  });
+
+  it("migration 69 binds only legacy null interrupt causes", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE fleet_workers (
+        id TEXT PRIMARY KEY,
+        interrupt_requested_at TEXT,
+        interrupt_cause TEXT
+      );
+      INSERT INTO fleet_workers
+        (id, interrupt_requested_at, interrupt_cause)
+      VALUES
+        ('legacy', '2026-08-01T12:00:00.000Z', NULL),
+        ('unknown', '2026-08-01T12:00:00.000Z', 'corrupt'),
+        ('unused', NULL, NULL);
+      CREATE TABLE _migrations (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO _migrations (id, name)
+      SELECT value, 'already-applied' FROM json_each(
+        '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68]'
+      );
+    `);
+
+    runMigrations(db);
+    expect(
+      db
+        .prepare(`SELECT id, interrupt_cause FROM fleet_workers ORDER BY id`)
+        .all()
+    ).toEqual([
+      { id: "legacy", interrupt_cause: "operator_pause" },
+      { id: "unknown", interrupt_cause: "corrupt" },
+      { id: "unused", interrupt_cause: null },
+    ]);
+    db.close();
+  });
+
+  it("migration 70 quarantines ambiguous owners and enforces one active session", () => {
+    const db = new Database(":memory:");
+    createSchema(db);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO fleet_runs (id, name, goal)
+      VALUES ('run-duplicate', 'Duplicate', 'Quarantine');
+      INSERT INTO sessions (id, name, tmux_name, agent_type)
+      VALUES ('shared-session', 'Shared session', 'shared-session', 'codex');
+      INSERT INTO fleet_tasks
+        (id, fleet_run_id, title, status, task_type, sort_order,
+         file_claims_json, approval_state)
+      VALUES
+        ('task-a', 'run-duplicate', 'A', 'running', 'task', 1, '[]', 'approved'),
+        ('task-b', 'run-duplicate', 'B', 'running', 'task', 2, '[]', 'approved');
+      INSERT INTO fleet_workers
+        (id, fleet_run_id, task_id, session_id, status, provider, attempt)
+      VALUES
+        ('worker-a', 'run-duplicate', 'task-a', 'shared-session', 'running', 'codex', 1),
+        ('worker-b', 'run-duplicate', 'task-b', 'shared-session', 'waiting_for_operator', 'codex', 1);
+      INSERT INTO _migrations (id, name)
+      SELECT value, 'already-applied' FROM json_each(
+        '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69]'
+      );
+    `);
+
+    runMigrations(db);
+    expect(
+      db
+        .prepare(`SELECT status, terminal_cause FROM fleet_workers ORDER BY id`)
+        .all()
+    ).toEqual([
+      {
+        status: "cleanup_pending",
+        terminal_cause: "duplicate_active_session_binding",
+      },
+      {
+        status: "cleanup_pending",
+        terminal_cause: "duplicate_active_session_binding",
+      },
+    ]);
+    expect(
+      db
+        .prepare(`SELECT status, failure_code FROM fleet_tasks ORDER BY id`)
+        .all()
+    ).toEqual([
+      {
+        status: "needs_inspection",
+        failure_code: "duplicate_active_session_binding",
+      },
+      {
+        status: "needs_inspection",
+        failure_code: "duplicate_active_session_binding",
+      },
+    ]);
+    db.prepare(
+      `INSERT INTO sessions (id, name, tmux_name, agent_type)
+       VALUES ('unique-session', 'Unique session', 'unique-session', 'codex')`
+    ).run();
+    db.prepare(
+      `INSERT INTO fleet_workers
+       (id, fleet_run_id, session_id, status, provider, attempt)
+       VALUES ('worker-c', 'run-duplicate', 'unique-session', 'running', 'codex', 1)`
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO fleet_workers
+         (id, fleet_run_id, session_id, status, provider, attempt)
+         VALUES ('worker-d', 'run-duplicate', 'unique-session', 'running', 'codex', 1)`
+        )
+        .run()
+    ).toThrow(/UNIQUE/);
+    db.close();
+  });
+
+  it("migration 71 backfills cumulative durable bytes without double charging", () => {
+    const db = new Database(":memory:");
+    createSchema(db);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO fleet_runs (id, name, goal)
+      VALUES ('run-usage', 'Usage', 'Backfill');
+      INSERT INTO fleet_events
+        (fleet_run_id, event_type, actor, payload)
+      VALUES ('run-usage', 'event', 'actor', 'payload');
+      INSERT INTO fleet_artifacts
+        (id, fleet_run_id, artifact_type, title, body, severity, actor,
+         metadata_json, byte_count)
+      VALUES ('artifact-usage', 'run-usage', 'report', 'title', 'body',
+              'info', 'worker', '{}', 4);
+      INSERT INTO fleet_resource_usage_buckets
+        (fleet_run_id, resource_type, resource_key, bucket_start_ms, units)
+      VALUES ('run-usage', 'event_bytes_total', 'fleet', 0, 1);
+      INSERT INTO _migrations (id, name)
+      SELECT value, 'already-applied' FROM json_each(
+        '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70]'
+      );
+    `);
+
+    runMigrations(db);
+    expect(
+      db
+        .prepare(
+          `SELECT resource_type, units FROM fleet_resource_usage_buckets
+           WHERE fleet_run_id = 'run-usage' AND bucket_start_ms = 0
+           ORDER BY resource_type`
+        )
+        .all()
+    ).toEqual([
+      { resource_type: "artifact_bytes_total", units: 11 },
+      { resource_type: "event_bytes_total", units: 17 },
+    ]);
+    runMigrations(db);
+    expect(
+      db
+        .prepare(
+          `SELECT resource_type, units FROM fleet_resource_usage_buckets
+           WHERE fleet_run_id = 'run-usage' AND bucket_start_ms = 0
+           ORDER BY resource_type`
+        )
+        .all()
+    ).toEqual([
+      { resource_type: "artifact_bytes_total", units: 11 },
+      { resource_type: "event_bytes_total", units: 17 },
+    ]);
+    db.close();
+  });
+
+  it("fresh schema persists actual provider and model for every auxiliary session", () => {
+    const db = new Database(":memory:");
+    createSchema(db);
+
+    expectColumns(db, "fleet_cost_accounts", [
+      "interrupt_requested_at",
+      "interrupt_deadline_at",
+      "interrupt_notice_state",
+      "interrupt_stop_state",
+      "interrupt_cause",
+    ]);
+
+    for (const table of [
+      "fleet_reviews",
+      "fleet_task_reviews",
+      "fleet_task_fixes",
+    ]) {
+      expectColumns(db, table, [
+        "provider",
+        "model",
+        "launch_failure_count",
+        "retry_not_before",
+      ]);
+    }
+    db.close();
+  });
+
+  it("migration 72 adds and backfills auxiliary provider bindings from reservations", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 71);
+    db.exec(`
+      CREATE TABLE fleet_reviews (
+        id TEXT PRIMARY KEY, fleet_run_id TEXT, request_id TEXT,
+        reviewer_session_id TEXT
+      );
+      CREATE TABLE fleet_task_reviews (
+        id TEXT PRIMARY KEY, fleet_run_id TEXT, request_id TEXT,
+        reviewer_session_id TEXT
+      );
+      CREATE TABLE fleet_task_fixes (
+        id TEXT PRIMARY KEY, fleet_run_id TEXT, request_id TEXT,
+        fixer_session_id TEXT
+      );
+      CREATE TABLE fleet_cost_accounts (
+        fleet_run_id TEXT, owner_type TEXT, owner_id TEXT,
+        provider TEXT, model TEXT
+      );
+      INSERT INTO fleet_reviews
+        (id, fleet_run_id, request_id, reviewer_session_id)
+      VALUES ('plan-review', 'run-1', 'plan-request', '');
+      INSERT INTO fleet_task_reviews
+        (id, fleet_run_id, request_id, reviewer_session_id)
+      VALUES ('task-review', 'run-1', 'review-request', '');
+      INSERT INTO fleet_task_fixes
+        (id, fleet_run_id, request_id, fixer_session_id)
+      VALUES ('task-fix', 'run-1', 'fix-request', '');
+      INSERT INTO fleet_cost_accounts
+        (fleet_run_id, owner_type, owner_id, provider, model)
+      VALUES
+        ('run-1', 'plan_review', 'plan-request', 'codex', 'gpt-5.5'),
+        ('run-1', 'task_review', 'review-request', 'claude', 'sonnet'),
+        ('run-1', 'fixer', 'fix-request', 'hermes', 'kimi-k3');
+    `);
+
+    runMigrations(db);
+    for (const table of [
+      "fleet_reviews",
+      "fleet_task_reviews",
+      "fleet_task_fixes",
+    ]) {
+      expectColumns(db, table, ["provider", "model"]);
+    }
+    expect(
+      db.prepare(`SELECT provider, model FROM fleet_reviews`).get()
+    ).toEqual({ provider: "codex", model: "gpt-5.5" });
+    expect(
+      db.prepare(`SELECT provider, model FROM fleet_task_reviews`).get()
+    ).toEqual({ provider: "claude", model: "sonnet" });
+    expect(
+      db.prepare(`SELECT provider, model FROM fleet_task_fixes`).get()
+    ).toEqual({ provider: "hermes", model: "kimi-k3" });
+    expect(() => runMigrations(db)).not.toThrow();
+    db.close();
+  });
+
+  it("migration 73 adds restart-safe auxiliary launch retry state", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 72);
+    for (const table of [
+      "fleet_reviews",
+      "fleet_task_reviews",
+      "fleet_task_fixes",
+    ]) {
+      db.exec(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, state TEXT)`);
+    }
+
+    runMigrations(db);
+    for (const table of [
+      "fleet_reviews",
+      "fleet_task_reviews",
+      "fleet_task_fixes",
+    ]) {
+      expectColumns(db, table, ["launch_failure_count", "retry_not_before"]);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_master
+             WHERE type = 'index' AND name = ?`
+          )
+          .get(`idx_${table}_launch_retry`)
+      ).toEqual({ name: `idx_${table}_launch_retry` });
+    }
+    expect(() => runMigrations(db)).not.toThrow();
+    db.close();
+  });
+
+  it("migration 74 adds durable auxiliary cost interrupts and repairs legacy active intent", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 73);
+    db.exec(`
+      CREATE TABLE fleet_cost_accounts (
+        id TEXT PRIMARY KEY,
+        fleet_run_id TEXT NOT NULL,
+        owner_type TEXT NOT NULL,
+        terminal_at TEXT,
+        reservation_released_at TEXT
+      );
+      CREATE TABLE fleet_runs (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        desired_state TEXT NOT NULL
+      );
+      INSERT INTO fleet_runs (id, status, desired_state) VALUES
+        ('legacy-reviewing', 'reviewing', 'draft'),
+        ('legacy-merging', 'merging', 'planned'),
+        ('paused', 'paused', 'paused');
+    `);
+
+    runMigrations(db);
+    expectColumns(db, "fleet_cost_accounts", [
+      "interrupt_requested_at",
+      "interrupt_deadline_at",
+      "interrupt_notice_state",
+      "interrupt_stop_state",
+      "interrupt_cause",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'index' AND name = 'idx_fleet_cost_accounts_interrupt'`
+        )
+        .get()
+    ).toEqual({ name: "idx_fleet_cost_accounts_interrupt" });
+    expect(
+      db.prepare(`SELECT id, desired_state FROM fleet_runs ORDER BY id`).all()
+    ).toEqual([
+      { id: "legacy-merging", desired_state: "running" },
+      { id: "legacy-reviewing", desired_state: "running" },
+      { id: "paused", desired_state: "paused" },
+    ]);
+    expect(() => runMigrations(db)).not.toThrow();
+    db.close();
+  });
 });

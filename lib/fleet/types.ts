@@ -1,3 +1,6 @@
+import type { FleetBudgetStopMode, FleetCostConfidence } from "./budgets";
+import type { FleetResourceLimits } from "./resource-admission";
+
 export type FleetRunStatus =
   | "draft"
   | "planned"
@@ -98,6 +101,10 @@ export type FleetTaskStatus =
 export type FleetPauseMode = "pause-new" | "pause-and-interrupt";
 export type FleetCancelMode =
   "cancel-preserve-worktrees" | "cancel-and-clean-owned-worktrees";
+export type FleetDestructiveOwnerType =
+  "planner" | "plan_review" | "worker" | "task_review" | "fixer";
+export type FleetDestructiveTargetOwnerType =
+  FleetDestructiveOwnerType | "integration_workspace";
 export type FleetClaimType = "unknown" | "exclusive";
 
 export type FleetArtifactSeverity = "info" | "warning" | "blocker";
@@ -121,6 +128,13 @@ export type FleetWorkerStatus =
   | "dead"
   | "cleanup_pending"
   | "cleanup_complete";
+
+export type FleetRenderedStatus =
+  "running" | "waiting" | "idle" | "error" | "dead";
+export type FleetInterruptNoticeState =
+  "unattempted" | "requested" | "delivered" | "failed";
+export type FleetInterruptStopState = "unattempted" | "requested" | "confirmed";
+export type FleetInterruptCause = "operator_pause" | "budget_hard_limit";
 
 export type FleetWorkerReportState =
   "legacy" | "pending" | "accepted" | "invalid";
@@ -162,7 +176,12 @@ export type FleetTaskReviewState =
   | "changes_requested";
 
 export type FleetTaskFixState =
-  "pending" | "spawning" | "running" | "completed" | "failed";
+  | "pending"
+  | "spawning"
+  | "running"
+  | "cleanup_pending"
+  | "completed"
+  | "failed";
 
 export interface FleetRunRow {
   id: string;
@@ -175,6 +194,7 @@ export interface FleetRunRow {
   source_name?: string | null;
   status: FleetRunStatus;
   budget_usd: number | null;
+  budget_tokens?: number | null;
   provider: string;
   model: string | null;
   max_concurrency: number;
@@ -215,6 +235,17 @@ export interface FleetRunRow {
   recovery_required?: number;
   reserved_budget_usd?: number;
   spent_budget_usd?: number;
+  reserved_budget_tokens?: number;
+  spent_budget_tokens?: number;
+  cost_confidence?: FleetCostConfidence;
+  budget_stop_mode?: FleetBudgetStopMode;
+  budget_warning_threshold?: number;
+  budget_warning_emitted_at?: string | null;
+  budget_hard_limit_at?: string | null;
+  budget_interrupt_deadline_at?: string | null;
+  provider_caps_json?: string;
+  resource_limits_json?: string;
+  default_max_attempts?: number;
   pause_mode?: FleetPauseMode | null;
   pause_reason?: string | null;
   cancel_mode?: FleetCancelMode | null;
@@ -322,6 +353,26 @@ export interface FleetWorkerRow {
   lease_owner?: string | null;
   lease_expires_at?: string | null;
   reservation_usd?: number;
+  reservation_tokens?: number;
+  reservation_confidence?: FleetCostConfidence;
+  reservation_basis?: string | null;
+  actual_cost_usd?: number | null;
+  actual_tokens?: number | null;
+  cost_confidence?: FleetCostConfidence;
+  cost_reconciled_at?: string | null;
+  interrupt_requested_at?: string | null;
+  interrupt_deadline_at?: string | null;
+  interrupt_notice_state?: FleetInterruptNoticeState;
+  interrupt_stop_state?: FleetInterruptStopState;
+  interrupt_cause?: FleetInterruptCause | null;
+  rendered_status?: FleetRenderedStatus | null;
+  rendered_status_summary?: string | null;
+  rendered_status_summary_redacted?: number;
+  rendered_status_replacement_count?: number;
+  rendered_status_stability_count?: number;
+  rendered_status_last_captured_at?: string | null;
+  rendered_status_next_capture_at?: string | null;
+  rendered_status_error?: string | null;
   terminal_cause?: string | null;
   failure_code?: string | null;
   created_at: string;
@@ -374,6 +425,10 @@ export interface FleetTaskReviewRow {
   verification_evidence_hash: string;
   policy_hash: string;
   lens: FleetPlanReviewLens;
+  provider: string | null;
+  model: string | null;
+  launch_failure_count: number;
+  retry_not_before: string | null;
   reviewer_session_id: string;
   verdict: "clean" | "changes_requested";
   state: FleetTaskReviewState;
@@ -405,6 +460,10 @@ export interface FleetTaskFixRow {
   new_head_sha: string | null;
   policy_hash: string;
   verification_evidence_hash: string;
+  provider: string | null;
+  model: string | null;
+  launch_failure_count: number;
+  retry_not_before: string | null;
   state: FleetTaskFixState;
   request_id: string;
   nonce_hash: string;
@@ -477,7 +536,7 @@ export interface FleetCleanupActionRow {
   fleet_run_id: string;
   worker_id: string | null;
   artifact_id: string | null;
-  action_type: "delete_worktree" | "prune_artifact_body";
+  action_type: "delete_worktree" | "delete_report_file" | "prune_artifact_body";
   state: FleetCleanupActionState;
   target_path: string | null;
   project_path: string | null;
@@ -511,6 +570,7 @@ export interface FleetRunDto {
   sourceName: string | null;
   status: FleetRunStatus;
   budgetUsd: number | null;
+  budgetTokens: number | null;
   provider: string;
   model: string | null;
   maxConcurrency: number;
@@ -550,6 +610,17 @@ export interface FleetRunDto {
   recoveryRequired: boolean;
   reservedBudgetUsd: number;
   spentBudgetUsd: number;
+  reservedBudgetTokens: number;
+  spentBudgetTokens: number;
+  costConfidence: FleetCostConfidence;
+  budgetStopMode: FleetBudgetStopMode;
+  budgetWarningThreshold: number;
+  budgetWarningEmittedAt: string | null;
+  budgetHardLimitAt: string | null;
+  budgetInterruptDeadlineAt: string | null;
+  providerCaps: Readonly<Record<string, number>>;
+  resourceLimits: FleetResourceLimits;
+  defaultMaxAttempts: number;
   pauseMode: FleetPauseMode | null;
   pauseReason: string | null;
   cancelMode: FleetCancelMode | null;
@@ -647,6 +718,26 @@ export interface FleetWorkerDto {
   reportNextPollAt: string | null;
   reportError: string | null;
   reservationUsd: number;
+  reservationTokens: number;
+  reservationConfidence: FleetCostConfidence;
+  reservationBasis: string | null;
+  actualCostUsd: number | null;
+  actualTokens: number | null;
+  costConfidence: FleetCostConfidence;
+  costReconciledAt: string | null;
+  interruptRequestedAt: string | null;
+  interruptDeadlineAt: string | null;
+  interruptNoticeState: FleetInterruptNoticeState;
+  interruptStopState: FleetInterruptStopState;
+  interruptCause: FleetInterruptCause | null;
+  renderedStatus: FleetRenderedStatus | null;
+  renderedStatusSummary: string | null;
+  renderedStatusSummaryRedacted: boolean;
+  renderedStatusReplacementCount: number;
+  renderedStatusStabilityCount: number;
+  renderedStatusLastCapturedAt: string | null;
+  renderedStatusNextCaptureAt: string | null;
+  renderedStatusError: string | null;
   terminalCause: string | null;
   failureCode: string | null;
   createdAt: string;
@@ -702,6 +793,14 @@ export interface FleetArtifactDto {
   createdAt: string;
 }
 
+export interface FleetArtifactBodyDto {
+  id: string;
+  contentHash: string | null;
+  byteCount: number;
+  body: string;
+  bodyPrunedAt: string | null;
+}
+
 export interface FleetRunDetailDto {
   run: FleetRunDto;
   tasks: FleetTaskDto[];
@@ -717,6 +816,12 @@ export interface CreateFleetRunInput {
   repoId?: string | null;
   projectId?: string | null;
   budgetUsd?: number | null;
+  budgetTokens?: number | null;
+  budgetStopMode?: FleetBudgetStopMode | null;
+  budgetWarningThreshold?: number | null;
+  providerCaps?: Record<string, number> | null;
+  resourceLimits?: Partial<FleetResourceLimits> | null;
+  maxRetriesPerTask?: number | null;
   provider?: string | null;
   model?: string | null;
   maxConcurrency?: number | null;
@@ -750,11 +855,92 @@ export interface ResumeFleetRunInput {
 export interface PauseFleetRunInput {
   actor?: string | null;
   mode?: FleetPauseMode | null;
+  graceMs?: number | null;
 }
 
 export interface CancelFleetRunInput {
   actor?: string | null;
   mode?: FleetCancelMode | null;
+  confirm?: boolean;
+  confirmation?: string;
+  previewDigest?: string;
+}
+
+export interface FleetDestructivePreviewOwner {
+  ownerType: FleetDestructiveTargetOwnerType;
+  ownerId: string;
+  taskId: string | null;
+  sessionId: string | null;
+  sessionName: string | null;
+  sessionStatus: string | null;
+  active: boolean;
+}
+
+export interface FleetDestructivePreviewOwnerRef {
+  ownerType: FleetDestructiveTargetOwnerType;
+  ownerId: string;
+  workerId: string | null;
+  sessionId: string | null;
+}
+
+export interface FleetDestructiveActionPreview {
+  runId: string;
+  action: "cancel" | "cleanup";
+  /** Exact, stable database revision used to close the preview/mutation race. */
+  revision: string;
+  /** Digest of the complete canonical preview the operator confirmed. */
+  targetDigest: string;
+  complete: boolean;
+  objectLimit: number;
+  truncatedKinds: Array<
+    "owners" | "sessions" | "worktrees" | "branches" | "artifacts"
+  >;
+  excludedWorktreeCount: number;
+  owners: FleetDestructivePreviewOwner[];
+  sessions: Array<{
+    id: string;
+    name: string | null;
+    status: string | null;
+    active: boolean;
+    owners: Array<{
+      ownerType: FleetDestructiveTargetOwnerType;
+      ownerId: string;
+    }>;
+  }>;
+  worktrees: Array<{
+    worktreePath: string;
+    projectPath: string;
+    exists: boolean;
+    expectedHeadSha: string | null;
+    owners: FleetDestructivePreviewOwnerRef[];
+    branchNames: string[];
+    sessionIds: string[];
+  }>;
+  branches: Array<{
+    branchName: string;
+    worktreePath: string;
+    ownerType: FleetDestructiveTargetOwnerType;
+    ownerId: string;
+    expectedHeadSha: string | null;
+    preserved: boolean;
+  }>;
+  artifacts: Array<{
+    id: string;
+    taskId: string | null;
+    workerId: string | null;
+    artifactType: string;
+    title: string;
+    byteCount: number;
+    bodyPrunedAt: string | null;
+    preserved: true;
+  }>;
+  effects: {
+    stopActiveSessions: boolean;
+    deleteVerifiedWorktrees: boolean;
+    preserveBranches: boolean;
+    preserveArtifactMetadata: boolean;
+    artifactBodyRetentionDays: number | null;
+  };
 }
 
 export interface FleetTaskDependencyRow {

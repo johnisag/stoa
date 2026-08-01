@@ -1,8 +1,7 @@
 /**
- * Locks the orchestration MCP-config writer (lib/mcp-config.ts) that the
- * "Enable orchestration" New Session option drives: it must write the `stoa`
- * server with THIS session's CONDUCTOR_SESSION_ID, merge non-destructively, and
- * git-exclude the generated .mcp.json so it never pollutes the user's repo.
+ * Locks the provider-native orchestration MCP-config writers that the "Enable
+ * orchestration" option drives: each must write `stoa` with THIS session's id,
+ * merge non-destructively, and locally git-exclude generated project files.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
@@ -11,12 +10,19 @@ import {
   readFileSync,
   writeFileSync,
   existsSync,
+  mkdirSync,
 } from "fs";
 import { execFileSync, spawnSync } from "child_process";
 import { tmpdir } from "os";
 import path from "path";
+import { pathToFileURL } from "url";
 import {
   ensureMcpConfig,
+  ensureKiloMcpConfig,
+  ensureKimiMcpConfig,
+  ensureProviderMcpConfig,
+  KILO_MCP_CONFIG_PATH,
+  KIMI_MCP_CONFIG_PATH,
   hasMcpConfig,
   buildCodexOrchestrationArgs,
   buildHermesRegisterArgs,
@@ -24,49 +30,24 @@ import {
   removeConductorMarker,
   planHermesRegistration,
   _mcpServerCommandForTests,
+  _findStoaInstallRootForTests,
 } from "@/lib/mcp-config";
 import { CONDUCTOR_MARKER_FILE } from "@/lib/conductor-marker";
-import { isWindows, resolveBinary } from "@/lib/platform";
 
-function expectedWindowsNpxCliPath() {
-  if (!isWindows) return null;
-  const candidates = new Set<string>();
-  const npx = resolveBinary("npx");
-  if (npx) {
-    candidates.add(
-      path.join(path.dirname(npx), "node_modules", "npm", "bin", "npx-cli.js")
-    );
-  }
-  if (process.execPath) {
-    candidates.add(
-      path.join(
-        path.dirname(process.execPath),
-        "node_modules",
-        "npm",
-        "bin",
-        "npx-cli.js"
-      )
-    );
-  }
-  const npmExecPath = process.env.npm_execpath;
-  if (npmExecPath) {
-    candidates.add(path.join(path.dirname(npmExecPath), "npx-cli.js"));
-  }
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
-}
+const EXPECTED_TSX_CLI = path.join(
+  process.cwd(),
+  "node_modules",
+  "tsx",
+  "dist",
+  "cli.mjs"
+);
 
 function expectedMcpCommand() {
-  return isWindows && expectedWindowsNpxCliPath()
-    ? resolveBinary("node") || process.execPath || "node"
-    : resolveBinary("npx") || "npx";
+  return process.execPath;
 }
 
 function expectedMcpArgsPrefix() {
-  const npxCli = expectedWindowsNpxCliPath();
-  return isWindows && npxCli ? [npxCli] : [];
+  return [EXPECTED_TSX_CLI];
 }
 
 function expectedTomlString(v: string) {
@@ -83,7 +64,7 @@ describe("ensureMcpConfig", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("writes the stoa server with this session's CONDUCTOR_SESSION_ID", () => {
+  it("writes an owned generic stoa server using Stoa's pinned tsx", () => {
     ensureMcpConfig(dir, "session-abc");
     const cfg = JSON.parse(readFileSync(path.join(dir, ".mcp.json"), "utf-8"));
     expect(cfg.mcpServers.stoa).toBeTruthy();
@@ -91,8 +72,14 @@ describe("ensureMcpConfig", () => {
     expect(
       cfg.mcpServers.stoa.args.slice(0, expectedMcpArgsPrefix().length)
     ).toEqual(expectedMcpArgsPrefix());
-    expect(cfg.mcpServers.stoa.args).toContain("tsx");
-    expect(cfg.mcpServers.stoa.env.CONDUCTOR_SESSION_ID).toBe("session-abc");
+    expect(path.basename(cfg.mcpServers.stoa.args[0])).toBe("cli.mjs");
+    expect(cfg.mcpServers.stoa.args).not.toContain("tsx");
+    expect(cfg.mcpServers.stoa.env.CONDUCTOR_SESSION_ID).toBe(
+      "${STOA_CONDUCTOR_SESSION_ID}"
+    );
+    expect(cfg.mcpServers.stoa.env.STOA_MCP_CONFIG_OWNER).toBe(
+      "stoa-managed-v1"
+    );
     expect(hasMcpConfig(dir)).toBe(true);
   });
 
@@ -109,33 +96,36 @@ describe("ensureMcpConfig", () => {
     expect(cfg.mcpServers.stoa).toBeTruthy(); // added
   });
 
-  it("recovers from a malformed array .mcp.json instead of dropping stoa", () => {
-    // A top-level JSON array survives JSON.parse but JSON.stringify([]) === "[]"
-    // would silently drop the stoa server — start fresh instead.
-    writeFileSync(path.join(dir, ".mcp.json"), "[]");
-    ensureMcpConfig(dir, "s1");
-    const cfg = JSON.parse(readFileSync(path.join(dir, ".mcp.json"), "utf-8"));
-    expect(Array.isArray(cfg)).toBe(false);
-    expect(cfg.mcpServers.stoa).toBeTruthy();
-    expect(hasMcpConfig(dir)).toBe(true);
+  it("leaves malformed Claude configs byte-for-byte intact", () => {
+    for (const malformed of [
+      "[]",
+      "{ definitely-not-json",
+      '{ "mcpServers": null, "other": true }',
+    ]) {
+      const configPath = path.join(dir, ".mcp.json");
+      writeFileSync(configPath, malformed);
+      expect(() => ensureMcpConfig(dir, "s1")).toThrow(
+        /Cannot update Claude MCP config/
+      );
+      expect(readFileSync(configPath, "utf-8")).toBe(malformed);
+    }
   });
 
-  it("recovers when mcpServers itself is malformed", () => {
-    for (const malformed of [[], "oops", null]) {
-      writeFileSync(
-        path.join(dir, ".mcp.json"),
-        JSON.stringify({ mcpServers: malformed, other: true })
-      );
+  it("preserves a user-owned stoa entry instead of replacing it", () => {
+    const configPath = path.join(dir, ".mcp.json");
+    const original = JSON.stringify({
+      mcpServers: { stoa: { command: "user-server", args: ["--stdio"] } },
+    });
+    writeFileSync(configPath, original);
+    expect(() => ensureMcpConfig(dir, "s1")).toThrow(/user-owned stoa/);
+    expect(readFileSync(configPath, "utf-8")).toBe(original);
+  });
 
-      ensureMcpConfig(dir, "s1");
-      const cfg = JSON.parse(
-        readFileSync(path.join(dir, ".mcp.json"), "utf-8")
-      );
-
-      expect(cfg.other).toBe(true);
-      expect(Array.isArray(cfg.mcpServers)).toBe(false);
-      expect(cfg.mcpServers.stoa).toBeTruthy();
-    }
+  it("stays byte-identical for two conductor sessions sharing one cwd", () => {
+    ensureMcpConfig(dir, "session-one");
+    const first = readFileSync(path.join(dir, ".mcp.json"), "utf-8");
+    ensureMcpConfig(dir, "session-two");
+    expect(readFileSync(path.join(dir, ".mcp.json"), "utf-8")).toBe(first);
   });
 
   it("git-excludes .mcp.json locally so it doesn't pollute the repo", () => {
@@ -169,45 +159,348 @@ describe("ensureMcpConfig", () => {
   });
 });
 
-describe("mcpServerCommand", () => {
-  it("uses node + npx-cli.js on Windows so npx.cmd never reparses paths", () => {
-    const result = _mcpServerCommandForTests({
-      onWindows: true,
-      execPath: "C:/Program Files/nodejs/node.exe",
-      npmExecPath: "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js",
-      resolveBin: (name) =>
-        name === "node"
-          ? "C:/Program Files/nodejs/node.exe"
-          : name === "npx"
-            ? "C:/Program Files/nodejs/npx.cmd"
-            : null,
-      exists: (candidate) =>
-        candidate.replace(/\\/g, "/").endsWith("npm/bin/npx-cli.js"),
-    });
+describe("provider-native project MCP configs", () => {
+  let dir: string;
 
-    expect(result.command).toBe("C:/Program Files/nodejs/node.exe");
-    expect(result.argsPrefix.map((p) => p.replace(/\\/g, "/"))).toEqual([
-      "C:/Program Files/nodejs/node_modules/npm/bin/npx-cli.js",
-    ]);
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "stoa-provider-mcp-"));
   });
 
-  it("refuses to fall back to npx.cmd on Windows when npx-cli.js is missing", () => {
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("writes Kilo's supported .kilo/kilo.json local-server shape", () => {
+    ensureKiloMcpConfig(dir, "kilo-session");
+
+    const configPath = path.join(dir, ".kilo", "kilo.json");
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(config.mcp.stoa).toMatchObject({
+      type: "local",
+      enabled: true,
+      environment: {
+        CONDUCTOR_SESSION_ID: "{env:STOA_CONDUCTOR_SESSION_ID}",
+        STOA_MCP_CONFIG_OWNER: "stoa-managed-v1",
+      },
+    });
+    expect(config.mcp.stoa.command[0]).toBe(expectedMcpCommand());
+    expect(
+      config.mcp.stoa.command.slice(1, 1 + expectedMcpArgsPrefix().length)
+    ).toEqual(expectedMcpArgsPrefix());
+    expect(config.mcp.stoa.command).not.toContain("tsx");
+    expect(config.mcp.stoa.command.at(-1)).toMatch(/orchestration-server\.ts$/);
+    expect(config.mcp.stoa.environment.STOA_URL).toBeTruthy();
+  });
+
+  it("writes Kimi's required .kimi-code/mcp.json stdio shape", () => {
+    ensureKimiMcpConfig(dir, "kimi-session");
+
+    const configPath = path.join(dir, ".kimi-code", "mcp.json");
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(config.mcpServers.stoa.transport).toBe("stdio");
+    expect(config.mcpServers.stoa.enabled).toBe(true);
+    expect(config.mcpServers.stoa.command).toBe(expectedMcpCommand());
+    expect(
+      config.mcpServers.stoa.args.slice(0, expectedMcpArgsPrefix().length)
+    ).toEqual(expectedMcpArgsPrefix());
+    expect(config.mcpServers.stoa.args).not.toContain("tsx");
+    expect(config.mcpServers.stoa.args.at(-1)).toMatch(
+      /orchestration-server\.ts$/
+    );
+    expect(config.mcpServers.stoa.env).toMatchObject({
+      STOA_URL: expect.any(String),
+      CONDUCTOR_SESSION_ID: "${STOA_CONDUCTOR_SESSION_ID}",
+      STOA_MCP_CONFIG_OWNER: "stoa-managed-v1",
+    });
+  });
+
+  it("preserves unrelated Kilo keys and is generic across two sessions", () => {
+    const configDir = path.join(dir, ".kilo");
+    const configPath = path.join(configDir, "kilo.json");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        model: "user/default",
+        mcp: {
+          github: {
+            type: "remote",
+            url: "https://example.test/mcp",
+            enabled: false,
+          },
+          stoa: {
+            type: "local",
+            command: ["old-command"],
+            timeout: 12_345,
+            environment: {
+              USER_SETTING: "preserved",
+              CONDUCTOR_SESSION_ID: "{env:STOA_CONDUCTOR_SESSION_ID}",
+              STOA_MCP_CONFIG_OWNER: "stoa-managed-v1",
+            },
+          },
+        },
+      })
+    );
+
+    ensureKiloMcpConfig(dir, "session-one");
+    const once = readFileSync(configPath, "utf-8");
+    ensureKiloMcpConfig(dir, "session-two");
+    expect(readFileSync(configPath, "utf-8")).toBe(once);
+
+    const config = JSON.parse(once);
+    expect(config.model).toBe("user/default");
+    expect(config.mcp.github).toEqual({
+      type: "remote",
+      url: "https://example.test/mcp",
+      enabled: false,
+    });
+    expect(config.mcp.stoa.timeout).toBe(12_345);
+    expect(config.mcp.stoa.environment.USER_SETTING).toBe("preserved");
+    expect(config.mcp.stoa.command).not.toEqual(["old-command"]);
+  });
+
+  it("preserves unrelated Kimi keys and is generic across two sessions", () => {
+    const configDir = path.join(dir, ".kimi-code");
+    const configPath = path.join(configDir, "mcp.json");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        metadata: { owner: "user" },
+        mcpServers: {
+          github: { command: "github-mcp", args: ["--stdio"] },
+          stoa: {
+            transport: "http",
+            url: "https://old.example.test/mcp",
+            headers: { Authorization: "old" },
+            bearerTokenEnvVar: "OLD_TOKEN",
+            command: "old-command",
+            args: [],
+            cwd: "custom-cwd",
+            startupTimeoutMs: 12_345,
+            env: {
+              USER_SETTING: "preserved",
+              CONDUCTOR_SESSION_ID: "${STOA_CONDUCTOR_SESSION_ID}",
+              STOA_MCP_CONFIG_OWNER: "stoa-managed-v1",
+            },
+            enabled: false,
+          },
+        },
+      })
+    );
+
+    ensureKimiMcpConfig(dir, "session-one");
+    const once = readFileSync(configPath, "utf-8");
+    ensureKimiMcpConfig(dir, "session-two");
+    expect(readFileSync(configPath, "utf-8")).toBe(once);
+
+    const config = JSON.parse(once);
+    expect(config.metadata).toEqual({ owner: "user" });
+    expect(config.mcpServers.github).toEqual({
+      command: "github-mcp",
+      args: ["--stdio"],
+    });
+    expect(config.mcpServers.stoa.cwd).toBe("custom-cwd");
+    expect(config.mcpServers.stoa.startupTimeoutMs).toBe(12_345);
+    expect(config.mcpServers.stoa.env.USER_SETTING).toBe("preserved");
+    expect(config.mcpServers.stoa.transport).toBe("stdio");
+    expect(config.mcpServers.stoa.enabled).toBe(true);
+    expect(config.mcpServers.stoa).not.toHaveProperty("url");
+    expect(config.mcpServers.stoa).not.toHaveProperty("headers");
+    expect(config.mcpServers.stoa).not.toHaveProperty("bearerTokenEnvVar");
+    expect(config.mcpServers.stoa.command).not.toBe("old-command");
+  });
+
+  it("leaves malformed Kilo and Kimi configs byte-for-byte intact", () => {
+    const cases = [
+      {
+        dirName: ".kilo",
+        fileName: "kilo.json",
+        malformed: '{ "mcp": [1, 2] }',
+        write: ensureKiloMcpConfig,
+      },
+      {
+        dirName: ".kilo",
+        fileName: "kilo.json",
+        malformed: "{ definitely-not-json",
+        write: ensureKiloMcpConfig,
+      },
+      {
+        dirName: ".kimi-code",
+        fileName: "mcp.json",
+        malformed: "{ definitely-not-json",
+        write: ensureKimiMcpConfig,
+      },
+      {
+        dirName: ".kimi-code",
+        fileName: "mcp.json",
+        malformed: '{ "mcpServers": { "stoa": false } }',
+        write: ensureKimiMcpConfig,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const configDir = path.join(dir, testCase.dirName);
+      const configPath = path.join(configDir, testCase.fileName);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(configPath, testCase.malformed);
+
+      expect(() => testCase.write(dir, "session")).toThrow(
+        /Cannot update (Kilo|Kimi) MCP config/
+      );
+      expect(readFileSync(configPath, "utf-8")).toBe(testCase.malformed);
+    }
+  });
+
+  it("preserves user-owned Kilo and Kimi stoa entries", () => {
+    const cases = [
+      {
+        relativePath: KILO_MCP_CONFIG_PATH,
+        config: { mcp: { stoa: { command: ["user-kilo"] } } },
+        write: ensureKiloMcpConfig,
+      },
+      {
+        relativePath: KIMI_MCP_CONFIG_PATH,
+        config: {
+          mcpServers: { stoa: { command: "user-kimi", args: [] } },
+        },
+        write: ensureKimiMcpConfig,
+      },
+    ];
+    for (const testCase of cases) {
+      const configPath = path.join(dir, testCase.relativePath);
+      mkdirSync(path.dirname(configPath), { recursive: true });
+      const original = JSON.stringify(testCase.config);
+      writeFileSync(configPath, original);
+      expect(() => testCase.write(dir, "session")).toThrow(/user-owned stoa/);
+      expect(readFileSync(configPath, "utf-8")).toBe(original);
+      rmSync(configPath);
+    }
+  });
+
+  it("coexists with Kilo JSONC without rewriting comments", () => {
+    const rootJsoncPath = path.join(dir, "kilo.jsonc");
+    const nestedDir = path.join(dir, ".kilo");
+    const nestedJsoncPath = path.join(nestedDir, "kilo.jsonc");
+    const rootJsonc = '{\n  // user comment\n  "model": "root/model"\n}\n';
+    const nestedJsonc = '{\n  // another comment\n  "theme": "dark"\n}\n';
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(rootJsoncPath, rootJsonc);
+    writeFileSync(nestedJsoncPath, nestedJsonc);
+
+    ensureKiloMcpConfig(dir, "session");
+
+    expect(readFileSync(rootJsoncPath, "utf-8")).toBe(rootJsonc);
+    expect(readFileSync(nestedJsoncPath, "utf-8")).toBe(nestedJsonc);
+    expect(existsSync(path.join(nestedDir, "kilo.json"))).toBe(true);
+  });
+
+  it("git-excludes the exact generated provider paths once", () => {
+    execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
+
+    ensureKiloMcpConfig(dir, "session");
+    ensureKiloMcpConfig(dir, "session");
+    ensureKimiMcpConfig(dir, "session");
+    ensureKimiMcpConfig(dir, "session");
+
+    const lines = readFileSync(
+      path.join(dir, ".git", "info", "exclude"),
+      "utf-8"
+    )
+      .split(/\r?\n/)
+      .filter(Boolean);
+    expect(lines.filter((line) => line === KILO_MCP_CONFIG_PATH)).toHaveLength(
+      1
+    );
+    expect(lines.filter((line) => line === KIMI_MCP_CONFIG_PATH)).toHaveLength(
+      1
+    );
+  });
+
+  it("dispatches only project-config providers", () => {
+    ensureProviderMcpConfig("kilo", dir, "kilo-session");
+    ensureProviderMcpConfig("kimi", dir, "kimi-session");
+    expect(existsSync(path.join(dir, ".kilo", "kilo.json"))).toBe(true);
+    expect(existsSync(path.join(dir, ".kimi-code", "mcp.json"))).toBe(true);
+    expect(() =>
+      ensureProviderMcpConfig("codex", dir, "codex-session")
+    ).toThrow(/does not use a project MCP config file/);
+  });
+});
+
+describe("mcpServerCommand", () => {
+  it("derives the Stoa root from the module tree and ships tsx at runtime", () => {
+    expect(_findStoaInstallRootForTests(path.join(process.cwd(), "lib"))).toBe(
+      process.cwd()
+    );
+    const manifest = JSON.parse(
+      readFileSync(path.join(process.cwd(), "package.json"), "utf-8")
+    );
+    expect(manifest.dependencies.tsx).toBeTruthy();
+    expect(manifest.devDependencies.tsx).toBeUndefined();
+  });
+
+  it("uses absolute node + pinned tsx argv and runs without npx/network", () => {
+    const result = _mcpServerCommandForTests({});
+    expect(result).toEqual({
+      command: process.execPath,
+      argsPrefix: [EXPECTED_TSX_CLI],
+    });
+    expect(path.isAbsolute(result.command)).toBe(true);
+    expect(result.argsPrefix.every(path.isAbsolute)).toBe(true);
+    expect(result.command.toLowerCase()).not.toContain("npx");
+    const probe = spawnSync(
+      result.command,
+      [...result.argsPrefix, "--version"],
+      {
+        encoding: "utf8",
+      }
+    );
+    expect(probe.error).toBeUndefined();
+    expect(probe.status).toBe(0);
+  });
+
+  it("ignores a malicious project-local tsx package", () => {
+    const project = mkdtempSync(path.join(tmpdir(), "stoa-malicious-tsx-"));
+    try {
+      const maliciousDir = path.join(project, "node_modules", "tsx", "dist");
+      mkdirSync(maliciousDir, { recursive: true });
+      writeFileSync(
+        path.join(maliciousDir, "cli.mjs"),
+        "throw new Error('project tsx executed')"
+      );
+      const moduleUrl = pathToFileURL(
+        path.join(process.cwd(), "lib", "mcp-config.ts")
+      ).href;
+      const probe = spawnSync(
+        process.execPath,
+        [
+          EXPECTED_TSX_CLI,
+          "--eval",
+          `import { _mcpServerCommandForTests as get } from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(get({})));`,
+        ],
+        { cwd: project, encoding: "utf8" }
+      );
+      expect(probe.error).toBeUndefined();
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(JSON.parse(probe.stdout.trim())).toEqual({
+        command: process.execPath,
+        argsPrefix: [EXPECTED_TSX_CLI],
+      });
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when the pinned absolute tsx path is unavailable", () => {
+    const missing = path.resolve("definitely-missing", "tsx", "cli.mjs");
     expect(() =>
       _mcpServerCommandForTests({
-        onWindows: true,
-        execPath: "C:\\Program Files\\nodejs\\node.exe",
-        npmExecPath: undefined,
-        resolveBin: (name) =>
-          name === "node"
-            ? "C:\\Program Files\\nodejs\\node.exe"
-            : name === "npx"
-              ? "C:\\Program Files\\nodejs\\npx.cmd"
-              : null,
+        execPath: process.execPath,
+        tsxCliPath: missing,
         exists: () => false,
       })
-    ).toThrow(
-      "Unable to locate npm npx-cli.js on Windows; cannot safely configure Stoa MCP server"
-    );
+    ).toThrow(/pinned tsx CLI is missing/);
   });
 });
 
@@ -228,32 +521,25 @@ describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
     for (const prefix of expectedMcpArgsPrefix()) {
       expect(argsToken).toContain(expectedTomlString(prefix));
     }
-    if (isWindows) {
-      // Codex starts MCP servers with a direct child-process spawn. On Windows,
-      // use node+npx-cli.js so cmd.exe never reparses the server path.
-      expect(path.basename(expectedMcpCommand()).toLowerCase()).not.toBe(
-        "cmd.exe"
-      );
-      const probe = spawnSync(
-        expectedMcpCommand(),
-        [...expectedMcpArgsPrefix(), "--version"],
-        { encoding: "utf8" }
-      );
-      expect(probe.error).toBeUndefined();
-      expect(probe.status).toBe(0);
-    }
-    expect(argsToken).toContain("'tsx'");
+    const probe = spawnSync(
+      expectedMcpCommand(),
+      [...expectedMcpArgsPrefix(), "--version"],
+      { encoding: "utf8" }
+    );
+    expect(probe.error).toBeUndefined();
+    expect(probe.status).toBe(0);
+    expect(argsToken).not.toMatch(/(?:\[|,)'tsx'(?:,|\])/);
     expect(kv).toContain(
       "mcp_servers.stoa.env.CONDUCTOR_SESSION_ID='sess-123'"
     );
-    // Points npx tsx at the orchestration server entrypoint.
+    // Points Stoa's pinned tsx CLI at the orchestration server entrypoint.
     expect(args.join(" ")).toContain("orchestration-server.ts");
   });
 
   it("uses TOML-safe literals for argv values (keeps Windows backslashes intact)", () => {
     const args = buildCodexOrchestrationArgs("s1");
     const argsToken = args.find((s) => s.startsWith("mcp_servers.stoa.args="))!;
-    expect(argsToken).toContain(expectedTomlString("tsx"));
+    expect(argsToken).toContain(expectedTomlString(EXPECTED_TSX_CLI));
     for (const prefix of expectedMcpArgsPrefix()) {
       expect(argsToken).toContain(expectedTomlString(prefix));
     }
@@ -271,40 +557,43 @@ describe("buildCodexOrchestrationArgs — Codex conductor `-c` flags", () => {
   });
 });
 
-describe("planHermesRegistration — stale-path self-correction (F3)", () => {
+describe("planHermesRegistration — ownership-safe global registration", () => {
   const cur = JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     serverPath: "/abs/stoa/mcp/orchestration-server.ts",
-    command: "npx",
-    args: ["tsx", "/abs/stoa/mcp/orchestration-server.ts"],
+    command: "/abs/node",
+    args: ["/abs/tsx/cli.mjs", "/abs/stoa/mcp/orchestration-server.ts"],
   });
 
   it("skips when listed AND recorded at the current registration identity", () => {
     expect(planHermesRegistration(true, cur, cur)).toEqual({
       skip: true,
       removeFirst: false,
+      conflict: false,
     });
   });
 
-  it("re-points (remove-first) when listed at a STALE identity", () => {
+  it("fails closed without removing a listed server at a stale identity", () => {
     expect(
       planHermesRegistration(true, JSON.stringify({ old: true }), cur)
     ).toEqual({
       skip: false,
-      removeFirst: true,
+      removeFirst: false,
+      conflict: true,
     });
   });
 
   it("treats the old path-only marker format as stale", () => {
     expect(
       planHermesRegistration(true, "/abs/stoa/mcp/orchestration-server.ts", cur)
-    ).toEqual({ skip: false, removeFirst: true });
+    ).toEqual({ skip: false, removeFirst: false, conflict: true });
   });
 
-  it("re-registers (remove-first) when listed but the path is unknown", () => {
+  it("preserves a user-owned global stoa entry when no marker proves ownership", () => {
     expect(planHermesRegistration(true, null, cur)).toEqual({
       skip: false,
-      removeFirst: true,
+      removeFirst: false,
+      conflict: true,
     });
   });
 
@@ -312,6 +601,7 @@ describe("planHermesRegistration — stale-path self-correction (F3)", () => {
     expect(planHermesRegistration(false, null, cur)).toEqual({
       skip: false,
       removeFirst: false,
+      conflict: false,
     });
   });
 });
@@ -353,7 +643,7 @@ describe("removeConductorMarker (F5 + ownership check)", () => {
 });
 
 describe("Hermes conductor wiring", () => {
-  it("buildHermesRegisterArgs registers the stoa stdio server (command/args only)", () => {
+  it("registers pinned stdio argv with a per-process identity mapping", () => {
     const args = buildHermesRegisterArgs("/abs/orchestration-server.ts");
     expect(args).toEqual([
       "mcp",
@@ -361,14 +651,13 @@ describe("Hermes conductor wiring", () => {
       "stoa",
       "--command",
       expectedMcpCommand(),
+      "--env",
+      "CONDUCTOR_SESSION_ID=${STOA_CONDUCTOR_SESSION_ID}",
       "--args",
       ...expectedMcpArgsPrefix(),
-      "tsx",
       "/abs/orchestration-server.ts",
     ]);
-    // No per-session env baked into the global registration — the id rides the
-    // marker file, so multiple conductors don't clobber each other.
-    expect(args).not.toContain("--env");
+    expect(args).not.toContain("tsx");
   });
 
   it("writeConductorMarker drops the session id in a .stoa-conductor file", () => {

@@ -3,7 +3,10 @@ import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
 
-const state = vi.hoisted(() => ({ db: null as unknown }));
+const state = vi.hoisted(() => ({
+  db: null as unknown,
+  defaultBranch: "main",
+}));
 
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
@@ -20,13 +23,30 @@ vi.mock("@/lib/git-status", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/git-status")>();
   return {
     ...actual,
-    getDefaultBranch: () => "main",
+    getDefaultBranch: () => state.defaultBranch,
     isGitRepo: () => true,
+  };
+});
+
+vi.mock("@/lib/readiness-server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/readiness-server")>();
+  return {
+    ...actual,
+    detectAgentBinaries: () => ({
+      claude: false,
+      codex: true,
+      hermes: false,
+      kilo: false,
+      kimi: false,
+      shell: true,
+    }),
   };
 });
 
 import { queries } from "@/lib/db";
 import { createFleetRunFromSource } from "@/lib/fleet/source-service";
+import { approveFleetRunPlan } from "@/lib/fleet/service";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
@@ -40,6 +60,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  state.defaultBranch = "main";
   db().exec(`
     DELETE FROM fleet_events;
     DELETE FROM fleet_artifacts;
@@ -83,6 +104,45 @@ beforeEach(() => {
 });
 
 describe("createFleetRunFromSource", () => {
+  it("redacts source lineage prose before durable import", () => {
+    const canary = "sk-SOURCECANARY0123456789";
+    const result = createFleetRunFromSource(
+      {
+        source: {
+          kind: "text",
+          name: `Imported ${canary}`,
+          text: "- Implement safe import [files: lib/import.ts]",
+          claimMode: "write",
+          repoId: "repo-source",
+          sourceId: "epic-safe",
+          provider: "codex",
+          verifyCommand: "npm test",
+        },
+      },
+      `source actor password=${canary}`
+    );
+    if ("error" in result) throw new Error(result.error);
+
+    const runId = result.run.run.id;
+    const run = db()
+      .prepare(
+        `SELECT name, goal, source_id, source_name, settings_json
+         FROM fleet_runs WHERE id = ?`
+      )
+      .get(runId);
+    const lineage = db()
+      .prepare(
+        `SELECT source_ref, source_step_id, source_issue_id
+         FROM fleet_tasks WHERE fleet_run_id = ?`
+      )
+      .all(runId);
+    const events = db()
+      .prepare(`SELECT payload FROM fleet_events WHERE fleet_run_id = ?`)
+      .all(runId);
+    expect(JSON.stringify({ run, lineage, events })).not.toContain(canary);
+    expect(JSON.stringify(run)).toContain("[REDACTED]");
+  });
+
   it("atomically creates a durable plan with its dependency graph", () => {
     const result = createFleetRunFromSource({
       source: {
@@ -96,6 +156,7 @@ describe("createFleetRunFromSource", () => {
         repoId: "repo-source",
         sourceId: "epic-42",
         provider: "codex",
+        verifyCommand: "npm test",
       },
       options: {
         reviewPolicy: "four_agent",
@@ -136,6 +197,166 @@ describe("createFleetRunFromSource", () => {
     ).toBe(true);
   });
 
+  it.each([
+    [
+      "Markdown",
+      {
+        kind: "text",
+        text: "- Implement import [files: lib/import.ts]",
+        claimMode: "write",
+        repoId: "repo-source",
+        provider: "hermes",
+        model: "kimi-k3",
+        verifyCommand: "npm test",
+      },
+    ],
+    [
+      "Pipeline",
+      {
+        kind: "pipeline",
+        repoId: "repo-source",
+        baseBranch: "main",
+        verifyCommand: "npm test",
+        spec: {
+          name: "Imported pipeline",
+          workingDirectory: "C:\\repo",
+          steps: [
+            {
+              id: "build",
+              agent: "hermes",
+              model: "kimi-k3",
+              task: "Build it",
+              outputFile: "lib/pipeline.ts",
+            },
+          ],
+        },
+      },
+    ],
+    [
+      "Builder",
+      {
+        kind: "builder",
+        repoId: "repo-source",
+        verifyCommand: "npm test",
+        workflow: {
+          name: "Imported builder",
+          workingDirectory: "C:\\repo",
+          projectId: null,
+          worktreePath: null,
+          nodes: [
+            {
+              step: {
+                id: "build",
+                agent: "hermes",
+                model: "kimi-k3",
+                task: "Build it",
+                outputFile: "lib/builder.ts",
+              },
+              x: 0,
+              y: 0,
+            },
+          ],
+          notes: [],
+        },
+      },
+    ],
+    [
+      "Dispatch",
+      {
+        kind: "dispatch_planner",
+        repo: { id: "repo-source" },
+        provider: "hermes",
+        model: "kimi-k3",
+        verifyCommand: "npm test",
+        tasks: [
+          {
+            title: "Build it",
+            body: "Implement the dispatch task",
+            claims: ["lib/dispatch.ts"],
+          },
+        ],
+      },
+    ],
+  ])(
+    "allocates an imported %s graph only to installed providers",
+    (_name, source) => {
+      const result = createFleetRunFromSource({ source });
+      if ("error" in result) throw new Error(result.error);
+
+      expect(result.run.run).toMatchObject({
+        provider: "codex",
+        model: null,
+        approvalState: "needs_approval",
+      });
+      expect(result.run.tasks).not.toHaveLength(0);
+      expect(
+        result.run.tasks.map((task) => ({
+          provider: task.agentType,
+          model: task.model,
+        }))
+      ).toEqual(
+        result.run.tasks.map(() => ({ provider: "codex", model: null }))
+      );
+    }
+  );
+
+  it("rejects an import before persistence when no agent provider is installed", () => {
+    const result = createFleetRunFromSource(
+      {
+        source: {
+          kind: "text",
+          text: "- Implement feature [files: lib/feature.ts]",
+          claimMode: "write",
+          repoId: "repo-source",
+          provider: "claude",
+          verifyCommand: "npm test",
+        },
+      },
+      "operator",
+      { detectInstalledProviders: () => [] }
+    );
+
+    expect(result).toEqual({
+      error: "no installed agent provider is available",
+      status: 409,
+    });
+    expect(db().prepare(`SELECT COUNT(*) AS n FROM fleet_runs`).get()).toEqual({
+      n: 0,
+    });
+  });
+
+  it("preserves a project's configured checkout branch through approval", () => {
+    state.defaultBranch = "release/v2";
+    const result = createFleetRunFromSource({
+      source: {
+        kind: "text",
+        text: "- Implement release [files: lib/release.ts]",
+        claimMode: "write",
+        projectId: "proj-source",
+        verifyCommand: "npm test",
+      },
+    });
+    if ("error" in result) throw new Error(result.error);
+    expect(result.run.run).toMatchObject({
+      provider: "codex",
+      model: "gpt-5.5",
+    });
+    expect(result.run.tasks[0]).toMatchObject({
+      agentType: "codex",
+      model: "gpt-5.5",
+      baseBranch: "release/v2",
+    });
+
+    const approved = approveFleetRunPlan(result.run.run.id, {
+      expectedPlanHash: result.run.run.planHash,
+    });
+    if ("error" in approved) throw new Error(approved.error);
+    expect(approved.run.run.approvalState).toBe("approved");
+    expect(approved.run.tasks[0]).toMatchObject({
+      baseBranch: "release/v2",
+    });
+  });
+
   it("rolls back the new draft when its repository target is invalid", () => {
     const result = createFleetRunFromSource({
       source: {
@@ -143,6 +364,7 @@ describe("createFleetRunFromSource", () => {
         text: "- Implement feature [files: lib/feature.ts]",
         claimMode: "write",
         repoId: "missing-repo",
+        verifyCommand: "npm test",
       },
     });
 
@@ -184,6 +406,7 @@ describe("createFleetRunFromSource", () => {
       "Pipeline",
       {
         kind: "pipeline",
+        verifyCommand: "npm test",
         spec: {
           name: "Unbound pipeline",
           workingDirectory: "C:\\repo",
@@ -195,6 +418,7 @@ describe("createFleetRunFromSource", () => {
       "Builder",
       {
         kind: "builder",
+        verifyCommand: "npm test",
         workflow: {
           name: "Unbound builder",
           workingDirectory: "C:\\repo",
@@ -215,6 +439,7 @@ describe("createFleetRunFromSource", () => {
       "Dispatch",
       {
         kind: "dispatch_planner",
+        verifyCommand: "npm test",
         tasks: [{ title: "Build it", body: "Implement", claims: ["lib/"] }],
       },
     ],
@@ -244,6 +469,7 @@ describe("createFleetRunFromSource", () => {
         claimMode: "write",
         repoId: "repo-source",
         workingDirectory: "C:\\other-repo",
+        verifyCommand: "npm test",
       },
     });
 
@@ -269,6 +495,7 @@ describe("createFleetRunFromSource", () => {
         kind: "pipeline",
         repoId: "repo-source",
         baseBranch: "main",
+        verifyCommand: "npm test",
         spec: {
           name: "Divergent pipeline",
           workingDirectory: "C:\\repo",
@@ -296,6 +523,7 @@ describe("createFleetRunFromSource", () => {
         sourceId: "pipeline-release",
         repoId: "repo-source",
         baseBranch: "main",
+        verifyCommand: "npm test",
         spec: {
           name: "Bound pipeline",
           workingDirectory: "C:\\repo",
@@ -327,6 +555,7 @@ describe("createFleetRunFromSource", () => {
       source: {
         kind: "dispatch_issue",
         sourceId: "dispatch-batch",
+        verifyCommand: "npm test",
         issues: [
           {
             id: "dispatch-10",
@@ -381,6 +610,7 @@ describe("createFleetRunFromSource", () => {
         },
       ],
       repo: { id: "repo-source" },
+      verifyCommand: "npm test",
     };
     const stale = createFleetRunFromSource({ source });
     const missing = createFleetRunFromSource({

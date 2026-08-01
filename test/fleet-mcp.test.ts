@@ -72,6 +72,7 @@ describe("Fleet MCP tools", () => {
       params: { name: "fleet_create_run", arguments: { goal: "unsafe" } },
     });
     expect(text(result)).toContain("capabilityToken is required");
+    expect(result.isError).toBe(true);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

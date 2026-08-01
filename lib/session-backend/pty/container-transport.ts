@@ -58,10 +58,11 @@ export class ContainerTransport implements PtyTransport {
         cwd: req.spawn.cwd ?? ".",
         cols: req.cols,
         rows: req.rows,
+        env: req.spawn.env,
       });
       return this.delegate.attachStream({
         ...req,
-        spawn: { binary: r.binary, args: r.args, cwd: r.cwd },
+        spawn: { binary: r.binary, args: r.args, cwd: r.cwd, env: r.env },
       });
     }
     return this.delegate.attachStream(req);

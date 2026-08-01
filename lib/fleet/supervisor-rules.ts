@@ -102,7 +102,10 @@ export function recommendFleetSupervisorActions(
   const criticalAttention = state.attention.some(
     (item) => item.severity === "critical"
   );
-  if (state.run.status === "running" && criticalAttention) {
+  if (
+    ["running", "reviewing", "merging"].includes(state.run.status) &&
+    criticalAttention
+  ) {
     recommendations.push(
       recommendation(40, "pause", "critical_attention_while_running")
     );

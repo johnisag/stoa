@@ -1166,6 +1166,566 @@ function ensureFleetSourceLineageSchema(db: Database.Database): void {
   }
 }
 
+function ensureFleetCostResourceSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_runs")) {
+    for (const column of [
+      { name: "budget_tokens", ddl: "budget_tokens INTEGER" },
+      {
+        name: "reserved_budget_tokens",
+        ddl: "reserved_budget_tokens INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "spent_budget_tokens",
+        ddl: "spent_budget_tokens INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "cost_confidence",
+        ddl: "cost_confidence TEXT NOT NULL DEFAULT 'unknown'",
+      },
+      {
+        name: "budget_stop_mode",
+        ddl: "budget_stop_mode TEXT NOT NULL DEFAULT 'pause-new'",
+      },
+      {
+        name: "budget_warning_threshold",
+        ddl: "budget_warning_threshold REAL NOT NULL DEFAULT 0.8",
+      },
+      {
+        name: "budget_warning_emitted_at",
+        ddl: "budget_warning_emitted_at TEXT",
+      },
+      { name: "budget_hard_limit_at", ddl: "budget_hard_limit_at TEXT" },
+      {
+        name: "budget_interrupt_deadline_at",
+        ddl: "budget_interrupt_deadline_at TEXT",
+      },
+      {
+        name: "provider_caps_json",
+        ddl: "provider_caps_json TEXT NOT NULL DEFAULT '{}'",
+      },
+      {
+        name: "resource_limits_json",
+        ddl: "resource_limits_json TEXT NOT NULL DEFAULT '{}'",
+      },
+      {
+        name: "default_max_attempts",
+        ddl: "default_max_attempts INTEGER NOT NULL DEFAULT 2",
+      },
+    ]) {
+      addColumnIfMissing(db, "fleet_runs", column);
+    }
+  }
+  if (hasTable(db, "fleet_workers")) {
+    for (const column of [
+      {
+        name: "reservation_tokens",
+        ddl: "reservation_tokens INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "reservation_confidence",
+        ddl: "reservation_confidence TEXT NOT NULL DEFAULT 'unknown'",
+      },
+      { name: "reservation_basis", ddl: "reservation_basis TEXT" },
+      { name: "actual_cost_usd", ddl: "actual_cost_usd REAL" },
+      { name: "actual_tokens", ddl: "actual_tokens INTEGER" },
+      {
+        name: "cost_confidence",
+        ddl: "cost_confidence TEXT NOT NULL DEFAULT 'unknown'",
+      },
+      { name: "cost_reconciled_at", ddl: "cost_reconciled_at TEXT" },
+      { name: "interrupt_requested_at", ddl: "interrupt_requested_at TEXT" },
+      { name: "interrupt_deadline_at", ddl: "interrupt_deadline_at TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_workers", column);
+    }
+  }
+  if (!hasTable(db, "fleet_runs")) return;
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS fleet_cost_accounts (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      session_id TEXT,
+      session_key TEXT NOT NULL,
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      task_id TEXT,
+      provider TEXT NOT NULL,
+      model TEXT,
+      reservation_usd REAL NOT NULL DEFAULT 0,
+      reservation_tokens INTEGER NOT NULL DEFAULT 0,
+      reservation_confidence TEXT NOT NULL DEFAULT 'unknown',
+      reservation_basis TEXT,
+      reservation_released_at TEXT,
+      peak_input_tokens INTEGER NOT NULL DEFAULT 0,
+      peak_output_tokens INTEGER NOT NULL DEFAULT 0,
+      peak_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      peak_cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      observed_cost_usd REAL,
+      fallback_cost_usd REAL NOT NULL DEFAULT 0,
+      charged_cost_usd REAL NOT NULL DEFAULT 0,
+      fallback_tokens INTEGER NOT NULL DEFAULT 0,
+      charged_tokens INTEGER NOT NULL DEFAULT 0,
+      confidence TEXT NOT NULL DEFAULT 'unknown',
+      last_sample_day TEXT,
+      last_sample_at TEXT,
+      terminal_at TEXT,
+      interrupt_requested_at TEXT,
+      interrupt_deadline_at TEXT,
+      interrupt_notice_state TEXT NOT NULL DEFAULT 'unattempted',
+      interrupt_stop_state TEXT NOT NULL DEFAULT 'unattempted',
+      interrupt_cause TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      UNIQUE (fleet_run_id, owner_type, owner_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_runtime_leases (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_key TEXT NOT NULL,
+      units INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'reserved',
+      lease_expires_at TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      released_at TEXT,
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_resource_usage_buckets (
+      fleet_run_id TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_key TEXT NOT NULL,
+      bucket_start_ms INTEGER NOT NULL,
+      units INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (fleet_run_id, resource_type, resource_key, bucket_start_ms),
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_provider_cooldowns (
+      provider TEXT PRIMARY KEY,
+      blocked_until TEXT NOT NULL,
+      failure_count INTEGER NOT NULL DEFAULT 1,
+      reason TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_cost_accounts_session
+      ON fleet_cost_accounts(fleet_run_id, session_key);
+    CREATE INDEX IF NOT EXISTS idx_fleet_cost_accounts_history
+      ON fleet_cost_accounts(provider, model, task_id, terminal_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_runtime_leases_owner_resource
+      ON fleet_runtime_leases(owner_type, owner_id, resource_type, resource_key)
+      WHERE status = 'reserved';
+    CREATE INDEX IF NOT EXISTS idx_fleet_runtime_leases_active
+      ON fleet_runtime_leases(resource_type, resource_key, status, lease_expires_at);
+    CREATE INDEX IF NOT EXISTS idx_fleet_runtime_leases_run
+      ON fleet_runtime_leases(fleet_run_id, status, owner_type, owner_id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_resource_usage_bucket_time
+      ON fleet_resource_usage_buckets(bucket_start_ms, fleet_run_id, resource_type, resource_key);
+    CREATE INDEX IF NOT EXISTS idx_fleet_provider_cooldowns_until
+      ON fleet_provider_cooldowns(blocked_until, provider)
+  `);
+  for (const column of [
+    {
+      name: "reservation_usd",
+      ddl: "reservation_usd REAL NOT NULL DEFAULT 0",
+    },
+    {
+      name: "reservation_tokens",
+      ddl: "reservation_tokens INTEGER NOT NULL DEFAULT 0",
+    },
+    {
+      name: "reservation_confidence",
+      ddl: "reservation_confidence TEXT NOT NULL DEFAULT 'unknown'",
+    },
+    { name: "reservation_basis", ddl: "reservation_basis TEXT" },
+    { name: "reservation_released_at", ddl: "reservation_released_at TEXT" },
+  ]) {
+    addColumnIfMissing(db, "fleet_cost_accounts", column);
+  }
+}
+
+function ensureFleetResourceUsageScopeSchema(db: Database.Database): void {
+  if (!hasTable(db, "fleet_resource_usage_buckets")) {
+    ensureFleetCostResourceSchema(db);
+  }
+  if (!hasTable(db, "fleet_resource_usage_buckets")) return;
+  if (hasColumn(db, "fleet_resource_usage_buckets", "fleet_run_id")) return;
+
+  // Minute buckets are transient admission counters. An unscoped legacy bucket
+  // cannot be attributed safely to a run, so replace it instead of guessing and
+  // accidentally making one run consume another run's allowance.
+  db.exec(`
+    DROP INDEX IF EXISTS idx_fleet_resource_usage_bucket_time;
+    ALTER TABLE fleet_resource_usage_buckets
+      RENAME TO fleet_resource_usage_buckets_unscoped;
+    CREATE TABLE fleet_resource_usage_buckets (
+      fleet_run_id TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_key TEXT NOT NULL,
+      bucket_start_ms INTEGER NOT NULL,
+      units INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (fleet_run_id, resource_type, resource_key, bucket_start_ms),
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE
+    );
+    DROP TABLE fleet_resource_usage_buckets_unscoped;
+    CREATE INDEX idx_fleet_resource_usage_bucket_time
+      ON fleet_resource_usage_buckets(
+        bucket_start_ms, fleet_run_id, resource_type, resource_key
+      );
+  `);
+}
+
+function ensureFleetStatusAndInterruptSchema(db: Database.Database): void {
+  if (!hasTable(db, "fleet_workers")) return;
+  for (const column of [
+    {
+      name: "interrupt_notice_state",
+      ddl: "interrupt_notice_state TEXT NOT NULL DEFAULT 'unattempted'",
+    },
+    {
+      name: "interrupt_stop_state",
+      ddl: "interrupt_stop_state TEXT NOT NULL DEFAULT 'unattempted'",
+    },
+    { name: "interrupt_cause", ddl: "interrupt_cause TEXT" },
+    { name: "rendered_status", ddl: "rendered_status TEXT" },
+    { name: "rendered_status_summary", ddl: "rendered_status_summary TEXT" },
+    {
+      name: "rendered_status_summary_redacted",
+      ddl: "rendered_status_summary_redacted INTEGER NOT NULL DEFAULT 0",
+    },
+    {
+      name: "rendered_status_replacement_count",
+      ddl: "rendered_status_replacement_count INTEGER NOT NULL DEFAULT 0",
+    },
+    {
+      name: "rendered_status_stability_count",
+      ddl: "rendered_status_stability_count INTEGER NOT NULL DEFAULT 0",
+    },
+    {
+      name: "rendered_status_last_captured_at",
+      ddl: "rendered_status_last_captured_at TEXT",
+    },
+    {
+      name: "rendered_status_next_capture_at",
+      ddl: "rendered_status_next_capture_at TEXT",
+    },
+    { name: "rendered_status_error", ddl: "rendered_status_error TEXT" },
+  ]) {
+    addColumnIfMissing(db, "fleet_workers", column);
+  }
+  if (
+    hasColumn(db, "fleet_workers", "id") &&
+    hasColumn(db, "fleet_workers", "status")
+  ) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_fleet_workers_rendered_status_due
+        ON fleet_workers(status, rendered_status_next_capture_at, id)
+    `);
+  }
+}
+
+function backfillFleetInterruptCause(db: Database.Database): void {
+  if (
+    !hasTable(db, "fleet_workers") ||
+    !hasColumn(db, "fleet_workers", "interrupt_requested_at") ||
+    !hasColumn(db, "fleet_workers", "interrupt_cause")
+  ) {
+    return;
+  }
+  // Interrupt requests pre-dating the explicit cause field could only have
+  // come from the operator pause path. Bind that one legacy case once; unknown
+  // non-null values remain untouched so the runtime can fail closed on them.
+  db.prepare(
+    `UPDATE fleet_workers SET interrupt_cause = 'operator_pause'
+     WHERE interrupt_requested_at IS NOT NULL AND interrupt_cause IS NULL`
+  ).run();
+}
+
+function ensureFleetActiveSessionOwnership(db: Database.Database): void {
+  const required = [
+    "id",
+    "session_id",
+    "status",
+    "task_id",
+    "terminal_cause",
+    "failure_code",
+  ];
+  if (
+    !hasTable(db, "fleet_workers") ||
+    required.some((column) => !hasColumn(db, "fleet_workers", column))
+  ) {
+    return;
+  }
+  // A pre-existing duplicate has no safe winner. Quarantine every claimant
+  // without deleting its session binding, so operator cleanup retains exact
+  // evidence and no message/stop side effect can target an ambiguous owner.
+  if (hasTable(db, "fleet_tasks") && hasColumn(db, "fleet_tasks", "status")) {
+    db.exec(`
+      UPDATE fleet_tasks SET status = 'needs_inspection',
+        failure_code = 'duplicate_active_session_binding'
+      WHERE id IN (
+        SELECT task_id FROM fleet_workers
+        WHERE session_id IN (
+          SELECT session_id FROM fleet_workers
+          WHERE session_id IS NOT NULL
+            AND status IN ('running', 'waiting_for_operator')
+          GROUP BY session_id HAVING COUNT(*) > 1
+        )
+      ) AND status IN ('running', 'waiting_for_operator')
+    `);
+  }
+  db.exec(`
+    UPDATE fleet_workers SET status = 'cleanup_pending',
+      terminal_cause = 'duplicate_active_session_binding',
+      failure_code = 'duplicate_active_session_binding'
+    WHERE session_id IN (
+      SELECT session_id FROM fleet_workers
+      WHERE session_id IS NOT NULL
+        AND status IN ('running', 'waiting_for_operator')
+      GROUP BY session_id HAVING COUNT(*) > 1
+    ) AND status IN ('running', 'waiting_for_operator');
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_one_active_session
+      ON fleet_workers(session_id)
+      WHERE session_id IS NOT NULL
+        AND status IN ('running', 'waiting_for_operator');
+  `);
+}
+
+function backfillFleetDurableUsageTotals(db: Database.Database): void {
+  if (
+    !hasTable(db, "fleet_resource_usage_buckets") ||
+    !hasColumn(db, "fleet_resource_usage_buckets", "fleet_run_id")
+  ) {
+    return;
+  }
+  if (
+    hasTable(db, "fleet_events") &&
+    ["fleet_run_id", "event_type", "actor", "payload"].every((column) =>
+      hasColumn(db, "fleet_events", column)
+    )
+  ) {
+    db.exec(`
+      INSERT INTO fleet_resource_usage_buckets
+        (fleet_run_id, resource_type, resource_key, bucket_start_ms, units,
+         updated_at)
+      SELECT fleet_run_id, 'event_bytes_total', 'fleet', 0,
+             SUM(
+               length(CAST(event_type AS BLOB)) +
+               length(CAST(actor AS BLOB)) +
+               length(CAST(COALESCE(payload, '') AS BLOB))
+             ), datetime('now')
+      FROM fleet_events GROUP BY fleet_run_id
+      ON CONFLICT(fleet_run_id, resource_type, resource_key, bucket_start_ms)
+      DO UPDATE SET units = MAX(units, excluded.units),
+                    updated_at = excluded.updated_at
+    `);
+  }
+  if (
+    hasTable(db, "fleet_artifacts") &&
+    [
+      "fleet_run_id",
+      "title",
+      "body",
+      "body_pruned_at",
+      "byte_count",
+      "metadata_json",
+    ].every((column) => hasColumn(db, "fleet_artifacts", column))
+  ) {
+    db.exec(`
+      INSERT INTO fleet_resource_usage_buckets
+        (fleet_run_id, resource_type, resource_key, bucket_start_ms, units,
+         updated_at)
+      SELECT fleet_run_id, 'artifact_bytes_total', 'fleet', 0,
+             SUM(
+               length(CAST(title AS BLOB)) +
+               CASE WHEN body_pruned_at IS NULL
+                 THEN length(CAST(body AS BLOB))
+                 ELSE COALESCE(byte_count, 0)
+               END +
+               length(CAST(COALESCE(metadata_json, '{}') AS BLOB))
+             ), datetime('now')
+      FROM fleet_artifacts GROUP BY fleet_run_id
+      ON CONFLICT(fleet_run_id, resource_type, resource_key, bucket_start_ms)
+      DO UPDATE SET units = MAX(units, excluded.units),
+                    updated_at = excluded.updated_at
+    `);
+  }
+}
+
+function ensureFleetAuxiliaryProviderSchema(db: Database.Database): void {
+  for (const table of [
+    "fleet_reviews",
+    "fleet_task_reviews",
+    "fleet_task_fixes",
+  ]) {
+    if (!hasTable(db, table)) continue;
+    addColumnIfMissing(db, table, { name: "provider", ddl: "provider TEXT" });
+    addColumnIfMissing(db, table, { name: "model", ddl: "model TEXT" });
+  }
+
+  // Requests that were already in flight before this migration must retain the
+  // provider/model used for their reservation. The cost account is the most
+  // authoritative durable launch binding and is preferred over legacy rows.
+  if (
+    hasTable(db, "fleet_cost_accounts") &&
+    ["fleet_run_id", "owner_type", "owner_id", "provider", "model"].every(
+      (column) => hasColumn(db, "fleet_cost_accounts", column)
+    )
+  ) {
+    for (const [table, ownerType] of [
+      ["fleet_reviews", "plan_review"],
+      ["fleet_task_reviews", "task_review"],
+      ["fleet_task_fixes", "fixer"],
+    ] as const) {
+      if (
+        !hasTable(db, table) ||
+        !hasColumn(db, table, "request_id") ||
+        !hasColumn(db, table, "fleet_run_id")
+      ) {
+        continue;
+      }
+      db.exec(`
+        UPDATE ${table}
+        SET model = COALESCE(model, (
+              SELECT account.model FROM fleet_cost_accounts account
+              WHERE account.fleet_run_id = ${table}.fleet_run_id
+                AND account.owner_type = '${ownerType}'
+                AND account.owner_id = ${table}.request_id
+              LIMIT 1
+            )),
+            provider = COALESCE(provider, (
+              SELECT account.provider FROM fleet_cost_accounts account
+              WHERE account.fleet_run_id = ${table}.fleet_run_id
+                AND account.owner_type = '${ownerType}'
+                AND account.owner_id = ${table}.request_id
+              LIMIT 1
+            ))
+        WHERE request_id <> '' AND provider IS NULL
+      `);
+    }
+  }
+
+  // Older active rows can predate cost accounting. Their linked session still
+  // records the exact provider/model that was spawned.
+  if (
+    hasTable(db, "sessions") &&
+    ["id", "agent_type", "model"].every((column) =>
+      hasColumn(db, "sessions", column)
+    )
+  ) {
+    for (const [table, sessionColumn] of [
+      ["fleet_reviews", "reviewer_session_id"],
+      ["fleet_task_reviews", "reviewer_session_id"],
+      ["fleet_task_fixes", "fixer_session_id"],
+    ] as const) {
+      if (
+        !hasTable(db, table) ||
+        !hasColumn(db, table, sessionColumn) ||
+        !hasColumn(db, table, "request_id")
+      ) {
+        continue;
+      }
+      db.exec(`
+        UPDATE ${table}
+        SET model = COALESCE(model, (
+              SELECT session.model FROM sessions session
+              WHERE session.id = ${table}.${sessionColumn} LIMIT 1
+            )),
+            provider = COALESCE(provider, (
+              SELECT session.agent_type FROM sessions session
+              WHERE session.id = ${table}.${sessionColumn} LIMIT 1
+            ))
+        WHERE request_id <> '' AND provider IS NULL
+      `);
+    }
+  }
+}
+
+function ensureFleetAuxiliaryRetrySchema(db: Database.Database): void {
+  for (const table of [
+    "fleet_reviews",
+    "fleet_task_reviews",
+    "fleet_task_fixes",
+  ]) {
+    if (!hasTable(db, table)) continue;
+    addColumnIfMissing(db, table, {
+      name: "launch_failure_count",
+      ddl: "launch_failure_count INTEGER NOT NULL DEFAULT 0",
+    });
+    addColumnIfMissing(db, table, {
+      name: "retry_not_before",
+      ddl: "retry_not_before TEXT",
+    });
+    if (hasColumn(db, table, "state")) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_${table}_launch_retry
+          ON ${table}(state, retry_not_before)
+      `);
+    }
+  }
+}
+
+function ensureFleetCostInterruptSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_cost_accounts")) {
+    for (const column of [
+      { name: "interrupt_requested_at", ddl: "interrupt_requested_at TEXT" },
+      { name: "interrupt_deadline_at", ddl: "interrupt_deadline_at TEXT" },
+      {
+        name: "interrupt_notice_state",
+        ddl: "interrupt_notice_state TEXT NOT NULL DEFAULT 'unattempted'",
+      },
+      {
+        name: "interrupt_stop_state",
+        ddl: "interrupt_stop_state TEXT NOT NULL DEFAULT 'unattempted'",
+      },
+      { name: "interrupt_cause", ddl: "interrupt_cause TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_cost_accounts", column);
+    }
+    if (
+      [
+        "fleet_run_id",
+        "interrupt_deadline_at",
+        "owner_type",
+        "terminal_at",
+        "reservation_released_at",
+      ].every((column) => hasColumn(db, "fleet_cost_accounts", column))
+    ) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_fleet_cost_accounts_interrupt
+          ON fleet_cost_accounts(
+            fleet_run_id, interrupt_deadline_at, owner_type
+          )
+          WHERE terminal_at IS NULL AND reservation_released_at IS NULL
+      `);
+    }
+  }
+
+  // Runs created before desired_state existed used status as the execution
+  // intent. Preserve that legacy intent once scheduler admission begins
+  // enforcing desired_state explicitly; never override a pause or cancel.
+  if (
+    hasTable(db, "fleet_runs") &&
+    ["status", "desired_state"].every((column) =>
+      hasColumn(db, "fleet_runs", column)
+    )
+  ) {
+    db.exec(`
+      UPDATE fleet_runs SET desired_state = 'running'
+      WHERE status IN ('running', 'reviewing', 'merging')
+        AND desired_state IN ('draft', 'planned')
+    `);
+  }
+}
+
 // All migrations in order. Migrations are idempotent (guarded by PRAGMA table_info
 // / IF NOT EXISTS) so a fresh schema or a concurrent-init race never throws a
 // duplicate-column/already-exists error. The runner no longer swallows those
@@ -2651,6 +3211,51 @@ const migrations: Migration[] = [
     id: 65,
     name: "add_fleet_source_lineage",
     up: ensureFleetSourceLineageSchema,
+  },
+  {
+    id: 66,
+    name: "add_fleet_cost_and_resource_admission",
+    up: ensureFleetCostResourceSchema,
+  },
+  {
+    id: 67,
+    name: "scope_fleet_runtime_usage_by_run",
+    up: ensureFleetResourceUsageScopeSchema,
+  },
+  {
+    id: 68,
+    name: "add_fleet_rendered_status_and_interrupt_state",
+    up: ensureFleetStatusAndInterruptSchema,
+  },
+  {
+    id: 69,
+    name: "backfill_fleet_interrupt_cause",
+    up: backfillFleetInterruptCause,
+  },
+  {
+    id: 70,
+    name: "enforce_fleet_active_session_ownership",
+    up: ensureFleetActiveSessionOwnership,
+  },
+  {
+    id: 71,
+    name: "backfill_fleet_durable_usage_totals",
+    up: backfillFleetDurableUsageTotals,
+  },
+  {
+    id: 72,
+    name: "persist_fleet_auxiliary_providers",
+    up: ensureFleetAuxiliaryProviderSchema,
+  },
+  {
+    id: 73,
+    name: "add_fleet_auxiliary_launch_retries",
+    up: ensureFleetAuxiliaryRetrySchema,
+  },
+  {
+    id: 74,
+    name: "add_fleet_cost_interrupt_state",
+    up: ensureFleetCostInterruptSchema,
   },
 ];
 

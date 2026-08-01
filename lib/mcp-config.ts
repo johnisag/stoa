@@ -1,18 +1,41 @@
 /**
  * MCP Config Auto-Generation
  *
- * Writes a .mcp.json file to the session's working directory so Claude
- * automatically picks up the orchestration tools with the session ID baked in.
+ * Writes provider-native configuration so conductor sessions automatically
+ * pick up orchestration tools. Shared configs use a generic environment
+ * placeholder; the launch path supplies each process's own session identity.
  */
 
-import { writeFileSync, existsSync, readFileSync, mkdirSync, rmSync } from "fs";
+import {
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  mkdirSync,
+  rmSync,
+  renameSync,
+  statSync,
+} from "fs";
 import { execFileSync } from "child_process";
+import { randomUUID } from "crypto";
 import path from "path";
 import os from "os";
-import { isWindows, resolveBinary } from "./platform";
-import { CONDUCTOR_MARKER_FILE } from "./conductor-marker";
+import { fileURLToPath } from "url";
+import { createRequire } from "module";
+import { resolveBinary } from "./platform";
+import {
+  CONDUCTOR_MARKER_FILE,
+  parseConductorMarker,
+} from "./conductor-marker";
+import type { ProviderId } from "./providers/registry";
 
 const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
+
+export const CLAUDE_MCP_CONFIG_PATH = ".mcp.json";
+// Kilo also accepts root-level and JSONC variants. Its config-directory loader
+// merges `.kilo/kilo.jsonc` followed by `.kilo/kilo.json`, so this deterministic
+// JSON target takes precedence for `mcp.stoa` without rewriting user comments.
+export const KILO_MCP_CONFIG_PATH = ".kilo/kilo.json";
+export const KIMI_MCP_CONFIG_PATH = ".kimi-code/mcp.json";
 
 interface McpServerCommand {
   command: string;
@@ -20,65 +43,82 @@ interface McpServerCommand {
 }
 
 interface McpServerCommandDeps {
-  onWindows?: boolean;
-  resolveBin?: (name: string) => string | null;
   exists?: (path: string) => boolean;
   execPath?: string;
-  npmExecPath?: string;
+  tsxCliPath?: string;
 }
 
-function windowsNpxCliPath(deps: McpServerCommandDeps = {}): string | null {
-  const candidates = new Set<string>();
-  const resolveBin = deps.resolveBin ?? resolveBinary;
-  const exists = deps.exists ?? existsSync;
-  const npx = resolveBin("npx");
-  if (npx) {
-    candidates.add(
-      path.join(path.dirname(npx), "node_modules", "npm", "bin", "npx-cli.js")
-    );
-  }
-  const execPath = deps.execPath ?? process.execPath;
-  if (execPath) {
-    candidates.add(
-      path.join(
-        path.dirname(execPath),
-        "node_modules",
-        "npm",
-        "bin",
-        "npx-cli.js"
-      )
-    );
-  }
-  const npmExecPath = deps.npmExecPath ?? process.env.npm_execpath;
-  if (npmExecPath) {
-    candidates.add(path.join(path.dirname(npmExecPath), "npx-cli.js"));
-  }
-  for (const candidate of candidates) {
-    if (exists(candidate)) return candidate;
-  }
-  return null;
+interface InstallRootDeps {
+  exists?: (candidate: string) => boolean;
+  readFile?: (candidate: string) => string;
 }
+
+function findStoaInstallRoot(
+  startDirectory: string,
+  deps: InstallRootDeps = {}
+): string {
+  const exists = deps.exists ?? existsSync;
+  const readFile =
+    deps.readFile ?? ((candidate) => readFileSync(candidate, "utf-8"));
+  let current = path.resolve(startDirectory);
+  for (;;) {
+    const manifestPath = path.join(current, "package.json");
+    if (exists(manifestPath)) {
+      try {
+        const manifest = JSON.parse(readFile(manifestPath)) as unknown;
+        if (
+          isPlainObjectRecord(manifest) &&
+          manifest.name === "@johnisag/stoa"
+        ) {
+          return current;
+        }
+      } catch {
+        // Keep walking: generated bundle directories can contain other manifests.
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  throw new Error("Cannot locate the Stoa installation root from this module");
+}
+
+export function _findStoaInstallRootForTests(
+  startDirectory: string,
+  deps: InstallRootDeps = {}
+): string {
+  return findStoaInstallRoot(startDirectory, deps);
+}
+
+// Resolve from this module, never from process.cwd(): MCP sessions deliberately
+// run in user-controlled projects, and direct server launches need not inherit
+// Stoa's cwd. The explicit runtime dependency path is offline and unambiguous.
+const STOA_INSTALL_ROOT = findStoaInstallRoot(
+  path.dirname(fileURLToPath(import.meta.url))
+);
+// Resolve with Node's algorithm anchored at Stoa's own manifest. This supports
+// npm's normal hoisting layout while remaining independent of the MCP child's
+// project cwd. `tsx` is a runtime dependency, so absence is a broken install.
+const STOA_REQUIRE = createRequire(
+  path.join(STOA_INSTALL_ROOT, "package.json")
+);
+const PINNED_TSX_CLI_PATH = STOA_REQUIRE.resolve("tsx/cli");
 
 function mcpServerCommand(deps: McpServerCommandDeps = {}): McpServerCommand {
-  const onWindows = deps.onWindows ?? isWindows;
-  const resolveBin = deps.resolveBin ?? resolveBinary;
-  if (onWindows) {
-    // Codex starts MCP servers with a direct child-process spawn. npm's Windows
-    // shims (`npx.cmd`) are batch files, and cmd.exe would re-parse metachars in
-    // checkout paths. Run npm's JS entrypoint under node so all paths stay argv.
-    const npxCli = windowsNpxCliPath(deps);
-    if (!npxCli) {
-      throw new Error(
-        "Unable to locate npm npx-cli.js on Windows; cannot safely configure Stoa MCP server"
-      );
-    }
-    return {
-      command:
-        resolveBin("node") || deps.execPath || process.execPath || "node",
-      argsPrefix: [npxCli],
-    };
+  const exists = deps.exists ?? existsSync;
+  const execPath = deps.execPath ?? process.execPath;
+  const tsxCliPath = deps.tsxCliPath ?? PINNED_TSX_CLI_PATH;
+  if (!path.isAbsolute(execPath) || !path.isAbsolute(tsxCliPath)) {
+    throw new Error(
+      "Cannot safely configure Stoa MCP server: node and tsx paths must be absolute"
+    );
   }
-  return { command: resolveBin("npx") || "npx", argsPrefix: [] };
+  if (!exists(tsxCliPath)) {
+    throw new Error(
+      `Cannot safely configure Stoa MCP server: pinned tsx CLI is missing at ${tsxCliPath}`
+    );
+  }
+  return { command: execPath, argsPrefix: [tsxCliPath] };
 }
 
 export function _mcpServerCommandForTests(
@@ -91,30 +131,136 @@ function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
+const STOA_MCP_OWNER_KEY = "STOA_MCP_CONFIG_OWNER";
+const STOA_MCP_OWNER_VALUE = "stoa-managed-v1";
+const CONDUCTOR_PROCESS_ENV = "STOA_CONDUCTOR_SESSION_ID";
+const CONDUCTOR_ENV_PLACEHOLDER = `\${${CONDUCTOR_PROCESS_ENV}}`;
+const KILO_CONDUCTOR_ENV_PLACEHOLDER = `{env:${CONDUCTOR_PROCESS_ENV}}`;
+
+/**
+ * Stoa never replaces a provider config entry it cannot prove it owns. Routes
+ * distinguish this from transient setup errors and return 409 without launching
+ * an agent against an ambiguous user-owned server.
+ */
+export class McpConfigConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "McpConfigConflictError";
+  }
+}
+
+function assertStoaEntryMayBeUpdated(
+  environment: Record<string, unknown>,
+  providerName: string,
+  configPath: string
+): void {
+  if (environment[STOA_MCP_OWNER_KEY] !== STOA_MCP_OWNER_VALUE) {
+    throw new McpConfigConflictError(
+      `Cannot configure ${providerName} orchestration: ${configPath} already contains a user-owned stoa MCP server`
+    );
+  }
+}
+
 function hermesRegistrationIdentity(serverPath: string): string {
   const mcp = mcpServerCommand();
   return JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     serverPath,
     command: mcp.command,
-    args: [...mcp.argsPrefix, "tsx", serverPath],
+    args: [...mcp.argsPrefix, serverPath],
+    env: { CONDUCTOR_SESSION_ID: CONDUCTOR_ENV_PLACEHOLDER },
   });
 }
 
 /** Absolute path to the orchestration MCP server entrypoint (server cwd-based). */
 function getOrchestrationServerPath(): string {
-  return path.join(process.cwd(), "mcp", "orchestration-server.ts");
+  return path.join(STOA_INSTALL_ROOT, "mcp", "orchestration-server.ts");
 }
 
-interface McpConfig {
-  mcpServers: Record<
-    string,
-    {
-      command: string;
-      args: string[];
-      env?: Record<string, string>;
-    }
-  >;
+function readJsonObjectForUpdate(
+  configPath: string,
+  providerName: string
+): Record<string, unknown> {
+  if (!existsSync(configPath)) return {};
+
+  const source = readFileSync(configPath, "utf-8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new McpConfigConflictError(
+      `Cannot update ${providerName} MCP config: ${configPath} is not valid JSON`
+    );
+  }
+  if (!isPlainObjectRecord(parsed)) {
+    throw new McpConfigConflictError(
+      `Cannot update ${providerName} MCP config: ${configPath} must contain a JSON object`
+    );
+  }
+  return parsed;
+}
+
+function readServerMapForUpdate(
+  config: Record<string, unknown>,
+  key: "mcp" | "mcpServers",
+  configPath: string,
+  providerName: string
+): Record<string, unknown> {
+  const current = config[key];
+  if (current === undefined) return {};
+  if (!isPlainObjectRecord(current)) {
+    throw new McpConfigConflictError(
+      `Cannot update ${providerName} MCP config: ${configPath}.${key} must be a JSON object`
+    );
+  }
+  return current;
+}
+
+function readNestedObjectForUpdate(
+  owner: Record<string, unknown>,
+  key: string,
+  configPath: string,
+  providerName: string,
+  jsonPath: string
+): Record<string, unknown> {
+  const current = owner[key];
+  if (current === undefined) return {};
+  if (!isPlainObjectRecord(current)) {
+    throw new McpConfigConflictError(
+      `Cannot update ${providerName} MCP config: ${configPath}.${jsonPath} must be a JSON object`
+    );
+  }
+  return current;
+}
+
+function writeJsonAtomically(
+  configPath: string,
+  config: Record<string, unknown>
+): void {
+  const tempPath = `${configPath}.stoa-${process.pid}-${randomUUID()}.tmp`;
+  const mode = existsSync(configPath) ? statSync(configPath).mode : undefined;
+  try {
+    writeFileSync(tempPath, JSON.stringify(config, null, 2) + "\n", {
+      encoding: "utf-8",
+      flag: "wx",
+      mode,
+    });
+    renameSync(tempPath, configPath);
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
+}
+
+function writeProjectConfig(
+  workingDirectory: string,
+  relativePath: string,
+  config: Record<string, unknown>
+): void {
+  const configPath = path.join(workingDirectory, relativePath);
+  mkdirSync(path.dirname(configPath), { recursive: true });
+  writeJsonAtomically(configPath, config);
+  ensureGitExcluded(workingDirectory, relativePath);
 }
 
 /**
@@ -122,54 +268,189 @@ interface McpConfig {
  */
 export function ensureMcpConfig(
   workingDirectory: string,
-  sessionId: string
+  _sessionId: string
 ): void {
-  const configPath = path.join(workingDirectory, ".mcp.json");
+  const configPath = path.join(workingDirectory, CLAUDE_MCP_CONFIG_PATH);
   const orchestrationServerPath = getOrchestrationServerPath();
-
-  let config: McpConfig = { mcpServers: {} };
-
-  // Read existing config if present
-  if (existsSync(configPath)) {
-    try {
-      const parsed = JSON.parse(readFileSync(configPath, "utf-8"));
-      // Only adopt a plain object — an array/null/primitive would survive
-      // JSON.parse but then silently drop our `stoa` server on stringify
-      // (e.g. JSON.stringify([]) === "[]"), breaking orchestration.
-      if (isPlainObjectRecord(parsed)) {
-        const parsedConfig = parsed as Partial<McpConfig> &
-          Record<string, unknown>;
-        config = {
-          ...parsedConfig,
-          mcpServers: isPlainObjectRecord(parsedConfig.mcpServers)
-            ? (parsedConfig.mcpServers as McpConfig["mcpServers"])
-            : {},
-        };
-      }
-    } catch {
-      // Invalid JSON, start fresh
-      config = { mcpServers: {} };
-    }
+  const config = readJsonObjectForUpdate(configPath, "Claude");
+  const servers = readServerMapForUpdate(
+    config,
+    "mcpServers",
+    configPath,
+    "Claude"
+  );
+  const hasStoa = Object.prototype.hasOwnProperty.call(servers, "stoa");
+  const existingStoa = readNestedObjectForUpdate(
+    servers,
+    "stoa",
+    configPath,
+    "Claude",
+    "mcpServers.stoa"
+  );
+  const existingEnv = readNestedObjectForUpdate(
+    existingStoa,
+    "env",
+    configPath,
+    "Claude",
+    "mcpServers.stoa.env"
+  );
+  if (hasStoa) {
+    assertStoaEntryMayBeUpdated(existingEnv, "Claude", configPath);
   }
-
-  // Add/update stoa orchestration server
   const mcp = mcpServerCommand();
-  config.mcpServers["stoa"] = {
-    command: mcp.command,
-    args: [...mcp.argsPrefix, "tsx", orchestrationServerPath],
-    env: {
-      STOA_URL,
-      CONDUCTOR_SESSION_ID: sessionId,
+  config.mcpServers = {
+    ...servers,
+    stoa: {
+      ...existingStoa,
+      command: mcp.command,
+      args: [...mcp.argsPrefix, orchestrationServerPath],
+      env: {
+        ...existingEnv,
+        STOA_URL,
+        CONDUCTOR_SESSION_ID: CONDUCTOR_ENV_PLACEHOLDER,
+        [STOA_MCP_OWNER_KEY]: STOA_MCP_OWNER_VALUE,
+      },
+    },
+  };
+  writeProjectConfig(workingDirectory, CLAUDE_MCP_CONFIG_PATH, config);
+}
+
+/**
+ * Write Kilo's project-local MCP entry. Stoa deliberately targets
+ * `.kilo/kilo.json`, one of Kilo's documented project config paths, and never
+ * rewrites JSONC files because serializing them as JSON would destroy comments.
+ * Existing JSON must be structurally usable; malformed user data is left intact
+ * and reported to the caller instead of being reset.
+ */
+export function ensureKiloMcpConfig(
+  workingDirectory: string,
+  _sessionId: string
+): void {
+  const configPath = path.join(workingDirectory, KILO_MCP_CONFIG_PATH);
+  const config = readJsonObjectForUpdate(configPath, "Kilo");
+  const servers = readServerMapForUpdate(config, "mcp", configPath, "Kilo");
+  const existingStoa = readNestedObjectForUpdate(
+    servers,
+    "stoa",
+    configPath,
+    "Kilo",
+    "mcp.stoa"
+  );
+  const existingEnvironment = readNestedObjectForUpdate(
+    existingStoa,
+    "environment",
+    configPath,
+    "Kilo",
+    "mcp.stoa.environment"
+  );
+  if (Object.prototype.hasOwnProperty.call(servers, "stoa")) {
+    assertStoaEntryMayBeUpdated(existingEnvironment, "Kilo", configPath);
+  }
+  const mcp = mcpServerCommand();
+
+  config.mcp = {
+    ...servers,
+    stoa: {
+      ...existingStoa,
+      type: "local",
+      command: [mcp.command, ...mcp.argsPrefix, getOrchestrationServerPath()],
+      environment: {
+        ...existingEnvironment,
+        STOA_URL,
+        CONDUCTOR_SESSION_ID: KILO_CONDUCTOR_ENV_PLACEHOLDER,
+        [STOA_MCP_OWNER_KEY]: STOA_MCP_OWNER_VALUE,
+      },
+      enabled: true,
     },
   };
 
-  // Write config
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  writeProjectConfig(workingDirectory, KILO_MCP_CONFIG_PATH, config);
+}
 
-  // Keep the generated .mcp.json out of the user's repo — it's machine-specific
-  // (absolute paths + this session's id). This is the opt-in replacement for the
-  // auto-creation that was removed precisely because it littered repos.
-  ensureGitExcluded(workingDirectory, ".mcp.json");
+/**
+ * Write Kimi Code's project-local `.kimi-code/mcp.json` entry. Existing JSON is
+ * merged by key; malformed data is never overwritten.
+ */
+export function ensureKimiMcpConfig(
+  workingDirectory: string,
+  _sessionId: string
+): void {
+  const configPath = path.join(workingDirectory, KIMI_MCP_CONFIG_PATH);
+  const config = readJsonObjectForUpdate(configPath, "Kimi");
+  const servers = readServerMapForUpdate(
+    config,
+    "mcpServers",
+    configPath,
+    "Kimi"
+  );
+  const existingStoa = readNestedObjectForUpdate(
+    servers,
+    "stoa",
+    configPath,
+    "Kimi",
+    "mcpServers.stoa"
+  );
+  const existingEnv = readNestedObjectForUpdate(
+    existingStoa,
+    "env",
+    configPath,
+    "Kimi",
+    "mcpServers.stoa.env"
+  );
+  if (Object.prototype.hasOwnProperty.call(servers, "stoa")) {
+    assertStoaEntryMayBeUpdated(existingEnv, "Kimi", configPath);
+  }
+  // Kimi dispatches on an explicit `transport` before it considers `command`.
+  // Reusing a prior remote stoa entry verbatim could therefore leave this new
+  // local command inert. Preserve common/stdio options, but remove remote-only
+  // fields and pin the transport below.
+  const existingStdio = { ...existingStoa };
+  delete existingStdio.url;
+  delete existingStdio.headers;
+  delete existingStdio.bearerTokenEnvVar;
+  const mcp = mcpServerCommand();
+
+  config.mcpServers = {
+    ...servers,
+    stoa: {
+      ...existingStdio,
+      transport: "stdio",
+      command: mcp.command,
+      args: [...mcp.argsPrefix, getOrchestrationServerPath()],
+      env: {
+        ...existingEnv,
+        STOA_URL,
+        CONDUCTOR_SESSION_ID: CONDUCTOR_ENV_PLACEHOLDER,
+        [STOA_MCP_OWNER_KEY]: STOA_MCP_OWNER_VALUE,
+      },
+      enabled: true,
+    },
+  };
+
+  writeProjectConfig(workingDirectory, KIMI_MCP_CONFIG_PATH, config);
+}
+
+/** Dispatch project-file orchestration to the provider's native config format. */
+export function ensureProviderMcpConfig(
+  providerId: ProviderId,
+  workingDirectory: string,
+  sessionId: string
+): void {
+  switch (providerId) {
+    case "claude":
+      ensureMcpConfig(workingDirectory, sessionId);
+      return;
+    case "kilo":
+      ensureKiloMcpConfig(workingDirectory, sessionId);
+      return;
+    case "kimi":
+      ensureKimiMcpConfig(workingDirectory, sessionId);
+      return;
+    default:
+      throw new Error(
+        `Provider ${providerId} does not use a project MCP config file`
+      );
+  }
 }
 
 /**
@@ -234,7 +515,7 @@ export function buildCodexOrchestrationArgs(sessionId: string): string[] {
   return [
     ...set(`mcp_servers.stoa.command=${tomlString(mcp.command)}`),
     ...set(
-      `mcp_servers.stoa.args=[${[...mcp.argsPrefix, "tsx", serverPath]
+      `mcp_servers.stoa.args=[${[...mcp.argsPrefix, serverPath]
         .map(tomlString)
         .join(",")}]`
     ),
@@ -260,20 +541,21 @@ function tomlString(v: string): string {
 
 /**
  * Write the conductor marker file (`.stoa-conductor`, containing the session id)
- * into the working dir, and git-exclude it. This is how a HERMES conductor's
- * session id reaches the stoa MCP server: Hermes strips arbitrary env vars from
- * MCP children and has no project-local config, but the stdio MCP server
- * inherits the conductor's cwd, so it reads the id from this file. Best-effort:
- * a write failure is the caller's to log (orchestration never blocks create).
+ * into the working dir, and git-exclude it. Retained only as a compatibility
+ * fallback for older Hermes registrations; new launches use the per-process
+ * STOA_CONDUCTOR_SESSION_ID mapping and never write this shared marker.
  */
 export function writeConductorMarker(
   workingDirectory: string,
   sessionId: string
 ): void {
-  writeFileSync(
-    path.join(workingDirectory, CONDUCTOR_MARKER_FILE),
-    sessionId + "\n"
-  );
+  const markerPath = path.join(workingDirectory, CONDUCTOR_MARKER_FILE);
+  if (parseConductorMarker(sessionId) !== sessionId) {
+    throw new McpConfigConflictError(
+      "Cannot configure Hermes orchestration: invalid conductor session id"
+    );
+  }
+  writeFileSync(markerPath, sessionId + "\n");
   ensureGitExcluded(workingDirectory, CONDUCTOR_MARKER_FILE);
 }
 
@@ -293,15 +575,15 @@ export function removeConductorMarker(
   try {
     const markerPath = path.join(workingDirectory, CONDUCTOR_MARKER_FILE);
     if (!existsSync(markerPath)) return;
-    if (readFileSync(markerPath, "utf-8").trim() === sessionId)
+    if (parseConductorMarker(readFileSync(markerPath, "utf-8")) === sessionId)
       rmSync(markerPath, { force: true });
   } catch {
     // Best-effort — a leftover marker is only consulted by Hermes conductors.
   }
 }
 
-/** argv for `hermes mcp add` registering the stoa stdio server (command + args
- * only — no per-session env; the id comes from the cwd marker). */
+/** argv for `hermes mcp add`. The global entry maps the parent agent's
+ * process-local identity into the stdio MCP child; no session id is persisted. */
 export function buildHermesRegisterArgs(serverPath: string): string[] {
   const mcp = mcpServerCommand();
   return [
@@ -310,16 +592,16 @@ export function buildHermesRegisterArgs(serverPath: string): string[] {
     "stoa",
     "--command",
     mcp.command,
+    "--env",
+    `CONDUCTOR_SESSION_ID=${CONDUCTOR_ENV_PLACEHOLDER}`,
     "--args",
     ...mcp.argsPrefix,
-    "tsx",
     serverPath,
   ];
 }
 
-/** Where we record the exact Hermes registration last written, so we can tell a
- * fresh install from a STALE one (Stoa moved, npx/cmd path changed, or schema
- * changed) — `hermes mcp list` only shows the name, not the full config. */
+/** Where we record the exact Hermes registration last written. `hermes mcp
+ * list` only shows the name, not enough detail to establish ownership itself. */
 const HERMES_PATH_MARKER = path.join(
   os.homedir(),
   ".stoa",
@@ -328,8 +610,18 @@ const HERMES_PATH_MARKER = path.join(
 
 function readRegisteredHermesIdentity(): string | null {
   try {
-    if (existsSync(HERMES_PATH_MARKER))
-      return readFileSync(HERMES_PATH_MARKER, "utf-8").trim();
+    if (!existsSync(HERMES_PATH_MARKER)) return null;
+    const marker = JSON.parse(
+      readFileSync(HERMES_PATH_MARKER, "utf-8")
+    ) as unknown;
+    if (
+      isPlainObjectRecord(marker) &&
+      marker.schemaVersion === 1 &&
+      marker.owner === "stoa" &&
+      typeof marker.identity === "string"
+    ) {
+      return marker.identity;
+    }
   } catch {
     // ignore
   }
@@ -339,7 +631,11 @@ function readRegisteredHermesIdentity(): string | null {
 function writeRegisteredHermesIdentity(identity: string): void {
   try {
     mkdirSync(path.dirname(HERMES_PATH_MARKER), { recursive: true });
-    writeFileSync(HERMES_PATH_MARKER, identity + "\n");
+    writeJsonAtomically(HERMES_PATH_MARKER, {
+      schemaVersion: 1,
+      owner: "stoa",
+      identity,
+    });
   } catch {
     // ignore — worst case we re-register once next time
   }
@@ -347,30 +643,29 @@ function writeRegisteredHermesIdentity(identity: string): void {
 
 /**
  * Decide what to do about the global `stoa` Hermes registration (pure, so it's
- * unit-testable). Skip only when it's listed AND matches the current registration
- * identity; otherwise (re)register, removing a stale entry first. Without the
- * remove-first, a moved Stoa checkout or changed MCP launcher would keep pointing
- * Hermes conductors at a dead path/command and orchestration would silently no-op.
+ * unit-testable). Skip only when it is listed and the structured Stoa marker
+ * matches exactly. A listed mismatch is ambiguous and must be preserved.
  */
 export function planHermesRegistration(
   stoaListed: boolean,
   recordedIdentity: string | null,
   currentIdentity: string
-): { skip: boolean; removeFirst: boolean } {
+): { skip: boolean; removeFirst: false; conflict: boolean } {
   if (stoaListed && recordedIdentity === currentIdentity)
-    return { skip: true, removeFirst: false };
-  return { skip: false, removeFirst: stoaListed };
+    return { skip: true, removeFirst: false, conflict: false };
+  if (stoaListed) return { skip: false, removeFirst: false, conflict: true };
+  return { skip: false, removeFirst: false, conflict: false };
 }
 
 /**
  * Register the stoa MCP server in Hermes' GLOBAL config (command/args only, no
- * per-session data) so a Hermes conductor exposes spawn_worker. Idempotent and
- * SELF-CORRECTING: skips when already registered at the current path, but
- * re-points a stale registration if Stoa moved. `hermes mcp add` is interactive
+ * per-session data) so a Hermes conductor exposes spawn_worker. Idempotent when
+ * the exact Stoa-owned identity is already registered and fail-closed when a
+ * listed `stoa` entry is not proven to be ours. `hermes mcp add` is interactive
  * ("Enable all N tools?") and discovery-first (it spawns the server to list
  * tools), so we auto-confirm via stdin. Every shell-out is bounded by a timeout
  * + SIGKILL so a slow/hung MCP discovery can't block the session-create request.
- * Best-effort — never throws (orchestration must not block create).
+ * Ordinary CLI/discovery failures remain best-effort; ownership conflicts throw.
  */
 export function ensureHermesMcpRegistered(): void {
   try {
@@ -391,17 +686,10 @@ export function ensureHermesMcpRegistered(): void {
       identity
     );
     if (plan.skip) return;
-    if (plan.removeFirst) {
-      try {
-        execFileSync(hermes, ["mcp", "remove", "stoa"], {
-          stdio: "ignore",
-          timeout: 10000,
-          killSignal: "SIGKILL",
-          windowsHide: true,
-        });
-      } catch {
-        // ignore — the add below overwrites anyway on most Hermes versions
-      }
+    if (plan.conflict) {
+      throw new McpConfigConflictError(
+        "Cannot configure Hermes orchestration: global MCP server 'stoa' exists but is not proven to be owned by this Stoa installation"
+      );
     }
     execFileSync(hermes, buildHermesRegisterArgs(serverPath), {
       input: "y\n", // auto-accept the "Enable all tools?" prompt
@@ -411,7 +699,8 @@ export function ensureHermesMcpRegistered(): void {
       windowsHide: true,
     });
     writeRegisteredHermesIdentity(identity);
-  } catch {
+  } catch (error) {
+    if (error instanceof McpConfigConflictError) throw error;
     // Hermes missing / not configured / add failed / timed out — leave it.
   }
 }

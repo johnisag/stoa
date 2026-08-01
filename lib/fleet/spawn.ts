@@ -3,6 +3,9 @@ import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/registry";
 import type { FleetRunRow, FleetTaskRow } from "./types";
 import { buildFleetWorkerPrompt } from "./prompt";
 import type { FleetWorkerAttemptContract } from "./report-runtime";
+import { parseFleetAutomationPolicy } from "./automation-policy";
+import { fleetAgentApprovalMode } from "./confinement";
+import { isFleetUnattendedProvider } from "./provider-eligibility";
 
 export interface FleetSpawnResult {
   sessionId: string;
@@ -39,6 +42,23 @@ export async function spawnFleetWorker(
   if (!PROVIDER_IDS.includes(provider as ProviderId) || provider === "shell") {
     throw new Error(`Unsupported fleet provider: ${provider}`);
   }
+  if (!isFleetUnattendedProvider(provider)) {
+    throw new Error(
+      `Fleet provider cannot run unattended: ${provider}. Use an interactive Stoa session instead.`
+    );
+  }
+  const parsedPolicy = parseFleetAutomationPolicy(
+    input.run.automation_policy_json
+  );
+  if (!parsedPolicy.valid) {
+    throw new Error("Fleet automation policy is invalid at worker launch");
+  }
+  const approvalMode = fleetAgentApprovalMode(parsedPolicy.policy);
+  if (approvalMode === "prompt") {
+    throw new Error(
+      "Fleet worker requires explicit unconfined-agent authorization until strong Fleet isolation is available"
+    );
+  }
   let session;
   try {
     const deliveryTask = buildFleetWorkerPrompt(input);
@@ -63,6 +83,11 @@ export async function spawnFleetWorker(
       useWorktree: true,
       requireWorktree: true,
       requireTaskDelivery: true,
+      fleetWritableRoots: input.reportContract
+        ? [input.reportContract.attemptDirectory]
+        : [],
+      requireStrongIsolation: true,
+      approvalMode,
       model: input.task.model ?? input.run.model ?? undefined,
       agentType: provider as ProviderId,
     });

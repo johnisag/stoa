@@ -253,11 +253,25 @@ function evidenceGate(
   }
   if (!task.report_artifact_id) return "worker report artifact is missing";
   const report = db
-    .prepare(`SELECT body FROM fleet_artifacts WHERE id = ? AND task_id = ?`)
-    .get(task.report_artifact_id, task.id) as { body: string } | undefined;
-  const followUps = report
-    ? parseJsonObject(report.body).followUps
-    : ["missing report artifact"];
+    .prepare(
+      `SELECT body, metadata_json, artifact_type, actor
+       FROM fleet_artifacts
+       WHERE id = ? AND fleet_run_id = ? AND task_id = ? AND head_sha = ?`
+    )
+    .get(task.report_artifact_id, task.fleet_run_id, task.id, task.head_sha) as
+    | {
+        body: string;
+        metadata_json: string;
+        artifact_type: string;
+        actor: string;
+      }
+    | undefined;
+  const followUps = !report
+    ? ["missing report artifact"]
+    : report.artifact_type === "automatic_fix_report" &&
+        report.actor === "fleet-task-fixer"
+      ? parseJsonObject(report.metadata_json).followUps
+      : parseJsonObject(report.body).followUps;
   if (!Array.isArray(followUps) || followUps.length > 0) {
     return "worker report has unresolved follow-up questions";
   }

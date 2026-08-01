@@ -31,7 +31,7 @@ describe("Fleet resource admission", () => {
       verifier: 16,
       gitOperation: 16,
       mergeOperation: 4,
-      worktreesPerRepo: 40,
+      worktreesPerRepo: 64,
       diskBytes: 1024 ** 4,
       outputBytesPerMinute: 1024 ** 3,
       artifactBytesPerMinute: 1024 ** 3,
@@ -44,13 +44,13 @@ describe("Fleet resource admission", () => {
     const limits = normalizeFleetResourceLimits({
       pty: 2,
       transportHost: 2,
-      gitOperation: 1,
+      gitOperation: 2,
       worktreesPerRepo: 1,
       providerCaps: { codex: 2 },
     });
     const usage: FleetResourceUnits[] = [
-      { kind: "git_operation", key: "local", units: 0.5 },
-      { kind: "git_operation", key: "local", units: 0.5 },
+      { kind: "git_operation", key: "local", units: 1 },
+      { kind: "git_operation", key: "local", units: 1 },
       { kind: "repo_worktree", key: "repo-1", units: 1 },
     ];
     const decision = evaluateFleetResourceAdmission({
@@ -71,7 +71,7 @@ describe("Fleet resource admission", () => {
     expect(decision.admitted).toBe(false);
     expect(decision.blocked).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "git_operation", used: 1 }),
+        expect.objectContaining({ kind: "git_operation", used: 2 }),
         expect.objectContaining({ kind: "repo_worktree", used: 1 }),
       ])
     );
@@ -131,4 +131,42 @@ describe("Fleet resource admission", () => {
       })
     ).toMatchObject({ admitted: false });
   });
+
+  it("canonicalizes provider keys before aggregating capacity", () => {
+    const limits = normalizeFleetResourceLimits({
+      providerCaps: { codex: 2 },
+    });
+    expect(
+      evaluateFleetResourceAdmission({
+        limits,
+        usage: [{ kind: "provider", key: "Codex", units: 2 }],
+        requested: [{ kind: "provider", key: "codex", units: 1 }],
+      })
+    ).toMatchObject({
+      admitted: false,
+      blocked: [
+        expect.objectContaining({
+          kind: "provider",
+          key: "codex",
+          used: 2,
+          reason: "capacity",
+        }),
+      ],
+    });
+  });
+
+  it.each([0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects malformed request units fail closed (%s)",
+    (units) => {
+      const decision = evaluateFleetResourceAdmission({
+        limits: normalizeFleetResourceLimits({}),
+        usage: [],
+        requested: [{ kind: "pty", key: "local", units }],
+      });
+      expect(decision).toMatchObject({
+        admitted: false,
+        blocked: [expect.objectContaining({ reason: "invalid-request" })],
+      });
+    }
+  );
 });
