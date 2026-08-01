@@ -886,8 +886,11 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
       scrubbing + net-off. _Seam:_ new `lib/container/`,
       `lib/session-backend/pty/container-transport.ts`, `lib/session-backend/index.ts`,
       `lib/session-backend/pty-backend.ts`, `server.ts`.
-48. ⏳ **MCP elicitation + sampling (2025-11 spec)** — `orchestration` · L. **ELICITATION
-    SHIPPED; sampling deferred to a v2 follow-up.** A new MCP tool
+48. ⏳ **MCP elicitation + sampling** — `orchestration` · L. **ELICITATION AND
+    THE SDK v2 / 2026-07-28 RUNTIME SHIPPED; OPTIONAL SAMPLING AND PROTOCOL TASKS
+    REMAIN DEFERRED.** The orchestration server now uses the split
+    `@modelcontextprotocol/server` v2 package and `serveStdio` modern/legacy
+    negotiation. A new MCP tool
     `request_operator_input` lets an orchestration agent ask the human OPERATOR a
     structured question and BLOCK until they answer in Stoa's own confirm UI —
     routed over the existing HTTP `apiCall` path, NOT the SDK's stdio
@@ -907,7 +910,12 @@ hasLock})` → acquire|release|hold + an injectable `createWakeLockController`
     the Inbox tab open. Decline/cancel/timeout render as NON-error tool text (a
     routine refusal isn't a tool failure). The store is bounded (settled entries
     reaped past a retention window + a global pending cap). _Deferred (v2):_ a
-    PUSH notification on a new request (the nav badge covers same-app
+    Fleet-specific scoped capability backend. Fleet currently advertises only
+    `fleet_request_action`, which queues attention without reading or mutating a
+    run; general elicitation answers are deliberately not treated as approval
+    capabilities. Direct run/task/lifecycle/artifact tools are rejected until
+    actions can use server-issued, action-bound, one-use authorization.
+    Other deferred v2 work: a PUSH notification on a new request (the nav badge covers same-app
     discoverability for now); SAMPLING (server tool requests an LLM completion via
     the host's model/budget) — needs a new operator model setting + an enforced
     request-count/spend cap + the model-catalog clamp, so it doesn't ride the

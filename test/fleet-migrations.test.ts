@@ -38,6 +38,62 @@ function expectColumns(
 }
 
 describe("fleet migrations", () => {
+  it("migration 57 repairs the durable scheduler schema", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 56);
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_runs (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'draft'
+      );
+      CREATE TABLE fleet_tasks (
+        id TEXT PRIMARY KEY,
+        fleet_run_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        priority INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE fleet_workers (
+        id TEXT PRIMARY KEY,
+        fleet_run_id TEXT NOT NULL,
+        task_id TEXT,
+        session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'waiting_for_operator'
+      );
+    `);
+    runMigrations(db);
+    expectColumns(db, "fleet_runs", [
+      "scheduler_epoch",
+      "recovery_required",
+      "reserved_budget_usd",
+      "spent_budget_usd",
+    ]);
+    expectColumns(db, "fleet_tasks", [
+      "lease_owner",
+      "spawn_request_id",
+      "approval_state",
+    ]);
+    expectColumns(db, "fleet_workers", ["spawn_request_id", "reservation_usd"]);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('fleet_task_dependencies', 'fleet_task_claims')`
+        )
+        .all()
+    ).toHaveLength(2);
+    const conductorFk = db
+      .prepare(`PRAGMA foreign_key_list(fleet_runs)`)
+      .all() as { from: string; table: string; on_delete: string }[];
+    expect(conductorFk).toContainEqual(
+      expect.objectContaining({
+        from: "conductor_session_id",
+        table: "sessions",
+        on_delete: "SET NULL",
+      })
+    );
+  });
+
   it("migration 56 survives an already-marked partial phase 2 schema", () => {
     const db = new Database(":memory:");
     markAppliedThrough(db, 55);
@@ -162,5 +218,35 @@ describe("fleet migrations", () => {
     });
     expect(artifact.created_at).toEqual(expect.any(String));
     expect(artifact.created_at.length).toBeGreaterThan(0);
+  });
+
+  it("schema init repairs partial scheduler task and worker tables before indexes", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY, status TEXT);
+      CREATE TABLE fleet_tasks (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_workers (id TEXT PRIMARY KEY);
+    `);
+    expect(() => createSchema(db)).not.toThrow();
+    expectColumns(db, "fleet_tasks", [
+      "fleet_run_id",
+      "status",
+      "priority",
+      "sort_order",
+      "approval_state",
+    ]);
+    expectColumns(db, "fleet_workers", [
+      "fleet_run_id",
+      "status",
+      "session_id",
+      "spawn_request_id",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_fleet_tasks_schedule', 'idx_fleet_workers_one_active_task')`
+        )
+        .all()
+    ).toHaveLength(2);
   });
 });

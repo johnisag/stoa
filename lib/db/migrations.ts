@@ -72,6 +72,137 @@ function ensureFleetArtifactRuntimeColumns(db: Database.Database): void {
   `);
 }
 
+function ensureFleetSchedulerSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_runs")) {
+    for (const column of [
+      {
+        name: "conductor_session_id",
+        ddl: "conductor_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL",
+      },
+      {
+        name: "scheduler_epoch",
+        ddl: "scheduler_epoch INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "recovery_required",
+        ddl: "recovery_required INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "reserved_budget_usd",
+        ddl: "reserved_budget_usd REAL NOT NULL DEFAULT 0",
+      },
+      {
+        name: "spent_budget_usd",
+        ddl: "spent_budget_usd REAL NOT NULL DEFAULT 0",
+      },
+      { name: "pause_mode", ddl: "pause_mode TEXT" },
+      { name: "pause_reason", ddl: "pause_reason TEXT" },
+      { name: "cancel_mode", ddl: "cancel_mode TEXT" },
+      { name: "started_at", ddl: "started_at TEXT" },
+      { name: "ended_at", ddl: "ended_at TEXT" },
+    ])
+      addColumnIfMissing(db, "fleet_runs", column);
+  }
+  if (hasTable(db, "fleet_tasks")) {
+    for (const column of [
+      { name: "priority", ddl: "priority INTEGER NOT NULL DEFAULT 0" },
+      { name: "agent_type", ddl: "agent_type TEXT" },
+      { name: "model", ddl: "model TEXT" },
+      { name: "working_directory", ddl: "working_directory TEXT" },
+      { name: "base_branch", ddl: "base_branch TEXT" },
+      { name: "branch_name", ddl: "branch_name TEXT" },
+      { name: "worktree_path", ddl: "worktree_path TEXT" },
+      { name: "max_attempts", ddl: "max_attempts INTEGER NOT NULL DEFAULT 2" },
+      {
+        name: "current_attempt",
+        ddl: "current_attempt INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "lease_owner", ddl: "lease_owner TEXT" },
+      { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+      {
+        name: "scheduler_epoch",
+        ddl: "scheduler_epoch INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "spawn_request_id", ddl: "spawn_request_id TEXT" },
+      { name: "acceptance_criteria", ddl: "acceptance_criteria TEXT" },
+      { name: "verify_command", ddl: "verify_command TEXT" },
+      { name: "approved_task_hash", ddl: "approved_task_hash TEXT" },
+      {
+        name: "approval_state",
+        ddl: "approval_state TEXT NOT NULL DEFAULT 'draft'",
+      },
+      { name: "failure_code", ddl: "failure_code TEXT" },
+      { name: "started_at", ddl: "started_at TEXT" },
+      { name: "ended_at", ddl: "ended_at TEXT" },
+    ])
+      addColumnIfMissing(db, "fleet_tasks", column);
+  }
+  if (hasTable(db, "fleet_workers")) {
+    for (const column of [
+      { name: "spawn_request_id", ddl: "spawn_request_id TEXT" },
+      { name: "worktree_path", ddl: "worktree_path TEXT" },
+      { name: "lease_owner", ddl: "lease_owner TEXT" },
+      { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+      {
+        name: "reservation_usd",
+        ddl: "reservation_usd REAL NOT NULL DEFAULT 0",
+      },
+      { name: "terminal_cause", ddl: "terminal_cause TEXT" },
+      { name: "failure_code", ddl: "failure_code TEXT" },
+    ])
+      addColumnIfMissing(db, "fleet_workers", column);
+  }
+
+  if (hasTable(db, "fleet_runs") && hasTable(db, "fleet_tasks")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS fleet_task_dependencies (
+      id TEXT PRIMARY KEY, fleet_run_id TEXT NOT NULL, task_id TEXT NOT NULL,
+      depends_on_task_id TEXT NOT NULL, dependency_type TEXT NOT NULL DEFAULT 'blocks',
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY (depends_on_task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE,
+      UNIQUE (fleet_run_id, task_id, depends_on_task_id, dependency_type)
+    );
+    CREATE TABLE IF NOT EXISTS fleet_task_claims (
+      id TEXT PRIMARY KEY, fleet_run_id TEXT NOT NULL, task_id TEXT NOT NULL,
+      path TEXT NOT NULL, claim_type TEXT NOT NULL DEFAULT 'exclusive',
+      confidence REAL NOT NULL DEFAULT 1.0,
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_fleet_tasks_schedule ON fleet_tasks(fleet_run_id, status, priority DESC, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_fleet_dependencies_task ON fleet_task_dependencies(fleet_run_id, task_id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_dependencies_upstream ON fleet_task_dependencies(fleet_run_id, depends_on_task_id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_claims_path ON fleet_task_claims(fleet_run_id, path);
+    `);
+  }
+  if (hasTable(db, "fleet_workers")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS fleet_resource_leases (
+        id TEXT PRIMARY KEY,
+        fleet_run_id TEXT NOT NULL,
+        worker_id TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        units INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'reserved',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        released_at TEXT,
+        FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY (worker_id) REFERENCES fleet_workers(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_fleet_workers_status ON fleet_workers(fleet_run_id, status);
+      CREATE INDEX IF NOT EXISTS idx_fleet_workers_session ON fleet_workers(session_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_spawn_request ON fleet_workers(spawn_request_id) WHERE spawn_request_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_one_active_task
+        ON fleet_workers(fleet_run_id, task_id)
+        WHERE status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending');
+      CREATE INDEX IF NOT EXISTS idx_fleet_resource_leases_active ON fleet_resource_leases(resource_type, resource_key, status);
+      CREATE INDEX IF NOT EXISTS idx_fleet_resource_leases_worker ON fleet_resource_leases(worker_id, status);
+    `);
+  }
+}
+
 // All migrations in order. Migrations are idempotent (guarded by PRAGMA table_info
 // / IF NOT EXISTS) so a fresh schema or a concurrent-init race never throws a
 // duplicate-column/already-exists error. The runner no longer swallows those
@@ -1512,6 +1643,11 @@ const migrations: Migration[] = [
         `);
       }
     },
+  },
+  {
+    id: 57,
+    name: "add_fleet_scheduler",
+    up: ensureFleetSchedulerSchema,
   },
 ];
 

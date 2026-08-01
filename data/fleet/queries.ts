@@ -11,6 +11,9 @@ import type {
   FleetRunDetailDto,
   FleetRunDto,
   IngestFleetPlanInput,
+  PauseFleetRunInput,
+  ResumeFleetRunInput,
+  CancelFleetRunInput,
 } from "@/lib/fleet/types";
 import { fleetKeys } from "./keys";
 
@@ -43,6 +46,7 @@ export function useFleetRunQuery(id: string | null, enabled = true) {
     queryKey: fleetKeys.run(id ?? "__disabled__"),
     queryFn: enabled && id ? () => fetchFleetRun(id) : skipToken,
     staleTime: 5000,
+    refetchInterval: enabled && id ? 5000 : false,
   });
 }
 
@@ -98,6 +102,79 @@ export function useIngestFleetPlan(runId: string | null) {
   });
 }
 
+export function useStartFleetPlan() {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0,
+    mutationFn: async (input: { runId: string; taskCap?: number }) => {
+      const res = await fetch(
+        `/api/fleet/runs/${encodeURIComponent(input.runId)}/generate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ taskCap: input.taskCap }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok)
+        throw new Error(data.error || "Failed to start fleet planner");
+      return data as FleetRunDetailDto;
+    },
+    onSuccess: (detail) => {
+      qc.invalidateQueries({ queryKey: fleetKeys.runs() });
+      qc.setQueryData(fleetKeys.run(detail.run.id), detail);
+    },
+  });
+}
+
+export function useFleetPlanPoll(runId: string | null, enabled: boolean) {
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: [...fleetKeys.run(runId ?? "__disabled__"), "planner"],
+    queryFn:
+      enabled && runId
+        ? async () => {
+            const res = await fetch(
+              `/api/fleet/runs/${encodeURIComponent(runId)}/generate`
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              throw new Error(data.error || "Failed to poll fleet planner");
+            }
+            const detail = data as FleetRunDetailDto;
+            qc.setQueryData(fleetKeys.run(runId), detail);
+            if (
+              ![
+                "starting",
+                "running",
+                "finalizing",
+                "cleanup_pending",
+              ].includes(detail.run.plannerState)
+            ) {
+              qc.invalidateQueries({ queryKey: fleetKeys.runs() });
+            }
+            return detail;
+          }
+        : skipToken,
+    refetchInterval: enabled && runId ? 2000 : false,
+    staleTime: 0,
+  });
+}
+
+export function useCancelFleetPlan(runId: string | null) {
+  return useFleetRunMutation(async () => {
+    if (!runId) throw new Error("No fleet run selected");
+    const res = await fetch(
+      `/api/fleet/runs/${encodeURIComponent(runId)}/generate`,
+      { method: "DELETE" }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok)
+      throw new Error(data.error || "Failed to cancel fleet planner");
+    return data as FleetRunDetailDto;
+  });
+}
+
 export function useApproveFleetPlan(runId: string | null) {
   return useFleetRunMutation(async (input: ApproveFleetPlanInput) => {
     if (!runId) throw new Error("No fleet run selected");
@@ -129,5 +206,62 @@ export function useAttachFleetArtifact(runId: string | null) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Failed to attach finding");
     return data as FleetRunDetailDto;
+  });
+}
+
+function useFleetAction<TInput>(runId: string | null, action: string) {
+  return useFleetRunMutation(async (input: TInput) => {
+    if (!runId) throw new Error("No fleet run selected");
+    const res = await fetch(
+      `/api/fleet/runs/${encodeURIComponent(runId)}/${action}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Failed to ${action} fleet run`);
+    return data as FleetRunDetailDto;
+  });
+}
+
+export function useResumeFleetRun(runId: string | null) {
+  return useFleetAction<ResumeFleetRunInput>(runId, "resume");
+}
+
+export function usePauseFleetRun(runId: string | null) {
+  return useFleetAction<PauseFleetRunInput>(runId, "pause");
+}
+
+export function useCancelFleetRun(runId: string | null) {
+  return useFleetAction<CancelFleetRunInput>(runId, "cancel");
+}
+
+export function useCompleteFleetWorker(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0,
+    mutationFn: async (workerId: string) => {
+      if (!runId) throw new Error("No fleet run selected");
+      const res = await fetch(
+        `/api/fleet/runs/${encodeURIComponent(runId)}/workers/${encodeURIComponent(workerId)}/complete`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor: "operator" }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to mark worker complete");
+      }
+      return data as FleetRunDetailDto;
+    },
+    onSuccess: (detail) => {
+      if (runId) qc.invalidateQueries({ queryKey: fleetKeys.run(runId) });
+      qc.invalidateQueries({ queryKey: fleetKeys.runs() });
+      qc.setQueryData(fleetKeys.run(detail.run.id), detail);
+    },
   });
 }

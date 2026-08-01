@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  ArrowLeft,
   BadgeCheck,
   ClipboardList,
   FileText,
@@ -10,9 +11,12 @@ import {
   Loader2,
   Network,
   Paperclip,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   ShieldCheck,
+  Square,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -33,6 +37,13 @@ import {
   useFleetRunQuery,
   useFleetRunsQuery,
   useIngestFleetPlan,
+  useStartFleetPlan,
+  useFleetPlanPoll,
+  useCancelFleetPlan,
+  useResumeFleetRun,
+  usePauseFleetRun,
+  useCancelFleetRun,
+  useCompleteFleetWorker,
 } from "@/data/fleet/queries";
 import { useProjectsQuery } from "@/data/projects/queries";
 import type {
@@ -87,6 +98,12 @@ function RunRow({
       <span className="text-muted-foreground flex items-center gap-2 text-[11px]">
         <span>{run.taskCount} tasks</span>
         <span>{run.workerCount} workers</span>
+        {!["idle", "ready", "failed"].includes(run.plannerState) && (
+          <span className="text-primary flex items-center gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            planner {run.plannerState.replaceAll("_", " ")}
+          </span>
+        )}
       </span>
     </button>
   );
@@ -136,10 +153,33 @@ function ApprovalPreview({ detail }: { detail: FleetRunDetailDto }) {
   );
 }
 
-function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
+function RunDetail({
+  detail,
+  onBack,
+}: {
+  detail: FleetRunDetailDto;
+  onBack: () => void;
+}) {
   const ingestPlan = useIngestFleetPlan(detail.run.id);
+  const startPlanner = useStartFleetPlan();
+  const plannerActive = [
+    "starting",
+    "running",
+    "finalizing",
+    "cleanup_pending",
+  ].includes(detail.run.plannerState);
+  const plannerCancelable = ["starting", "running", "finalizing"].includes(
+    detail.run.plannerState
+  );
+  const plannerCleaning = detail.run.plannerState === "cleanup_pending";
+  const plannerPoll = useFleetPlanPoll(detail.run.id, plannerActive);
+  const cancelPlanner = useCancelFleetPlan(detail.run.id);
   const approvePlan = useApproveFleetPlan(detail.run.id);
   const attachArtifact = useAttachFleetArtifact(detail.run.id);
+  const resumeRun = useResumeFleetRun(detail.run.id);
+  const pauseRun = usePauseFleetRun(detail.run.id);
+  const cancelRun = useCancelFleetRun(detail.run.id);
+  const completeWorker = useCompleteFleetWorker(detail.run.id);
   const reviewedPlanText = detail.run.planText ?? "";
   const [planText, setPlanText] = useState(
     detail.run.planText ?? detail.run.goal
@@ -204,6 +244,7 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
   }
 
   const canApprove =
+    !plannerActive &&
     detail.run.approvalState === "needs_approval" &&
     !!detail.run.planHash &&
     !!reviewedPlanText &&
@@ -218,6 +259,7 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
     (detail.run.approvalState === "draft" ||
       detail.run.approvalState === "needs_approval");
   const canAttachArtifact =
+    !plannerActive &&
     detail.run.status === "draft" &&
     detail.run.approvalState === "needs_approval" &&
     !!detail.run.planHash &&
@@ -227,15 +269,69 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
     () => new Map(detail.tasks.map((task) => [task.id, task.title])),
     [detail.tasks]
   );
+  const lifecycleError =
+    resumeRun.error?.message ??
+    pauseRun.error?.message ??
+    cancelRun.error?.message;
+  const resetLifecycleErrors = () => {
+    resumeRun.reset();
+    pauseRun.reset();
+    cancelRun.reset();
+    completeWorker.reset();
+  };
+  const attentionWorkers = detail.workers.filter((worker) =>
+    ["failed", "dead", "waiting_for_operator", "cleanup_pending"].includes(
+      worker.status
+    )
+  );
+  const attentionTasks = detail.tasks.filter((task) =>
+    ["blocked", "failed", "needs_inspection", "waiting_for_operator"].includes(
+      task.status
+    )
+  );
+  const attentionTaskIds = new Set(attentionTasks.map((task) => task.id));
+  const sortedTasks = [...detail.tasks].sort(
+    (a, b) =>
+      Number(attentionTaskIds.has(b.id)) - Number(attentionTaskIds.has(a.id))
+  );
+  const attentionWorkerIds = new Set(
+    attentionWorkers.map((worker) => worker.id)
+  );
+  const sortedWorkers = [...detail.workers].sort(
+    (a, b) =>
+      Number(attentionWorkerIds.has(b.id)) -
+      Number(attentionWorkerIds.has(a.id))
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-4 pb-4">
-      <section className="grid gap-3 rounded-md border p-3 md:grid-cols-4">
+      <section className="grid gap-3 rounded-md border p-3 md:grid-cols-5">
         <div>
           <div className="text-muted-foreground text-[10px] font-medium uppercase">
             Status
           </div>
           <div className="text-sm font-medium">{detail.run.status}</div>
+          <div className="text-muted-foreground mt-1 font-mono text-[10px] break-all">
+            ID {detail.run.id}
+          </div>
+        </div>
+        <div>
+          <div className="text-muted-foreground text-[10px] font-medium uppercase">
+            Planner
+          </div>
+          <div className="flex items-center gap-1 text-sm">
+            {plannerActive && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {detail.run.plannerState.replaceAll("_", " ")}
+            {detail.run.plannerProvider
+              ? ` / ${detail.run.plannerProvider}`
+              : ""}
+          </div>
+          {detail.run.plannerSessionId && plannerActive && (
+            <div className="text-muted-foreground mt-1 text-[10px] break-all">
+              Session {detail.run.plannerSessionId}. Open it from Sessions if
+              the provider requests permission to write PLAN.md.
+            </div>
+          )}
         </div>
         <div>
           <div className="text-muted-foreground text-[10px] font-medium uppercase">
@@ -259,9 +355,113 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
           <div className="text-sm">
             {detail.run.budgetUsd == null
               ? "Unset"
-              : `$${detail.run.budgetUsd.toFixed(2)}`}
+              : `$${detail.run.spentBudgetUsd.toFixed(2)} spent + $${detail.run.reservedBudgetUsd.toFixed(2)} reserved of $${detail.run.budgetUsd.toFixed(2)}`}
           </div>
         </div>
+      </section>
+
+      <section className="bg-background sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-md border p-3 shadow-sm">
+        <Button className="gap-2 lg:hidden" variant="ghost" onClick={onBack}>
+          <ArrowLeft className="h-4 w-4" /> Back to runs
+        </Button>
+        <Button
+          className="gap-2"
+          disabled={
+            !["planned", "paused"].includes(detail.run.status) ||
+            detail.run.pauseReason === "budget_exhausted" ||
+            resumeRun.isPending
+          }
+          onClick={() => {
+            resetLifecycleErrors();
+            void resumeRun
+              .mutateAsync({ actor: "operator" })
+              .catch(() => undefined);
+          }}
+        >
+          {resumeRun.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Play className="h-4 w-4" />
+          )}
+          {detail.run.status === "planned"
+            ? "Start"
+            : detail.run.recoveryRequired
+              ? "Retry recovery"
+              : "Resume"}
+        </Button>
+        <Button
+          className="gap-2"
+          variant="outline"
+          disabled={detail.run.status !== "running" || pauseRun.isPending}
+          onClick={() => {
+            resetLifecycleErrors();
+            void pauseRun
+              .mutateAsync({ actor: "operator", mode: "pause-new" })
+              .catch(() => undefined);
+          }}
+        >
+          <Pause className="h-4 w-4" /> Pause new work
+        </Button>
+        <Button
+          className="gap-2"
+          variant="destructive"
+          disabled={
+            ["completed", "failed", "canceled"].includes(detail.run.status) ||
+            plannerActive ||
+            cancelRun.isPending
+          }
+          onClick={() => {
+            resetLifecycleErrors();
+            if (
+              !window.confirm(
+                "Cancel this fleet and request all active workers to stop? Worktrees will be preserved, and any stop failure will remain cleanup-pending."
+              )
+            )
+              return;
+            void cancelRun
+              .mutateAsync({
+                actor: "operator",
+                mode: "cancel-preserve-worktrees",
+              })
+              .catch(() => undefined);
+          }}
+        >
+          <Square className="h-4 w-4" /> Cancel
+        </Button>
+        {plannerActive && (
+          <span className="text-xs text-amber-700 dark:text-amber-300">
+            Cancel the planner and wait for cleanup before canceling the run.
+          </span>
+        )}
+        {detail.run.recoveryRequired && (
+          <span className="text-xs text-amber-700 dark:text-amber-300">
+            Recovery must finish before new workers launch.
+          </span>
+        )}
+        {detail.run.pauseReason === "budget_exhausted" && (
+          <span className="text-xs text-amber-700 dark:text-amber-300">
+            Budget exhausted. Create a new run; editing an approved run budget
+            is not available yet.
+          </span>
+        )}
+        {attentionWorkers.length > 0 && (
+          <span className="text-xs text-amber-700 dark:text-amber-300">
+            {attentionWorkers.length} worker
+            {attentionWorkers.length === 1 ? "" : "s"} need attention.
+          </span>
+        )}
+        {attentionTasks.length > 0 && (
+          <span className="text-xs text-amber-700 dark:text-amber-300">
+            {attentionTasks.length} task{attentionTasks.length === 1 ? "" : "s"}{" "}
+            need attention.
+          </span>
+        )}
+        {lifecycleError && (
+          <span className="text-destructive flex items-center gap-1 text-xs">
+            <AlertCircle className="h-3.5 w-3.5" />
+            {lifecycleError}
+          </span>
+        )}
       </section>
 
       <ApprovalPreview detail={detail} />
@@ -283,7 +483,7 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
             value={planText}
             onChange={(event) => setPlanText(event.target.value)}
           />
-          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
             <div className="min-w-0">
               <div className="text-muted-foreground text-[10px] font-medium uppercase">
                 Current hash
@@ -311,7 +511,42 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
               className="gap-2"
               variant="outline"
               disabled={
-                !canReplacePlan || !planText.trim() || ingestPlan.isPending
+                !canReplacePlan ||
+                plannerCleaning ||
+                startPlanner.isPending ||
+                cancelPlanner.isPending
+              }
+              onClick={() => {
+                if (plannerCancelable) {
+                  void cancelPlanner
+                    .mutateAsync(undefined)
+                    .catch(() => undefined);
+                } else {
+                  void startPlanner
+                    .mutateAsync({ runId: detail.run.id })
+                    .catch(() => undefined);
+                }
+              }}
+            >
+              {startPlanner.isPending || cancelPlanner.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Network className="h-4 w-4" />
+              )}
+              {plannerCleaning
+                ? "Cleaning up planner"
+                : plannerCancelable
+                  ? "Cancel planner"
+                  : "Plan automatically"}
+            </Button>
+            <Button
+              className="gap-2"
+              variant="outline"
+              disabled={
+                !canReplacePlan ||
+                plannerActive ||
+                !planText.trim() ||
+                ingestPlan.isPending
               }
               onClick={() => void handleIngestPlan()}
             >
@@ -335,10 +570,20 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
               Approve
             </Button>
           </div>
-          {(ingestPlan.isError || approvePlan.isError) && (
+          {(ingestPlan.isError ||
+            approvePlan.isError ||
+            startPlanner.isError ||
+            cancelPlanner.isError ||
+            plannerPoll.isError ||
+            detail.run.plannerState === "failed") && (
             <div className="text-destructive flex items-center gap-2 text-xs">
               <AlertCircle className="h-3.5 w-3.5" />
-              {ingestPlan.error?.message ?? approvePlan.error?.message}
+              {ingestPlan.error?.message ??
+                approvePlan.error?.message ??
+                startPlanner.error?.message ??
+                cancelPlanner.error?.message ??
+                plannerPoll.error?.message ??
+                detail.run.plannerError}
             </div>
           )}
           {!canApprove &&
@@ -364,7 +609,7 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
           {detail.tasks.length === 0 ? (
             <p className="text-muted-foreground text-sm">No tasks</p>
           ) : (
-            detail.tasks.map((task) => (
+            sortedTasks.map((task) => (
               <div
                 key={task.id}
                 className="grid gap-2 rounded border px-3 py-2 md:grid-cols-[minmax(0,1fr)_auto]"
@@ -390,6 +635,29 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
                       ))}
                     </div>
                   )}
+                  {task.dependsOnTaskIds.length > 0 && (
+                    <div className="text-muted-foreground mt-1 text-[11px]">
+                      Depends on:{" "}
+                      {task.dependsOnTaskIds
+                        .map((id) => taskTitleById.get(id) ?? id)
+                        .join(", ")}
+                    </div>
+                  )}
+                  {task.acceptanceCriteria && (
+                    <div className="text-muted-foreground mt-1 text-[11px] break-words">
+                      Acceptance: {task.acceptanceCriteria}
+                    </div>
+                  )}
+                  {task.verifyCommand && (
+                    <div className="text-muted-foreground mt-1 font-mono text-[11px] break-all">
+                      Verify: {task.verifyCommand}
+                    </div>
+                  )}
+                  {task.failureCode && (
+                    <div className="text-destructive mt-1 text-xs break-words">
+                      {task.failureCode}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-start gap-1">
                   <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
@@ -398,6 +666,12 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
                   <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
                     {task.taskType}
                   </span>
+                  {task.agentType && (
+                    <span className="bg-primary/10 text-primary rounded px-1.5 py-0.5 text-[10px] uppercase">
+                      {task.agentType}
+                      {task.model ? ` / ${task.model}` : ""}
+                    </span>
+                  )}
                 </div>
               </div>
             ))
@@ -530,16 +804,70 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
             {detail.workers.length === 0 ? (
               <p className="text-muted-foreground text-sm">No workers</p>
             ) : (
-              <div className="grid gap-2">
-                {detail.workers.map((worker) => (
-                  <div key={worker.id} className="rounded border px-3 py-2">
-                    <div className="text-sm font-medium">{worker.status}</div>
-                    <div className="text-muted-foreground text-xs">
-                      attempt {worker.attempt}
+              <>
+                <div className="grid gap-2">
+                  {sortedWorkers.map((worker) => (
+                    <div key={worker.id} className="rounded border px-3 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-sm font-medium">
+                          {worker.taskId
+                            ? (taskTitleById.get(worker.taskId) ??
+                              worker.taskId)
+                            : "Unlinked worker"}
+                        </div>
+                        <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
+                          {worker.status}
+                        </span>
+                      </div>
+                      <div className="text-muted-foreground mt-1 text-xs">
+                        {worker.provider ?? "unknown provider"}
+                        {worker.model ? ` / ${worker.model}` : ""} · attempt{" "}
+                        {worker.attempt}
+                      </div>
+                      {worker.sessionId && (
+                        <div className="text-muted-foreground mt-1 font-mono text-[10px] break-all">
+                          session {worker.sessionId}
+                        </div>
+                      )}
+                      {(worker.failureCode || worker.terminalCause) && (
+                        <div className="text-destructive mt-1 text-xs break-words">
+                          {worker.failureCode ?? worker.terminalCause}
+                        </div>
+                      )}
+                      {worker.sessionId &&
+                        ["running", "waiting_for_operator"].includes(
+                          worker.status
+                        ) && (
+                          <Button
+                            className="mt-2"
+                            size="sm"
+                            variant="outline"
+                            disabled={completeWorker.isPending}
+                            onClick={() => {
+                              resetLifecycleErrors();
+                              if (
+                                !window.confirm(
+                                  "Stop this worker and mark its visible completion report ready for inspection? Its worktree will be preserved."
+                                )
+                              )
+                                return;
+                              void completeWorker
+                                .mutateAsync(worker.id)
+                                .catch(() => undefined);
+                            }}
+                          >
+                            Mark report done
+                          </Button>
+                        )}
                     </div>
+                  ))}
+                </div>
+                {completeWorker.isError && (
+                  <div className="text-destructive mt-2 text-xs">
+                    {completeWorker.error.message}
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -552,7 +880,9 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
             {detail.events.map((event) => (
               <div key={event.id} className="rounded border px-3 py-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium">{event.eventType}</span>
+                  <span className="text-sm font-medium">
+                    {event.eventType.replaceAll("_", " ")}
+                  </span>
                   <span className="text-muted-foreground text-xs">
                     {labelDate(event.createdAt)}
                   </span>
@@ -560,6 +890,11 @@ function RunDetail({ detail }: { detail: FleetRunDetailDto }) {
                 <div className="text-muted-foreground text-xs">
                   {event.actor}
                 </div>
+                {event.payload != null && (
+                  <pre className="text-muted-foreground mt-1 overflow-auto text-[10px] whitespace-pre-wrap">
+                    {JSON.stringify(event.payload, null, 2)}
+                  </pre>
+                )}
               </div>
             ))}
           </div>
@@ -574,7 +909,11 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
   const repos = useDispatchReposQuery(true);
   const projects = useProjectsQuery();
   const createRun = useCreateFleetRun();
+  const startCreatedPlanner = useStartFleetPlan();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [createPlannerErrorRunId, setCreatePlannerErrorRunId] = useState<
+    string | null
+  >(null);
   const [name, setName] = useState("");
   const [goal, setGoal] = useState("");
   const [repoId, setRepoId] = useState(NONE);
@@ -583,8 +922,11 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
   const [provider, setProvider] = useState("claude");
   const [model, setModel] = useState("");
   const [maxConcurrency, setMaxConcurrency] = useState(4);
+  const [autoPlan, setAutoPlan] = useState(true);
+  const [plannerTaskCap, setPlannerTaskCap] = useState(8);
   const [reviewPolicy, setReviewPolicy] =
     useState<FleetReviewPolicy>("four_agent");
+  const detailRef = useRef<HTMLElement>(null);
 
   const selectedRun = useMemo(
     () => (runs.data ?? []).find((run) => run.id === selectedRunId) ?? null,
@@ -592,11 +934,52 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
   );
   const detail = useFleetRunQuery(selectedRunId, selectedRunId != null);
 
+  function selectRun(id: string) {
+    if (createPlannerErrorRunId && createPlannerErrorRunId !== id) {
+      startCreatedPlanner.reset();
+      setCreatePlannerErrorRunId(null);
+    }
+    setSelectedRunId(id);
+    if (window.innerWidth < 1024) {
+      requestAnimationFrame(() =>
+        detailRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        })
+      );
+    }
+  }
+
   useEffect(() => {
     if (!selectedRunId && runs.data?.[0]) setSelectedRunId(runs.data[0].id);
   }, [runs.data, selectedRunId]);
 
+  useEffect(() => {
+    if (
+      createPlannerErrorRunId &&
+      detail.data?.run.id === createPlannerErrorRunId &&
+      [
+        "starting",
+        "running",
+        "finalizing",
+        "cleanup_pending",
+        "ready",
+      ].includes(detail.data.run.plannerState)
+    ) {
+      startCreatedPlanner.reset();
+      setCreatePlannerErrorRunId(null);
+    }
+  }, [
+    createPlannerErrorRunId,
+    detail.data?.run.id,
+    detail.data?.run.plannerState,
+    startCreatedPlanner,
+  ]);
+
   async function handleCreateRun() {
+    createRun.reset();
+    startCreatedPlanner.reset();
+    setCreatePlannerErrorRunId(null);
     try {
       const created = await createRun.mutateAsync({
         name,
@@ -613,10 +996,23 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
       setName("");
       setGoal("");
       setBudgetUsd("");
+      if (autoPlan) {
+        try {
+          await startCreatedPlanner.mutateAsync({
+            runId: created.run.id,
+            taskCap: plannerTaskCap,
+          });
+        } catch {
+          setCreatePlannerErrorRunId(created.run.id);
+        }
+      }
     } catch {
       // React Query owns the rendered error state.
     }
   }
+
+  const automaticPlanNeedsTarget =
+    autoPlan && repoId === NONE && projectId === NONE;
 
   return (
     <div className="bg-background flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -654,7 +1050,10 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto border-t lg:grid-cols-[22rem_minmax(0,1fr)] lg:overflow-hidden">
-        <aside className="flex min-h-0 flex-col gap-3 border-r p-4">
+        <aside
+          id="fleet-run-list"
+          className="flex min-h-0 flex-col gap-3 border-r p-4"
+        >
           <section className="rounded-md border p-3">
             <div className="mb-3 flex items-center gap-2">
               <Plus className="h-4 w-4" />
@@ -675,7 +1074,13 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                 value={goal}
                 onChange={(event) => setGoal(event.target.value)}
               />
-              <Select value={repoId} onValueChange={setRepoId}>
+              <Select
+                value={repoId}
+                onValueChange={(value) => {
+                  setRepoId(value);
+                  if (value !== NONE) setProjectId(NONE);
+                }}
+              >
                 <SelectTrigger aria-label="Repository">
                   <SelectValue placeholder="Repository" />
                 </SelectTrigger>
@@ -688,7 +1093,13 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                   ))}
                 </SelectContent>
               </Select>
-              <Select value={projectId} onValueChange={setProjectId}>
+              <Select
+                value={projectId}
+                onValueChange={(value) => {
+                  setProjectId(value);
+                  if (value !== NONE) setRepoId(NONE);
+                }}
+              >
                 <SelectTrigger aria-label="Project">
                   <SelectValue placeholder="Project" />
                 </SelectTrigger>
@@ -720,6 +1131,38 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                   }
                 />
               </div>
+              <label className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs">
+                <span>
+                  Plan automatically after creating the run
+                  <span className="text-muted-foreground mt-0.5 block">
+                    Generates and allocates tasks, then waits for approval.
+                  </span>
+                </span>
+                <input
+                  aria-label="Plan automatically"
+                  type="checkbox"
+                  checked={autoPlan}
+                  onChange={(event) => setAutoPlan(event.target.checked)}
+                />
+              </label>
+              {autoPlan && (
+                <label className="grid gap-1 text-xs">
+                  <span>Planner task cap (1-40)</span>
+                  <Input
+                    aria-label="Planner task cap"
+                    type="number"
+                    min={1}
+                    max={40}
+                    value={plannerTaskCap}
+                    onChange={(event) =>
+                      setPlannerTaskCap(Number(event.target.value))
+                    }
+                  />
+                  <span className="text-muted-foreground">
+                    Maximum tasks the generated plan may contain.
+                  </span>
+                </label>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <Input
                   aria-label="Provider"
@@ -755,20 +1198,38 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
               </Select>
               <Button
                 className="gap-2"
-                disabled={!name.trim() || !goal.trim() || createRun.isPending}
+                disabled={
+                  !name.trim() ||
+                  !goal.trim() ||
+                  automaticPlanNeedsTarget ||
+                  createRun.isPending ||
+                  startCreatedPlanner.isPending
+                }
                 onClick={() => void handleCreateRun()}
               >
-                {createRun.isPending ? (
+                {createRun.isPending || startCreatedPlanner.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Plus className="h-4 w-4" />
                 )}
-                Create draft
+                {autoPlan ? "Create and plan" : "Create draft"}
               </Button>
-              {createRun.isError && (
+              {(createRun.isError ||
+                (startCreatedPlanner.isError &&
+                  createPlannerErrorRunId === selectedRunId)) && (
                 <div className="text-destructive flex items-center gap-2 text-xs">
                   <AlertCircle className="h-3.5 w-3.5" />
-                  {createRun.error.message}
+                  {createRun.error?.message ??
+                    (startCreatedPlanner.error
+                      ? `Draft created and selected; planning failed: ${startCreatedPlanner.error.message}. Retry from Plan review.`
+                      : null)}
+                </div>
+              )}
+              {automaticPlanNeedsTarget && (
+                <div className="text-muted-foreground text-xs">
+                  Select a repository or project to create and plan
+                  automatically. Turn automatic planning off to save a goal-only
+                  draft.
                 </div>
               )}
             </div>
@@ -800,7 +1261,7 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                     key={run.id}
                     run={run}
                     selected={selectedRun?.id === run.id}
-                    onSelect={() => setSelectedRunId(run.id)}
+                    onSelect={() => selectRun(run.id)}
                   />
                 ))}
               </div>
@@ -808,7 +1269,10 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
           </section>
         </aside>
 
-        <main className="flex min-h-0 flex-col lg:overflow-hidden">
+        <main
+          ref={detailRef}
+          className="flex min-h-0 flex-col lg:overflow-hidden"
+        >
           {selectedRunId == null ? (
             <div className="text-muted-foreground flex flex-1 items-center justify-center p-6 text-sm">
               Select or create a fleet run
@@ -833,7 +1297,15 @@ export function FleetManagementView({ onClose }: { onClose?: () => void }) {
                   {detail.data.run.goal}
                 </p>
               </div>
-              <RunDetail detail={detail.data} />
+              <RunDetail
+                detail={detail.data}
+                onBack={() =>
+                  document.getElementById("fleet-run-list")?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start",
+                  })
+                }
+              />
             </>
           ) : null}
         </main>

@@ -5,6 +5,10 @@ export interface ParsedFleetPlanTask {
   parentIndex: number | null;
   sortOrder: number;
   fileClaims: string[];
+  agentType: string | null;
+  model: string | null;
+  acceptanceCriteria: string | null;
+  verifyCommand: string | null;
 }
 
 export const FLEET_PLAN_TEXT_MAX = 24000;
@@ -198,6 +202,10 @@ function toParsedTasks(tasks: DraftTask[]): ParsedFleetPlanTask[] {
     parentIndex: parentIndexFor(tasks, index),
     sortOrder: index,
     fileClaims: uniqueCapped(task.fileClaims),
+    agentType: null,
+    model: null,
+    acceptanceCriteria: null,
+    verifyCommand: null,
   }));
 }
 
@@ -223,5 +231,9 @@ export function canonicalFleetPlanTasks(tasks: ParsedFleetPlanTask[]) {
     parentIndex: task.parentIndex,
     sortOrder: task.sortOrder,
     fileClaims: [...task.fileClaims].sort(),
+    agentType: task.agentType,
+    model: task.model,
+    acceptanceCriteria: task.acceptanceCriteria,
+    verifyCommand: task.verifyCommand,
   }));
 }

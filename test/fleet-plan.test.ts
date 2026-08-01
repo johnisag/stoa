@@ -5,7 +5,7 @@ import {
   FLEET_PLAN_TEXT_MAX,
   parseFleetPlanText,
 } from "@/lib/fleet/plan";
-import type { FleetTaskRow } from "@/lib/fleet/types";
+import type { FleetTaskDependencyRow, FleetTaskRow } from "@/lib/fleet/types";
 
 const now = "2026-07-08T00:00:00.000Z";
 
@@ -128,5 +128,19 @@ describe("fleet plan hashes", () => {
 
     expect(hashA).toBe(hashB);
     expect(hashA).not.toBe(hashC);
+  });
+
+  it("binds every dependency edge, including multi-parent DAGs", () => {
+    const tasks = [taskRow("a", 0), taskRow("b", 1), taskRow("c", 2)];
+    const edge = (id: string, from: string): FleetTaskDependencyRow => ({
+      id,
+      fleet_run_id: "run-1",
+      task_id: "c",
+      depends_on_task_id: from,
+      dependency_type: "blocks",
+    });
+    expect(hashFleetTaskRows(tasks, [edge("1", "a")])).not.toBe(
+      hashFleetTaskRows(tasks, [edge("1", "a"), edge("2", "b")])
+    );
   });
 });

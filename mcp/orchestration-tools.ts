@@ -12,6 +12,19 @@ export const SPAWNABLE_AGENTS = PROVIDER_IDS.filter(
   (id) => id !== "shell"
 ) as string[];
 
+const DIRECT_FLEET_TOOLS = new Set([
+  "fleet_list_runs",
+  "fleet_get_run",
+  "fleet_list_tasks",
+  "fleet_create_run",
+  "fleet_plan_run",
+  "fleet_approve_run",
+  "fleet_pause_run",
+  "fleet_resume_run",
+  "fleet_cancel_run",
+  "fleet_submit_artifact",
+]);
+
 const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
 
 // Conductor session ID: from CONDUCTOR_SESSION_ID (Claude/Codex bake it into the
@@ -125,7 +138,74 @@ export async function handleToolCall(request: {
   const args = request.params.arguments;
 
   try {
+    if (DIRECT_FLEET_TOOLS.has(name)) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: direct Fleet access is not exposed through MCP; use fleet_request_action to queue an operator request.",
+          },
+        ],
+      };
+    }
     switch (name) {
+      case "fleet_request_action": {
+        const conductorId = getConductorId(args);
+        if (!conductorId) throw new Error("conductorId is required");
+        const runId = requireString(args, "runId");
+        const action = requireString(args, "action");
+        const actions = new Set([
+          "plan",
+          "approve",
+          "start_or_resume",
+          "pause",
+          "cancel",
+        ]);
+        if (!actions.has(action)) throw new Error("unsupported Fleet action");
+        const expectedPlanHash =
+          typeof args?.expectedPlanHash === "string"
+            ? args.expectedPlanHash.trim().slice(0, 128)
+            : "";
+        const note =
+          typeof args?.message === "string"
+            ? args.message.trim().slice(0, 1000)
+            : "";
+        const created = await apiCall("/api/mcp/elicit", {
+          method: "POST",
+          body: JSON.stringify({
+            conductorId,
+            message: [
+              `Fleet operator request: ${action} run ${runId}.`,
+              expectedPlanHash
+                ? `Expected plan hash: ${expectedPlanHash}.`
+                : "",
+              note,
+              "This request is informational only. Review and perform the action in Fleet Management; accepting this form does not execute it.",
+            ]
+              .filter(Boolean)
+              .join(" "),
+            fields: [
+              {
+                key: "acknowledged",
+                type: "boolean",
+                description:
+                  "Acknowledge only: this Fleet request still needs operator review",
+              },
+            ],
+          }),
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: created?.error
+                ? `Error: ${created.error}`
+                : `Fleet operator request queued (${created.elicitationId}). No Fleet state was changed.`,
+            },
+          ],
+        };
+      }
+
       case "spawn_worker": {
         const conductorId = getConductorId(args);
         if (!conductorId) {

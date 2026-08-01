@@ -383,7 +383,9 @@ export function discardChanges(workingDir: string, filePath: string): void {
  */
 export function isGitRepo(workingDir: string): boolean {
   try {
-    git(["rev-parse", "--git-dir"], workingDir, { stdio: "pipe" });
+    git(["rev-parse", "--git-dir"], expandHome(workingDir), {
+      stdio: "pipe",
+    });
     return true;
   } catch {
     return false;
@@ -486,17 +488,36 @@ export function getRemoteUrl(workingDir: string): string | null {
  * Get the default branch name (main or master)
  */
 export function getDefaultBranch(workingDir: string): string {
+  const resolvedWorkingDir = expandHome(workingDir);
   try {
     // Try to get from remote
     const output = git(
       ["symbolic-ref", "refs/remotes/origin/HEAD"],
-      workingDir,
+      resolvedWorkingDir,
       { stdio: "pipe" }
     ).trim();
     return output
       .replace("refs/remotes/origin/", "")
       .replace("refs/heads/", "");
   } catch {
+    for (const candidate of ["main", "master"]) {
+      try {
+        git(["rev-parse", "--verify", candidate], resolvedWorkingDir, {
+          stdio: "pipe",
+        });
+        return candidate;
+      } catch {
+        // Try the next conventional default name.
+      }
+    }
+    try {
+      const current = git(["branch", "--show-current"], resolvedWorkingDir, {
+        stdio: "pipe",
+      }).trim();
+      if (current) return current;
+    } catch {
+      // Fall through to the stable default below.
+    }
     // No origin/HEAD configured — matches the old `|| echo 'refs/heads/main'`
     return "main";
   }

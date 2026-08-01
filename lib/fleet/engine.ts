@@ -6,6 +6,7 @@ import type {
   FleetEventDto,
   FleetEventRow,
   FleetReviewPolicy,
+  FleetPlannerState,
   FleetRunDetailDto,
   FleetRunDto,
   FleetRunRow,
@@ -101,7 +102,9 @@ export function normalizeFleetRunDraft(
   };
 }
 
-export function buildFleetApprovalPreview(): FleetApprovalPreview {
+export function buildFleetApprovalPreview(
+  canApproveExecutableWork = false
+): FleetApprovalPreview {
   return {
     requiredGates: [
       "operator phase-start authorization",
@@ -110,13 +113,10 @@ export function buildFleetApprovalPreview(): FleetApprovalPreview {
       "green CI on the final PR head",
       "authorized head-SHA-pinned merge",
     ],
-    blockedActions: [
-      "autonomous planner execution",
-      "worker spawning",
-      "resume or tick execution",
-      "merge or cleanup",
-    ],
-    canApproveExecutableWork: false,
+    blockedActions: canApproveExecutableWork
+      ? ["merge or cleanup"]
+      : ["worker spawning", "resume or tick execution", "merge or cleanup"],
+    canApproveExecutableWork,
   };
 }
 
@@ -143,10 +143,45 @@ function parseSettingsPlanText(value: string): string | null {
   return typeof planText === "string" && planText.trim() ? planText : null;
 }
 
+function parsePlannerSettings(value: string): {
+  state: FleetPlannerState;
+  error: string | null;
+  provider: string | null;
+  sessionId: string | null;
+} {
+  const parsed = parseJson(value);
+  const planner =
+    parsed && typeof parsed === "object"
+      ? (parsed as { planner?: unknown }).planner
+      : null;
+  if (!planner || typeof planner !== "object") {
+    return { state: "idle", error: null, provider: null, sessionId: null };
+  }
+  const record = planner as Record<string, unknown>;
+  const states: FleetPlannerState[] = [
+    "idle",
+    "starting",
+    "running",
+    "finalizing",
+    "cleanup_pending",
+    "ready",
+    "failed",
+  ];
+  return {
+    state: states.includes(record.state as FleetPlannerState)
+      ? (record.state as FleetPlannerState)
+      : "idle",
+    error: typeof record.error === "string" ? record.error : null,
+    provider: typeof record.provider === "string" ? record.provider : null,
+    sessionId: typeof record.sessionId === "string" ? record.sessionId : null,
+  };
+}
+
 export function toFleetRunDto(
   row: FleetRunRow,
   counts: { taskCount: number; workerCount: number }
 ): FleetRunDto {
+  const planner = parsePlannerSettings(row.settings_json);
   return {
     id: row.id,
     name: row.name,
@@ -165,24 +200,54 @@ export function toFleetRunDto(
     approvedPlanHash: row.approved_plan_hash,
     approvedBy: row.approved_by,
     approvedAt: row.approved_at,
+    schedulerEpoch: row.scheduler_epoch ?? 0,
+    recoveryRequired: row.recovery_required === 1,
+    reservedBudgetUsd: row.reserved_budget_usd ?? 0,
+    spentBudgetUsd: row.spent_budget_usd ?? 0,
+    pauseMode: row.pause_mode ?? null,
+    pauseReason: row.pause_reason ?? null,
+    cancelMode: row.cancel_mode ?? null,
     taskCount: counts.taskCount,
     workerCount: counts.workerCount,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    approvalPreview: buildFleetApprovalPreview(),
+    approvalPreview: buildFleetApprovalPreview(
+      row.approval_state === "approved" &&
+        row.approved_plan_hash != null &&
+        row.approved_plan_hash === row.plan_hash
+    ),
+    plannerState: planner.state,
+    plannerError: planner.error,
+    plannerProvider: planner.provider,
+    plannerSessionId: planner.sessionId,
   };
 }
 
-export function toFleetTaskDto(row: FleetTaskRow): FleetTaskDto {
+export function toFleetTaskDto(
+  row: FleetTaskRow,
+  dependsOnTaskIds: string[] = []
+): FleetTaskDto {
   return {
     id: row.id,
     parentTaskId: row.parent_task_id,
+    dependsOnTaskIds,
     title: row.title,
     description: row.description,
     status: row.status,
     taskType: row.task_type,
     sortOrder: row.sort_order,
     fileClaims: parseStringArray(row.file_claims_json),
+    priority: row.priority ?? 0,
+    agentType: row.agent_type ?? null,
+    model: row.model ?? null,
+    workingDirectory: row.working_directory ?? null,
+    branchName: row.branch_name ?? null,
+    worktreePath: row.worktree_path ?? null,
+    maxAttempts: row.max_attempts ?? 2,
+    currentAttempt: row.current_attempt ?? 0,
+    acceptanceCriteria: row.acceptance_criteria ?? null,
+    verifyCommand: row.verify_command ?? null,
+    failureCode: row.failure_code ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -197,6 +262,11 @@ export function toFleetWorkerDto(row: FleetWorkerRow): FleetWorkerDto {
     provider: row.provider,
     model: row.model,
     attempt: row.attempt,
+    spawnRequestId: row.spawn_request_id ?? null,
+    worktreePath: row.worktree_path ?? null,
+    reservationUsd: row.reservation_usd ?? 0,
+    terminalCause: row.terminal_cause ?? null,
+    failureCode: row.failure_code ?? null,
     createdAt: row.created_at,
     lastHeartbeatAt: row.last_heartbeat_at,
     endedAt: row.ended_at,
@@ -230,6 +300,7 @@ export function toFleetArtifactDto(row: FleetArtifactRow): FleetArtifactDto {
 export function composeFleetRunDetail(input: {
   run: FleetRunRow;
   tasks: FleetTaskRow[];
+  dependencies?: import("./types").FleetTaskDependencyRow[];
   workers: FleetWorkerRow[];
   artifacts: FleetArtifactRow[];
   events: FleetEventRow[];
@@ -239,7 +310,14 @@ export function composeFleetRunDetail(input: {
       taskCount: input.tasks.length,
       workerCount: input.workers.length,
     }),
-    tasks: input.tasks.map(toFleetTaskDto),
+    tasks: input.tasks.map((task) =>
+      toFleetTaskDto(
+        task,
+        (input.dependencies ?? [])
+          .filter((dependency) => dependency.task_id === task.id)
+          .map((dependency) => dependency.depends_on_task_id)
+      )
+    ),
     workers: input.workers.map(toFleetWorkerDto),
     artifacts: input.artifacts.map(toFleetArtifactDto),
     events: input.events.map(toFleetEventDto),
