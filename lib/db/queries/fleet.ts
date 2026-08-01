@@ -40,6 +40,13 @@ export const fleetQueries = {
         r.approved_plan_hash,
         r.approved_by,
         r.approved_at,
+        r.scheduler_epoch,
+        r.recovery_required,
+        r.reserved_budget_usd,
+        r.spent_budget_usd,
+        r.pause_mode,
+        r.pause_reason,
+        r.cancel_mode,
         r.settings_json,
         r.created_at,
         r.updated_at,
@@ -71,6 +78,37 @@ export const fleetQueries = {
 
   deleteFleetTasksForRun: (db: Database.Database) =>
     getStmt(db, `DELETE FROM fleet_tasks WHERE fleet_run_id = ?`),
+
+  deleteFleetTaskDependenciesForRun: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM fleet_task_dependencies WHERE fleet_run_id = ?`),
+
+  deleteFleetTaskClaimsForRun: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM fleet_task_claims WHERE fleet_run_id = ?`),
+
+  createFleetTaskDependency: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO fleet_task_dependencies
+      (id, fleet_run_id, task_id, depends_on_task_id, dependency_type)
+      VALUES (?, ?, ?, ?, ?)`
+    ),
+
+  createFleetTaskClaim: (db: Database.Database) =>
+    getStmt(
+      db,
+      `INSERT INTO fleet_task_claims
+      (id, fleet_run_id, task_id, path, claim_type, confidence)
+      VALUES (?, ?, ?, ?, ?, ?)`
+    ),
+
+  approveFleetTasksForRun: (db: Database.Database) =>
+    getStmt(
+      db,
+      `UPDATE fleet_tasks
+      SET status = CASE WHEN task_type = 'milestone' THEN 'completed' ELSE 'ready' END,
+          approval_state = 'approved', approved_task_hash = ?, updated_at = ?
+      WHERE fleet_run_id = ? AND status = 'draft'`
+    ),
 
   listFleetTasksForRun: (db: Database.Database) =>
     getStmt(

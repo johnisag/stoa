@@ -101,7 +101,9 @@ export function normalizeFleetRunDraft(
   };
 }
 
-export function buildFleetApprovalPreview(): FleetApprovalPreview {
+export function buildFleetApprovalPreview(
+  canApproveExecutableWork = false
+): FleetApprovalPreview {
   return {
     requiredGates: [
       "operator phase-start authorization",
@@ -110,13 +112,15 @@ export function buildFleetApprovalPreview(): FleetApprovalPreview {
       "green CI on the final PR head",
       "authorized head-SHA-pinned merge",
     ],
-    blockedActions: [
-      "autonomous planner execution",
-      "worker spawning",
-      "resume or tick execution",
-      "merge or cleanup",
-    ],
-    canApproveExecutableWork: false,
+    blockedActions: canApproveExecutableWork
+      ? ["merge or cleanup"]
+      : [
+          "autonomous planner execution",
+          "worker spawning",
+          "resume or tick execution",
+          "merge or cleanup",
+        ],
+    canApproveExecutableWork,
   };
 }
 
@@ -165,11 +169,22 @@ export function toFleetRunDto(
     approvedPlanHash: row.approved_plan_hash,
     approvedBy: row.approved_by,
     approvedAt: row.approved_at,
+    schedulerEpoch: row.scheduler_epoch ?? 0,
+    recoveryRequired: row.recovery_required === 1,
+    reservedBudgetUsd: row.reserved_budget_usd ?? 0,
+    spentBudgetUsd: row.spent_budget_usd ?? 0,
+    pauseMode: row.pause_mode ?? null,
+    pauseReason: row.pause_reason ?? null,
+    cancelMode: row.cancel_mode ?? null,
     taskCount: counts.taskCount,
     workerCount: counts.workerCount,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    approvalPreview: buildFleetApprovalPreview(),
+    approvalPreview: buildFleetApprovalPreview(
+      row.approval_state === "approved" &&
+        row.approved_plan_hash != null &&
+        row.approved_plan_hash === row.plan_hash
+    ),
   };
 }
 
@@ -183,6 +198,16 @@ export function toFleetTaskDto(row: FleetTaskRow): FleetTaskDto {
     taskType: row.task_type,
     sortOrder: row.sort_order,
     fileClaims: parseStringArray(row.file_claims_json),
+    priority: row.priority ?? 0,
+    agentType: row.agent_type ?? null,
+    model: row.model ?? null,
+    workingDirectory: row.working_directory ?? null,
+    branchName: row.branch_name ?? null,
+    worktreePath: row.worktree_path ?? null,
+    maxAttempts: row.max_attempts ?? 2,
+    currentAttempt: row.current_attempt ?? 0,
+    acceptanceCriteria: row.acceptance_criteria ?? null,
+    failureCode: row.failure_code ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -197,6 +222,11 @@ export function toFleetWorkerDto(row: FleetWorkerRow): FleetWorkerDto {
     provider: row.provider,
     model: row.model,
     attempt: row.attempt,
+    spawnRequestId: row.spawn_request_id ?? null,
+    worktreePath: row.worktree_path ?? null,
+    reservationUsd: row.reservation_usd ?? 0,
+    terminalCause: row.terminal_cause ?? null,
+    failureCode: row.failure_code ?? null,
     createdAt: row.created_at,
     lastHeartbeatAt: row.last_heartbeat_at,
     endedAt: row.ended_at,

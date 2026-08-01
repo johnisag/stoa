@@ -62,6 +62,31 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
       { name: "approved_by", ddl: "approved_by TEXT" },
       { name: "approved_at", ddl: "approved_at TEXT" },
       {
+        name: "conductor_session_id",
+        ddl: "conductor_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL",
+      },
+      {
+        name: "scheduler_epoch",
+        ddl: "scheduler_epoch INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "recovery_required",
+        ddl: "recovery_required INTEGER NOT NULL DEFAULT 0",
+      },
+      {
+        name: "reserved_budget_usd",
+        ddl: "reserved_budget_usd REAL NOT NULL DEFAULT 0",
+      },
+      {
+        name: "spent_budget_usd",
+        ddl: "spent_budget_usd REAL NOT NULL DEFAULT 0",
+      },
+      { name: "pause_mode", ddl: "pause_mode TEXT" },
+      { name: "pause_reason", ddl: "pause_reason TEXT" },
+      { name: "cancel_mode", ddl: "cancel_mode TEXT" },
+      { name: "started_at", ddl: "started_at TEXT" },
+      { name: "ended_at", ddl: "ended_at TEXT" },
+      {
         name: "settings_json",
         ddl: "settings_json TEXT NOT NULL DEFAULT '{}'",
       },
@@ -79,6 +104,87 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
       SET updated_at = created_at
       WHERE updated_at IS NULL OR updated_at = '';
     `);
+  }
+
+  if (hasTable(db, "fleet_tasks")) {
+    for (const column of [
+      { name: "id", ddl: "id TEXT" },
+      { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+      { name: "parent_task_id", ddl: "parent_task_id TEXT" },
+      { name: "title", ddl: "title TEXT NOT NULL DEFAULT ''" },
+      { name: "description", ddl: "description TEXT" },
+      { name: "status", ddl: "status TEXT NOT NULL DEFAULT 'draft'" },
+      { name: "task_type", ddl: "task_type TEXT NOT NULL DEFAULT 'planning'" },
+      { name: "sort_order", ddl: "sort_order INTEGER NOT NULL DEFAULT 0" },
+      {
+        name: "file_claims_json",
+        ddl: "file_claims_json TEXT NOT NULL DEFAULT '[]'",
+      },
+      { name: "priority", ddl: "priority INTEGER NOT NULL DEFAULT 0" },
+      { name: "agent_type", ddl: "agent_type TEXT" },
+      { name: "model", ddl: "model TEXT" },
+      { name: "working_directory", ddl: "working_directory TEXT" },
+      { name: "base_branch", ddl: "base_branch TEXT" },
+      { name: "branch_name", ddl: "branch_name TEXT" },
+      { name: "worktree_path", ddl: "worktree_path TEXT" },
+      { name: "max_attempts", ddl: "max_attempts INTEGER NOT NULL DEFAULT 2" },
+      {
+        name: "current_attempt",
+        ddl: "current_attempt INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "lease_owner", ddl: "lease_owner TEXT" },
+      { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+      {
+        name: "scheduler_epoch",
+        ddl: "scheduler_epoch INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "spawn_request_id", ddl: "spawn_request_id TEXT" },
+      { name: "acceptance_criteria", ddl: "acceptance_criteria TEXT" },
+      { name: "verify_command", ddl: "verify_command TEXT" },
+      { name: "approved_task_hash", ddl: "approved_task_hash TEXT" },
+      {
+        name: "approval_state",
+        ddl: "approval_state TEXT NOT NULL DEFAULT 'draft'",
+      },
+      { name: "failure_code", ddl: "failure_code TEXT" },
+      { name: "started_at", ddl: "started_at TEXT" },
+      { name: "ended_at", ddl: "ended_at TEXT" },
+      { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+      { name: "updated_at", ddl: "updated_at TEXT NOT NULL DEFAULT ''" },
+    ]) {
+      addColumnIfMissing(db, "fleet_tasks", column);
+    }
+  }
+
+  if (hasTable(db, "fleet_workers")) {
+    for (const column of [
+      { name: "id", ddl: "id TEXT" },
+      { name: "fleet_run_id", ddl: "fleet_run_id TEXT NOT NULL DEFAULT ''" },
+      { name: "task_id", ddl: "task_id TEXT" },
+      { name: "session_id", ddl: "session_id TEXT" },
+      {
+        name: "status",
+        ddl: "status TEXT NOT NULL DEFAULT 'waiting_for_operator'",
+      },
+      { name: "provider", ddl: "provider TEXT" },
+      { name: "model", ddl: "model TEXT" },
+      { name: "attempt", ddl: "attempt INTEGER NOT NULL DEFAULT 1" },
+      { name: "spawn_request_id", ddl: "spawn_request_id TEXT" },
+      { name: "worktree_path", ddl: "worktree_path TEXT" },
+      { name: "lease_owner", ddl: "lease_owner TEXT" },
+      { name: "lease_expires_at", ddl: "lease_expires_at TEXT" },
+      {
+        name: "reservation_usd",
+        ddl: "reservation_usd REAL NOT NULL DEFAULT 0",
+      },
+      { name: "terminal_cause", ddl: "terminal_cause TEXT" },
+      { name: "failure_code", ddl: "failure_code TEXT" },
+      { name: "created_at", ddl: "created_at TEXT NOT NULL DEFAULT ''" },
+      { name: "last_heartbeat_at", ddl: "last_heartbeat_at TEXT" },
+      { name: "ended_at", ddl: "ended_at TEXT" },
+    ]) {
+      addColumnIfMissing(db, "fleet_workers", column);
+    }
   }
 
   if (hasTable(db, "fleet_artifacts")) {
@@ -594,11 +700,22 @@ export function createSchema(db: Database.Database): void {
       approved_plan_hash TEXT,
       approved_by TEXT,
       approved_at TEXT,
+      conductor_session_id TEXT,
+      scheduler_epoch INTEGER NOT NULL DEFAULT 0,
+      recovery_required INTEGER NOT NULL DEFAULT 0,
+      reserved_budget_usd REAL NOT NULL DEFAULT 0,
+      spent_budget_usd REAL NOT NULL DEFAULT 0,
+      pause_mode TEXT,
+      pause_reason TEXT,
+      cancel_mode TEXT,
       settings_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      started_at TEXT,
+      ended_at TEXT,
       FOREIGN KEY (repo_id) REFERENCES dispatch_repos(id) ON DELETE SET NULL,
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
+      FOREIGN KEY (conductor_session_id) REFERENCES sessions(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS fleet_tasks (
@@ -611,8 +728,28 @@ export function createSchema(db: Database.Database): void {
       task_type TEXT NOT NULL DEFAULT 'planning',
       sort_order INTEGER NOT NULL DEFAULT 0,
       file_claims_json TEXT NOT NULL DEFAULT '[]',
+      priority INTEGER NOT NULL DEFAULT 0,
+      agent_type TEXT,
+      model TEXT,
+      working_directory TEXT,
+      base_branch TEXT,
+      branch_name TEXT,
+      worktree_path TEXT,
+      max_attempts INTEGER NOT NULL DEFAULT 2,
+      current_attempt INTEGER NOT NULL DEFAULT 0,
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      scheduler_epoch INTEGER NOT NULL DEFAULT 0,
+      spawn_request_id TEXT,
+      acceptance_criteria TEXT,
+      verify_command TEXT,
+      approved_task_hash TEXT,
+      approval_state TEXT NOT NULL DEFAULT 'draft',
+      failure_code TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      started_at TEXT,
+      ended_at TEXT,
       FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
       FOREIGN KEY (parent_task_id) REFERENCES fleet_tasks(id) ON DELETE SET NULL
     );
@@ -626,12 +763,56 @@ export function createSchema(db: Database.Database): void {
       provider TEXT,
       model TEXT,
       attempt INTEGER NOT NULL DEFAULT 1,
+      spawn_request_id TEXT,
+      worktree_path TEXT,
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      reservation_usd REAL NOT NULL DEFAULT 0,
+      terminal_cause TEXT,
+      failure_code TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_heartbeat_at TEXT,
       ended_at TEXT,
       FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
       FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE SET NULL,
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_task_dependencies (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      depends_on_task_id TEXT NOT NULL,
+      dependency_type TEXT NOT NULL DEFAULT 'blocks',
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY (depends_on_task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE,
+      UNIQUE (fleet_run_id, task_id, depends_on_task_id, dependency_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_task_claims (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      claim_type TEXT NOT NULL DEFAULT 'exclusive',
+      confidence REAL NOT NULL DEFAULT 1.0,
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES fleet_tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS fleet_resource_leases (
+      id TEXT PRIMARY KEY,
+      fleet_run_id TEXT NOT NULL,
+      worker_id TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_key TEXT NOT NULL,
+      units INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'reserved',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      released_at TEXT,
+      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (worker_id) REFERENCES fleet_workers(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS fleet_events (
@@ -693,7 +874,19 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_fleet_runs_status ON fleet_runs(status);
     CREATE INDEX IF NOT EXISTS idx_fleet_runs_updated ON fleet_runs(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_fleet_tasks_run ON fleet_tasks(fleet_run_id, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_fleet_tasks_schedule ON fleet_tasks(fleet_run_id, status, priority DESC, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_fleet_dependencies_task ON fleet_task_dependencies(fleet_run_id, task_id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_dependencies_upstream ON fleet_task_dependencies(fleet_run_id, depends_on_task_id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_claims_path ON fleet_task_claims(fleet_run_id, path);
+    CREATE INDEX IF NOT EXISTS idx_fleet_resource_leases_active ON fleet_resource_leases(resource_type, resource_key, status);
+    CREATE INDEX IF NOT EXISTS idx_fleet_resource_leases_worker ON fleet_resource_leases(worker_id, status);
     CREATE INDEX IF NOT EXISTS idx_fleet_workers_run ON fleet_workers(fleet_run_id);
+    CREATE INDEX IF NOT EXISTS idx_fleet_workers_status ON fleet_workers(fleet_run_id, status);
+    CREATE INDEX IF NOT EXISTS idx_fleet_workers_session ON fleet_workers(session_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_spawn_request ON fleet_workers(spawn_request_id) WHERE spawn_request_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_workers_one_active_task
+      ON fleet_workers(fleet_run_id, task_id)
+      WHERE status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending');
     CREATE INDEX IF NOT EXISTS idx_fleet_events_run ON fleet_events(fleet_run_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_fleet_artifacts_run ON fleet_artifacts(fleet_run_id, created_at DESC);
 

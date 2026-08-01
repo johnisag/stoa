@@ -3,7 +3,10 @@ import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
 
-const state = vi.hoisted(() => ({ db: null as unknown }));
+const state = vi.hoisted(() => ({
+  db: null as unknown,
+  stopFleetSession: async () => true,
+}));
 
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
@@ -16,10 +19,25 @@ vi.mock("@/lib/db", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/git-status", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/git-status")>();
+  return {
+    ...actual,
+    getDefaultBranch: () => "develop",
+    isGitRepo: () => true,
+  };
+});
+
+vi.mock("@/lib/fleet/stop", () => ({
+  stopFleetSession: vi.fn(() => state.stopFleetSession()),
+}));
+
 import { queries } from "@/lib/db";
 import {
   approveFleetRunPlan,
   attachFleetPlanCriticArtifact,
+  cancelFleetRun,
+  completeFleetWorker,
   createDraftFleetRun,
   getFleetRunDetail,
   ingestFleetRunPlan,
@@ -38,12 +56,14 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  state.stopFleetSession = async () => true;
   db().exec(`
     DELETE FROM fleet_events;
     DELETE FROM fleet_artifacts;
     DELETE FROM fleet_workers;
     DELETE FROM fleet_tasks;
     DELETE FROM fleet_runs;
+    DELETE FROM sessions WHERE id = 'fleet-session';
     DELETE FROM dispatch_repos;
     DELETE FROM projects WHERE id <> 'uncategorized';
   `);
@@ -78,6 +98,153 @@ beforeEach(() => {
       "npm test",
       "proj-fleet"
     );
+});
+
+describe("Phase 3 worker completion", () => {
+  function addRunningWorker() {
+    const created = createDraftFleetRun({
+      name: "Runtime fleet",
+      goal: "Finish a worker safely",
+      repoId: "repo-fleet",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const planned = ingestFleetRunPlan(created.run.run.id, {
+      planText: "- Build runtime [files: lib/runtime.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    const approved = approveFleetRunPlan(created.run.run.id, {
+      expectedPlanHash: planned.run.run.planHash!,
+    });
+    if ("error" in approved) throw new Error(approved.error);
+    const taskId = approved.run.tasks[0].id;
+    db()
+      .prepare(
+        `INSERT INTO sessions
+       (id, name, tmux_name, status, worker_status, working_directory, group_path, agent_type)
+       VALUES ('fleet-session', 'Worker', 'fleet-session', 'running', 'working', 'C:\\repo', 'sessions', 'codex')`
+      )
+      .run();
+    db()
+      .prepare(
+        `UPDATE fleet_runs SET status = 'running', reserved_budget_usd = 0.25 WHERE id = ?`
+      )
+      .run(created.run.run.id);
+    db()
+      .prepare(`UPDATE fleet_tasks SET status = 'running' WHERE id = ?`)
+      .run(taskId);
+    db()
+      .prepare(
+        `INSERT INTO fleet_workers
+       (id, fleet_run_id, task_id, session_id, status, provider, attempt, reservation_usd)
+       VALUES ('fleet-worker', ?, ?, 'fleet-session', 'running', 'codex', 1, 0.25)`
+      )
+      .run(created.run.run.id, taskId);
+    const insertLease = db().prepare(
+      `INSERT INTO fleet_resource_leases
+       (id, fleet_run_id, worker_id, resource_type, resource_key)
+       VALUES (?, ?, 'fleet-worker', ?, ?)`
+    );
+    for (const resourceType of [
+      "pty",
+      "provider",
+      "git_operation",
+      "worktree",
+    ]) {
+      insertLease.run(
+        `lease-${resourceType}`,
+        created.run.run.id,
+        resourceType,
+        resourceType
+      );
+    }
+    return { runId: created.run.run.id, taskId };
+  }
+
+  it("stops the backend before releasing runtime resources", async () => {
+    const { runId, taskId } = addRunningWorker();
+
+    const result = await completeFleetWorker(runId, "fleet-worker", {
+      actor: "operator",
+    });
+    expect(result).toHaveProperty("run");
+    expect(
+      db()
+        .prepare(`SELECT status FROM fleet_workers WHERE id = 'fleet-worker'`)
+        .get()
+    ).toEqual({ status: "completed" });
+    expect(
+      db().prepare(`SELECT status FROM fleet_tasks WHERE id = ?`).get(taskId)
+    ).toEqual({ status: "needs_inspection" });
+    expect(
+      db()
+        .prepare(
+          `SELECT resource_type FROM fleet_resource_leases WHERE worker_id = 'fleet-worker' AND status = 'reserved'`
+        )
+        .all()
+    ).toEqual([{ resource_type: "worktree" }]);
+  });
+
+  it("lets cancellation take ownership of an in-flight completion cleanup", async () => {
+    const { runId } = addRunningWorker();
+    let releaseFirstStop!: (value: boolean) => void;
+    const firstStop = new Promise<boolean>((resolve) => {
+      releaseFirstStop = resolve;
+    });
+    let calls = 0;
+    state.stopFleetSession = async () => {
+      calls += 1;
+      return calls === 1 ? firstStop : true;
+    };
+
+    const completing = completeFleetWorker(runId, "fleet-worker", {
+      actor: "operator",
+    });
+    await vi.waitFor(() =>
+      expect(
+        db()
+          .prepare(
+            `SELECT status, terminal_cause FROM fleet_workers WHERE id = 'fleet-worker'`
+          )
+          .get()
+      ).toEqual({
+        status: "cleanup_pending",
+        terminal_cause: "operator_completion_pending",
+      })
+    );
+    const canceled = await cancelFleetRun(runId, {
+      actor: "operator",
+      mode: "cancel-preserve-worktrees",
+    });
+    expect(canceled).toHaveProperty("run");
+    releaseFirstStop(true);
+    await completing;
+
+    expect(
+      db()
+        .prepare(
+          `SELECT status, terminal_cause FROM fleet_workers WHERE id = 'fleet-worker'`
+        )
+        .get()
+    ).toEqual({
+      status: "cleanup_complete",
+      terminal_cause: "operator_cancel",
+    });
+    expect(
+      db()
+        .prepare(
+          `SELECT spent_budget_usd, reserved_budget_usd FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual({ spent_budget_usd: 0.25, reserved_budget_usd: 0 });
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_resource_leases WHERE worker_id = 'fleet-worker' AND status = 'reserved'`
+        )
+        .get()
+    ).toEqual({ n: 0 });
+  });
 });
 
 describe("createDraftFleetRun", () => {
@@ -252,6 +419,48 @@ describe("Phase 2 plan ingestion and approval", () => {
     expect(approved.run.events[0]).toMatchObject({
       eventType: "plan_approved",
       actor: "operator",
+    });
+  });
+
+  it("resolves a project checkout default branch into the approved contract", () => {
+    const created = createDraftFleetRun({
+      name: "Project fleet",
+      goal: "Use the checkout default branch",
+      projectId: "proj-fleet",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const planned = ingestFleetRunPlan(created.run.run.id, {
+      planText: "- Build project task [files: lib/project.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    const approved = approveFleetRunPlan(created.run.run.id, {
+      expectedPlanHash: planned.run.run.planHash!,
+    });
+    expect(approved).toHaveProperty("run");
+    expect(
+      (
+        db()
+          .prepare(`SELECT base_branch FROM fleet_tasks WHERE fleet_run_id = ?`)
+          .get(created.run.run.id) as { base_branch: string }
+      ).base_branch
+    ).toBe("develop");
+  });
+
+  it("rejects unsupported providers before executable approval", () => {
+    const runId = createRun();
+    const planned = ingestFleetRunPlan(runId, { planText: "- Build parser" });
+    if ("error" in planned) throw new Error(planned.error);
+    db()
+      .prepare(`UPDATE fleet_runs SET provider = 'unknown' WHERE id = ?`)
+      .run(runId);
+    expect(
+      approveFleetRunPlan(runId, {
+        expectedPlanHash: planned.run.run.planHash,
+      })
+    ).toEqual({
+      error: "select a supported agent provider before approval",
+      status: 409,
     });
   });
 

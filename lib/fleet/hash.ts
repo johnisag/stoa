@@ -1,5 +1,10 @@
 import { createHash } from "crypto";
-import type { FleetTaskRow } from "./types";
+import type {
+  FleetRunRow,
+  FleetTaskClaimRow,
+  FleetTaskDependencyRow,
+  FleetTaskRow,
+} from "./types";
 import { canonicalFleetPlanTasks, type ParsedFleetPlanTask } from "./plan";
 
 function parseFileClaims(value: string): string[] {
@@ -53,6 +58,68 @@ export function hashFleetTaskRows(rows: FleetTaskRow[]): string {
     fileClaims: parseFileClaims(task.file_claims_json).sort(),
   }));
   return stableHash(canonical);
+}
+
+export function hashFleetExecutionContract(input: {
+  run: FleetRunRow;
+  tasks: FleetTaskRow[];
+  claims: FleetTaskClaimRow[];
+  dependencies: FleetTaskDependencyRow[];
+}): string {
+  const { run } = input;
+  return stableHash({
+    run: {
+      repoId: run.repo_id,
+      projectId: run.project_id,
+      budgetUsd: run.budget_usd,
+      provider: run.provider,
+      model: run.model,
+      maxConcurrency: run.max_concurrency,
+      reviewPolicy: run.review_policy,
+      planHash: run.plan_hash,
+    },
+    tasks: [...input.tasks]
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((task) => ({
+        id: task.id,
+        parentTaskId: task.parent_task_id,
+        title: task.title,
+        description: task.description,
+        taskType: task.task_type,
+        sortOrder: task.sort_order,
+        fileClaimsJson: task.file_claims_json,
+        priority: task.priority ?? 0,
+        agentType: task.agent_type ?? null,
+        model: task.model ?? null,
+        workingDirectory: task.working_directory ?? null,
+        baseBranch: task.base_branch ?? null,
+        branchName: task.branch_name ?? null,
+        maxAttempts: task.max_attempts ?? 2,
+        acceptanceCriteria: task.acceptance_criteria ?? null,
+        verifyCommand: task.verify_command ?? null,
+      })),
+    claims: [...input.claims]
+      .sort((a, b) =>
+        `${a.task_id}:${a.path}`.localeCompare(`${b.task_id}:${b.path}`)
+      )
+      .map((claim) => ({
+        taskId: claim.task_id,
+        path: claim.path,
+        claimType: claim.claim_type,
+        confidence: claim.confidence,
+      })),
+    dependencies: [...input.dependencies]
+      .sort((a, b) =>
+        `${a.task_id}:${a.depends_on_task_id}:${a.dependency_type}`.localeCompare(
+          `${b.task_id}:${b.depends_on_task_id}:${b.dependency_type}`
+        )
+      )
+      .map((dependency) => ({
+        taskId: dependency.task_id,
+        dependsOnTaskId: dependency.depends_on_task_id,
+        dependencyType: dependency.dependency_type,
+      })),
+  });
 }
 
 export function validateFleetTaskRowsForApproval(

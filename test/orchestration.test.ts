@@ -16,12 +16,17 @@ import type Database from "better-sqlite3";
 const state = vi.hoisted(() => ({
   db: null as unknown,
   sandboxPath: null as string | null,
+  worktreeShouldFail: false,
+  worktreeActive: 0,
+  worktreeMaxActive: 0,
+  worktreeGate: null as Promise<void> | null,
 }));
 
 // Backend: record create/kill calls; capture() returns a ready banner so the
 // spawn poll loop exits fast.
 const backendCreate = vi.hoisted(() => vi.fn(async () => {}));
 const backendKill = vi.hoisted(() => vi.fn(async () => {}));
+const backendSendLiteral = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("@/lib/session-backend", () => ({
   getSessionBackend: () => ({
     create: backendCreate,
@@ -29,7 +34,7 @@ vi.mock("@/lib/session-backend", () => ({
     // Capture returns Claude's ready banner so the spawn poll loop matches on
     // its first 2s tick instead of waiting out the full 30s timeout.
     capture: vi.fn(async () => "? for shortcuts"),
-    sendKeysLiteral: vi.fn(async () => {}),
+    sendKeysLiteral: backendSendLiteral,
     sendEnter: vi.fn(async () => {}),
     sendKeysInterpreted: vi.fn(async () => {}),
   }),
@@ -39,7 +44,22 @@ vi.mock("@/lib/sandbox/detect", () => ({
     state.sandboxPath ? { tool: "bwrap", path: state.sandboxPath } : null,
 }));
 vi.mock("@/lib/worktrees", () => ({
-  createWorktree: vi.fn(async () => ({ worktreePath: "/tmp/wt" })),
+  createWorktree: vi.fn(async () => {
+    if (state.worktreeShouldFail) throw new Error("git worktree failed");
+    state.worktreeActive += 1;
+    state.worktreeMaxActive = Math.max(
+      state.worktreeMaxActive,
+      state.worktreeActive
+    );
+    if (state.worktreeGate) await state.worktreeGate;
+    else await new Promise((resolve) => setTimeout(resolve, 10));
+    state.worktreeActive -= 1;
+    return {
+      worktreePath: "/tmp/wt",
+      branchName: "mock-branch",
+      baseBranch: "main",
+    };
+  }),
   deleteWorktree: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/env-setup", () => ({
@@ -108,12 +128,106 @@ function addSession(over: Partial<Record<string, unknown>> = {}): string {
 beforeEach(() => {
   backendCreate.mockClear();
   backendKill.mockClear();
+  backendSendLiteral.mockReset();
+  backendSendLiteral.mockResolvedValue(undefined);
   state.sandboxPath = null;
+  state.worktreeShouldFail = false;
+  state.worktreeActive = 0;
+  state.worktreeMaxActive = 0;
+  state.worktreeGate = null;
   delete process.env.STOA_SANDBOX;
   db().prepare("DELETE FROM sessions").run();
 });
 
 describe("spawnWorker — conductor FK guard", () => {
+  it("fails closed for fleet worktrees while preserving generic fallback", async () => {
+    const conductor = addSession();
+    state.worktreeShouldFail = true;
+    await expect(
+      spawnWorker({
+        conductorSessionId: conductor,
+        task: "fleet write",
+        workingDirectory: "/repo",
+        useWorktree: true,
+        requireWorktree: true,
+      })
+    ).rejects.toThrow(/requires an isolated worktree/);
+    expect(backendCreate).not.toHaveBeenCalled();
+
+    await expect(
+      spawnWorker({
+        conductorSessionId: conductor,
+        task: "legacy write",
+        workingDirectory: "/repo",
+        useWorktree: true,
+      })
+    ).resolves.toBeTruthy();
+    expect(backendCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects strict fleet launch when task delivery fails", async () => {
+    const conductor = addSession();
+    backendSendLiteral.mockRejectedValueOnce(new Error("paste failed"));
+    await expect(
+      spawnWorker({
+        conductorSessionId: conductor,
+        task: "deliver this",
+        workingDirectory: "/repo",
+        useWorktree: true,
+        requireWorktree: true,
+        requireTaskDelivery: true,
+      })
+    ).rejects.toMatchObject({
+      name: "WorkerSpawnError",
+      worktreePath: "/tmp/wt",
+    });
+  });
+
+  it("preserves worktree identity when session persistence fails", async () => {
+    const conductor = addSession();
+    let releaseWorktree!: () => void;
+    state.worktreeGate = new Promise<void>((resolve) => {
+      releaseWorktree = resolve;
+    });
+    const spawning = spawnWorker({
+      conductorSessionId: conductor,
+      task: "fleet write",
+      workingDirectory: "/repo",
+      useWorktree: true,
+      requireWorktree: true,
+      requireTaskDelivery: true,
+    });
+    await vi.waitFor(() => expect(state.worktreeActive).toBe(1));
+    db().prepare(`DELETE FROM sessions WHERE id = ?`).run(conductor);
+    releaseWorktree();
+
+    await expect(spawning).rejects.toMatchObject({
+      name: "WorkerSpawnError",
+      sessionId: null,
+      worktreePath: "/tmp/wt",
+    });
+    expect(backendCreate).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent git worktree creation", async () => {
+    const conductor = addSession();
+    await Promise.all([
+      spawnWorker({
+        conductorSessionId: conductor,
+        task: "first",
+        workingDirectory: "/repo",
+        branchName: "fleet-first",
+      }),
+      spawnWorker({
+        conductorSessionId: conductor,
+        task: "second",
+        workingDirectory: "/repo",
+        branchName: "fleet-second",
+      }),
+    ]);
+    expect(state.worktreeMaxActive).toBe(1);
+  });
+
   it("throws on an unknown conductor and never touches the backend", async () => {
     await expect(
       spawnWorker({
@@ -157,7 +271,8 @@ describe("spawnWorker — conductor FK guard", () => {
     });
 
     const createArg = (backendCreate.mock.calls as unknown[][])[0]?.[0] as
-      { binary: string; args: string[]; command: string } | undefined;
+      | { binary: string; args: string[]; command: string }
+      | undefined;
     expect(createArg!.binary).toBe("/usr/bin/bwrap");
     expect(createArg!.args).toContain("claude");
     expect(createArg!.args).toContain("--dangerously-skip-permissions");
@@ -191,7 +306,8 @@ describe("spawnWorker — conductor FK guard", () => {
       "[sandbox] STOA_SANDBOX=1 but no Linux/bwrap primitive found; running unconfined with full-bypass"
     );
     const createArg = (backendCreate.mock.calls as unknown[][])[0]?.[0] as
-      { args: string[] } | undefined;
+      | { args: string[] }
+      | undefined;
     expect(createArg!.args).toContain("--dangerously-skip-permissions");
     warn.mockRestore();
   });

@@ -109,6 +109,10 @@ import {
   COST_SAMPLE_INTERVAL_MS,
 } from "./lib/cost-history";
 import { reconcileTick, reconcileOrphans } from "./lib/dispatch/reconciler";
+import {
+  initializeFleetScheduler,
+  reconcileFleetRuns,
+} from "./lib/fleet/scheduler";
 import { evictStale as evictStaleWarmPool } from "./lib/dispatch/warm-pool";
 import {
   getBudgetConfig,
@@ -669,7 +673,8 @@ app.prepare().then(() => {
               s.status === "error")
           ) {
             const row = queries.getSession(getDb()).get(s.id) as
-              Session | undefined;
+              | Session
+              | undefined;
             if (row?.working_directory)
               void captureSnapshot(
                 row.working_directory,
@@ -1475,6 +1480,27 @@ app.prepare().then(() => {
         );
       }
     }
+    let fleetSchedulerReady = false;
+    try {
+      await initializeFleetScheduler();
+      fleetSchedulerReady = true;
+      console.log("> Fleet recovery complete; scheduler ready");
+    } catch (err) {
+      // Fail closed: explicit ticks also run recovery and reject while the flag
+      // remains set, so a recovery error cannot create duplicate workers.
+      console.error(
+        "> Fleet recovery failed; automatic launches disabled:",
+        err
+      );
+    }
+    makeGuardedInterval({
+      intervalMs: 5000,
+      enabled: fleetSchedulerReady,
+      onError: (err) => console.error("fleet scheduler tick failed:", err),
+      tick: async () => {
+        await reconcileFleetRuns();
+      },
+    });
     // Dispatch startup catch-up: free slots held by workers that didn't survive
     // a Tier-1 restart, then run one reconcile pass immediately so a day missed
     // while Stoa was down is topped up now (not only on the next 60s tick).
