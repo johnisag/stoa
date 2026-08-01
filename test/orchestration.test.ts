@@ -271,8 +271,7 @@ describe("spawnWorker — conductor FK guard", () => {
     });
 
     const createArg = (backendCreate.mock.calls as unknown[][])[0]?.[0] as
-      | { binary: string; args: string[]; command: string }
-      | undefined;
+      { binary: string; args: string[]; command: string } | undefined;
     expect(createArg!.binary).toBe("/usr/bin/bwrap");
     expect(createArg!.args).toContain("claude");
     expect(createArg!.args).toContain("--dangerously-skip-permissions");
@@ -306,8 +305,7 @@ describe("spawnWorker — conductor FK guard", () => {
       "[sandbox] STOA_SANDBOX=1 but no Linux/bwrap primitive found; running unconfined with full-bypass"
     );
     const createArg = (backendCreate.mock.calls as unknown[][])[0]?.[0] as
-      | { args: string[] }
-      | undefined;
+      { args: string[] } | undefined;
     expect(createArg!.args).toContain("--dangerously-skip-permissions");
     warn.mockRestore();
   });
