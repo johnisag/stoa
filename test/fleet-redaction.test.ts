@@ -38,11 +38,13 @@ describe("Fleet durable-content redaction", () => {
   });
 
   it("redacts complete private-key blocks across lines", () => {
+    const privateKeyStart = ["-----BEGIN ", "PRIVATE KEY-----"].join("");
+    const privateKeyEnd = ["-----END ", "PRIVATE KEY-----"].join("");
     const key = [
       "before",
-      "-----BEGIN PRIVATE KEY-----",
+      privateKeyStart,
       "not-real-private-material",
-      "-----END PRIVATE KEY-----",
+      privateKeyEnd,
       "after",
     ].join("\n");
 
@@ -52,9 +54,12 @@ describe("Fleet durable-content redaction", () => {
   });
 
   it("redacts an unterminated private key through end of input", () => {
+    const privateKeyStart = ["-----BEGIN OPENSSH ", "PRIVATE KEY-----"].join(
+      ""
+    );
     const input = [
       "safe prefix",
-      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      privateKeyStart,
       "partial-secret-material",
     ].join("\n");
 
