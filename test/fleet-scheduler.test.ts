@@ -7,6 +7,7 @@ import { registerFleetCostAccount } from "@/lib/fleet/cost-runtime";
 import {
   reconcileFleetRun,
   reconcileFleetRuns,
+  reconcileFleetCostTelemetry,
   recoverFleetRuns,
   fleetSessionBackendExists,
   type FleetSchedulerDeps,
@@ -657,6 +658,87 @@ describe("fleet scheduler", () => {
         interrupt_cause: "budget_hard_limit",
       });
     }
+  });
+
+  it("rotates bounded cost sampling past unsupported accounts", async () => {
+    const runId = addRun({ status: "draft", desiredState: "draft" });
+    const unsupported = Array.from({ length: 8 }, (_, index) =>
+      addAuxiliaryCostAccount(runId, {
+        ownerType: "planner",
+        ownerId: `unsupported-${index}`,
+      })
+    );
+    const trackable = addAuxiliaryCostAccount(runId, {
+      ownerType: "planner",
+      ownerId: "trackable-after-batch",
+    });
+    for (const owner of unsupported) {
+      db.prepare(`UPDATE sessions SET agent_type = 'hermes' WHERE id = ?`).run(
+        owner.sessionId
+      );
+      db.prepare(
+        `UPDATE fleet_cost_accounts SET provider = 'hermes'
+         WHERE fleet_run_id = ? AND owner_id = ?`
+      ).run(runId, owner.ownerId);
+    }
+    db.prepare(
+      `UPDATE fleet_cost_accounts SET sample_attempt_cursor = 1
+       WHERE fleet_run_id = ? AND owner_id = ?`
+    ).run(runId, trackable.ownerId);
+
+    const sampledBatches: string[][] = [];
+    const sampleCosts = vi.fn(async (sessions: Session[]) => {
+      sampledBatches.push(sessions.map((session) => session.id));
+      if (!sessions.some((session) => session.id === trackable.sessionId)) {
+        return 0;
+      }
+      const account = db
+        .prepare(
+          `SELECT session_key FROM fleet_cost_accounts
+           WHERE fleet_run_id = ? AND owner_id = ?`
+        )
+        .get(runId, trackable.ownerId) as { session_key: string };
+      db.prepare(
+        `INSERT INTO session_costs
+         (session_key, day, session_id, agent_type, model, input_tokens,
+          output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+          updated_at)
+         VALUES (?, '2026-08-01', ?, 'codex', 'gpt', 1000, 0, 0, 0,
+                 0.2, '2026-08-01T12:00:31.000Z')`
+      ).run(account.session_key, trackable.sessionId);
+      return 1;
+    });
+
+    await reconcileFleetCostTelemetry({
+      db,
+      now: () => new Date("2026-08-01T12:00:00.000Z"),
+      sampleCosts,
+    });
+    await reconcileFleetCostTelemetry({
+      db,
+      now: () => new Date("2026-08-01T12:00:31.000Z"),
+      sampleCosts,
+    });
+
+    expect(sampledBatches[0]).not.toContain(trackable.sessionId);
+    expect(sampledBatches[1]).toContain(trackable.sessionId);
+    expect(
+      db
+        .prepare(
+          `SELECT observed_cost_usd, last_sample_at
+           FROM fleet_cost_accounts
+           WHERE fleet_run_id = ? AND owner_id = ?`
+        )
+        .get(runId, trackable.ownerId)
+    ).toEqual({
+      observed_cost_usd: 0.2,
+      last_sample_at: "2026-08-01T12:00:31.000Z",
+    });
+    expect(
+      db
+        .prepare(`SELECT spent_budget_usd FROM fleet_runs WHERE id = ?`)
+        .get(runId)
+    ).toEqual({ spent_budget_usd: 0.2 });
   });
 
   it("claims one auxiliary hard stop across concurrent ticks and replays a transient failure", async () => {

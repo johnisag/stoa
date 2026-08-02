@@ -602,7 +602,11 @@ export function composeFleetRunDetail(input: {
   verifications?: FleetVerificationRow[];
   events: FleetEventRow[];
 }): FleetRunDetailDto {
+  const attentionActive =
+    input.run.archived_at == null &&
+    !["completed", "failed", "canceled"].includes(input.run.status);
   const awaitingManualMerge =
+    input.run.archived_at == null &&
     input.run.merge_requested_at == null &&
     input.run.approval_state === "approved" &&
     input.run.plan_hash != null &&
@@ -644,32 +648,39 @@ export function composeFleetRunDetail(input: {
     input.run.recovery_required === 1 ||
     input.run.integration_error != null ||
     input.run.integration_state === "awaiting_operator";
-  const runAttention = runNeedsAttention ? 1 : 0;
-  const taskAttention = input.tasks.filter(
-    (task) =>
-      [
-        "waiting_for_operator",
-        "failed",
-        "blocked",
-        "needs_inspection",
-        "needs_followup",
-      ].includes(task.status) ||
-      task.verification_status === "fail" ||
-      task.verification_status === "error" ||
-      task.review_status === "changes_requested" ||
-      task.provider_state === "backoff" ||
-      task.provider_state === "failed" ||
-      task.retry_not_before != null
-  ).length;
-  const workerAttention = input.workers.filter(
-    (worker) =>
-      ["waiting_for_operator", "failed", "dead", "cleanup_pending"].includes(
-        worker.status
-      ) ||
-      (worker.rendered_status != null &&
-        ["waiting", "error", "dead"].includes(worker.rendered_status)) ||
-      worker.rendered_status_error != null
-  ).length;
+  const runAttention = attentionActive && runNeedsAttention ? 1 : 0;
+  const taskAttention = attentionActive
+    ? input.tasks.filter(
+        (task) =>
+          [
+            "waiting_for_operator",
+            "failed",
+            "blocked",
+            "needs_inspection",
+            "needs_followup",
+          ].includes(task.status) ||
+          task.verification_status === "fail" ||
+          task.verification_status === "error" ||
+          task.review_status === "changes_requested" ||
+          task.provider_state === "backoff" ||
+          task.provider_state === "failed" ||
+          task.retry_not_before != null
+      ).length
+    : 0;
+  const workerAttention = attentionActive
+    ? input.workers.filter(
+        (worker) =>
+          [
+            "waiting_for_operator",
+            "failed",
+            "dead",
+            "cleanup_pending",
+          ].includes(worker.status) ||
+          (worker.rendered_status != null &&
+            ["waiting", "error", "dead"].includes(worker.rendered_status)) ||
+          worker.rendered_status_error != null
+      ).length
+    : 0;
   return {
     run: toFleetRunDto(input.run, {
       taskCount: input.tasks.length,

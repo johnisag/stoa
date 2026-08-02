@@ -215,6 +215,65 @@ describe("managed supervisor settings-corruption recovery", () => {
     ).toEqual({ terminal_at: null, reservation_released_at: null });
   });
 
+  it("rotates a bounded corrupt-state batch to a later exact identity", async () => {
+    seed("not-json");
+    db.prepare(
+      `UPDATE fleet_cost_accounts SET fallback_recovery_cursor = 1
+       WHERE id = 'fallback-account'`
+    ).run();
+    for (let index = 0; index < 2; index += 1) {
+      const runId = `ambiguous-run-${index}`;
+      db.prepare(
+        `INSERT INTO fleet_runs (id, name, goal, settings_json)
+         VALUES (?, 'Ambiguous', 'Require operator recovery', 'not-json')`
+      ).run(runId);
+      db.prepare(
+        `INSERT INTO fleet_cost_accounts
+         (id, fleet_run_id, session_id, session_key, owner_type, owner_id,
+          provider, model)
+         VALUES (?, ?, NULL, ?, 'supervisor', ?, 'claude', ?)`
+      ).run(
+        `ambiguous-account-${index}`,
+        runId,
+        `pending:ambiguous-${index}`,
+        `ambiguous-request-${index}`,
+        MODEL
+      );
+    }
+    const sessionExists = vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const stopSession = vi.fn(async () => true);
+    const deps = {
+      db,
+      now: () => new Date(NOW),
+      sessionExists,
+      stopSession,
+    };
+
+    await expect(
+      reconcileUntrackedManagedFleetSupervisors(deps, 2)
+    ).resolves.toEqual({ inspected: 2, recovered: 0, recoveryRequired: 2 });
+    expect(sessionExists).not.toHaveBeenCalled();
+
+    await expect(
+      reconcileUntrackedManagedFleetSupervisors(deps, 2)
+    ).resolves.toEqual({ inspected: 2, recovered: 1, recoveryRequired: 0 });
+    expect(stopSession).toHaveBeenCalledWith(SESSION_ID, "failed");
+    expect(
+      db
+        .prepare(
+          `SELECT terminal_at, reservation_released_at
+           FROM fleet_cost_accounts WHERE id = 'fallback-account'`
+        )
+        .get()
+    ).toEqual({
+      terminal_at: NOW.toISOString(),
+      reservation_released_at: NOW.toISOString(),
+    });
+  });
+
   it("pins the canonical backend and all persisted launch fields", () => {
     seed("{}");
     const session = db

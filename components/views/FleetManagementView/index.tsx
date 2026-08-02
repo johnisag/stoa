@@ -2098,8 +2098,12 @@ function RunDetail({
     }
   }
 
+  const planReviewGate = supervisor.data?.gates?.planReview;
+  const planReviewsComplete =
+    detail.run.reviewPolicy === "manual" || planReviewGate?.complete === true;
   const canApprove =
     !plannerActive &&
+    planReviewsComplete &&
     detail.run.approvalState === "needs_approval" &&
     !!detail.run.planHash &&
     !!reviewedPlanText &&
@@ -2819,6 +2823,17 @@ function RunDetail({
                 detail.run.plannerError}
             </div>
           )}
+          {!canApprove &&
+            detail.run.approvalState === "needs_approval" &&
+            detail.run.reviewPolicy !== "manual" &&
+            !planReviewsComplete && (
+              <div className="text-muted-foreground text-xs">
+                Four independent clean plan critics must finish before approval
+                {planReviewGate
+                  ? ` (${planReviewGate.exactCleanLenses}/${planReviewGate.required} clean lenses, ${planReviewGate.independentReviewers} independent reviewers)`
+                  : "."}
+              </div>
+            )}
           {!canApprove &&
             detail.run.approvalState === "needs_approval" &&
             detail.artifacts.some(
@@ -3975,7 +3990,10 @@ export function FleetManagementView({
   const automaticPlanNeedsTarget =
     autoPlan && repoId === NONE && projectId === NONE;
   const unattendedAgentLaunchEnabled =
-    (autoPlan && inputMode === "epic") || autoApprove || autoStart;
+    reviewPolicy !== "manual" ||
+    (autoPlan && inputMode === "epic") ||
+    autoApprove ||
+    autoStart;
   const unattendedConsentMissing =
     unattendedAgentLaunchEnabled && !allowUnconfinedAgents;
   const createPending = createRun.isPending || importRun.isPending;
@@ -3997,6 +4015,21 @@ export function FleetManagementView({
       (Number.isSafeInteger(Number(budgetTokens)) &&
         Number(budgetTokens) >= 0 &&
         Number(budgetTokens) <= 1_000_000_000_000));
+  const plannerTaskCapValid =
+    !autoPlan ||
+    inputMode !== "epic" ||
+    (Number.isSafeInteger(plannerTaskCap) &&
+      plannerTaskCap >= 1 &&
+      plannerTaskCap <= 40);
+  const automaticFixRoundsValid =
+    !autoFix ||
+    (Number.isSafeInteger(maxAutomaticFixRounds) &&
+      maxAutomaticFixRounds >= 1 &&
+      maxAutomaticFixRounds <= 20);
+  const retentionDaysValid =
+    Number.isSafeInteger(retentionDays) &&
+    retentionDays >= 1 &&
+    retentionDays <= 3650;
   const draftSettingsValid =
     providerCaps.ok &&
     resourceLimitsValid &&
@@ -4009,7 +4042,10 @@ export function FleetManagementView({
     maxRetriesPerTask <= 9 &&
     Number.isFinite(budgetWarningPercent) &&
     budgetWarningPercent >= 1 &&
-    budgetWarningPercent <= 100;
+    budgetWarningPercent <= 100 &&
+    plannerTaskCapValid &&
+    automaticFixRoundsValid &&
+    retentionDaysValid;
 
   return (
     <div className="bg-background flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -4345,6 +4381,7 @@ export function FleetManagementView({
                     const enabled = event.target.checked;
                     setAutoPlan(enabled);
                     if (!enabled) {
+                      setReviewPolicy("manual");
                       setAutoApprove(false);
                       setAutoStart(false);
                       setAutoFix(false);
@@ -4406,7 +4443,7 @@ export function FleetManagementView({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="four_agent">
-                    Four plan + task reviewers (includes red-team)
+                    Four plan critics + four task reviewers
                   </SelectItem>
                   <SelectItem value="manual">
                     Manual plan approval + four task reviews
@@ -4482,11 +4519,19 @@ export function FleetManagementView({
               {unattendedAgentLaunchEnabled && (
                 <div className="grid gap-2 rounded-md border border-amber-500/50 bg-amber-500/5 px-3 py-2 text-xs">
                   <div className="text-amber-700 dark:text-amber-300">
-                    Automatic planning and automatic start can launch unattended
-                    agents that execute code or modify the selected repository.
-                    When strong isolation is unavailable, those launches remain
-                    paused unless you grant the consent below.
+                    Automatic planning, four-agent plan review, and automatic
+                    start can launch unattended agents that execute code or
+                    modify the selected repository. When strong isolation is
+                    unavailable, those launches remain paused unless you grant
+                    the consent below.
                   </div>
+                  {inputMode === "plan" && reviewPolicy !== "manual" && (
+                    <div className="text-muted-foreground">
+                      Imported plans skip the planner session, but the
+                      four-agent policy still launches four unattended critics
+                      before either manual or automatic approval.
+                    </div>
+                  )}
                   <label className="flex items-center gap-2">
                     <input
                       aria-label="Allow unconfined unattended agents"
@@ -4640,8 +4685,8 @@ export function FleetManagementView({
               {unattendedConsentMissing && (
                 <div className="text-xs text-amber-700 dark:text-amber-300">
                   Grant unattended-agent consent above before creating an
-                  automatic run. Turn automatic planning off to create a manual
-                  draft instead.
+                  automatic run. Disable automatic planning and select the
+                  manual review policy to create without unattended agents.
                 </div>
               )}
               {!budgetsValid && (
@@ -4663,6 +4708,21 @@ export function FleetManagementView({
                 <div className="text-destructive text-xs">
                   Parallel workers must be an integer from 1 to{" "}
                   {FLEET_MAX_TOTAL_WORKERS}.
+                </div>
+              )}
+              {!plannerTaskCapValid && (
+                <div className="text-destructive text-xs">
+                  Planner task cap must be an integer from 1 to 40.
+                </div>
+              )}
+              {!automaticFixRoundsValid && (
+                <div className="text-destructive text-xs">
+                  Automatic fix rounds must be an integer from 1 to 20.
+                </div>
+              )}
+              {!retentionDaysValid && (
+                <div className="text-destructive text-xs">
+                  Artifact retention must be an integer from 1 to 3650 days.
                 </div>
               )}
               {createError && (

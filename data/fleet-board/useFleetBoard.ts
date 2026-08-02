@@ -76,24 +76,22 @@ export function useFleetBoard(open: boolean) {
     elicitationCount,
     elicitationError: elicitations.isError,
     elicitationFetching: elicitations.isFetching,
+    fleetError: fleetRuns.isError,
+    fleetFetching: fleetRuns.isFetching,
     isLoading:
       inbox.isLoading ||
       board.isLoading ||
       pending.isLoading ||
-      repos.isLoading ||
-      fleetRuns.isLoading,
-    isError:
-      inbox.isError ||
-      board.isError ||
-      pending.isError ||
-      repos.isError ||
-      fleetRuns.isError,
+      repos.isLoading,
+    isError: inbox.isError || board.isError || pending.isError || repos.isError,
     isFetching:
       inbox.isFetching ||
       board.isFetching ||
       pending.isFetching ||
-      repos.isFetching ||
-      fleetRuns.isFetching,
+      repos.isFetching,
+    refetchFleetRuns: useCallback(() => {
+      void fleetRuns.refetch();
+    }, [fleetRuns.refetch]),
     refetchElicitations: useCallback(() => {
       void elicitations.refetch();
     }, [elicitations.refetch]),

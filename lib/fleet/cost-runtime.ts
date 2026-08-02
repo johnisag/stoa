@@ -45,6 +45,8 @@ interface FleetCostAccountRow {
   confidence: FleetCostConfidence;
   last_sample_day: string | null;
   last_sample_at: string | null;
+  sample_attempt_cursor: number;
+  fallback_recovery_cursor: number;
   terminal_at: string | null;
   updated_at: string;
 }

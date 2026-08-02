@@ -71,6 +71,9 @@ export const fleetQueries = {
         r.integration_merge_sha,
         r.integration_error,
         r.integration_updated_at,
+        r.archived_at,
+        r.archived_by,
+        r.retention_days,
         r.scheduler_epoch,
         r.recovery_required,
         r.reserved_budget_usd,
@@ -94,35 +97,40 @@ export const fleetQueries = {
         r.updated_at,
         (SELECT COUNT(*) FROM fleet_tasks t WHERE t.fleet_run_id = r.id) AS task_count,
         (SELECT COUNT(*) FROM fleet_workers w WHERE w.fleet_run_id = r.id) AS worker_count,
-        (
-          CASE WHEN
-            r.approval_state IN ('needs_approval', 'blocked') OR
-            r.automation_last_error IS NOT NULL OR
-            json_extract(r.settings_json, '$.planner.state') = 'failed' OR
-            r.pause_reason = 'budget_exhausted' OR
-            r.budget_hard_limit_at IS NOT NULL OR
-            r.budget_warning_emitted_at IS NOT NULL OR
-            r.recovery_required = 1 OR
-            r.integration_error IS NOT NULL OR
-            r.integration_state = 'awaiting_operator'
-          THEN 1 ELSE 0 END +
-          (SELECT COUNT(*) FROM fleet_tasks t
-           WHERE t.fleet_run_id = r.id AND (
-             t.status IN ('waiting_for_operator', 'failed', 'blocked',
-                          'needs_inspection', 'needs_followup') OR
-             t.verification_status IN ('fail', 'error') OR
-             t.review_status = 'changes_requested' OR
-             t.provider_state IN ('backoff', 'failed') OR
-             t.retry_not_before IS NOT NULL
-           )) +
-          (SELECT COUNT(*) FROM fleet_workers w
-           WHERE w.fleet_run_id = r.id AND (
-             w.status IN ('waiting_for_operator', 'failed', 'dead', 'cleanup_pending') OR
-             w.rendered_status IN ('waiting', 'error', 'dead') OR
-             w.rendered_status_error IS NOT NULL
-           ))
-        ) AS attention_count,
         CASE WHEN
+          r.archived_at IS NULL AND
+          r.status NOT IN ('completed', 'failed', 'canceled')
+        THEN (
+            CASE WHEN
+              r.approval_state IN ('needs_approval', 'blocked') OR
+              r.automation_last_error IS NOT NULL OR
+              json_extract(r.settings_json, '$.planner.state') = 'failed' OR
+              r.pause_reason = 'budget_exhausted' OR
+              r.budget_hard_limit_at IS NOT NULL OR
+              r.budget_warning_emitted_at IS NOT NULL OR
+              r.recovery_required = 1 OR
+              r.integration_error IS NOT NULL OR
+              r.integration_state = 'awaiting_operator'
+            THEN 1 ELSE 0 END +
+            (SELECT COUNT(*) FROM fleet_tasks t
+             WHERE t.fleet_run_id = r.id AND (
+               t.status IN ('waiting_for_operator', 'failed', 'blocked',
+                            'needs_inspection', 'needs_followup') OR
+               t.verification_status IN ('fail', 'error') OR
+               t.review_status = 'changes_requested' OR
+               t.provider_state IN ('backoff', 'failed') OR
+               t.retry_not_before IS NOT NULL
+             )) +
+            (SELECT COUNT(*) FROM fleet_workers w
+             WHERE w.fleet_run_id = r.id AND (
+               w.status IN ('waiting_for_operator', 'failed', 'dead', 'cleanup_pending') OR
+               w.rendered_status IN ('waiting', 'error', 'dead') OR
+               w.rendered_status_error IS NOT NULL
+             ))
+          )
+        ELSE 0 END AS attention_count,
+        CASE WHEN
+          r.archived_at IS NULL AND
           r.merge_requested_at IS NULL AND
           r.approval_state = 'approved' AND
           r.plan_hash IS NOT NULL AND r.approved_plan_hash = r.plan_hash AND
@@ -192,7 +200,11 @@ export const fleetQueries = {
       db,
       `SELECT * FROM fleet_runs
        WHERE automation_policy_hash IS NOT NULL
-         AND desired_state IN ('planned', 'running')
+         AND (
+           desired_state IN ('planned', 'running') OR
+           (review_policy <> 'manual' AND status = 'draft'
+             AND approval_state = 'needs_approval' AND plan_hash IS NOT NULL)
+         )
          AND status NOT IN ('completed', 'failed', 'canceled')
        ORDER BY updated_at ASC, id ASC
        LIMIT ?`

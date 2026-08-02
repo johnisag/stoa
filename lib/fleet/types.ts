@@ -244,6 +244,7 @@ export interface FleetRunRow {
   budget_warning_emitted_at?: string | null;
   budget_hard_limit_at?: string | null;
   budget_interrupt_deadline_at?: string | null;
+  managed_supervisor_poll_cursor?: number;
   provider_caps_json?: string;
   resource_limits_json?: string;
   default_max_attempts?: number;

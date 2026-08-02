@@ -381,6 +381,80 @@ describe("managed Fleet supervisor captured-output runtime", () => {
     expect(state(db).state).toBe("completed");
   });
 
+  it("rotates bounded polling to a later healthy supervisor", async () => {
+    await start();
+    const blockerRunId = "aaa-managed-supervisor-blocker";
+    const blockerRequestId = "aaa-supervisor-request";
+    const blockerSessionId = "aaa-supervisor-session";
+    db.prepare(
+      `INSERT INTO fleet_runs
+       (id, name, goal, status, desired_state, approval_state, plan_hash,
+        approved_plan_hash, automation_policy_json, automation_policy_hash,
+        automation_base_sha, provider, model, conductor_session_id, settings_json)
+       VALUES (?, 'Blocker', 'Keep one healthy supervisor pending', 'running',
+        'running', 'approved', ?, ?, '{}', ?, ?, 'codex', 'gpt-5.4',
+        'fleet-conductor', '{}')`
+    ).run(blockerRunId, PLAN_HASH, PLAN_HASH, POLICY_HASH, BASE_SHA);
+    db.prepare(
+      `INSERT INTO fleet_tasks
+       (id, fleet_run_id, title, description, status, task_type, sort_order,
+        file_claims_json, priority, working_directory, base_branch, base_sha,
+        head_sha, provider_state, max_attempts, current_attempt,
+        verification_status, review_status, integration_state)
+       VALUES ('blocker-task-a', ?, 'Task A', 'First task', 'ready',
+        'implementation', 0, '["lib/blocker-a.ts"]', 1, 'C:\\repo', 'main',
+        ?, ?, 'ready', 3, 0, NULL, NULL, 'pending'),
+       ('blocker-task-b', ?, 'Task B', 'Second task', 'blocked',
+        'implementation', 1, '["lib/blocker-b.ts"]', 1, 'C:\\repo', 'main',
+        ?, ?, 'ready', 3, 0, NULL, NULL, 'pending')`
+    ).run(
+      blockerRunId,
+      BASE_SHA,
+      "d".repeat(40),
+      blockerRunId,
+      BASE_SHA,
+      "e".repeat(40)
+    );
+    const blockerLaunch = vi.fn(async () => {});
+    await expect(
+      startManagedFleetSupervisor(
+        blockerRunId,
+        {},
+        {
+          ...deps,
+          randomId: () => blockerRequestId,
+          randomSessionId: () => blockerSessionId,
+          randomNonce: () => "blocker-ephemeral-nonce",
+          launchSession: blockerLaunch,
+          sessionExists: vi.fn(async () => true),
+        }
+      )
+    ).resolves.toEqual({
+      status: expect.objectContaining({
+        state: "running",
+        sessionId: blockerSessionId,
+      }),
+    });
+    db.prepare(
+      `UPDATE fleet_runs SET managed_supervisor_poll_cursor = 1 WHERE id = ?`
+    ).run(RUN_ID);
+
+    const polled: string[] = [];
+    const pollDeps: ManagedFleetSupervisorDeps = {
+      ...deps,
+      captureSession: vi.fn(async (_database, sessionId) => {
+        polled.push(sessionId);
+        return `${MANAGED_SUPERVISOR_READY}\n${MANAGED_SUPERVISOR_STARTED}\n`;
+      }),
+      sessionExists: vi.fn(async () => true),
+    };
+    await reconcileManagedFleetSupervisors(1, pollDeps);
+    await reconcileManagedFleetSupervisors(1, pollDeps);
+
+    expect(polled).toEqual([blockerSessionId, SESSION_ID]);
+    expect(blockerLaunch).toHaveBeenCalledTimes(1);
+  });
+
   it("reattaches a preallocated starting identity but never respawns a lost one", async () => {
     await start();
     vi.mocked(launchSession).mockClear();

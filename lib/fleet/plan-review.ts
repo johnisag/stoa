@@ -44,13 +44,9 @@ import type {
   FleetTaskDependencyRow,
   FleetTaskRow,
 } from "./types";
+import { FLEET_PLAN_REVIEW_LENSES } from "./plan-review-evidence";
 
-export const FLEET_PLAN_REVIEW_LENSES: readonly FleetPlanReviewLens[] = [
-  "correctness_security",
-  "conventions_cross_platform",
-  "simplicity_ux",
-  "adversarial_red_team",
-];
+export { FLEET_PLAN_REVIEW_LENSES } from "./plan-review-evidence";
 
 const REVIEW_RESULT_SCHEMA_VERSION = 1;
 const REVIEW_RESULT_MAX_BYTES = 64 * 1024;

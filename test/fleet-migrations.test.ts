@@ -1172,4 +1172,80 @@ describe("fleet migrations", () => {
     ).toEqual({ count: 1 });
     db.close();
   });
+
+  it("migration 77 adds and idempotently repairs durable Fleet fairness cursors", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 76);
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_cost_accounts (
+        id TEXT PRIMARY KEY,
+        owner_type TEXT NOT NULL,
+        terminal_at TEXT,
+        session_id TEXT
+      );
+      INSERT INTO fleet_runs (id) VALUES ('legacy-run');
+      INSERT INTO fleet_cost_accounts
+        (id, owner_type, terminal_at, session_id)
+      VALUES ('legacy-account', 'supervisor', NULL, 'legacy-session');
+    `);
+
+    runMigrations(db);
+
+    expectColumns(db, "fleet_runs", ["managed_supervisor_poll_cursor"]);
+    expectColumns(db, "fleet_cost_accounts", [
+      "sample_attempt_cursor",
+      "fallback_recovery_cursor",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT managed_supervisor_poll_cursor FROM fleet_runs
+           WHERE id = 'legacy-run'`
+        )
+        .get()
+    ).toEqual({ managed_supervisor_poll_cursor: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT sample_attempt_cursor, fallback_recovery_cursor
+           FROM fleet_cost_accounts WHERE id = 'legacy-account'`
+        )
+        .get()
+    ).toEqual({ sample_attempt_cursor: 0, fallback_recovery_cursor: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'index' AND name LIKE '%_cursor'
+           ORDER BY name`
+        )
+        .all()
+    ).toEqual([
+      { name: "idx_fleet_cost_accounts_fallback_recovery_cursor" },
+      { name: "idx_fleet_cost_accounts_sample_attempt_cursor" },
+      { name: "idx_fleet_runs_supervisor_poll_cursor" },
+    ]);
+
+    db.exec(`
+      DELETE FROM _migrations WHERE id = 77;
+      DROP INDEX idx_fleet_cost_accounts_sample_attempt_cursor;
+    `);
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(
+      db
+        .prepare(`SELECT COUNT(*) AS count FROM _migrations WHERE id = 77`)
+        .get()
+    ).toEqual({ count: 1 });
+    expect(
+      db
+        .prepare(
+          `SELECT 1 AS present FROM sqlite_master
+           WHERE type = 'index'
+             AND name = 'idx_fleet_cost_accounts_sample_attempt_cursor'`
+        )
+        .get()
+    ).toEqual({ present: 1 });
+    db.close();
+  });
 });

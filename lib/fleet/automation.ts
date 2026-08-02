@@ -14,10 +14,8 @@ import {
 import { classifySensitiveFleetPath } from "./git-state";
 import { fleetProviderRetryIsDue } from "./backoff";
 import { startFleetPlanner } from "./planner";
-import {
-  FLEET_PLAN_REVIEW_LENSES,
-  reconcileFleetPlanReviews,
-} from "./plan-review";
+import { reconcileFleetPlanReviews } from "./plan-review";
+import { hasFourIndependentCleanPlanReviews } from "./plan-review-evidence";
 import { redactAndCapFleetText } from "./redaction";
 import {
   approveFleetRunPlan,
@@ -29,7 +27,6 @@ import type {
   FleetAutomationAction,
   FleetAutomationPolicy,
   FleetDesiredState,
-  FleetPlanReviewLens,
   FleetPlannerState,
   FleetReviewEvidenceRow,
   FleetRunRow,
@@ -39,7 +36,7 @@ import type {
   FleetTaskRow,
 } from "./types";
 
-export { FLEET_PLAN_REVIEW_LENSES } from "./plan-review";
+export { FLEET_PLAN_REVIEW_LENSES } from "./plan-review-evidence";
 
 export type FleetAutomationDecision =
   | { action: "planning" }
@@ -104,6 +101,7 @@ export function isSensitiveFleetPath(value: string): boolean {
 
 export function evaluateAutomaticApproval(
   input: CommonDecisionInput & {
+    policyHash: string;
     reviewPolicy: FleetRunRow["review_policy"];
     planHash: string | null;
     executionHash: string | null;
@@ -159,22 +157,13 @@ export function evaluateAutomaticApproval(
     return { action: "wait", reason: "plan touches sensitive paths" };
   }
 
-  const cleanByLens = new Map<FleetPlanReviewLens, string>();
-  for (const review of input.reviews) {
-    if (
-      review.subject_hash !== input.planHash ||
-      review.execution_hash !== input.executionHash ||
-      review.base_sha !== input.baseSha ||
-      review.verdict !== "clean" ||
-      !review.reviewer_session_id
-    ) {
-      continue;
-    }
-    cleanByLens.set(review.lens, review.reviewer_session_id);
-  }
   if (
-    !FLEET_PLAN_REVIEW_LENSES.every((lens) => cleanByLens.has(lens)) ||
-    new Set(cleanByLens.values()).size !== FLEET_PLAN_REVIEW_LENSES.length
+    !hasFourIndependentCleanPlanReviews(input.reviews, {
+      planHash: input.planHash,
+      policyHash: input.policyHash,
+      executionHash: input.executionHash,
+      baseSha: input.baseSha,
+    })
   ) {
     return {
       action: "wait",
@@ -827,7 +816,7 @@ async function reconcileOneFleetAutomation(
 
     run = queries.getFleetRun(deps.db).get(run.id) as FleetRunRow;
     if (
-      parsed.policy.automaticPlanApproval &&
+      run.review_policy !== "manual" &&
       run.status === "draft" &&
       run.approval_state === "needs_approval"
     ) {
@@ -848,32 +837,6 @@ async function reconcileOneFleetAutomation(
             .countFleetBlockerArtifactsForPlan(deps.db)
             .get(run.id, run.plan_hash) as { n: number })
         : { n: 0 };
-      const reviewEligibility = evaluateAutomaticApproval({
-        policy: parsed.policy,
-        policyHashMatches,
-        authorized:
-          actionStatus(deps.db, run.id, "plan_approval", policyHash) ===
-          "authorized",
-        desiredState: desiredState(run),
-        status: run.status,
-        approvalState: run.approval_state,
-        reviewPolicy: run.review_policy,
-        planHash: run.plan_hash,
-        executionHash: preview?.executionHash ?? null,
-        baseSha: base.stored,
-        currentBaseSha: base.current,
-        plannerState: plannerState(run),
-        graphHashMatches: preview?.graphHashMatches ?? false,
-        blockerCount: 0,
-        unverifiedWriteTaskCount:
-          preview?.tasks.filter(
-            (task) =>
-              !["milestone", "review", "explore"].includes(task.task_type) &&
-              !task.verify_command?.trim()
-          ).length ?? 0,
-        claimPaths: preview?.claimPaths ?? ["*"],
-        reviews,
-      });
       const activeReviews =
         preview && run.plan_hash
           ? (deps.db
@@ -894,15 +857,23 @@ async function reconcileOneFleetAutomation(
           : { n: 0 };
       const auxiliaryLaunchAllowed =
         parsed.policy.allowUnconfinedAgents || deps.confinementAvailable();
-      if (
-        preview &&
-        run.plan_hash &&
-        !auxiliaryLaunchAllowed &&
-        reviews.length < FLEET_PLAN_REVIEW_LENSES.length &&
-        reviewEligibility.action === "wait" &&
-        reviewEligibility.reason ===
-          "four independent clean plan critics are required"
-      ) {
+      const reviewContractReady =
+        preview != null &&
+        run.plan_hash != null &&
+        policyHashMatches &&
+        base.stored === base.current &&
+        ["idle", "ready"].includes(plannerState(run)) &&
+        preview.graphHashMatches;
+      const reviewsComplete =
+        preview != null &&
+        run.plan_hash != null &&
+        hasFourIndependentCleanPlanReviews(reviews, {
+          planHash: run.plan_hash,
+          policyHash,
+          executionHash: preview.executionHash,
+          baseSha: base.stored,
+        });
+      if (reviewContractReady && !auxiliaryLaunchAllowed && !reviewsComplete) {
         recordAutomationWait(
           deps.db,
           run,
@@ -913,12 +884,11 @@ async function reconcileOneFleetAutomation(
         return;
       }
       if (
+        reviewContractReady &&
         preview &&
         run.plan_hash &&
         auxiliaryLaunchAllowed &&
-        reviewEligibility.action === "wait" &&
-        reviewEligibility.reason ===
-          "four independent clean plan critics are required" &&
+        !reviewsComplete &&
         (blockers.n === 0 || activeReviews.n > 0)
       ) {
         await deps.reconcilePlanReviews({
@@ -949,6 +919,7 @@ async function reconcileOneFleetAutomation(
       }
       const approval = evaluateAutomaticApproval({
         policy: parsed.policy,
+        policyHash,
         policyHashMatches,
         authorized:
           actionStatus(deps.db, run.id, "plan_approval", policyHash) ===

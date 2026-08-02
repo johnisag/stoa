@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
+import type { IssueDispatch } from "@/lib/dispatch/types";
 import type { FleetRunDto } from "@/lib/fleet/types";
 
 const state = vi.hoisted(() => ({
@@ -12,6 +13,8 @@ const state = vi.hoisted(() => ({
   elicitationRefetch: vi.fn(),
   elicitationError: false,
   elicitationFetching: false,
+  fleetError: false,
+  boardData: [] as IssueDispatch[],
 }));
 
 function query(data: unknown, refetch: () => void) {
@@ -29,28 +32,32 @@ vi.mock("@/data/verdict-inbox/queries", () => ({
 }));
 
 vi.mock("@/data/dispatch/queries", () => ({
-  useBoardQuery: () => query([], state.boardRefetch),
+  useBoardQuery: () => query(state.boardData, state.boardRefetch),
   usePendingQuery: () => query([], state.pendingRefetch),
   useDispatchReposQuery: () => query([], state.reposRefetch),
 }));
 
 vi.mock("@/data/fleet/queries", () => ({
-  useFleetRunsQuery: () =>
-    query(
-      [
-        {
-          id: "run-query-1",
-          name: "Queried run",
-          goal: "Test board composition",
-          status: "reviewing",
-          taskCount: 3,
-          workerCount: 2,
-          attentionCount: 3,
-          awaitingManualMerge: false,
-        } as FleetRunDto,
-      ],
+  useFleetRunsQuery: () => ({
+    ...query(
+      state.fleetError
+        ? undefined
+        : [
+            {
+              id: "run-query-1",
+              name: "Queried run",
+              goal: "Test board composition",
+              status: "reviewing",
+              taskCount: 3,
+              workerCount: 2,
+              attentionCount: 3,
+              awaitingManualMerge: false,
+            } as FleetRunDto,
+          ],
       state.fleetRefetch
     ),
+    isError: state.fleetError,
+  }),
 }));
 
 vi.mock("@/data/mcp-elicitations/queries", () => ({
@@ -72,6 +79,8 @@ describe("useFleetBoard Fleet Management read model", () => {
     vi.clearAllMocks();
     state.elicitationError = false;
     state.elicitationFetching = false;
+    state.fleetError = false;
+    state.boardData = [];
   });
 
   it("composes Fleet runs and includes them in bounded manual refresh", () => {
@@ -104,5 +113,24 @@ describe("useFleetBoard Fleet Management read model", () => {
 
     result.current.refetchElicitations();
     expect(state.elicitationRefetch).toHaveBeenCalledOnce();
+  });
+
+  it("keeps existing board sources usable when the Fleet run list fails", () => {
+    state.fleetError = true;
+    state.boardData = [
+      { id: "dispatch-still-visible", status: "pending" } as IssueDispatch,
+    ];
+    const { result } = renderHook(() => useFleetBoard(true));
+
+    expect(result.current.total).toBe(1);
+    expect(result.current.lanes.queued[0]).toMatchObject({
+      source: "dispatch",
+      dispatch: { id: "dispatch-still-visible" },
+    });
+    expect(result.current.isError).toBe(false);
+    expect(result.current.fleetError).toBe(true);
+
+    result.current.refetchFleetRuns();
+    expect(state.fleetRefetch).toHaveBeenCalledOnce();
   });
 });

@@ -2728,21 +2728,33 @@ async function reconcileFleetCostTelemetryWithDeps(
   // Advance before transcript reads so a persistent failure backs off instead of
   // turning the scheduler cadence into a tight cost-reader retry loop.
   fleetCostSampleAt.set(deps.db, now.getTime());
-  const accounts = deps.db
-    .prepare(
-      `SELECT a.fleet_run_id, a.owner_type, a.owner_id, a.session_id
-       FROM fleet_cost_accounts a
-       JOIN sessions s ON s.id = a.session_id
-       WHERE a.terminal_at IS NULL
-       ORDER BY COALESCE(a.last_sample_at, '') ASC, a.updated_at ASC, a.id ASC
-       LIMIT ?`
-    )
-    .all(FLEET_COST_SAMPLE_MAX_PER_TICK) as Array<{
-    fleet_run_id: string;
-    owner_type: string;
-    owner_id: string;
-    session_id: string;
-  }>;
+  const accounts = transaction(deps.db, () => {
+    const selected = deps.db
+      .prepare(
+        `SELECT a.id, a.fleet_run_id, a.owner_type, a.owner_id, a.session_id
+         FROM fleet_cost_accounts a
+         JOIN sessions s ON s.id = a.session_id
+         WHERE a.terminal_at IS NULL
+         ORDER BY a.sample_attempt_cursor ASC, a.id ASC
+         LIMIT ?`
+      )
+      .all(FLEET_COST_SAMPLE_MAX_PER_TICK) as Array<{
+      id: string;
+      fleet_run_id: string;
+      owner_type: string;
+      owner_id: string;
+      session_id: string;
+    }>;
+    const advance = deps.db.prepare(
+      `UPDATE fleet_cost_accounts
+       SET sample_attempt_cursor = (
+         SELECT COALESCE(MAX(sample_attempt_cursor), 0) + 1
+         FROM fleet_cost_accounts
+       )
+       WHERE id = ? AND terminal_at IS NULL`
+    );
+    return selected.filter((account) => advance.run(account.id).changes === 1);
+  });
   if (accounts.length === 0) return 0;
   const getSession = queries.getSession(deps.db);
   const sessions = accounts

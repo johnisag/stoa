@@ -1756,6 +1756,53 @@ function ensureFleetPlannerRiskSchema(db: Database.Database): void {
   });
 }
 
+function installFleetFairnessCursorSchema(db: Database.Database): void {
+  if (hasTable(db, "fleet_runs")) {
+    addColumnIfMissing(db, "fleet_runs", {
+      name: "managed_supervisor_poll_cursor",
+      ddl: "managed_supervisor_poll_cursor INTEGER NOT NULL DEFAULT 0",
+    });
+    if (hasColumn(db, "fleet_runs", "id")) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_fleet_runs_supervisor_poll_cursor
+          ON fleet_runs(managed_supervisor_poll_cursor, id)
+      `);
+    }
+  }
+  if (hasTable(db, "fleet_cost_accounts")) {
+    addColumnIfMissing(db, "fleet_cost_accounts", {
+      name: "sample_attempt_cursor",
+      ddl: "sample_attempt_cursor INTEGER NOT NULL DEFAULT 0",
+    });
+    addColumnIfMissing(db, "fleet_cost_accounts", {
+      name: "fallback_recovery_cursor",
+      ddl: "fallback_recovery_cursor INTEGER NOT NULL DEFAULT 0",
+    });
+    if (hasColumn(db, "fleet_cost_accounts", "id")) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_fleet_cost_accounts_sample_attempt_cursor
+          ON fleet_cost_accounts(sample_attempt_cursor, id)
+      `);
+      if (hasColumn(db, "fleet_cost_accounts", "owner_type")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_fleet_cost_accounts_fallback_recovery_cursor
+            ON fleet_cost_accounts(fallback_recovery_cursor, id)
+            WHERE owner_type = 'supervisor'
+        `);
+      }
+    }
+  }
+}
+
+/** Install every fairness cursor and its ordering index atomically. */
+function ensureFleetFairnessCursorSchema(db: Database.Database): void {
+  if (db.inTransaction) {
+    installFleetFairnessCursorSchema(db);
+    return;
+  }
+  db.transaction(() => installFleetFairnessCursorSchema(db)).immediate();
+}
+
 // All migrations in order. Migrations are idempotent (guarded by PRAGMA table_info
 // / IF NOT EXISTS) so a fresh schema or a concurrent-init race never throws a
 // duplicate-column/already-exists error. The runner no longer swallows those
@@ -3296,6 +3343,11 @@ const migrations: Migration[] = [
     id: 76,
     name: "add_immutable_session_launch_profiles",
     up: ensureSessionLaunchProfileSchema,
+  },
+  {
+    id: 77,
+    name: "add_fleet_fairness_cursors",
+    up: ensureFleetFairnessCursorSchema,
   },
 ];
 

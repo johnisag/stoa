@@ -375,6 +375,7 @@ describe("createFleetRunFromSource", () => {
         projectId: "proj-source",
         verifyCommand: "npm test",
       },
+      options: { reviewPolicy: "manual" },
     });
     if ("error" in result) throw new Error(result.error);
     expect(result.run.run).toMatchObject({

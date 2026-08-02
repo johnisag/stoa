@@ -1675,19 +1675,12 @@ async function reconcileOne(
 
 const reconcileLocks = new Set<string>();
 
-/** Recover and poll only the preallocated durable broker identity. This function
- * never creates or respawns a session. */
-export async function reconcileManagedFleetSupervisors(
-  limit = 40,
-  overrides: ManagedFleetSupervisorDeps = {}
-): Promise<number> {
-  const deps = dependencies(overrides);
-  if (reconcileLocks.has("global")) return 0;
-  reconcileLocks.add("global");
-  try {
-    const boundedLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
-    await reconcileUntrackedManagedFleetSupervisors(deps, boundedLimit);
-    const rows = deps.db
+function claimManagedSupervisorRuns(
+  db: Database.Database,
+  limit: number
+): Array<{ id: string }> {
+  return transaction(db, () => {
+    const selected = db
       .prepare(
         `SELECT id FROM fleet_runs
          WHERE json_valid(settings_json)
@@ -1703,9 +1696,34 @@ export async function reconcileManagedFleetSupervisors(
                ) = 0
              )
            )
-         ORDER BY updated_at, id LIMIT ?`
+         ORDER BY managed_supervisor_poll_cursor, id LIMIT ?`
       )
-      .all(boundedLimit) as Array<{ id: string }>;
+      .all(limit) as Array<{ id: string }>;
+    const advance = db.prepare(
+      `UPDATE fleet_runs
+       SET managed_supervisor_poll_cursor = (
+         SELECT COALESCE(MAX(managed_supervisor_poll_cursor), 0) + 1
+         FROM fleet_runs
+       )
+       WHERE id = ?`
+    );
+    return selected.filter((run) => advance.run(run.id).changes === 1);
+  });
+}
+
+/** Recover and poll only the preallocated durable broker identity. This function
+ * never creates or respawns a session. */
+export async function reconcileManagedFleetSupervisors(
+  limit = 40,
+  overrides: ManagedFleetSupervisorDeps = {}
+): Promise<number> {
+  const deps = dependencies(overrides);
+  if (reconcileLocks.has("global")) return 0;
+  reconcileLocks.add("global");
+  try {
+    const boundedLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
+    await reconcileUntrackedManagedFleetSupervisors(deps, boundedLimit);
+    const rows = claimManagedSupervisorRuns(deps.db, boundedLimit);
     for (const row of rows) await reconcileOne(deps, row.id);
     return rows.length;
   } finally {

@@ -53,10 +53,13 @@ export function FleetBoardView({
     elicitationCount,
     elicitationError,
     elicitationFetching,
+    fleetError,
+    fleetFetching,
     isLoading,
     isError,
     isFetching,
     refetch,
+    refetchFleetRuns,
     refetchElicitations,
   } = useFleetBoard(true);
   // Surfaced in the header so "what needs me?" is answered without scrolling.
@@ -137,6 +140,39 @@ export function FleetBoardView({
       </div>
 
       <div className="flex-1 overflow-auto px-4 pb-4">
+        {!showHelp && fleetError && (
+          <div
+            className="border-destructive/30 bg-destructive/5 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border p-3"
+            data-testid="fleet-board-runs-error"
+            role="status"
+            aria-atomic="true"
+          >
+            <span className="flex min-w-0 items-center gap-2 text-sm">
+              <AlertCircle
+                aria-hidden="true"
+                className="text-destructive h-4 w-4 flex-shrink-0"
+              />
+              <span>
+                Fleet Management runs could not be loaded. Dispatch and inbox
+                lanes remain available.
+              </span>
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={refetchFleetRuns}
+              disabled={fleetFetching}
+            >
+              {fleetFetching && (
+                <Loader2
+                  aria-hidden="true"
+                  className="mr-1 h-3.5 w-3.5 animate-spin"
+                />
+              )}
+              Retry Fleet runs
+            </Button>
+          </div>
+        )}
         {!showHelp && elicitationError && (
           <div
             className="border-destructive/30 bg-destructive/5 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border p-3"
@@ -224,7 +260,7 @@ export function FleetBoardView({
           <div className="text-muted-foreground py-10 text-center text-sm">
             {elicitationCount > 0
               ? "No delivery work is on the board."
-              : "Fleet idle — dispatch a task, or flip a session to auto mode."}
+              : "Fleet idle — create a Fleet run or dispatch a task."}
           </div>
         ) : (
           // Mobile: lanes stack vertically (each full-width), no horizontal scroll

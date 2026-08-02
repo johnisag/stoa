@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
     skipped: Array<Record<string, unknown>>;
     impact: FleetDestructiveActionPreview;
   } | null,
+  planReviewComplete: true,
   createMutation: vi.fn(async (_input: unknown) => {
     if (!state.detail) throw new Error("missing Fleet fixture");
     return state.detail;
@@ -119,6 +120,14 @@ vi.mock("@/data/fleet/queries", () => ({
           taskId: "task-blocked",
         },
       ],
+      gates: {
+        planReview: {
+          required: 4,
+          exactCleanLenses: state.planReviewComplete ? 4 : 2,
+          independentReviewers: state.planReviewComplete ? 4 : 2,
+          complete: state.planReviewComplete,
+        },
+      },
     } as FleetSupervisorSnapshot,
     error: null,
   }),
@@ -797,6 +806,7 @@ describe("FleetManagementView status drilldowns", () => {
     state.cancellationPreview = destructivePreviewFixture();
     state.cleanupPreview = null;
     state.mergeStatus = null;
+    state.planReviewComplete = true;
     state.outputHook.mockClear();
     state.artifactBodyHook.mockClear();
     state.approvalMutation.mockClear();
@@ -838,6 +848,37 @@ describe("FleetManagementView status drilldowns", () => {
     expect(estimate.textContent).toContain("400,000 tokens");
     expect(estimate.textContent).toContain("tokens exceeds");
     expect(estimate.textContent).not.toContain("zero-cost estimate");
+  });
+
+  it("keeps four-agent approval disabled until all exact critics are clean", async () => {
+    state.detail!.run.status = "draft";
+    state.detail!.run.approvalState = "needs_approval";
+    state.detail!.run.reviewPolicy = "four_agent";
+    state.detail!.run.approvedPlanHash = null;
+    state.detail!.run.approvedAt = null;
+    state.detail!.run.approvedBy = null;
+    state.detail!.artifacts = [];
+    state.planReviewComplete = false;
+
+    const first = render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+    expect(
+      (screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+    expect(
+      screen.getByText(/Four independent clean plan critics must finish/)
+        .textContent
+    ).toContain("2/4 clean lenses, 2 independent reviewers");
+
+    first.unmount();
+    state.planReviewComplete = true;
+    render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+    expect(
+      (screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
   });
 
   it("renders structured task risk severity and mitigation beside acceptance", async () => {
@@ -898,11 +939,17 @@ describe("FleetManagementView status drilldowns", () => {
       ).checked
     ).toBe(false);
     expect(
-      screen.getByText(/Manual plan approval \+ four task reviews/)
-    ).toBeTruthy();
+      screen.getAllByText(/Manual plan approval \+ four task reviews/).length
+    ).toBeGreaterThan(0);
+    fireEvent.click(screen.getByLabelText("Review policy"));
     expect(
-      screen.getByText(/Four plan \+ task reviewers \(includes red-team\)/)
+      await screen.findByText(/Four plan critics \+ four task reviewers/)
     ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("option", {
+        name: "Manual plan approval + four task reviews",
+      })
+    );
     expect(screen.queryByText(/extra red-team/)).toBeNull();
     expect(
       screen.getAllByText(/\$1\.25 spent \+ \$0\.50 reserved/).length
@@ -1651,6 +1698,86 @@ describe("FleetManagementView status drilldowns", () => {
     );
   });
 
+  it("validates planner, automatic-fix, and retention bounds before creation", async () => {
+    render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+    fireEvent.change(screen.getByLabelText("Fleet run name"), {
+      target: { value: "Bounded automation" },
+    });
+    fireEvent.change(screen.getByLabelText("Fleet run goal"), {
+      target: { value: "Reject invalid client settings" },
+    });
+    fireEvent.click(screen.getByLabelText("Repository"));
+    fireEvent.click(await screen.findByText("acme/stoa"));
+    fireEvent.click(
+      screen.getByLabelText("Allow unconfined unattended agents")
+    );
+
+    fireEvent.change(screen.getByLabelText("Planner task cap"), {
+      target: { value: "41" },
+    });
+    expect(
+      screen.getByText("Planner task cap must be an integer from 1 to 40.")
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Create and plan",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    fireEvent.change(screen.getByLabelText("Planner task cap"), {
+      target: { value: "8" },
+    });
+
+    fireEvent.click(screen.getByLabelText("Approve plans automatically"));
+    fireEvent.click(screen.getByLabelText("Start approved work automatically"));
+    fireEvent.click(screen.getByLabelText("Fix review findings automatically"));
+    fireEvent.change(screen.getByLabelText("Maximum automatic fix rounds"), {
+      target: { value: "0" },
+    });
+    expect(
+      screen.getByText("Automatic fix rounds must be an integer from 1 to 20.")
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Create autonomous run",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    fireEvent.change(screen.getByLabelText("Maximum automatic fix rounds"), {
+      target: { value: "2" },
+    });
+
+    fireEvent.change(screen.getByLabelText("Fleet artifact retention days"), {
+      target: { value: "0" },
+    });
+    expect(
+      screen.getByText(
+        "Artifact retention must be an integer from 1 to 3650 days."
+      )
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Create autonomous run",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Fleet artifact retention days"), {
+      target: { value: "30" },
+    });
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Create autonomous run",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false);
+  });
+
   it("allows an auto-plan-only run to grant unattended-agent consent", async () => {
     render(<FleetManagementView />);
     const consent = await screen.findByLabelText(
@@ -1718,21 +1845,22 @@ describe("FleetManagementView status drilldowns", () => {
     );
   });
 
-  it("shows unattended-agent consent for imported-plan auto-approval critics", async () => {
+  it("explains imported-plan critic consent before either approval mode", async () => {
     render(<FleetManagementView />);
     fireEvent.click(await screen.findByLabelText("Fleet input mode"));
     fireEvent.click(
       await screen.findByText("Existing Markdown task plan — import")
     );
     expect(
-      screen.queryByLabelText("Allow unconfined unattended agents")
-    ).toBeNull();
-
-    fireEvent.click(screen.getByLabelText("Approve plans automatically"));
-
-    expect(
       screen.getByLabelText("Allow unconfined unattended agents")
     ).toBeTruthy();
+    expect(
+      screen.getByText(/Imported plans skip the planner session/).textContent
+    ).toContain("before either manual or automatic approval");
+    expect(
+      (screen.getByLabelText("Approve plans automatically") as HTMLInputElement)
+        .checked
+    ).toBe(false);
     expect(
       (
         screen.getByLabelText(

@@ -460,6 +460,7 @@ describe("Fleet source adapters", () => {
             ...DEFAULT_FLEET_AUTOMATION_POLICY,
             automaticPlanApproval: true,
           },
+          policyHash: "policy-hash",
           policyHashMatches: true,
           authorized: true,
           desiredState: "running",

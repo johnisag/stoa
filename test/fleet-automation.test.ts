@@ -140,6 +140,7 @@ describe("Fleet automation decisions", () => {
         automaticPlanning: true,
         automaticPlanApproval: true,
       }),
+      policyHash: POLICY_HASH,
       policyHashMatches: true,
       authorized: true,
       desiredState: "planned" as const,
@@ -180,6 +181,7 @@ describe("Fleet automation decisions", () => {
         automaticPlanning: true,
         automaticPlanApproval: true,
       }),
+      policyHash: POLICY_HASH,
       policyHashMatches: true,
       authorized: true,
       desiredState: "planned" as const,
@@ -380,6 +382,64 @@ function insertExactCleanReviews(runId: string): string {
 }
 
 describe("reconcileFleetAutomation", () => {
+  it("launches four-agent plan critics even when approval remains manual", async () => {
+    const created = createDraftFleetRun({
+      name: "Critics before manual approval",
+      goal: "Review the imported plan",
+      repoId: "fleet-auto-repo",
+      provider: "codex",
+      reviewPolicy: "four_agent",
+      automationPolicy: {
+        automaticPlanning: false,
+        automaticPlanApproval: false,
+        allowUnconfinedAgents: true,
+      },
+    });
+    if ("error" in created) throw new Error(created.error);
+    const planned = ingestGeneratedFleetRunPlan(created.run.run.id, {
+      planText: "- Review first [files: lib/fleet/review-first.ts]",
+      tasks: [
+        {
+          title: "Review first",
+          description: "Keep manual approval behind exact critics.",
+          taskType: "implementation",
+          parentIndex: null,
+          sortOrder: 0,
+          fileClaims: ["lib/fleet/review-first.ts"],
+          agentType: "codex",
+          model: null,
+          acceptanceCriteria: "Four critics finish before approval.",
+          verifyCommand: "npm test",
+        },
+      ],
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    const reconcilePlanReviews = vi.fn(async () => undefined);
+
+    await reconcileFleetAutomation(40, {
+      db: db(),
+      resolveBaseSha: async () => BASE_SHA,
+      schedulerReady: () => false,
+      confinementAvailable: () => false,
+      reconcilePlanReviews,
+    });
+
+    expect(reconcilePlanReviews).toHaveBeenCalledOnce();
+    expect(
+      db()
+        .prepare(`SELECT status, approval_state FROM fleet_runs WHERE id = ?`)
+        .get(created.run.run.id)
+    ).toEqual({ status: "draft", approval_state: "needs_approval" });
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_action_authorizations
+           WHERE fleet_run_id = ? AND action = 'plan_approval'`
+        )
+        .get(created.run.run.id)
+    ).toEqual({ n: 0 });
+  });
+
   it("does not launch an automatic planner without confinement or explicit consent", async () => {
     const created = createPlanningAutomationRun(false);
     const startPlanner = vi.fn(async () => ({ run: created.run }));

@@ -13,6 +13,9 @@ const state = vi.hoisted(() => ({
   elicitationError: false,
   elicitationFetching: false,
   refetchElicitations: vi.fn(),
+  fleetError: false,
+  fleetFetching: false,
+  refetchFleetRuns: vi.fn(),
 }));
 
 const run = {
@@ -45,10 +48,13 @@ vi.mock("@/data/fleet-board/useFleetBoard", () => ({
     elicitationCount: state.elicitationCount,
     elicitationError: state.elicitationError,
     elicitationFetching: state.elicitationFetching,
+    fleetError: state.fleetError,
+    fleetFetching: state.fleetFetching,
     isLoading: false,
     isError: false,
     isFetching: false,
     refetch: vi.fn(),
+    refetchFleetRuns: state.refetchFleetRuns,
     refetchElicitations: state.refetchElicitations,
   }),
 }));
@@ -75,6 +81,8 @@ describe("FleetBoardView durable Fleet run handoff", () => {
     state.elicitationCount = 1;
     state.elicitationError = false;
     state.elicitationFetching = false;
+    state.fleetError = false;
+    state.fleetFetching = false;
   });
 
   it("lazily reads one run's tasks and opens the exact run/task", () => {
@@ -134,6 +142,19 @@ describe("FleetBoardView durable Fleet run handoff", () => {
     expect(state.refetchElicitations).toHaveBeenCalledOnce();
   });
 
+  it("keeps other lanes usable and offers an isolated Fleet-run retry", () => {
+    state.fleetError = true;
+    render(<FleetBoardView />);
+
+    expect(screen.getByText("Ship autonomous Fleet")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Fleet Management runs could not be loaded. Dispatch and inbox lanes remain available."
+    );
+    expect(screen.queryByText("Failed to load the board")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry Fleet runs" }));
+    expect(state.refetchFleetRuns).toHaveBeenCalledOnce();
+  });
+
   it("uses neutral delivery copy when only operator questions remain", () => {
     state.total = 0;
     state.needsMeCount = 1;
@@ -146,5 +167,16 @@ describe("FleetBoardView durable Fleet run handoff", () => {
         "Fleet idle — dispatch a task, or flip a session to auto mode."
       )
     ).toBeNull();
+  });
+
+  it("points an empty board to sessionless Fleet run creation", () => {
+    state.total = 0;
+    state.needsMeCount = 0;
+    state.elicitationCount = 0;
+    render(<FleetBoardView />);
+
+    expect(
+      screen.getByText("Fleet idle — create a Fleet run or dispatch a task.")
+    ).toBeTruthy();
   });
 });

@@ -57,6 +57,7 @@ import {
 } from "./interrupt-policy";
 import { redactAndCapFleetText } from "./redaction";
 import type { FleetDestructiveConfirmation } from "./lifecycle";
+import { hasFourIndependentCleanPlanReviews } from "./plan-review-evidence";
 import type {
   FleetArtifactRow,
   FleetArtifactSeverity,
@@ -70,6 +71,7 @@ import type {
   FleetTaskDependencyRow,
   FleetAutomationAction,
   FleetVerificationRow,
+  FleetReviewEvidenceRow,
 } from "./types";
 
 interface FleetRunListRow extends FleetRunRow {
@@ -1052,13 +1054,11 @@ export function approveFleetRunPlan(
         status: 409,
       };
     }
-    db.prepare(
-      `UPDATE fleet_tasks SET working_directory = COALESCE(working_directory, ?),
-       base_branch = COALESCE(base_branch, ?) WHERE fleet_run_id = ?`
-    ).run(defaultWorkingDirectory, defaultBaseBranch, id);
-    const executionTasks = queries
-      .listFleetTasksForRun(db)
-      .all(id) as FleetTaskRow[];
+    const executionTasks = tasks.map((task) => ({
+      ...task,
+      working_directory: task.working_directory ?? defaultWorkingDirectory,
+      base_branch: task.base_branch ?? defaultBaseBranch,
+    }));
     const executionDirectories = new Set<string>();
     for (const task of executionTasks) {
       const provider = task.agent_type ?? run.provider;
@@ -1114,6 +1114,42 @@ export function approveFleetRunPlan(
         status: 409,
       };
     }
+    if (run.review_policy !== "manual") {
+      if (!run.automation_policy_hash || !run.automation_base_sha) {
+        return {
+          error:
+            "four independent clean plan critics are required before approval",
+          status: 409,
+        };
+      }
+      const reviews = queries
+        .listFleetReviewsForContract(db)
+        .all(
+          id,
+          run.plan_hash,
+          run.automation_policy_hash,
+          approvedExecutionHash,
+          run.automation_base_sha
+        ) as FleetReviewEvidenceRow[];
+      if (
+        !hasFourIndependentCleanPlanReviews(reviews, {
+          planHash: run.plan_hash,
+          policyHash: run.automation_policy_hash,
+          executionHash: approvedExecutionHash,
+          baseSha: run.automation_base_sha,
+        })
+      ) {
+        return {
+          error:
+            "four independent clean plan critics are required before approval",
+          status: 409,
+        };
+      }
+    }
+    db.prepare(
+      `UPDATE fleet_tasks SET working_directory = COALESCE(working_directory, ?),
+       base_branch = COALESCE(base_branch, ?) WHERE fleet_run_id = ?`
+    ).run(defaultWorkingDirectory, defaultBaseBranch, id);
     const settings = settingsJson(run, {
       phase: "approved_plan",
       approvedPlanHash: run.plan_hash,

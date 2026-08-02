@@ -35,13 +35,16 @@ vi.mock("@/lib/fleet/stop", () => ({
 }));
 
 import { queries } from "@/lib/db";
-import { hashFleetTaskRows } from "@/lib/fleet/hash";
+import {
+  hashFleetExecutionContract,
+  hashFleetTaskRows,
+} from "@/lib/fleet/hash";
 import {
   approveFleetRunPlan,
   attachFleetPlanCriticArtifact,
   cancelFleetRun,
   completeFleetWorker,
-  createDraftFleetRun,
+  createDraftFleetRun as createDraftFleetRunService,
   getFleetRunDetail,
   ingestFleetRunPlan,
   ingestGeneratedFleetRunPlan,
@@ -52,10 +55,77 @@ import {
   tickFleetRun,
 } from "@/lib/fleet/service";
 import { cancelFleetPlanner } from "@/lib/fleet/planner";
-import type { FleetTaskDependencyRow, FleetTaskRow } from "@/lib/fleet/types";
+import type {
+  FleetRunRow,
+  FleetTaskClaimRow,
+  FleetTaskDependencyRow,
+  FleetTaskRow,
+} from "@/lib/fleet/types";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
+}
+
+// Most service tests exercise lifecycle behavior unrelated to automatic plan
+// critics. Make that manual policy explicit while allowing focused tests to
+// opt into the four-agent contract.
+function createDraftFleetRun(
+  input: unknown,
+  actor?: string,
+  runIdOverride?: string
+) {
+  const payload =
+    input && typeof input === "object" && !Array.isArray(input)
+      ? { reviewPolicy: "manual", ...input }
+      : input;
+  return createDraftFleetRunService(payload, actor, runIdOverride);
+}
+
+function insertExactPlanReviews(runId: string, reviewerPrefix = "critic") {
+  db()
+    .prepare(`UPDATE fleet_runs SET automation_base_sha = ? WHERE id = ?`)
+    .run(state.baseSha, runId);
+  const run = queries.getFleetRun(db()).get(runId) as FleetRunRow;
+  const tasks = queries.listFleetTasksForRun(db()).all(runId) as FleetTaskRow[];
+  const dependencies = db()
+    .prepare(`SELECT * FROM fleet_task_dependencies WHERE fleet_run_id = ?`)
+    .all(runId) as FleetTaskDependencyRow[];
+  const claims = db()
+    .prepare(`SELECT * FROM fleet_task_claims WHERE fleet_run_id = ?`)
+    .all(runId) as FleetTaskClaimRow[];
+  const executionHash = hashFleetExecutionContract({
+    run,
+    tasks: tasks.map((task) => ({
+      ...task,
+      working_directory: task.working_directory ?? "C:\\repo",
+      base_branch: task.base_branch ?? "main",
+    })),
+    dependencies,
+    claims,
+  });
+  const insert = db().prepare(
+    `INSERT INTO fleet_reviews
+     (id, fleet_run_id, subject_type, subject_hash, policy_hash,
+      execution_hash, base_sha, lens, reviewer_session_id, verdict, state)
+     VALUES (?, ?, 'plan', ?, ?, ?, ?, ?, ?, 'clean', 'clean')`
+  );
+  for (const [index, lens] of [
+    "correctness_security",
+    "conventions_cross_platform",
+    "simplicity_ux",
+    "adversarial_red_team",
+  ].entries()) {
+    insert.run(
+      `${runId}-${lens}`,
+      runId,
+      run.plan_hash,
+      run.automation_policy_hash,
+      executionHash,
+      state.baseSha,
+      lens,
+      `${reviewerPrefix}-${index}`
+    );
+  }
 }
 
 beforeAll(() => {
@@ -1664,6 +1734,61 @@ describe("Fleet list attention and readiness presentation", () => {
     });
     expect(getFleetRunDetail(runId)?.run.attentionCount).toBe(3);
   });
+
+  it("keeps terminal and archived run history out of ambient attention", () => {
+    const created = createDraftFleetRun({
+      name: "Historical failure",
+      goal: "Keep evidence without a permanent alert",
+      repoId: "repo-fleet",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    const taskId = created.run.tasks[0].id;
+    db()
+      .prepare(
+        `UPDATE fleet_runs
+         SET status = 'failed', approval_state = 'blocked',
+             automation_last_error = 'historical failure',
+             budget_warning_emitted_at = '2026-08-01T10:00:00.000Z'
+         WHERE id = ?`
+      )
+      .run(runId);
+    db()
+      .prepare(`UPDATE fleet_tasks SET status = 'failed' WHERE id = ?`)
+      .run(taskId);
+    db()
+      .prepare(
+        `INSERT INTO fleet_workers
+         (id, fleet_run_id, task_id, status, provider, attempt)
+         VALUES ('historical-worker', ?, ?, 'failed', 'codex', 1)`
+      )
+      .run(runId, taskId);
+
+    expect(listFleetRuns().find((run) => run.id === runId)).toMatchObject({
+      archivedAt: null,
+      attentionCount: 0,
+      awaitingManualMerge: false,
+    });
+    expect(getFleetRunDetail(runId)?.run.attentionCount).toBe(0);
+
+    db()
+      .prepare(
+        `UPDATE fleet_runs
+         SET archived_at = '2026-08-02T12:34:56.000Z', archived_by = 'operator'
+         WHERE id = ?`
+      )
+      .run(runId);
+    expect(listFleetRuns().find((run) => run.id === runId)).toMatchObject({
+      archivedAt: "2026-08-02T12:34:56.000Z",
+      archivedBy: "operator",
+      attentionCount: 0,
+    });
+    expect(getFleetRunDetail(runId)?.run).toMatchObject({
+      archivedAt: "2026-08-02T12:34:56.000Z",
+      attentionCount: 0,
+    });
+  });
 });
 
 describe("createDraftFleetRun", () => {
@@ -1704,6 +1829,7 @@ describe("createDraftFleetRun", () => {
         goal: "Plan, review, and execute",
         repoId: "repo-fleet",
         provider: "codex",
+        reviewPolicy: "four_agent",
         automationPolicy: {
           automaticPlanning: true,
           automaticPlanApproval: true,
@@ -1936,6 +2062,37 @@ describe("Phase 2 plan ingestion and approval", () => {
       eventType: "plan_approved",
       actor: "operator",
     });
+  });
+
+  it("requires four exact independent plan critics for four-agent approval", () => {
+    const created = createDraftFleetRun({
+      name: "Four-agent approval",
+      goal: "Require exact critic evidence",
+      repoId: "repo-fleet",
+      provider: "codex",
+      reviewPolicy: "four_agent",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const planned = ingestFleetRunPlan(created.run.run.id, {
+      planText: "- Ship reviewed work [files: lib/reviewed.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+
+    expect(
+      approveFleetRunPlan(created.run.run.id, {
+        expectedPlanHash: planned.run.run.planHash,
+      })
+    ).toEqual({
+      error: "four independent clean plan critics are required before approval",
+      status: 409,
+    });
+
+    insertExactPlanReviews(created.run.run.id);
+    expect(
+      approveFleetRunPlan(created.run.run.id, {
+        expectedPlanHash: planned.run.run.planHash,
+      })
+    ).toHaveProperty("run.run.approvalState", "approved");
   });
 
   it("resolves a project checkout default branch into the approved contract", () => {

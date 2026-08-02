@@ -157,47 +157,62 @@ function markRecoveryRequired(
   return false;
 }
 
-function untrackedAccountIds(
+function claimUntrackedAccounts(
   db: Database.Database,
   limit: number
 ): Array<{ id: string; fleet_run_id: string }> {
-  return db
-    .prepare(
-      `SELECT account.id, account.fleet_run_id
-       FROM fleet_cost_accounts account
-       JOIN fleet_runs run ON run.id = account.fleet_run_id
-       WHERE account.owner_type = 'supervisor'
-         AND (
-           account.reservation_released_at IS NULL
-           OR account.terminal_at IS NULL
-         )
-         AND CASE
-           WHEN NOT json_valid(run.settings_json) THEN 1
-           WHEN json_type(run.settings_json, '$.managedSupervisor')
-                  IS NOT 'object' THEN 1
-           WHEN json_extract(
-                  run.settings_json, '$.managedSupervisor.requestId'
-                ) IS NOT account.owner_id THEN 1
-           WHEN account.session_id IS NOT NULL
-                AND json_extract(
-                  run.settings_json, '$.managedSupervisor.sessionId'
-                ) IS NOT account.session_id THEN 1
-           WHEN json_extract(
-                  run.settings_json, '$.managedSupervisor.state'
-                ) IN ('starting', 'running', 'cleanup_pending') THEN 0
-           WHEN json_extract(
-                  run.settings_json, '$.managedSupervisor.state'
-                ) IN ('completed', 'failed', 'canceled')
-                AND COALESCE(json_extract(
-                  run.settings_json,
-                  '$.managedSupervisor.orphanSweepComplete'
-                ), 0) = 0 THEN 0
-           ELSE 1
-         END = 1
-       ORDER BY account.updated_at, account.id
-       LIMIT ?`
-    )
-    .all(limit) as Array<{ id: string; fleet_run_id: string }>;
+  const claim = () => {
+    const selected = db
+      .prepare(
+        `SELECT account.id, account.fleet_run_id
+         FROM fleet_cost_accounts account
+         JOIN fleet_runs run ON run.id = account.fleet_run_id
+         WHERE account.owner_type = 'supervisor'
+           AND (
+             account.reservation_released_at IS NULL
+             OR account.terminal_at IS NULL
+           )
+           AND CASE
+             WHEN NOT json_valid(run.settings_json) THEN 1
+             WHEN json_type(run.settings_json, '$.managedSupervisor')
+                    IS NOT 'object' THEN 1
+             WHEN json_extract(
+                    run.settings_json, '$.managedSupervisor.requestId'
+                  ) IS NOT account.owner_id THEN 1
+             WHEN account.session_id IS NOT NULL
+                  AND json_extract(
+                    run.settings_json, '$.managedSupervisor.sessionId'
+                  ) IS NOT account.session_id THEN 1
+             WHEN json_extract(
+                    run.settings_json, '$.managedSupervisor.state'
+                  ) IN ('starting', 'running', 'cleanup_pending') THEN 0
+             WHEN json_extract(
+                    run.settings_json, '$.managedSupervisor.state'
+                  ) IN ('completed', 'failed', 'canceled')
+                  AND COALESCE(json_extract(
+                    run.settings_json,
+                    '$.managedSupervisor.orphanSweepComplete'
+                  ), 0) = 0 THEN 0
+             ELSE 1
+           END = 1
+         ORDER BY account.fallback_recovery_cursor, account.id
+         LIMIT ?`
+      )
+      .all(limit) as Array<{ id: string; fleet_run_id: string }>;
+    const advance = db.prepare(
+      `UPDATE fleet_cost_accounts
+       SET fallback_recovery_cursor = (
+         SELECT COALESCE(MAX(fallback_recovery_cursor), 0) + 1
+         FROM fleet_cost_accounts WHERE owner_type = 'supervisor'
+       )
+       WHERE id = ? AND owner_type = 'supervisor'
+         AND (reservation_released_at IS NULL OR terminal_at IS NULL)`
+    );
+    return selected.filter(
+      (candidate) => advance.run(candidate.id).changes === 1
+    );
+  };
+  return db.inTransaction ? claim() : db.transaction(claim).immediate();
 }
 
 /** Recover supervisor cost/session identities that the settings-driven runtime
@@ -211,7 +226,7 @@ export async function reconcileUntrackedManagedFleetSupervisors(
   const boundedLimit = Number.isSafeInteger(limit)
     ? Math.max(1, Math.min(200, limit))
     : 40;
-  const candidates = untrackedAccountIds(deps.db, boundedLimit);
+  const candidates = claimUntrackedAccounts(deps.db, boundedLimit);
   let recovered = 0;
   let recoveryRequired = 0;
 
