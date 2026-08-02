@@ -246,6 +246,10 @@ export interface FleetRunRow {
   budget_interrupt_deadline_at?: string | null;
   managed_supervisor_poll_cursor?: number;
   scheduler_poll_cursor?: number;
+  automation_poll_cursor?: number;
+  cancellation_poll_cursor?: number;
+  merge_poll_cursor?: number;
+  lifecycle_poll_cursor?: number;
   provider_caps_json?: string;
   resource_limits_json?: string;
   default_max_attempts?: number;

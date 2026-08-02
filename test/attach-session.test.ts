@@ -31,6 +31,7 @@ interface Rec {
 class FakeTransport implements PtyTransport {
   recs: Rec[] = [];
   writes: Array<[string, string]> = [];
+  kills: string[] = [];
   rejectWith: unknown = null;
   private nextId = 0;
 
@@ -63,7 +64,9 @@ class FakeTransport implements PtyTransport {
 
   // Unused control-plane methods.
   async spawn(): Promise<void> {}
-  async kill(): Promise<void> {}
+  async kill(key: string): Promise<void> {
+    this.kills.push(key);
+  }
   async rename(): Promise<void> {}
   async exists(): Promise<boolean> {
     return true;
@@ -251,5 +254,36 @@ describe("AttachSession — attach-race sequence guard", () => {
     await s.attach("k");
 
     expect(errors).toEqual(["Session backend disconnected"]);
+  });
+
+  it("refuses a tombstoned backend key before create-if-missing attach", async () => {
+    const t = new FakeTransport();
+    const { errors, sink } = makeSink();
+    const s = new AttachSession(t, sink, () => true);
+
+    await s.attach("deleted-key");
+
+    expect(t.recs).toEqual([]);
+    expect(t.kills).toEqual([]);
+    expect(s.key).toBeNull();
+    expect(errors).toEqual(["Session deletion is in progress"]);
+  });
+
+  it("kills a PTY created while deletion publishes its backend-key fence", async () => {
+    const t = new FakeTransport();
+    const { out, errors, sink } = makeSink();
+    let checks = 0;
+    const s = new AttachSession(t, sink, () => ++checks > 1);
+
+    const attaching = s.attach("racing-key");
+    expect(t.recs).toHaveLength(1);
+    t.recs[0].release();
+    await attaching;
+
+    expect(t.recs[0].detached).toBe(true);
+    expect(t.kills).toEqual(["racing-key"]);
+    expect(s.key).toBeNull();
+    expect(out).toEqual([]);
+    expect(errors).toEqual(["Session deletion is in progress"]);
   });
 });

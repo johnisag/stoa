@@ -318,6 +318,7 @@ describe("startRecoverableFleetRuntime", () => {
     const enableNormalAutomation = vi.fn();
     const admitPlannerOrPlanReviewer = vi.fn();
     const admitWorkerOrTaskReviewer = vi.fn();
+    const reconcileMerges = vi.fn();
     const recoveryErrors = vi.fn();
 
     const runtime = await startRecoverableFleetRuntime({
@@ -328,6 +329,7 @@ describe("startRecoverableFleetRuntime", () => {
       onRecovered: enableNormalAutomation,
       plannerTick: admitPlannerOrPlanReviewer,
       schedulerTick: admitWorkerOrTaskReviewer,
+      mergeTick: reconcileMerges,
       onRecoveryError: recoveryErrors,
     });
 
@@ -337,6 +339,7 @@ describe("startRecoverableFleetRuntime", () => {
     expect(enableNormalAutomation).not.toHaveBeenCalled();
     expect(admitPlannerOrPlanReviewer).not.toHaveBeenCalled();
     expect(admitWorkerOrTaskReviewer).not.toHaveBeenCalled();
+    expect(reconcileMerges).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(1);
 
     await vi.advanceTimersByTimeAsync(1_000);
@@ -346,12 +349,14 @@ describe("startRecoverableFleetRuntime", () => {
     expect(enableNormalAutomation).toHaveBeenCalledTimes(1);
     expect(admitPlannerOrPlanReviewer).not.toHaveBeenCalled();
     expect(admitWorkerOrTaskReviewer).not.toHaveBeenCalled();
-    // The retry timer is gone; exactly one planner and one scheduler timer exist.
-    expect(vi.getTimerCount()).toBe(2);
+    // The retry timer is gone; planner, scheduler, and merge timers are armed.
+    expect(vi.getTimerCount()).toBe(3);
+    expect(reconcileMerges).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(admitPlannerOrPlanReviewer).toHaveBeenCalledTimes(1);
     expect(admitWorkerOrTaskReviewer).toHaveBeenCalledTimes(1);
+    expect(reconcileMerges).toHaveBeenCalledTimes(2);
     expect(enableNormalAutomation).toHaveBeenCalledTimes(1);
     runtime.stop();
   });
@@ -370,6 +375,7 @@ describe("startRecoverableFleetRuntime", () => {
     const onRecovered = vi.fn();
     const plannerTick = vi.fn();
     const schedulerTick = vi.fn();
+    const mergeTick = vi.fn();
     const runtime = await startRecoverableFleetRuntime({
       recoveryRetryMs: 1_000,
       runtimeIntervalMs: 1_000,
@@ -378,6 +384,7 @@ describe("startRecoverableFleetRuntime", () => {
       onRecovered,
       plannerTick,
       schedulerTick,
+      mergeTick,
       onRecoveryError: vi.fn(),
     });
 
@@ -392,19 +399,21 @@ describe("startRecoverableFleetRuntime", () => {
     await Promise.resolve();
     expect(runtime.ready).toBe(true);
     expect(onRecovered).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(2);
+    expect(vi.getTimerCount()).toBe(3);
 
     await vi.advanceTimersByTimeAsync(3_000);
     expect(recover).toHaveBeenCalledTimes(2);
     expect(onRecovered).toHaveBeenCalledTimes(1);
     expect(plannerTick).toHaveBeenCalledTimes(3);
     expect(schedulerTick).toHaveBeenCalledTimes(3);
+    expect(mergeTick).toHaveBeenCalledTimes(4);
     runtime.stop();
   });
 
   it("cleans recovery and normal timers on shutdown", async () => {
     const plannerTick = vi.fn();
     const schedulerTick = vi.fn();
+    const mergeTick = vi.fn();
     const runtime = await startRecoverableFleetRuntime({
       recoveryRetryMs: 1_000,
       runtimeIntervalMs: 1_000,
@@ -413,15 +422,79 @@ describe("startRecoverableFleetRuntime", () => {
       onRecovered: vi.fn(),
       plannerTick,
       schedulerTick,
+      mergeTick,
     });
 
     expect(runtime.ready).toBe(true);
-    expect(vi.getTimerCount()).toBe(2);
+    expect(vi.getTimerCount()).toBe(3);
     runtime.stop();
     runtime.stop();
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(plannerTick).not.toHaveBeenCalled();
     expect(schedulerTick).not.toHaveBeenCalled();
+    expect(mergeTick).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps general scheduling live while a merge reconcile remains pending", async () => {
+    let releaseMerge!: () => void;
+    const schedulerTick = vi.fn();
+    const mergeTick = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseMerge = resolve;
+          })
+      )
+      .mockResolvedValue(undefined);
+    const runtime = await startRecoverableFleetRuntime({
+      recoveryRetryMs: 1_000,
+      runtimeIntervalMs: 1_000,
+      recover: vi.fn(),
+      pollWhileBlocked: vi.fn(),
+      onRecovered: vi.fn(),
+      plannerTick: vi.fn(),
+      schedulerTick,
+      mergeTick,
+    });
+
+    expect(mergeTick).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(schedulerTick).toHaveBeenCalledTimes(3);
+    expect(mergeTick).toHaveBeenCalledTimes(1);
+
+    releaseMerge();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(schedulerTick).toHaveBeenCalledTimes(4);
+    expect(mergeTick).toHaveBeenCalledTimes(2);
+    runtime.stop();
+  });
+
+  it("contains merge rejection and releases its independent overlap guard", async () => {
+    const error = new Error("merge verification timed out");
+    const onMergeError = vi.fn();
+    const mergeTick = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue(undefined);
+    const runtime = await startRecoverableFleetRuntime({
+      recoveryRetryMs: 1_000,
+      runtimeIntervalMs: 1_000,
+      recover: vi.fn(),
+      pollWhileBlocked: vi.fn(),
+      onRecovered: vi.fn(),
+      plannerTick: vi.fn(),
+      schedulerTick: vi.fn(),
+      mergeTick,
+      onMergeError,
+    });
+
+    await Promise.resolve();
+    expect(onMergeError).toHaveBeenCalledWith(error);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mergeTick).toHaveBeenCalledTimes(2);
+    runtime.stop();
   });
 });

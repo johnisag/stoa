@@ -19,6 +19,7 @@ import {
   hashFleetTaskRows,
 } from "./hash";
 import { parseFleetAutomationPolicy } from "./automation-policy";
+import { prepareFleetFairnessCursor } from "./fairness-cursor";
 import {
   insertFleetArtifact as writeFleetArtifact,
   prepareFleetArtifactBody,
@@ -41,9 +42,12 @@ import type {
 import {
   buildFleetPrCreateArgs,
   buildFleetPrViewArgs,
+  buildFleetRequiredCheckRulesArgs,
   fleetIntegrationIdentity,
   parseFleetPrStatus,
+  parseFleetRequiredCheckRules,
   type FleetPrStatus,
+  type FleetRequiredCheckSet,
 } from "./merge-contract";
 import {
   approvedExecutionHash,
@@ -65,6 +69,7 @@ export {
   buildFleetPrViewArgs,
   fleetIntegrationIdentity,
   parseFleetPrStatus,
+  parseFleetRequiredCheckRules,
   summarizeGitHubChecks,
 } from "./merge-contract";
 export {
@@ -88,6 +93,8 @@ const FLEET_MERGE_LIMIT = 20;
 const FLEET_MERGE_ARTIFACT_MAX = 16_000;
 const FLEET_INTEGRATION_DISK_ESTIMATE_BYTES = 512 * 1024 ** 2;
 const FLEET_FINAL_VERIFICATION_MAX_ATTEMPTS = 3;
+const FLEET_LANDING_RETRY_BASE_MS = 1_000;
+const FLEET_LANDING_RETRY_MAX_MS = 5 * 60_000;
 // A merge operation already owns a durable Git resource lease. This additional
 // repository-keyed guard prevents two local landing commands from different
 // Fleet runs entering the same checkout concurrently inside this server process.
@@ -116,6 +123,16 @@ export interface FleetMergeStatus extends FleetMergeStatusBase {
 class FleetMergeCapacityUnavailable extends Error {}
 class FleetMergeRecoveryInProgress extends Error {}
 class FleetMergeRunInactive extends Error {}
+class FleetMergeClaimStale extends Error {}
+class FleetMergeLandingContractViolation extends Error {}
+class FleetMergeLandingRetryable extends Error {
+  constructor(
+    message: string,
+    readonly integrationState: "waiting_ci" | "merging" = "merging"
+  ) {
+    super(message);
+  }
+}
 
 interface GitResult {
   stdout: string;
@@ -143,6 +160,29 @@ interface FleetMergeRuntimeDeps {
 function boundedError(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error);
   return redactAndCapFleetText(value, 1000).text;
+}
+
+function retryableLandingError(
+  context: string,
+  error: unknown,
+  integrationState: "waiting_ci" | "merging" = "merging"
+): FleetMergeLandingRetryable {
+  return new FleetMergeLandingRetryable(
+    `${context}: ${boundedError(error)}`,
+    integrationState
+  );
+}
+
+function landingRetryNotBefore(now: Date, attemptCount: number): string {
+  const safeAttempt = Number.isSafeInteger(attemptCount)
+    ? Math.max(1, attemptCount)
+    : 1;
+  const exponent = Math.min(20, safeAttempt - 1);
+  const delay = Math.min(
+    FLEET_LANDING_RETRY_MAX_MS,
+    FLEET_LANDING_RETRY_BASE_MS * 2 ** exponent
+  );
+  return new Date(now.getTime() + delay).toISOString();
 }
 
 function hash(value: string): string {
@@ -276,7 +316,9 @@ async function assertDirectGitRef(
     4096
   );
   if (stdout.trim()) {
-    throw new Error(`Git target ${ref} is symbolic`);
+    throw new FleetMergeLandingContractViolation(
+      `Git target ${ref} is symbolic`
+    );
   }
 }
 
@@ -388,6 +430,77 @@ async function restoreExactCleanHead(
     expectedHead,
     "exact-head restoration failed"
   );
+}
+
+async function gitHasIgnoredPaths(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string
+): Promise<boolean> {
+  const { stdout } = await deps.git(
+    cwd,
+    [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+      "--no-empty-directory",
+      "-z",
+    ],
+    15_000,
+    1024 * 1024
+  );
+  return stdout.length > 0;
+}
+
+async function assertExactIsolatedHead(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string,
+  expectedHead: string,
+  context: string
+): Promise<void> {
+  await assertExactCleanHead(deps, cwd, expectedHead, context);
+  if (await gitHasIgnoredPaths(deps, cwd)) {
+    throw new Error(`${context}: ignored workspace content is not isolated`);
+  }
+}
+
+async function cleanIgnoredVerificationOutputs(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string
+): Promise<void> {
+  await deps.git(cwd, ["clean", "-fdx"], 30_000, 1024 * 1024);
+  if (await gitHasIgnoredPaths(deps, cwd)) {
+    throw new Error("ignored verification output cleanup was incomplete");
+  }
+}
+
+async function restoreExactIsolatedHead(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string,
+  expectedHead: string
+): Promise<void> {
+  await restoreExactCleanHead(deps, cwd, expectedHead);
+  await cleanIgnoredVerificationOutputs(deps, cwd);
+  await assertExactIsolatedHead(
+    deps,
+    cwd,
+    expectedHead,
+    "isolated exact-head restoration failed"
+  );
+}
+
+async function sanitizeExactVerificationHead(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string,
+  expectedHead: string,
+  context: string
+): Promise<void> {
+  // Reject tracked, untracked, index, or HEAD mutations before removing only
+  // ignored verifier output from the operation-owned isolated workspace.
+  await assertExactCleanHead(deps, cwd, expectedHead, context);
+  await cleanIgnoredVerificationOutputs(deps, cwd);
+  await assertExactIsolatedHead(deps, cwd, expectedHead, context);
 }
 
 async function isAncestor(
@@ -594,9 +707,66 @@ function ensureOperation(
   return row;
 }
 
+interface TaskMergeClaimGuard {
+  integrationBranch: string;
+  integrationWorktree: string;
+}
+
+function bindClaimedTaskMerge(
+  deps: FleetMergeRuntimeDeps,
+  operation: FleetMergeOperationRow,
+  guard: TaskMergeClaimGuard,
+  nowIso: string
+): void {
+  if (
+    operation.operation_type !== "task_merge" ||
+    !operation.task_id ||
+    !validSha(operation.expected_task_head_sha)
+  ) {
+    throw new FleetMergeClaimStale("task merge claim contract changed");
+  }
+  const changed = deps.db
+    .prepare(
+      `UPDATE fleet_tasks SET integration_state = 'integrating',
+       integration_operation_id = ?, updated_at = ?
+       WHERE id = ? AND fleet_run_id = ? AND status = 'ready_to_merge'
+         AND head_sha = ? AND verified_head_sha = head_sha
+         AND review_head_sha = head_sha AND review_status = 'clean'
+         AND integration_state IN ('pending','integrating')
+         AND (integration_operation_id IS NULL OR integration_operation_id = ?)
+         AND EXISTS (
+           SELECT 1 FROM fleet_runs run
+           WHERE run.id = fleet_tasks.fleet_run_id
+             AND run.status IN ('running','reviewing','merging')
+             AND run.desired_state = 'running' AND run.recovery_required = 0
+             AND run.approval_state = 'approved'
+             AND run.integration_state = 'integrating'
+             AND run.integration_head_sha = ?
+             AND run.integration_branch = ? AND run.integration_worktree = ?
+         )`
+    )
+    .run(
+      operation.id,
+      nowIso,
+      operation.task_id,
+      operation.fleet_run_id,
+      operation.expected_task_head_sha,
+      operation.id,
+      operation.expected_base_sha,
+      guard.integrationBranch,
+      guard.integrationWorktree
+    );
+  if (changed.changes !== 1) {
+    throw new FleetMergeClaimStale(
+      "task merge operation no longer owns the current integration head"
+    );
+  }
+}
+
 function claimOperation(
   deps: FleetMergeRuntimeDeps,
-  id: string
+  id: string,
+  taskMergeGuard?: TaskMergeClaimGuard
 ): FleetMergeOperationRow | null {
   const now = deps.now();
   const nowIso = now.toISOString();
@@ -609,22 +779,32 @@ function claimOperation(
          SET state = 'running', lease_owner = ?, lease_expires_at = ?,
              attempt_count = attempt_count + 1,
              started_at = COALESCE(started_at, ?), updated_at = ?, error = NULL
-         WHERE id = ? AND (
-           state IN ('pending', 'waiting') OR
-           (state = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
-         )`
+          WHERE id = ? AND (
+            state = 'pending' OR
+            (state = 'waiting' AND
+              (lease_expires_at IS NULL OR lease_expires_at <= ?)) OR
+            (state = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+          )`
         )
-        .run(deps.leaseOwner, expiry, nowIso, nowIso, id, nowIso);
+        .run(deps.leaseOwner, expiry, nowIso, nowIso, id, nowIso, nowIso);
       if (changed.changes !== 1) return null;
       releaseOperationResources(deps, id, now);
       const operation = deps.db
         .prepare(`SELECT * FROM fleet_merge_operations WHERE id = ?`)
         .get(id) as FleetMergeOperationRow;
+      if (taskMergeGuard) {
+        bindClaimedTaskMerge(deps, operation, taskMergeGuard, nowIso);
+      }
       acquireOperationResources(deps, operation, now, expiry);
       return operation;
     });
   } catch (error) {
-    if (error instanceof FleetMergeCapacityUnavailable) return null;
+    if (
+      error instanceof FleetMergeCapacityUnavailable ||
+      error instanceof FleetMergeClaimStale
+    ) {
+      return null;
+    }
     throw error;
   }
 }
@@ -683,6 +863,42 @@ function releaseOperationResources(
   });
 }
 
+function assertInterruptedOperationOwnsCurrentIntegrationState(
+  deps: FleetMergeRuntimeDeps,
+  operation: FleetMergeOperationRow
+): void {
+  const identity = fleetIntegrationIdentity(operation.fleet_run_id);
+  const owned = deps.db
+    .prepare(
+      `SELECT 1
+       FROM fleet_merge_operations operation
+       JOIN fleet_runs run ON run.id = operation.fleet_run_id
+       WHERE operation.id = ? AND operation.state = 'running'
+         AND operation.operation_type IN ('task_merge','final_verify')
+         AND operation.expected_base_sha = run.integration_head_sha
+         AND run.status IN ('running','reviewing','merging')
+         AND run.desired_state = 'running' AND run.recovery_required = 0
+         AND run.approval_state = 'approved'
+         AND run.integration_branch = ? AND run.integration_worktree = ?
+         AND (
+           operation.operation_type = 'final_verify' OR EXISTS (
+             SELECT 1 FROM fleet_tasks task
+             WHERE task.id = operation.task_id
+               AND task.fleet_run_id = operation.fleet_run_id
+               AND task.head_sha = operation.expected_task_head_sha
+               AND task.integration_state = 'integrating'
+               AND task.integration_operation_id = operation.id
+           )
+         )`
+    )
+    .get(operation.id, identity.branch, identity.worktree);
+  if (!owned) {
+    throw new FleetMergeRunInactive(
+      "interrupted merge operation no longer owns the current integration state"
+    );
+  }
+}
+
 function claimInterruptedOperationRecovery(
   deps: FleetMergeRuntimeDeps,
   operation: FleetMergeOperationRow,
@@ -695,6 +911,7 @@ function claimInterruptedOperationRecovery(
   ).toISOString();
   try {
     return transaction(deps.db, () => {
+      assertInterruptedOperationOwnsCurrentIntegrationState(deps, operation);
       const changed = deps.db
         .prepare(
           `UPDATE fleet_merge_operations
@@ -907,6 +1124,67 @@ function renewOperationLease(
   });
 }
 
+function renewTaskMergeMutationOwnership(
+  deps: FleetMergeRuntimeDeps,
+  run: FleetMergeRunRow,
+  task: FleetTaskRow,
+  operation: FleetMergeOperationRow,
+  requireActive: boolean
+): void {
+  renewOperationLease(deps, operation);
+  const owned = deps.db
+    .prepare(
+      `SELECT run.status, run.desired_state, run.recovery_required,
+              run.approval_state, run.integration_state,
+              task.status AS task_status
+       FROM fleet_merge_operations operation
+       JOIN fleet_runs run ON run.id = operation.fleet_run_id
+       JOIN fleet_tasks task ON task.id = operation.task_id
+         AND task.fleet_run_id = operation.fleet_run_id
+       WHERE operation.id = ? AND operation.operation_type = 'task_merge'
+         AND operation.state = 'running' AND operation.lease_owner = ?
+         AND operation.lease_expires_at > ?
+         AND operation.expected_base_sha = run.integration_head_sha
+         AND operation.expected_task_head_sha = task.head_sha
+         AND run.integration_branch = ? AND run.integration_worktree = ?
+         AND task.integration_state = 'integrating'
+         AND task.integration_operation_id = operation.id`
+    )
+    .get(
+      operation.id,
+      deps.leaseOwner,
+      deps.now().toISOString(),
+      run.integration_branch,
+      run.integration_worktree
+    ) as
+    | (Pick<
+        FleetRunRow,
+        | "status"
+        | "desired_state"
+        | "recovery_required"
+        | "approval_state"
+        | "integration_state"
+      > & { task_status: string })
+    | undefined;
+  if (
+    !owned ||
+    (requireActive &&
+      (!fleetMergeRunIsActive(owned) ||
+        owned.integration_state !== "integrating" ||
+        owned.task_status !== "ready_to_merge"))
+  ) {
+    throw new FleetMergeRunInactive(
+      "task merge operation no longer owns the current integration state"
+    );
+  }
+  if (
+    task.id !== operation.task_id ||
+    task.head_sha !== operation.expected_task_head_sha
+  ) {
+    throw new FleetMergeRunInactive("task merge evidence binding changed");
+  }
+}
+
 function finishOperation(
   deps: FleetMergeRuntimeDeps,
   operation: FleetMergeOperationRow,
@@ -916,6 +1194,7 @@ function finishOperation(
     outputHash?: string | null;
     artifactId?: string | null;
     error?: string | null;
+    retryNotBefore?: string | null;
   }
 ): boolean {
   const finish = () => {
@@ -925,9 +1204,10 @@ function finishOperation(
       .prepare(
         `UPDATE fleet_merge_operations
          SET state = ?, result_head_sha = ?, verification_output_hash = ?,
-             output_artifact_id = ?, error = ?, lease_owner = NULL,
-             lease_expires_at = NULL, updated_at = ?,
-             completed_at = CASE WHEN ? IN ('completed', 'failed') THEN ? ELSE NULL END
+              output_artifact_id = ?, error = ?, lease_owner = NULL,
+              lease_expires_at = CASE WHEN ? = 'waiting' THEN ? ELSE NULL END,
+              updated_at = ?,
+              completed_at = CASE WHEN ? IN ('completed', 'failed') THEN ? ELSE NULL END
          WHERE id = ? AND state = 'running' AND lease_owner = ?`
       )
       .run(
@@ -936,6 +1216,8 @@ function finishOperation(
         input.outputHash ?? null,
         input.artifactId ?? null,
         input.error ? redactAndCapFleetText(input.error, 1000).text : null,
+        input.state,
+        input.retryNotBefore ?? null,
         now,
         input.state,
         now,
@@ -948,6 +1230,67 @@ function finishOperation(
     return changed.changes === 1;
   };
   return deps.db.inTransaction ? finish() : transaction(deps.db, finish);
+}
+
+/**
+ * Preserve a consumed one-shot landing authorization while a correctable,
+ * precondition-read failure clears. `lease_expires_at` doubles as the durable
+ * not-before timestamp only while the operation is in `waiting`; claimOperation
+ * checks it before reacquiring the exact same operation after a restart.
+ */
+function leaveLandingOperationRetryable(
+  deps: FleetMergeRuntimeDeps,
+  run: FleetMergeRunRow,
+  operation: FleetMergeOperationRow,
+  error: unknown,
+  integrationState: "waiting_ci" | "merging"
+): boolean {
+  const now = deps.now();
+  const retryNotBefore = landingRetryNotBefore(now, operation.attempt_count);
+  const message = `landing retry scheduled for ${retryNotBefore}: ${boundedError(error)}`;
+  return transaction(deps.db, () => {
+    if (
+      !finishOperation(deps, operation, {
+        state: "waiting",
+        error: message,
+        retryNotBefore,
+      })
+    ) {
+      return false;
+    }
+    const changed = deps.db
+      .prepare(
+        `UPDATE fleet_runs SET integration_state = ?, integration_error = ?,
+         integration_updated_at = ?, updated_at = ?
+         WHERE id = ? AND integration_head_sha = ?
+           AND status IN ('running','reviewing','merging')
+           AND desired_state = 'running' AND recovery_required = 0`
+      )
+      .run(
+        integrationState,
+        message,
+        now.toISOString(),
+        now.toISOString(),
+        run.id,
+        run.integration_head_sha
+      );
+    if (changed.changes === 1) {
+      createEvent(
+        deps.db,
+        run.id,
+        "fleet_landing_retry_scheduled",
+        {
+          operationId: operation.id,
+          operationType: operation.operation_type,
+          attempt: operation.attempt_count,
+          retryNotBefore,
+          error: boundedError(error),
+        },
+        { controlPlane: true }
+      );
+    }
+    return true;
+  });
 }
 
 function reopenFailedOperationForExactRecovery(
@@ -985,6 +1328,14 @@ async function ensureIntegrationWorkspace(
   }
 
   const worktreeExists = await deps.pathExists(worktree);
+  const workspaceIdentityChanged =
+    run.integration_branch !== branch ||
+    run.integration_worktree !== worktree ||
+    run.integration_base_sha !== baseSha ||
+    !validSha(run.integration_head_sha);
+  const workspaceStateTransition = ["idle", "initializing"].includes(
+    run.integration_state
+  );
   ensureIntegrationWorkspaceResources(deps, run, target);
 
   const now = deps.now().toISOString();
@@ -1047,6 +1398,7 @@ async function ensureIntegrationWorkspace(
     );
   }
   let recoveringOperation = false;
+  let recoveredInterruptedOperation = false;
   if (validSha(run.integration_head_sha) && head !== run.integration_head_sha) {
     const active = deps.db
       .prepare(
@@ -1063,7 +1415,8 @@ async function ensureIntegrationWorkspace(
   }
   const workspaceClean = await gitClean(deps, worktree);
   const mergeInProgress = await gitMergeInProgress(deps, worktree);
-  if (!workspaceClean || mergeInProgress) {
+  const ignoredWorkspaceContent = await gitHasIgnoredPaths(deps, worktree);
+  if (!workspaceClean || mergeInProgress || ignoredWorkspaceContent) {
     const runningOperations = deps.db
       .prepare(
         `SELECT * FROM fleet_merge_operations
@@ -1111,7 +1464,7 @@ async function ensureIntegrationWorkspace(
         // A verifier may have dirtied the exact durably-bound result after the
         // branch moved. Restore that result, not the prior base, so the next
         // claim resumes the same immutable merge commit.
-        await restoreExactCleanHead(deps, worktree, expectedRecoveryHead);
+        await restoreExactIsolatedHead(deps, worktree, expectedRecoveryHead);
       }
     } catch (error) {
       finishInterruptedOperationRecovery(deps, interrupted.id, recovery, {
@@ -1127,6 +1480,7 @@ async function ensureIntegrationWorkspace(
     ) {
       throw new Error("Fleet integration recovery lease changed");
     }
+    recoveredInterruptedOperation = true;
   }
   deps.db
     .prepare(
@@ -1140,19 +1494,26 @@ async function ensureIntegrationWorkspace(
        integration_updated_at = ?, updated_at = ? WHERE id = ?`
     )
     .run(recoveringOperation ? 1 : 0, head, now, now, run.id);
-  createEvent(
-    deps.db,
-    run.id,
-    "integration_workspace_ready",
-    {
-      branch,
-      worktree,
-      baseSha,
-      headSha: recoveringOperation ? run.integration_head_sha : head,
-      recoveringOperation,
-    },
-    { controlPlane: true }
-  );
+  if (
+    !worktreeExists ||
+    workspaceIdentityChanged ||
+    workspaceStateTransition ||
+    recoveredInterruptedOperation
+  ) {
+    createEvent(
+      deps.db,
+      run.id,
+      "integration_workspace_ready",
+      {
+        branch,
+        worktree,
+        baseSha,
+        headSha: recoveringOperation ? run.integration_head_sha : head,
+        recoveringOperation: recoveredInterruptedOperation,
+      },
+      { controlPlane: true }
+    );
+  }
   return queries.getFleetRun(deps.db).get(run.id) as FleetMergeRunRow;
 }
 
@@ -1188,10 +1549,12 @@ async function abortMerge(
     // A conflict can fail before MERGE_HEAD exists, and a nominally successful
     // abort is not trusted without exact HEAD/clean checks. The workspace is
     // Fleet-owned, so this reset is scoped to its durable pre-operation head.
-    await restoreExactCleanHead(deps, cwd, expectedHead);
+    await restoreExactIsolatedHead(deps, cwd, expectedHead);
+  } else {
+    await cleanIgnoredVerificationOutputs(deps, cwd);
   }
   try {
-    await assertExactCleanHead(
+    await assertExactIsolatedHead(
       deps,
       cwd,
       expectedHead,
@@ -1218,6 +1581,20 @@ function markTaskMergeFailure(
       FleetMergeRunRow | undefined;
     if (!currentRun || !fleetMergeRunIsActive(currentRun)) {
       settleInactiveOperation(deps, operation, error);
+      return;
+    }
+    if (
+      currentRun.integration_head_sha !== operation.expected_base_sha ||
+      currentRun.integration_branch !== run.integration_branch ||
+      currentRun.integration_worktree !== run.integration_worktree
+    ) {
+      settleInactiveOperation(
+        deps,
+        operation,
+        new FleetMergeRunInactive(
+          "integration head changed before merge failure persistence"
+        )
+      );
       return;
     }
     const taskChanged = deps.db
@@ -1490,7 +1867,10 @@ async function integrateTask(
   });
   if (operation.state === "completed") return false;
   if (operation.state === "failed") return false;
-  const claimed = claimOperation(deps, operation.id);
+  const claimed = claimOperation(deps, operation.id, {
+    integrationBranch: run.integration_branch,
+    integrationWorktree: run.integration_worktree,
+  });
   if (!claimed) return false;
 
   let artifactId: string | null = null;
@@ -1498,11 +1878,6 @@ async function integrateTask(
   let resultHead: string | null = null;
   try {
     const currentIntegrationHead = await gitSha(deps, run.integration_worktree);
-    // This Fleet-owned workspace can contain an interrupted no-commit merge
-    // even while HEAD still equals the base. Every failure after claiming the
-    // operation therefore restores the exact bound base, not only failures
-    // observed after HEAD moved.
-    integrationMutationStarted = true;
     if (
       claimed.expected_result_head_sha !== null &&
       !validSha(claimed.expected_result_head_sha)
@@ -1536,19 +1911,13 @@ async function integrateTask(
     }
 
     if (claimed.expected_result_head_sha === null) {
-      await assertExactCleanHead(
+      await assertExactIsolatedHead(
         deps,
         run.integration_worktree,
         operation.expected_base_sha,
         "task merge construction preflight"
       );
-      deps.db
-        .prepare(
-          `UPDATE fleet_tasks SET integration_state = 'integrating',
-           integration_operation_id = ?, updated_at = ?
-           WHERE id = ? AND status = 'ready_to_merge' AND head_sha = ?`
-        )
-        .run(claimed.id, deps.now().toISOString(), task.id, task.head_sha);
+      renewTaskMergeMutationOwnership(deps, run, task, claimed, true);
       try {
         // The command can leave MERGE_HEAD/index mutations even when it throws.
         // From this point every unsuccessful durable outcome restores baseSha.
@@ -1602,8 +1971,9 @@ async function integrateTask(
       resultHead = claimed.expected_result_head_sha;
     }
 
+    renewTaskMergeMutationOwnership(deps, run, task, claimed, true);
     integrationMutationStarted = true;
-    await restoreExactCleanHead(deps, run.integration_worktree, resultHead);
+    await restoreExactIsolatedHead(deps, run.integration_worktree, resultHead);
     if ((await gitSha(deps, run.integration_worktree)) !== resultHead) {
       throw new Error("integration branch did not publish the expected result");
     }
@@ -1617,20 +1987,19 @@ async function integrateTask(
     ) {
       throw new Error("integration result does not contain exact task head");
     }
-    await assertExactCleanHead(
+    await assertExactIsolatedHead(
       deps,
       run.integration_worktree,
       resultHead,
       "integration verification preflight"
     );
-    assertFleetMergeRunActive(deps, run.id);
-    renewOperationLease(deps, claimed);
+    renewTaskMergeMutationOwnership(deps, run, task, claimed, true);
 
     let verification: VerifyResult | null = null;
     let verificationFailure: Error | null = null;
     try {
       verification = await deps.verify(run.integration_worktree, command);
-      await assertExactCleanHead(
+      await sanitizeExactVerificationHead(
         deps,
         run.integration_worktree,
         resultHead,
@@ -1640,7 +2009,12 @@ async function integrateTask(
       verificationFailure =
         error instanceof Error ? error : new Error(boundedError(error));
       try {
-        await restoreExactCleanHead(deps, run.integration_worktree, resultHead);
+        renewTaskMergeMutationOwnership(deps, run, task, claimed, false);
+        await restoreExactIsolatedHead(
+          deps,
+          run.integration_worktree,
+          resultHead
+        );
       } catch (restoreError) {
         throw new Error(
           `integration verifier failed and exact committed-head restoration failed: ${boundedError(restoreError)}`
@@ -1651,8 +2025,8 @@ async function integrateTask(
         output: boundedError(verificationFailure),
       };
     }
-    renewOperationLease(deps, claimed);
-    await assertExactCleanHead(
+    renewTaskMergeMutationOwnership(deps, run, task, claimed, true);
+    await assertExactIsolatedHead(
       deps,
       run.integration_worktree,
       resultHead,
@@ -1698,13 +2072,13 @@ async function integrateTask(
     if (verification.status !== "pass") {
       throw new Error(`integration verification ${verification.status}`);
     }
-    await assertExactCleanHead(
+    await assertExactIsolatedHead(
       deps,
       run.integration_worktree,
       resultHead,
       "integration persistence boundary"
     );
-    renewOperationLease(deps, claimed);
+    renewTaskMergeMutationOwnership(deps, run, task, claimed, true);
     const verificationArtifact = persistIntegratedTask(
       deps,
       run,
@@ -1726,8 +2100,26 @@ async function integrateTask(
         // the still-running durable operation can be reconciled on restart.
       }
     }
+    if (!integrationMutationStarted) {
+      try {
+        renewTaskMergeMutationOwnership(deps, run, task, claimed, false);
+      } catch (ownershipError) {
+        settleInactiveOperation(deps, claimed, ownershipError);
+        return false;
+      }
+    }
     if (integrationMutationStarted) {
       try {
+        renewTaskMergeMutationOwnership(deps, run, task, claimed, false);
+        const currentHead = await gitSha(deps, run.integration_worktree);
+        if (
+          currentHead !== operation.expected_base_sha &&
+          (!validSha(resultHead) || currentHead !== resultHead)
+        ) {
+          throw new FleetMergeRunInactive(
+            "refusing to reset an integration head not owned by this task merge"
+          );
+        }
         await abortMerge(
           deps,
           run.integration_worktree,
@@ -1874,7 +2266,7 @@ async function runFinalVerification(
   let artifactId: string | null = null;
   let verificationStarted = false;
   try {
-    await assertExactCleanHead(
+    await assertExactIsolatedHead(
       deps,
       run.integration_worktree,
       run.integration_head_sha,
@@ -1910,7 +2302,7 @@ async function runFinalVerification(
       let result: VerifyResult;
       try {
         result = await deps.verify(run.integration_worktree, command);
-        await assertExactCleanHead(
+        await sanitizeExactVerificationHead(
           deps,
           run.integration_worktree,
           run.integration_head_sha,
@@ -1920,7 +2312,7 @@ async function runFinalVerification(
         verificationFailure =
           error instanceof Error ? error : new Error(boundedError(error));
         try {
-          await restoreExactCleanHead(
+          await restoreExactIsolatedHead(
             deps,
             run.integration_worktree,
             run.integration_head_sha
@@ -1941,7 +2333,7 @@ async function runFinalVerification(
     const passed =
       results.length === commands.length &&
       results.every((result) => result.status === "pass");
-    await assertExactCleanHead(
+    await assertExactIsolatedHead(
       deps,
       run.integration_worktree,
       run.integration_head_sha,
@@ -1975,7 +2367,7 @@ async function runFinalVerification(
     }
     if (verificationFailure) throw verificationFailure;
     if (!passed) throw new Error("final combined-head verification failed");
-    await assertExactCleanHead(
+    await assertExactIsolatedHead(
       deps,
       run.integration_worktree,
       run.integration_head_sha,
@@ -1995,7 +2387,7 @@ async function runFinalVerification(
   } catch (error) {
     if (verificationStarted) {
       try {
-        await restoreExactCleanHead(
+        await restoreExactIsolatedHead(
           deps,
           run.integration_worktree,
           run.integration_head_sha
@@ -2143,6 +2535,37 @@ function leaveExternallyCompletedOperationRecoverable(
     );
 }
 
+async function localLandingTargetHead(
+  deps: FleetMergeRuntimeDeps,
+  repoPath: string,
+  targetRef: string
+): Promise<string> {
+  try {
+    await assertDirectGitRef(deps, repoPath, targetRef);
+    return await gitSha(deps, repoPath, targetRef);
+  } catch (error) {
+    if (error instanceof FleetMergeLandingContractViolation) throw error;
+    throw retryableLandingError(
+      "local target ref is temporarily unreadable",
+      error
+    );
+  }
+}
+
+async function localLandingCheckoutSnapshot(
+  deps: FleetMergeRuntimeDeps,
+  repoPath: string
+): Promise<GitCheckoutSnapshot> {
+  try {
+    return await gitCheckoutSnapshot(deps, repoPath);
+  } catch (error) {
+    throw retryableLandingError(
+      "local checkout status is temporarily unavailable",
+      error
+    );
+  }
+}
+
 async function finalizeLocal(
   deps: FleetMergeRuntimeDeps,
   run: FleetMergeRunRow,
@@ -2182,8 +2605,11 @@ async function finalizeLocalLocked(
   if (operation.state === "failed") {
     try {
       const targetRef = `refs/heads/${target.baseBranch}`;
-      await assertDirectGitRef(deps, target.repoPath, targetRef);
-      const targetHead = await gitSha(deps, target.repoPath, targetRef);
+      const targetHead = await localLandingTargetHead(
+        deps,
+        target.repoPath,
+        targetRef
+      );
       if (targetHead !== run.integration_head_sha) {
         return false;
       }
@@ -2198,15 +2624,18 @@ async function finalizeLocalLocked(
   if (!claimed) return false;
   let externalActionStarted = false;
   try {
-    await assertExactCleanHead(
+    await assertExactIsolatedHead(
       deps,
       run.integration_worktree,
       run.integration_head_sha,
       "local landing preflight"
     );
     const targetRef = `refs/heads/${target.baseBranch}`;
-    await assertDirectGitRef(deps, target.repoPath, targetRef);
-    const targetHead = await gitSha(deps, target.repoPath, targetRef);
+    const targetHead = await localLandingTargetHead(
+      deps,
+      target.repoPath,
+      targetRef
+    );
     if (
       targetHead !== run.integration_base_sha &&
       targetHead !== run.integration_head_sha
@@ -2214,15 +2643,19 @@ async function finalizeLocalLocked(
       throw new Error("local target branch moved after Fleet bound it");
     }
     if (targetHead === run.integration_base_sha) {
-      const source = await gitCheckoutSnapshot(deps, target.repoPath);
+      const source = await localLandingCheckoutSnapshot(deps, target.repoPath);
       if (source.branch !== target.baseBranch) {
-        throw new Error(
+        throw new FleetMergeLandingRetryable(
           `local checkout is on ${source.branch || "detached HEAD"}, expected ${target.baseBranch}`
         );
       }
-      if (!source.clean) throw new Error("local checkout is dirty");
+      if (!source.clean) {
+        throw new FleetMergeLandingRetryable("local checkout is dirty");
+      }
       if (await gitMergeInProgress(deps, target.repoPath)) {
-        throw new Error("local checkout has an unfinished merge");
+        throw new FleetMergeLandingRetryable(
+          "local checkout has an unfinished merge"
+        );
       }
       if (source.head !== run.integration_base_sha) {
         throw new Error("local checkout base moved after Fleet bound it");
@@ -2270,10 +2703,15 @@ async function finalizeLocalLocked(
     completeRun(deps, run, claimed, mergedHead);
     return true;
   } catch (error) {
+    let observedTargetHead: string | undefined;
     try {
       const targetRef = `refs/heads/${target.baseBranch}`;
-      await assertDirectGitRef(deps, target.repoPath, targetRef);
-      const targetHead = await gitSha(deps, target.repoPath, targetRef);
+      const targetHead = await localLandingTargetHead(
+        deps,
+        target.repoPath,
+        targetRef
+      );
+      observedTargetHead = targetHead;
       if (targetHead === run.integration_head_sha) {
         try {
           completeRun(deps, run, claimed, targetHead);
@@ -2297,7 +2735,31 @@ async function finalizeLocalLocked(
       }
     }
     if (externalActionStarted) {
-      leaveExternallyCompletedOperationRecoverable(deps, run, claimed, error);
+      if (observedTargetHead === run.integration_base_sha) {
+        leaveLandingOperationRetryable(deps, run, claimed, error, "merging");
+      } else {
+        finishOperation(deps, claimed, {
+          state: "failed",
+          error: boundedError(error),
+        });
+        setRunError(
+          deps.db,
+          run.id,
+          "awaiting_operator",
+          error,
+          deps.now().toISOString()
+        );
+      }
+      return false;
+    }
+    if (error instanceof FleetMergeLandingRetryable) {
+      leaveLandingOperationRetryable(
+        deps,
+        run,
+        claimed,
+        error,
+        error.integrationState
+      );
       return false;
     }
     finishOperation(deps, claimed, {
@@ -2330,7 +2792,11 @@ async function remoteBranchHead(
   const line = stdout.trim().split(/\r?\n/, 1)[0] ?? "";
   if (!line) return null;
   const sha = line.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
-  if (!validSha(sha)) throw new Error("origin returned an invalid branch head");
+  if (!validSha(sha)) {
+    throw new FleetMergeLandingContractViolation(
+      "origin returned an invalid branch head"
+    );
+  }
   return sha;
 }
 
@@ -2350,11 +2816,44 @@ async function verifiedGitHubRemoteUrl(
     !actualRepoSlug ||
     actualRepoSlug.toLowerCase() !== expectedRepoSlug.toLowerCase()
   ) {
-    throw new Error(
+    throw new FleetMergeLandingContractViolation(
       "GitHub repository identity differs from the checkout's origin"
     );
   }
   return stdout.trim();
+}
+
+async function verifiedGitHubLandingRemoteUrl(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string,
+  expectedRepoSlug: string
+): Promise<string> {
+  try {
+    return await verifiedGitHubRemoteUrl(deps, cwd, expectedRepoSlug);
+  } catch (error) {
+    if (error instanceof FleetMergeLandingContractViolation) throw error;
+    throw retryableLandingError(
+      "GitHub origin identity is temporarily unavailable",
+      error
+    );
+  }
+}
+
+async function landingRemoteBranchHead(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string,
+  branch: string,
+  remote = "origin"
+): Promise<string | null> {
+  try {
+    return await remoteBranchHead(deps, cwd, branch, remote);
+  } catch (error) {
+    if (error instanceof FleetMergeLandingContractViolation) throw error;
+    throw retryableLandingError(
+      `remote branch ${branch} is temporarily unreadable`,
+      error
+    );
+  }
 }
 
 /**
@@ -2469,7 +2968,7 @@ async function ensureGitHubPush(
       target.repoPath,
       target.repoSlug
     );
-    await assertExactCleanHead(
+    await assertExactIsolatedHead(
       deps,
       run.integration_worktree,
       run.integration_head_sha,
@@ -2573,6 +3072,67 @@ async function readFleetPr(
   } catch {
     return null;
   }
+}
+
+async function readFleetPrForLanding(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string,
+  selector: string | number,
+  repoSlug: string
+): Promise<FleetPrStatus> {
+  let result: GitResult;
+  try {
+    result = await deps.gh(cwd, buildFleetPrViewArgs(selector, repoSlug));
+  } catch (error) {
+    throw retryableLandingError(
+      "GitHub PR status is temporarily unavailable",
+      error,
+      "waiting_ci"
+    );
+  }
+  const pr = parseFleetPrStatus(result.stdout);
+  if (!pr) {
+    throw new FleetMergeLandingRetryable(
+      "GitHub PR status response is unavailable or malformed",
+      "waiting_ci"
+    );
+  }
+  return pr;
+}
+
+async function readRequiredGitHubChecks(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string,
+  repoSlug: string,
+  baseBranch: string
+): Promise<FleetRequiredCheckSet> {
+  let result: GitResult;
+  try {
+    result = await deps.gh(
+      cwd,
+      buildFleetRequiredCheckRulesArgs(repoSlug, baseBranch)
+    );
+  } catch (error) {
+    throw retryableLandingError(
+      "GitHub required-check rules are temporarily unavailable",
+      error,
+      "waiting_ci"
+    );
+  }
+  const required = parseFleetRequiredCheckRules(result.stdout);
+  if (!required || required.checks.length === 0) {
+    throw new FleetMergeLandingRetryable(
+      "GitHub returned no trustworthy required-check context set; automatic landing is disabled",
+      "waiting_ci"
+    );
+  }
+  if (required.checks.some((check) => check.integrationId !== null)) {
+    throw new FleetMergeLandingRetryable(
+      "GitHub required checks are app-bound, but the PR rollup does not prove app identity; automatic landing is disabled",
+      "waiting_ci"
+    );
+  }
+  return required;
 }
 
 function fleetPrTargetError(
@@ -2820,17 +3380,37 @@ function recordGitHubPrWait(
   deps: FleetMergeRuntimeDeps,
   run: FleetMergeRunRow,
   operation: FleetMergeOperationRow,
-  pr: FleetPrStatus
+  pr: FleetPrStatus,
+  required: FleetRequiredCheckSet
 ): boolean {
-  if (pr.mergeable === "MERGEABLE" && pr.checks === "passing") {
+  const expectedContexts = required.checks.map((check) => check.context);
+  const missing = expectedContexts.filter(
+    (context) => !Object.hasOwn(pr.checkContexts, context)
+  );
+  const requiredStates = expectedContexts
+    .map((context) => pr.checkContexts[context])
+    .filter((state): state is "passing" | "pending" | "failing" => !!state);
+  if (requiredStates.includes("failing")) {
+    throw new FleetMergeLandingContractViolation(
+      "A required GitHub check is failing"
+    );
+  }
+  if (
+    pr.mergeable === "MERGEABLE" &&
+    pr.checks === "passing" &&
+    missing.length === 0 &&
+    requiredStates.every((state) => state === "passing")
+  ) {
     return false;
   }
-  const error =
-    pr.checks === "failing"
-      ? "GitHub checks are failing"
-      : pr.checks === "none"
-        ? "GitHub has not reported any checks; waiting to avoid the check-registration race"
-        : "GitHub mergeability or checks are pending";
+  if (pr.checks === "failing") {
+    throw new FleetMergeLandingContractViolation("GitHub checks are failing");
+  }
+  const error = missing.length
+    ? `GitHub has not registered ${missing.length} required check${missing.length === 1 ? "" : "s"}: ${missing.slice(0, 8).join(", ")}`
+    : pr.checks === "none"
+      ? "GitHub has not reported any checks; waiting to avoid the check-registration race"
+      : "GitHub mergeability or checks are pending";
   finishOperation(deps, operation, { state: "waiting", error });
   const now = deps.now().toISOString();
   deps.db
@@ -2839,12 +3419,7 @@ function recordGitHubPrWait(
        integration_error = ?, integration_updated_at = ?, updated_at = ?
        WHERE id = ?`
     )
-    .run(
-      pr.checks === "failing" || pr.checks === "none" ? error : null,
-      now,
-      now,
-      run.id
-    );
+    .run(error, now, now, run.id);
   return true;
 }
 
@@ -2894,25 +3469,24 @@ async function finalizeGitHub(
   let landingAttempted = false;
   let exactPr: FleetPrStatus | null = null;
   try {
-    githubRemote ??= await verifiedGitHubRemoteUrl(
+    githubRemote ??= await verifiedGitHubLandingRemoteUrl(
       deps,
       target.repoPath,
       target.repoSlug
     );
-    let pr = await readFleetPr(
+    let pr = await readFleetPrForLanding(
       deps,
       target.repoPath,
       run.integration_pr_number,
       target.repoSlug
     );
-    if (!pr) throw new Error("GitHub PR status is unavailable");
     assertExactFleetPrTarget(pr, run, target, pr.state !== "MERGED");
     if (pr.headSha !== run.integration_head_sha) {
       throw new Error("GitHub PR head changed after final verification");
     }
     exactPr = pr;
     if (pr.state === "MERGED") {
-      const landedHead = await remoteBranchHead(
+      const landedHead = await landingRemoteBranchHead(
         deps,
         target.repoPath,
         target.baseBranch,
@@ -2933,26 +3507,51 @@ async function finalizeGitHub(
     if (pr.state !== "OPEN") {
       throw new Error(`GitHub PR is not open (state ${pr.state ?? "unknown"})`);
     }
-    if (recordGitHubPrWait(deps, run, claimed, pr)) return false;
+    const requiredChecks = await readRequiredGitHubChecks(
+      deps,
+      target.repoPath,
+      target.repoSlug,
+      target.baseBranch
+    );
+    if (recordGitHubPrWait(deps, run, claimed, pr, requiredChecks)) {
+      return false;
+    }
 
     // Re-read the PR for operator-facing audit context immediately before the
     // external action. The action itself does not derive its destination from
     // mutable PR metadata: it advances the configured target ref with an exact
     // old-OID lease below.
-    pr = await readFleetPr(
+    pr = await readFleetPrForLanding(
       deps,
       target.repoPath,
       run.integration_pr_number,
       target.repoSlug
     );
-    if (!pr) throw new Error("GitHub PR status is unavailable before merge");
     assertExactFleetPrTarget(pr, run, target, pr.state !== "MERGED");
     if (pr.headSha !== run.integration_head_sha) {
       throw new Error("GitHub PR head changed immediately before merge");
     }
+    const finalRequiredChecks = await readRequiredGitHubChecks(
+      deps,
+      target.repoPath,
+      target.repoSlug,
+      target.baseBranch
+    );
+    if (
+      JSON.stringify(finalRequiredChecks.checks) !==
+      JSON.stringify(requiredChecks.checks)
+    ) {
+      throw new FleetMergeLandingRetryable(
+        "GitHub required-check context set changed before landing",
+        "waiting_ci"
+      );
+    }
+    if (recordGitHubPrWait(deps, run, claimed, pr, finalRequiredChecks)) {
+      return false;
+    }
     exactPr = pr;
     if (pr.state === "MERGED") {
-      const landedHead = await remoteBranchHead(
+      const landedHead = await landingRemoteBranchHead(
         deps,
         target.repoPath,
         target.baseBranch,
@@ -2973,9 +3572,11 @@ async function finalizeGitHub(
     if (pr.state !== "OPEN") {
       throw new Error(`GitHub PR is not open (state ${pr.state ?? "unknown"})`);
     }
-    if (recordGitHubPrWait(deps, run, claimed, pr)) return false;
+    if (recordGitHubPrWait(deps, run, claimed, pr, finalRequiredChecks)) {
+      return false;
+    }
 
-    await assertExactCleanHead(
+    await assertExactIsolatedHead(
       deps,
       run.integration_worktree,
       run.integration_head_sha,
@@ -2993,7 +3594,7 @@ async function finalizeGitHub(
         "verified integration head is not descended from its base"
       );
     }
-    const remoteBase = await remoteBranchHead(
+    const remoteBase = await landingRemoteBranchHead(
       deps,
       target.repoPath,
       target.baseBranch,
@@ -3019,7 +3620,7 @@ async function finalizeGitHub(
       run.integration_base_sha,
       run.integration_head_sha
     );
-    const landedHead = await remoteBranchHead(
+    const landedHead = await landingRemoteBranchHead(
       deps,
       target.repoPath,
       target.baseBranch,
@@ -3080,6 +3681,21 @@ async function finalizeGitHub(
     }
     if (landingAttempted && observedTargetHead === undefined) {
       leaveExternallyCompletedOperationRecoverable(deps, run, claimed, error);
+      return false;
+    }
+    if (
+      (!landingAttempted && error instanceof FleetMergeLandingRetryable) ||
+      (landingAttempted && observedTargetHead === run.integration_base_sha)
+    ) {
+      leaveLandingOperationRetryable(
+        deps,
+        run,
+        claimed,
+        error,
+        error instanceof FleetMergeLandingRetryable
+          ? error.integrationState
+          : "merging"
+      );
       return false;
     }
     finishOperation(deps, claimed, {
@@ -4158,14 +4774,11 @@ async function cleanupTerminalIntegration(
     )
     .run(now, now, run.id, terminalStatus);
   try {
+    const integrationRef = `refs/heads/${expected.branch}`;
+    await assertDirectGitRef(deps, target.repoPath, integrationRef);
     const branchResult = await deps.git(
       target.repoPath,
-      [
-        "for-each-ref",
-        "--format=%(objectname)",
-        "--count=2",
-        `refs/heads/${expected.branch}`,
-      ],
+      ["for-each-ref", "--format=%(objectname)", "--count=2", integrationRef],
       15_000,
       4096
     );
@@ -4201,20 +4814,19 @@ async function cleanupTerminalIntegration(
       await deps.removeWorktree(expected.worktree, target.repoPath, false);
     }
     if (branchHead) {
+      // Revalidate immediately before deletion, then delete only if the direct
+      // ref still names the exact inspected head. --no-deref and the old-OID
+      // compare-and-swap keep a symbolic or concurrently moved ref intact.
+      await assertDirectGitRef(deps, target.repoPath, integrationRef);
       await deps.git(
         target.repoPath,
-        ["branch", "-D", "--", expected.branch],
+        ["update-ref", "--no-deref", "-d", integrationRef, branchHead],
         30_000,
         4096
       );
       const remaining = await deps.git(
         target.repoPath,
-        [
-          "for-each-ref",
-          "--format=%(objectname)",
-          "--count=1",
-          `refs/heads/${expected.branch}`,
-        ],
+        ["for-each-ref", "--format=%(objectname)", "--count=1", integrationRef],
         15_000,
         4096
       );
@@ -4477,72 +5089,110 @@ export async function reconcileFleetMerges(
 ): Promise<void> {
   const deps = runtimeDeps(overrides);
   const launchBlocked = fleetRecoveryUnavailable(deps.db, onlyRunId);
-  const automaticCandidates = deps.db
-    .prepare(
-      `SELECT * FROM fleet_runs
-       WHERE merge_requested_at IS NULL
-         AND merge_request_kind IS NULL
-         AND status NOT IN ('completed','failed','canceled')
-         AND desired_state = 'running' AND recovery_required = 0
-         AND automation_policy_hash IS NOT NULL
-       ORDER BY updated_at ASC, id ASC LIMIT ?`
-    )
-    .all(FLEET_MERGE_LIMIT) as FleetMergeRunRow[];
-  const requestedCandidates = onlyRunId
-    ? ([queries.getFleetRun(deps.db).get(onlyRunId)].filter(
-        Boolean
-      ) as FleetMergeRunRow[])
-    : (deps.db
-        .prepare(
-          `SELECT * FROM fleet_runs
-           WHERE (
-             (merge_requested_at IS NOT NULL
-               AND status NOT IN ('completed','failed','canceled')
-               AND desired_state = 'running' AND recovery_required = 0
-               AND integration_state <> 'cleanup_complete') OR
-             (merge_requested_at IS NULL
-               AND merge_request_kind = 'manual'
-               AND merge_target IN ('local','github_pr')
-               AND status NOT IN ('completed','failed','canceled')
-               AND desired_state = 'running' AND recovery_required = 0
-               AND integration_state <> 'cleanup_complete') OR
-             (status = 'completed'
-               AND integration_state IN ('completed','cleanup_pending')) OR
-             (status = 'canceled'
-               AND cancel_mode = 'cancel-and-clean-owned-worktrees'
-               AND integration_state <> 'cleanup_complete'
-               AND (integration_worktree IS NOT NULL OR EXISTS (
-                 SELECT 1 FROM fleet_runtime_leases lease
-                 WHERE lease.owner_type = 'integration_workspace'
-                   AND lease.owner_id = fleet_runs.id
-                   AND lease.status = 'reserved'
-               ))) OR
-             (status IN ('failed','canceled') AND EXISTS (
+  const claimCandidates = (): FleetMergeRunRow[] => {
+    let nextCursor = prepareFleetFairnessCursor(deps.db, "mergePoll");
+    const selected = deps.db
+      .prepare(
+        `SELECT * FROM fleet_runs
+         WHERE (
+           (merge_requested_at IS NULL
+             AND merge_request_kind IS NULL
+             AND status NOT IN ('completed','failed','canceled')
+             AND desired_state = 'running' AND recovery_required = 0
+             AND automation_policy_hash IS NOT NULL) OR
+           (merge_requested_at IS NOT NULL
+             AND status NOT IN ('completed','failed','canceled')
+             AND desired_state = 'running' AND recovery_required = 0
+             AND integration_state <> 'cleanup_complete') OR
+           (merge_requested_at IS NULL
+             AND merge_request_kind = 'manual'
+             AND merge_target IN ('local','github_pr')
+             AND status NOT IN ('completed','failed','canceled')
+             AND desired_state = 'running' AND recovery_required = 0
+             AND integration_state <> 'cleanup_complete') OR
+           (status = 'completed'
+             AND integration_state IN ('completed','cleanup_pending')) OR
+           (status = 'canceled'
+             AND cancel_mode = 'cancel-and-clean-owned-worktrees'
+             AND integration_state <> 'cleanup_complete'
+             AND (integration_worktree IS NOT NULL OR EXISTS (
                SELECT 1 FROM fleet_runtime_leases lease
                WHERE lease.owner_type = 'integration_workspace'
                  AND lease.owner_id = fleet_runs.id
                  AND lease.status = 'reserved'
-             ))
-           )
-           ORDER BY updated_at ASC, id ASC LIMIT ?`
-        )
-        .all(FLEET_MERGE_LIMIT) as FleetMergeRunRow[]);
+             ))) OR
+           (status IN ('failed','canceled') AND EXISTS (
+             SELECT 1 FROM fleet_runtime_leases lease
+             WHERE lease.owner_type = 'integration_workspace'
+               AND lease.owner_id = fleet_runs.id
+               AND lease.status = 'reserved'
+           ))
+         )
+         ORDER BY merge_poll_cursor, id LIMIT ?`
+      )
+      .all(FLEET_MERGE_LIMIT) as FleetMergeRunRow[];
+    const advance = deps.db.prepare(
+      `UPDATE fleet_runs SET merge_poll_cursor = ? WHERE id = ?`
+    );
+    return selected.filter(
+      (run) => advance.run(++nextCursor, run.id).changes === 1
+    );
+  };
+  const claimedCandidates = onlyRunId
+    ? ([queries.getFleetRun(deps.db).get(onlyRunId)].filter(
+        Boolean
+      ) as FleetMergeRunRow[])
+    : transaction(deps.db, claimCandidates);
   const candidates = new Map<string, FleetMergeRunRow>();
-  for (const run of launchBlocked ? [] : automaticCandidates) {
-    if (onlyRunId && run.id !== onlyRunId) continue;
-    const eligible = autoMergeEligible(deps.db, run.id);
-    if (eligible) candidates.set(run.id, eligible.run);
-  }
-  for (const run of requestedCandidates) {
-    if (
+  for (const run of claimedCandidates) {
+    const isAutomaticCandidate =
+      run.merge_requested_at === null &&
+      run.merge_request_kind === null &&
+      !["completed", "failed", "canceled"].includes(run.status) &&
+      run.automation_policy_hash !== null;
+    if (isAutomaticCandidate && !launchBlocked) {
+      const eligible = autoMergeEligible(deps.db, run.id);
+      if (eligible) candidates.set(run.id, eligible.run);
+    } else if (
       !launchBlocked ||
       ["completed", "failed", "canceled"].includes(run.status)
     ) {
       candidates.set(run.id, run);
     }
   }
+  const persistenceFailures: unknown[] = [];
   for (const run of candidates.values()) {
-    await reconcileOneMerge(deps, run);
+    try {
+      await reconcileOneMerge(deps, run);
+    } catch (error) {
+      try {
+        const now = deps.now().toISOString();
+        setRunError(deps.db, run.id, "awaiting_operator", error, now);
+        const alreadyRecorded = deps.db
+          .prepare(
+            `SELECT 1 FROM fleet_events WHERE fleet_run_id = ?
+             AND event_type = 'integration_reconcile_failed' LIMIT 1`
+          )
+          .get(run.id);
+        if (!alreadyRecorded) {
+          createEvent(
+            deps.db,
+            run.id,
+            "integration_reconcile_failed",
+            { error: boundedError(error) },
+            { controlPlane: true }
+          );
+        }
+      } catch (persistenceError) {
+        persistenceFailures.push(persistenceError);
+      }
+    }
+  }
+  if (persistenceFailures.length > 0) {
+    const first = persistenceFailures[0];
+    throw first instanceof Error
+      ? first
+      : new Error("failed to persist a Fleet integration error");
   }
 }
 
@@ -4552,6 +5202,8 @@ export const __fleetMergeTesting = {
   ensureOperation,
   claimOperation,
   finishOperation,
+  assertExactIsolatedHead,
+  sanitizeExactVerificationHead,
   integrateTask,
   runFinalVerification,
   consumeAutomaticMergeAuthorization,

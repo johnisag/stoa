@@ -1,5 +1,9 @@
 import { normalizeClaim } from "@/lib/dispatch/claims";
 import { runGit } from "@/lib/git";
+import {
+  fleetPathComparisonKey,
+  type FleetPathComparisonOptions,
+} from "./conflicts";
 
 const GIT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_GIT_OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -86,6 +90,8 @@ export interface FleetGitDiffSummary {
 
 export interface FleetGitState {
   repositoryRoot: string;
+  /** Repository-local Git path semantics (`core.ignorecase`). */
+  caseInsensitivePaths: boolean;
   baseSha: string;
   headSha: string;
   /** Null when HEAD is detached. */
@@ -514,7 +520,8 @@ export interface FleetClaimDriftResult {
  */
 export function compareFleetPathClaims(
   plannedPrefixClaims: readonly string[],
-  gitPaths: readonly string[]
+  gitPaths: readonly string[],
+  options: FleetPathComparisonOptions = {}
 ): FleetClaimDriftResult {
   const normalizedClaims: string[] = [];
   const invalidClaims: string[] = [];
@@ -551,11 +558,13 @@ export function compareFleetPathClaims(
   const coveredPaths: string[] = [];
   const driftPaths: string[] = [];
   for (const path of actualPaths) {
+    const pathKey = fleetPathComparisonKey(path, options);
     const covered =
       unknownClaim ||
-      normalizedClaims.some(
-        (claim) => path === claim || path.startsWith(`${claim}/`)
-      );
+      normalizedClaims.some((claim) => {
+        const claimKey = fleetPathComparisonKey(claim, options);
+        return pathKey === claimKey || pathKey.startsWith(`${claimKey}/`);
+      });
     (covered ? coveredPaths : driftPaths).push(path);
   }
 
@@ -573,6 +582,30 @@ export function compareFleetPathClaims(
       invalidActualPaths.length > 0 ||
       driftPaths.length > 0,
   };
+}
+
+type FleetGitRunner = typeof runGit;
+
+/**
+ * Read Git's repository-local path comparison policy. Git init/clone records
+ * `core.ignorecase=true` for case-insensitive worktrees; missing, invalid, or
+ * inaccessible configuration preserves Git's default case-sensitive behavior.
+ */
+export async function detectFleetCaseInsensitivePaths(
+  cwd: string,
+  git: FleetGitRunner = runGit
+): Promise<boolean> {
+  try {
+    const { stdout } = await git(
+      cwd,
+      ["config", "--bool", "--get", "core.ignorecase"],
+      5_000,
+      4 * 1024
+    );
+    return stdout.trim().toLowerCase() === "true";
+  } catch {
+    return false;
+  }
 }
 
 export async function collectFleetGitState(
@@ -632,6 +665,7 @@ export async function collectFleetGitState(
       "Git returned an empty repository root"
     );
   }
+  const caseInsensitivePaths = await detectFleetCaseInsensitivePaths(cwd);
 
   const baseSha = (
     await git(
@@ -785,6 +819,7 @@ export async function collectFleetGitState(
 
   return {
     repositoryRoot,
+    caseInsensitivePaths,
     baseSha,
     headSha,
     currentBranch,

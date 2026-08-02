@@ -137,6 +137,14 @@ const CONDUCTOR_PROCESS_ENV = "STOA_CONDUCTOR_SESSION_ID";
 const CONDUCTOR_ENV_PLACEHOLDER = `\${${CONDUCTOR_PROCESS_ENV}}`;
 const KILO_CONDUCTOR_ENV_PLACEHOLDER = `{env:${CONDUCTOR_PROCESS_ENV}}`;
 
+export interface McpConfigOwnershipDeps {
+  /** Prove a legacy Stoa-generated Claude entry is bound to a durable session. */
+  isLegacyClaudeSessionOwned?: (
+    sessionId: string,
+    workingDirectory: string
+  ) => boolean;
+}
+
 /**
  * Stoa never replaces a provider config entry it cannot prove it owns. Routes
  * distinguish this from transient setup errors and return 409 without launching
@@ -159,6 +167,57 @@ function assertStoaEntryMayBeUpdated(
       `Cannot configure ${providerName} orchestration: ${configPath} already contains a user-owned stoa MCP server`
     );
   }
+}
+
+function objectHasOnlyKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[]
+): boolean {
+  const keys = Object.keys(value).sort();
+  return (
+    keys.length === expected.length &&
+    [...expected].sort().every((key, index) => keys[index] === key)
+  );
+}
+
+/**
+ * Recognize only the exact project entry emitted by the immediately preceding
+ * Stoa release. The durable session callback is still required before adoption;
+ * matching this shape alone never grants ownership.
+ */
+function legacyClaudeConductorSessionId(
+  entry: Record<string, unknown>,
+  environment: Record<string, unknown>,
+  orchestrationServerPath: string
+): string | null {
+  if (!objectHasOnlyKeys(entry, ["command", "args", "env"])) return null;
+  if (!objectHasOnlyKeys(environment, ["STOA_URL", "CONDUCTOR_SESSION_ID"])) {
+    return null;
+  }
+  if (
+    typeof entry.command !== "string" ||
+    entry.command.trim() === "" ||
+    environment.STOA_URL !== STOA_URL ||
+    typeof environment.CONDUCTOR_SESSION_ID !== "string" ||
+    environment.CONDUCTOR_SESSION_ID.trim() === "" ||
+    !Array.isArray(entry.args) ||
+    !entry.args.every((value) => typeof value === "string")
+  ) {
+    return null;
+  }
+  const args = entry.args as string[];
+  const validPosixArgs =
+    args.length === 2 &&
+    args[0] === "tsx" &&
+    args[1] === orchestrationServerPath;
+  const validWindowsArgs =
+    args.length === 3 &&
+    path.basename(args[0]).toLowerCase() === "npx-cli.js" &&
+    args[1] === "tsx" &&
+    args[2] === orchestrationServerPath;
+  return validPosixArgs || validWindowsArgs
+    ? environment.CONDUCTOR_SESSION_ID
+    : null;
 }
 
 function hermesRegistrationIdentity(serverPath: string): string {
@@ -268,7 +327,8 @@ function writeProjectConfig(
  */
 export function ensureMcpConfig(
   workingDirectory: string,
-  _sessionId: string
+  _sessionId: string,
+  ownership: McpConfigOwnershipDeps = {}
 ): void {
   const configPath = path.join(workingDirectory, CLAUDE_MCP_CONFIG_PATH);
   const orchestrationServerPath = getOrchestrationServerPath();
@@ -295,7 +355,20 @@ export function ensureMcpConfig(
     "mcpServers.stoa.env"
   );
   if (hasStoa) {
-    assertStoaEntryMayBeUpdated(existingEnv, "Claude", configPath);
+    const legacySessionId = legacyClaudeConductorSessionId(
+      existingStoa,
+      existingEnv,
+      orchestrationServerPath
+    );
+    const legacyOwned =
+      legacySessionId != null &&
+      ownership.isLegacyClaudeSessionOwned?.(
+        legacySessionId,
+        workingDirectory
+      ) === true;
+    if (!legacyOwned) {
+      assertStoaEntryMayBeUpdated(existingEnv, "Claude", configPath);
+    }
   }
   const mcp = mcpServerCommand();
   config.mcpServers = {
@@ -434,11 +507,12 @@ export function ensureKimiMcpConfig(
 export function ensureProviderMcpConfig(
   providerId: ProviderId,
   workingDirectory: string,
-  sessionId: string
+  sessionId: string,
+  ownership: McpConfigOwnershipDeps = {}
 ): void {
   switch (providerId) {
     case "claude":
-      ensureMcpConfig(workingDirectory, sessionId);
+      ensureMcpConfig(workingDirectory, sessionId, ownership);
       return;
     case "kilo":
       ensureKiloMcpConfig(workingDirectory, sessionId);
@@ -608,12 +682,11 @@ const HERMES_PATH_MARKER = path.join(
   "hermes-stoa-server-path"
 );
 
-function readRegisteredHermesIdentity(): string | null {
+export function _parseRegisteredHermesIdentityMarkerForTests(
+  source: string
+): string | null {
   try {
-    if (!existsSync(HERMES_PATH_MARKER)) return null;
-    const marker = JSON.parse(
-      readFileSync(HERMES_PATH_MARKER, "utf-8")
-    ) as unknown;
+    const marker = JSON.parse(source) as unknown;
     if (
       isPlainObjectRecord(marker) &&
       marker.schemaVersion === 1 &&
@@ -622,6 +695,33 @@ function readRegisteredHermesIdentity(): string | null {
     ) {
       return marker.identity;
     }
+    // The immediately preceding release wrote the registration identity JSON
+    // itself. Return only that exact schema for planHermesRegistration to bind
+    // to this installation's current server path before it can be adopted.
+    if (
+      isPlainObjectRecord(marker) &&
+      marker.schemaVersion === 2 &&
+      objectHasOnlyKeys(marker, [
+        "schemaVersion",
+        "serverPath",
+        "command",
+        "args",
+      ])
+    ) {
+      return source.trim();
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function readRegisteredHermesIdentity(): string | null {
+  try {
+    if (!existsSync(HERMES_PATH_MARKER)) return null;
+    return _parseRegisteredHermesIdentityMarkerForTests(
+      readFileSync(HERMES_PATH_MARKER, "utf-8")
+    );
   } catch {
     // ignore
   }
@@ -641,6 +741,48 @@ function writeRegisteredHermesIdentity(identity: string): void {
   }
 }
 
+function legacyHermesIdentityMatchesCurrent(
+  recordedIdentity: string,
+  currentIdentity: string
+): boolean {
+  try {
+    const legacy = JSON.parse(recordedIdentity) as unknown;
+    const current = JSON.parse(currentIdentity) as unknown;
+    if (
+      !isPlainObjectRecord(legacy) ||
+      !isPlainObjectRecord(current) ||
+      legacy.schemaVersion !== 2 ||
+      current.schemaVersion !== 3 ||
+      !objectHasOnlyKeys(legacy, [
+        "schemaVersion",
+        "serverPath",
+        "command",
+        "args",
+      ]) ||
+      typeof legacy.serverPath !== "string" ||
+      legacy.serverPath !== current.serverPath ||
+      typeof legacy.command !== "string" ||
+      legacy.command.trim() === "" ||
+      !Array.isArray(legacy.args) ||
+      !legacy.args.every((value) => typeof value === "string")
+    ) {
+      return false;
+    }
+    const args = legacy.args as string[];
+    return (
+      (args.length === 2 &&
+        args[0] === "tsx" &&
+        args[1] === legacy.serverPath) ||
+      (args.length === 3 &&
+        path.basename(args[0]).toLowerCase() === "npx-cli.js" &&
+        args[1] === "tsx" &&
+        args[2] === legacy.serverPath)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Decide what to do about the global `stoa` Hermes registration (pure, so it's
  * unit-testable). Skip only when it is listed and the structured Stoa marker
@@ -650,9 +792,16 @@ export function planHermesRegistration(
   stoaListed: boolean,
   recordedIdentity: string | null,
   currentIdentity: string
-): { skip: boolean; removeFirst: false; conflict: boolean } {
+): { skip: boolean; removeFirst: boolean; conflict: boolean } {
   if (stoaListed && recordedIdentity === currentIdentity)
     return { skip: true, removeFirst: false, conflict: false };
+  if (
+    stoaListed &&
+    recordedIdentity != null &&
+    legacyHermesIdentityMatchesCurrent(recordedIdentity, currentIdentity)
+  ) {
+    return { skip: false, removeFirst: true, conflict: false };
+  }
   if (stoaListed) return { skip: false, removeFirst: false, conflict: true };
   return { skip: false, removeFirst: false, conflict: false };
 }
@@ -690,6 +839,14 @@ export function ensureHermesMcpRegistered(): void {
       throw new McpConfigConflictError(
         "Cannot configure Hermes orchestration: global MCP server 'stoa' exists but is not proven to be owned by this Stoa installation"
       );
+    }
+    if (plan.removeFirst) {
+      execFileSync(hermes, ["mcp", "remove", "stoa"], {
+        stdio: "ignore",
+        timeout: 10000,
+        killSignal: "SIGKILL",
+        windowsHide: true,
+      });
     }
     execFileSync(hermes, buildHermesRegisterArgs(serverPath), {
       input: "y\n", // auto-accept the "Enable all tools?" prompt

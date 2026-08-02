@@ -258,7 +258,8 @@ function evaluateCollectedReport(input: {
 > {
   const claimDrift = compareFleetPathClaims(
     input.plannedClaims,
-    input.gitState.allTouchedPaths
+    input.gitState.allTouchedPaths,
+    { caseInsensitive: input.gitState.caseInsensitivePaths }
   );
   const dirty =
     input.gitState.stagedChanges.length > 0 ||

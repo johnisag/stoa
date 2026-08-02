@@ -3,7 +3,11 @@ process.env.STOA_PTY_HOST_NAME = "stoa-pty-host-test-legacy-protocol";
 
 import net from "net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HostClient } from "@/lib/session-backend/pty/host-client";
+import {
+  HostClient,
+  PtyHostCompatibilityError,
+  ptyHostFailureAllowsTier1Fallback,
+} from "@/lib/session-backend/pty/host-client";
 import { encode, hostAddress } from "@/lib/session-backend/pty/protocol";
 
 interface HostClientTestAccess {
@@ -32,8 +36,17 @@ function legacyJsonFrame(value: unknown): Buffer {
   return Buffer.concat([length, payload]);
 }
 
-function legacyPingServer(requestTypes: string[] = []): net.Server {
+type LegacyHandshakeBehavior = "success" | "error" | "close" | "silent";
+
+const peerSockets = new Set<net.Socket>();
+
+function legacyPingServer(
+  requestTypes: string[] = [],
+  behavior: LegacyHandshakeBehavior = "success"
+): net.Server {
   return net.createServer((socket) => {
+    peerSockets.add(socket);
+    socket.once("close", () => peerSockets.delete(socket));
     let buffered = Buffer.alloc(0);
     socket.on("data", (chunk: Buffer) => {
       buffered = Buffer.concat([buffered, chunk]);
@@ -49,7 +62,23 @@ function legacyPingServer(requestTypes: string[] = []): net.Server {
         };
         if (typeof request.t === "string") requestTypes.push(request.t);
         if (request.t === "ping" && typeof request.id === "number") {
-          socket.write(legacyJsonFrame({ t: "res", id: request.id, ok: true }));
+          if (behavior === "silent") continue;
+          if (behavior === "close") {
+            socket.destroy();
+            continue;
+          }
+          socket.write(
+            legacyJsonFrame(
+              behavior === "error"
+                ? {
+                    t: "res",
+                    id: request.id,
+                    ok: false,
+                    error: "legacy handshake rejected",
+                  }
+                : { t: "res", id: request.id, ok: true }
+            )
+          );
         }
       }
     });
@@ -59,6 +88,8 @@ function legacyPingServer(requestTypes: string[] = []): net.Server {
 let server: net.Server | null = null;
 
 afterEach(async () => {
+  for (const socket of peerSockets) socket.destroy();
+  peerSockets.clear();
   if (!server) return;
   const active = server;
   server = null;
@@ -66,7 +97,7 @@ afterEach(async () => {
 });
 
 describe("pty-host upgrade compatibility", () => {
-  it("fails closed when a surviving legacy daemon has no spawn capabilities", async () => {
+  it("keeps Tier 2 selected when a surviving legacy daemon may own sessions", async () => {
     server = legacyPingServer();
     await new Promise<void>((resolve, reject) => {
       server!.once("error", reject);
@@ -74,14 +105,100 @@ describe("pty-host upgrade compatibility", () => {
     });
 
     const client = new HostClient();
-    await expect(client.ensureReady()).rejects.toThrow(
+    let failure: unknown;
+    try {
+      await client.ensureReady();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(PtyHostCompatibilityError);
+    expect(String(failure)).toMatch(
       /incompatible pty-host daemon.*protocol handshake/
     );
+    expect(ptyHostFailureAllowsTier1Fallback(failure)).toBe(false);
     client.close();
 
     // Rejecting the peer must not kill or replace it: a production upgrade can
-    // preserve its surviving sessions while this server safely chooses Tier 1.
+    // preserve its surviving sessions while this Stoa process refuses a second
+    // local ownership domain.
     expect(server.listening).toBe(true);
+  });
+
+  it("allows Tier 1 fallback only when no compatible ownership domain answered", () => {
+    expect(
+      ptyHostFailureAllowsTier1Fallback(new Error("could not connect"))
+    ).toBe(true);
+    expect(
+      ptyHostFailureAllowsTier1Fallback(
+        new PtyHostCompatibilityError("legacy protocol")
+      )
+    ).toBe(false);
+  });
+
+  it("fails closed when a reachable daemon times out during negotiation", async () => {
+    server = legacyPingServer([], "silent");
+    await new Promise<void>((resolve, reject) => {
+      server!.once("error", reject);
+      server!.listen(hostAddress(), resolve);
+    });
+
+    const client = new HostClient();
+    let failure: unknown;
+    try {
+      await client.ensureReady();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(PtyHostCompatibilityError);
+    expect(String(failure)).toMatch(
+      /incompatible pty-host daemon.*ping timeout/
+    );
+    expect(ptyHostFailureAllowsTier1Fallback(failure)).toBe(false);
+    client.close();
+  });
+
+  it("fails closed when a reachable daemon closes during negotiation", async () => {
+    server = legacyPingServer([], "close");
+    await new Promise<void>((resolve, reject) => {
+      server!.once("error", reject);
+      server!.listen(hostAddress(), resolve);
+    });
+
+    const client = new HostClient();
+    let failure: unknown;
+    try {
+      await client.ensureReady();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(PtyHostCompatibilityError);
+    expect(String(failure)).toMatch(
+      /incompatible pty-host daemon.*host closed/
+    );
+    expect(ptyHostFailureAllowsTier1Fallback(failure)).toBe(false);
+    client.close();
+  });
+
+  it("fails closed when a reachable daemon rejects negotiation", async () => {
+    server = legacyPingServer([], "error");
+    await new Promise<void>((resolve, reject) => {
+      server!.once("error", reject);
+      server!.listen(hostAddress(), resolve);
+    });
+
+    const client = new HostClient();
+    let failure: unknown;
+    try {
+      await client.ensureReady();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(PtyHostCompatibilityError);
+    expect(String(failure)).toMatch(
+      /incompatible pty-host daemon.*legacy handshake rejected/
+    );
+    expect(ptyHostFailureAllowsTier1Fallback(failure)).toBe(false);
+    client.close();
   });
 
   it("negotiates before sending a spawn to a legacy daemon", async () => {

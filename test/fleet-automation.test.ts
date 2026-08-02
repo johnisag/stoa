@@ -411,6 +411,48 @@ function insertExactCleanReviews(runId: string): string {
 }
 
 describe("reconcileFleetAutomation", () => {
+  it("rotates the 41st automatic-planning candidate into the next bounded tick", async () => {
+    const createdRuns: ReturnType<typeof createPlanningAutomationRun>[] = [];
+    for (let index = 0; index < 41; index++) {
+      createdRuns.push(createPlanningAutomationRun());
+    }
+    const runIds = createdRuns.map((created) => created.run.run.id);
+    const targetId = runIds.at(-1)!;
+    const markInert = db().prepare(
+      `UPDATE fleet_runs SET settings_json = ?, automation_poll_cursor = 0
+       WHERE id = ?`
+    );
+    for (const runId of runIds.slice(0, -1)) {
+      const row = queries.getFleetRun(db()).get(runId) as FleetRunRow;
+      markInert.run(
+        JSON.stringify({
+          ...JSON.parse(row.settings_json),
+          planner: { state: "running" },
+        }),
+        runId
+      );
+    }
+    db()
+      .prepare(`UPDATE fleet_runs SET automation_poll_cursor = 1 WHERE id = ?`)
+      .run(targetId);
+    const startPlanner = vi.fn(async (_runId: string) => ({
+      run: createdRuns.at(-1)!.run,
+    }));
+    const overrides = {
+      db: db(),
+      startPlanner,
+      resolveBaseSha: async () => BASE_SHA,
+      schedulerReady: () => true,
+      confinementAvailable: () => true,
+    };
+
+    await reconcileFleetAutomation(40, overrides);
+    expect(startPlanner).not.toHaveBeenCalled();
+    await reconcileFleetAutomation(40, overrides);
+    expect(startPlanner).toHaveBeenCalledOnce();
+    expect(startPlanner.mock.calls[0][0]).toBe(targetId);
+  });
+
   it("launches four-agent plan critics even when approval remains manual", async () => {
     const created = createDraftFleetRun({
       name: "Critics before manual approval",

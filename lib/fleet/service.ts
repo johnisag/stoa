@@ -30,6 +30,7 @@ import {
   parseFleetAutomationPolicy,
 } from "./automation-policy";
 import { fleetUnattendedAgentLaunchAllowed } from "./confinement";
+import { prepareFleetFairnessCursor } from "./fairness-cursor";
 import {
   FLEET_PLAN_TASK_DESCRIPTION_MAX,
   FLEET_PLAN_TASK_TITLE_MAX,
@@ -2400,15 +2401,38 @@ export async function cancelFleetRun(
         ? 1
         : 0);
     if (pendingCount > 0) {
-      queries
-        .createFleetEvent(db)
-        .run(
-          id,
-          "cancel_cleanup_pending",
-          "scheduler",
-          JSON.stringify({ pendingCount }),
-          { controlPlane: true }
-        );
+      const previous = db
+        .prepare(
+          `SELECT payload FROM fleet_events
+           WHERE fleet_run_id = ? AND event_type = 'cancel_cleanup_pending'
+           ORDER BY id DESC LIMIT 1`
+        )
+        .get(id) as { payload: string | null } | undefined;
+      let previousPendingCount: number | null = null;
+      if (previous?.payload) {
+        try {
+          const parsed = JSON.parse(previous.payload) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            const value = (parsed as { pendingCount?: unknown }).pendingCount;
+            if (Number.isSafeInteger(value) && Number(value) > 0) {
+              previousPendingCount = Number(value);
+            }
+          }
+        } catch {
+          // A legacy or malformed event is not a durable coalescing marker.
+        }
+      }
+      if (previousPendingCount !== pendingCount) {
+        queries
+          .createFleetEvent(db)
+          .run(
+            id,
+            "cancel_cleanup_pending",
+            "scheduler",
+            JSON.stringify({ pendingCount }),
+            { controlPlane: true }
+          );
+      }
     }
     return pendingCount;
   });
@@ -2435,9 +2459,11 @@ export async function reconcileFleetCancellationCleanup(
     Number.isSafeInteger(overrides.maxRuns) && Number(overrides.maxRuns) > 0
       ? Math.min(Number(overrides.maxRuns), 16)
       : 8;
-  const runs = db
-    .prepare(
-      `SELECT id, cancel_mode, settings_json FROM fleet_runs r
+  const claimRuns = () => {
+    let nextCursor = prepareFleetFairnessCursor(db, "cancellationPoll");
+    const selected = db
+      .prepare(
+        `SELECT id, cancel_mode, settings_json FROM fleet_runs r
        WHERE r.status = 'canceled' AND (
          r.reserved_budget_usd > 0.000000001 OR
          r.reserved_budget_tokens > 0 OR
@@ -2452,13 +2478,48 @@ export async function reconcileFleetCancellationCleanup(
          EXISTS (SELECT 1 FROM fleet_cost_accounts c
            WHERE c.fleet_run_id = r.id AND c.terminal_at IS NULL)
        )
-       ORDER BY COALESCE(r.ended_at, r.updated_at), r.id LIMIT ?`
-    )
-    .all(maxRuns) as Array<{
-    id: string;
-    cancel_mode: string | null;
-    settings_json: string;
-  }>;
+       ORDER BY r.cancellation_poll_cursor, r.id LIMIT ?`
+      )
+      .all(maxRuns) as Array<{
+      id: string;
+      cancel_mode: string | null;
+      settings_json: string;
+    }>;
+    const advance = db.prepare(
+      `UPDATE fleet_runs SET cancellation_poll_cursor = ?
+       WHERE id = ? AND status = 'canceled'`
+    );
+    return selected.filter(
+      (run) => advance.run(++nextCursor, run.id).changes === 1
+    );
+  };
+  const runs = db.inTransaction
+    ? claimRuns()
+    : db.transaction(claimRuns).immediate();
+  const recordRecoveryFailure = (runId: string, error: string): void => {
+    try {
+      const alreadyRecorded = db
+        .prepare(
+          `SELECT 1 FROM fleet_events WHERE fleet_run_id = ?
+           AND event_type = 'cancel_cleanup_recovery_failed' LIMIT 1`
+        )
+        .get(runId);
+      if (alreadyRecorded) return;
+      queries
+        .createFleetEvent(db)
+        .run(
+          runId,
+          "cancel_cleanup_recovery_failed",
+          "cancel-recovery",
+          JSON.stringify({ error: redactAndCapFleetText(error, 500).text }),
+          { controlPlane: true }
+        );
+    } catch {
+      // Failure evidence is best-effort: the already-advanced durable cursor
+      // retries this run after a bounded rotation, while later candidates in
+      // the current claim must still make progress.
+    }
+  };
   let completed = 0;
   for (const run of runs) {
     const destructive = run.cancel_mode === "cancel-and-clean-owned-worktrees";
@@ -2473,31 +2534,44 @@ export async function reconcileFleetCancellationCleanup(
       } catch {
         previewDigest = "";
       }
-      if (!/^[0-9a-f]{64}$/.test(previewDigest)) continue;
+      if (!/^[0-9a-f]{64}$/.test(previewDigest)) {
+        recordRecoveryFailure(
+          run.id,
+          "destructive cancellation preview authorization is invalid"
+        );
+        continue;
+      }
     }
-    const result = await cancelFleetRun(
-      run.id,
-      {
-        mode: destructive
-          ? "cancel-and-clean-owned-worktrees"
-          : "cancel-preserve-worktrees",
-        ...(destructive
-          ? {
-              confirm: true,
-              confirmation: run.id,
-              previewDigest,
-            }
-          : {}),
-        actor: "cancel-recovery",
-      },
-      { db, stopSession: overrides.stopSession }
-    );
-    if (!("error" in result)) {
-      completed += 1;
-      continue;
-    }
-    if (result.status !== 409) {
-      throw new Error(`Fleet cancellation recovery failed: ${result.error}`);
+    try {
+      const result = await cancelFleetRun(
+        run.id,
+        {
+          mode: destructive
+            ? "cancel-and-clean-owned-worktrees"
+            : "cancel-preserve-worktrees",
+          ...(destructive
+            ? {
+                confirm: true,
+                confirmation: run.id,
+                previewDigest,
+              }
+            : {}),
+          actor: "cancel-recovery",
+        },
+        { db, stopSession: overrides.stopSession }
+      );
+      if (!("error" in result)) {
+        completed += 1;
+        continue;
+      }
+      if (result.status !== 409) {
+        recordRecoveryFailure(run.id, result.error);
+      }
+    } catch (error) {
+      recordRecoveryFailure(
+        run.id,
+        error instanceof Error ? error.message : String(error)
+      );
     }
   }
   return completed;

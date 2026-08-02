@@ -1225,6 +1225,10 @@ describe("fleet migrations", () => {
     ).toEqual([
       { name: "idx_fleet_cost_accounts_fallback_recovery_cursor" },
       { name: "idx_fleet_cost_accounts_sample_attempt_cursor" },
+      { name: "idx_fleet_runs_automation_poll_cursor" },
+      { name: "idx_fleet_runs_cancellation_poll_cursor" },
+      { name: "idx_fleet_runs_lifecycle_poll_cursor" },
+      { name: "idx_fleet_runs_merge_poll_cursor" },
       { name: "idx_fleet_runs_scheduler_poll_cursor" },
       { name: "idx_fleet_runs_supervisor_poll_cursor" },
     ]);
@@ -1519,6 +1523,53 @@ describe("fleet migrations", () => {
         )
         .get()
     ).toEqual({ count: 3 });
+    db.close();
+  });
+
+  it("migration 83 adds and idempotently repairs control-plane poll cursors", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 82);
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY);
+      INSERT INTO fleet_runs (id) VALUES ('legacy-run');
+    `);
+
+    runMigrations(db);
+    expectColumns(db, "fleet_runs", [
+      "automation_poll_cursor",
+      "cancellation_poll_cursor",
+      "merge_poll_cursor",
+      "lifecycle_poll_cursor",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT automation_poll_cursor, cancellation_poll_cursor,
+                  merge_poll_cursor, lifecycle_poll_cursor
+           FROM fleet_runs WHERE id = 'legacy-run'`
+        )
+        .get()
+    ).toEqual({
+      automation_poll_cursor: 0,
+      cancellation_poll_cursor: 0,
+      merge_poll_cursor: 0,
+      lifecycle_poll_cursor: 0,
+    });
+
+    db.exec(`
+      DELETE FROM _migrations WHERE id = 83;
+      DROP INDEX idx_fleet_runs_automation_poll_cursor;
+    `);
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(
+      db
+        .prepare(
+          `SELECT 1 AS present FROM sqlite_master
+           WHERE type = 'index'
+             AND name = 'idx_fleet_runs_automation_poll_cursor'`
+        )
+        .get()
+    ).toEqual({ present: 1 });
     db.close();
   });
 });

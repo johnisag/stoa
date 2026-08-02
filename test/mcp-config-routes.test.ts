@@ -402,6 +402,48 @@ describe("session routes use provider-native orchestration wiring", () => {
     expect(readFileSync(configPath, "utf-8")).toBe(malformed);
   });
 
+  it("adopts legacy Claude config only for a durable conductor in the same directory", async () => {
+    const legacyId = "11111111-1111-4111-8111-111111111111";
+    const targetId = "22222222-2222-4222-8222-222222222222";
+    const configPath = path.join(dir, ".mcp.json");
+    const original = JSON.stringify({
+      mcpServers: {
+        stoa: {
+          command: "npx",
+          args: [
+            "tsx",
+            path.join(process.cwd(), "mcp", "orchestration-server.ts"),
+          ],
+          env: {
+            STOA_URL: "http://localhost:3011",
+            CONDUCTOR_SESSION_ID: legacyId,
+          },
+        },
+      },
+    });
+    writeFileSync(configPath, original);
+    setSession(legacyId, "claude", dir);
+    setSession(targetId, "claude", dir);
+
+    const unowned = await repairMcpConfig(
+      request({}) as never,
+      routeContext(targetId)
+    );
+    expect(unowned.status).toBe(409);
+    expect(readFileSync(configPath, "utf-8")).toBe(original);
+
+    state.sessions.get(legacyId)!.mcp_launch_args = "[]";
+    const owned = await repairMcpConfig(
+      request({}) as never,
+      routeContext(targetId)
+    );
+    expect(owned.status).toBe(200);
+    expect(
+      JSON.parse(readFileSync(configPath, "utf-8")).mcpServers.stoa.env
+        .STOA_MCP_CONFIG_OWNER
+    ).toBe("stoa-managed-v1");
+  });
+
   it("session creation preserves malformed Claude config and rolls back the session", async () => {
     const configPath = path.join(dir, ".mcp.json");
     const malformed = "{ definitely-not-json";

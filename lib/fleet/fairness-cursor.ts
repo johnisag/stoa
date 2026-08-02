@@ -20,6 +20,22 @@ const FAIRNESS_TARGETS = {
     table: "fleet_runs",
     column: "scheduler_poll_cursor",
   },
+  automationPoll: {
+    table: "fleet_runs",
+    column: "automation_poll_cursor",
+  },
+  cancellationPoll: {
+    table: "fleet_runs",
+    column: "cancellation_poll_cursor",
+  },
+  mergePoll: {
+    table: "fleet_runs",
+    column: "merge_poll_cursor",
+  },
+  lifecyclePoll: {
+    table: "fleet_runs",
+    column: "lifecycle_poll_cursor",
+  },
 } as const;
 
 export type FleetFairnessCursorTarget = keyof typeof FAIRNESS_TARGETS;

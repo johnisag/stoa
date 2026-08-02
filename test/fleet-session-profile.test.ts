@@ -7,8 +7,8 @@ import {
   fleetSessionProfileError,
 } from "@/lib/fleet/session-profile";
 import {
+  claimConductorSessionDeletion,
   commitConductorSessionDeletion,
-  planConductorSessionDeletion,
 } from "@/lib/session-deletion";
 import { insertFleetOwnedSession } from "./fleet-session-fixture";
 
@@ -159,7 +159,7 @@ describe("Fleet owner-bound session profiles", () => {
 
     commitConductorSessionDeletion(
       db,
-      planConductorSessionDeletion(db, "conductor")
+      claimConductorSessionDeletion(db, "conductor")
     );
 
     const detached = db

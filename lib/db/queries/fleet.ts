@@ -267,7 +267,7 @@ export const fleetQueries = {
              AND approval_state = 'needs_approval' AND plan_hash IS NOT NULL)
          )
          AND status NOT IN ('completed', 'failed', 'canceled')
-       ORDER BY updated_at ASC, id ASC
+       ORDER BY automation_poll_cursor ASC, id ASC
        LIMIT ?`
     ),
 

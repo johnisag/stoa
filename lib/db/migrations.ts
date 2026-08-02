@@ -3,6 +3,7 @@ import { ensureSessionLaunchProfileSchema } from "./session-launch-profile-schem
 import { ensureFleetSessionOwnershipSchema } from "./fleet-session-ownership-schema";
 import { ensureFleetOwnedSessionRoleSchema } from "./fleet-session-role-schema";
 import { ensureFleetMergeProvenanceSchema } from "./fleet-merge-provenance-schema";
+import { ensureSessionDeletionClaimSchema } from "./session-deletion-claim-schema";
 
 const SAFE_FLEET_AUTOMATION_POLICY_JSON =
   '{"version":1,"automaticPlanning":false,"automaticPlanApproval":false,"automaticStart":false,"automaticFixes":false,"maxAutomaticFixRounds":0,"automaticMerge":false,"mergeTarget":"github_pr","allowSensitivePaths":false,"allowUnconfinedAgents":false,"plannerTaskCap":8,"cleanupPolicy":"preserve","retentionDays":null}';
@@ -1829,6 +1830,38 @@ function ensureFleetSchedulerPollCursorSchema(db: Database.Database): void {
   db.transaction(() => installFleetSchedulerPollCursorSchema(db)).immediate();
 }
 
+function installFleetControlPlanePollCursorSchema(db: Database.Database): void {
+  if (!hasTable(db, "fleet_runs")) return;
+  for (const column of [
+    "automation_poll_cursor",
+    "cancellation_poll_cursor",
+    "merge_poll_cursor",
+    "lifecycle_poll_cursor",
+  ]) {
+    addColumnIfMissing(db, "fleet_runs", {
+      name: column,
+      ddl: `${column} INTEGER NOT NULL DEFAULT 0`,
+    });
+    if (hasColumn(db, "fleet_runs", "id")) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_fleet_runs_${column}
+          ON fleet_runs(${column}, id)
+      `);
+    }
+  }
+}
+
+/** Install the bounded control-plane round-robin domains atomically. */
+function ensureFleetControlPlanePollCursorSchema(db: Database.Database): void {
+  if (db.inTransaction) {
+    installFleetControlPlanePollCursorSchema(db);
+    return;
+  }
+  db.transaction(() =>
+    installFleetControlPlanePollCursorSchema(db)
+  ).immediate();
+}
+
 // All migrations in order. Migrations are idempotent (guarded by PRAGMA table_info
 // / IF NOT EXISTS) so a fresh schema or a concurrent-init race never throws a
 // duplicate-column/already-exists error. The runner no longer swallows those
@@ -3394,6 +3427,16 @@ const migrations: Migration[] = [
     id: 81,
     name: "bind_expected_fleet_merge_results",
     up: ensureFleetMergeProvenanceSchema,
+  },
+  {
+    id: 82,
+    name: "add_session_deletion_claims",
+    up: ensureSessionDeletionClaimSchema,
+  },
+  {
+    id: 83,
+    name: "add_fleet_control_plane_poll_cursors",
+    up: ensureFleetControlPlanePollCursorSchema,
   },
 ];
 

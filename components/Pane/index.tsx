@@ -598,7 +598,6 @@ export const Pane = memo(function Pane({
       case "fleet-management":
         return (
           <FleetManagementView
-            onOpenSession={onOpenSessionInNewTab ?? onSelectSession}
             initialRunId={fleetSelection?.runId}
             initialTaskId={fleetSelection?.taskId}
             selectionKey={fleetSelection?.requestKey}

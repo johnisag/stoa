@@ -222,6 +222,7 @@ function gitState(input: {
     : [];
   return {
     repositoryRoot: PROJECT_PATH,
+    caseInsensitivePaths: false,
     baseSha: input.baseSha,
     headSha: input.headSha,
     currentBranch: input.branch,

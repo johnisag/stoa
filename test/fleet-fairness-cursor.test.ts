@@ -61,6 +61,26 @@ describe("Fleet fairness cursor rebasing", () => {
       column: "scheduler_poll_cursor",
     },
     {
+      target: "automationPoll",
+      table: "fleet_runs",
+      column: "automation_poll_cursor",
+    },
+    {
+      target: "cancellationPoll",
+      table: "fleet_runs",
+      column: "cancellation_poll_cursor",
+    },
+    {
+      target: "mergePoll",
+      table: "fleet_runs",
+      column: "merge_poll_cursor",
+    },
+    {
+      target: "lifecyclePoll",
+      table: "fleet_runs",
+      column: "lifecycle_poll_cursor",
+    },
+    {
       target: "costSample",
       table: "fleet_cost_accounts",
       column: "sample_attempt_cursor",

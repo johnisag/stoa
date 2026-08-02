@@ -220,7 +220,7 @@ export function makeGuardedInterval(
 export interface RecoverableFleetRuntimeOptions {
   /** Retry recovery on this cadence while Fleet launch admission is closed. */
   recoveryRetryMs: number;
-  /** Cadence for the normal planner/automation and scheduler runtime loops. */
+  /** Cadence for the normal planner, scheduler, and merge runtime loops. */
   runtimeIntervalMs: number;
   /** Restart recovery. No launch-capable callback runs until this succeeds. */
   recover: () => void | Promise<void>;
@@ -232,11 +232,14 @@ export interface RecoverableFleetRuntimeOptions {
   plannerTick: () => void | Promise<void>;
   /** Normal worker/reviewer/runtime reconciliation. */
   schedulerTick: () => void | Promise<void>;
+  /** Merge/landing reconciliation, isolated because verification can run long. */
+  mergeTick: () => void | Promise<void>;
   onRecoveryError?: (err: unknown) => void;
   onBlockedPollError?: (err: unknown) => void;
   onRecoveredError?: (err: unknown) => void;
   onPlannerError?: (err: unknown) => void;
   onSchedulerError?: (err: unknown) => void;
+  onMergeError?: (err: unknown) => void;
 }
 
 export interface RecoverableFleetRuntime {
@@ -265,8 +268,10 @@ function reportRuntimeError(
  * retry interval. Until it succeeds, only the explicitly safe persisted-runtime
  * poll is called; planner automation, reviewers, and worker admission stay
  * unreachable. Success atomically closes the retry loop, runs normal startup
- * reconciliation once, then arms exactly one planner timer and one scheduler
- * timer. The returned stop handle owns every timer across both phases.
+ * reconciliation once, then arms exactly one planner timer, one scheduler
+ * timer, and one independently guarded merge timer. Merge reconciliation runs
+ * once immediately for startup catch-up without delaying either general loop.
+ * The returned stop handle owns every timer across both phases.
  */
 export async function startRecoverableFleetRuntime(
   opts: RecoverableFleetRuntimeOptions
@@ -276,6 +281,7 @@ export async function startRecoverableFleetRuntime(
   let recoveryInterval: GuardedInterval | null = null;
   let plannerInterval: GuardedInterval | null = null;
   let schedulerInterval: GuardedInterval | null = null;
+  let mergeInterval: GuardedInterval | null = null;
 
   const stop = () => {
     if (stopped) return;
@@ -283,9 +289,11 @@ export async function startRecoverableFleetRuntime(
     recoveryInterval?.stop();
     plannerInterval?.stop();
     schedulerInterval?.stop();
+    mergeInterval?.stop();
     recoveryInterval = null;
     plannerInterval = null;
     schedulerInterval = null;
+    mergeInterval = null;
   };
 
   const activate = async () => {
@@ -318,6 +326,14 @@ export async function startRecoverableFleetRuntime(
       onError:
         opts.onSchedulerError ??
         ((error) => console.error("fleet scheduler tick failed:", error)),
+    });
+    mergeInterval = makeGuardedInterval({
+      intervalMs: opts.runtimeIntervalMs,
+      runAtStartup: true,
+      tick: opts.mergeTick,
+      onError:
+        opts.onMergeError ??
+        ((error) => console.error("fleet merge tick failed:", error)),
     });
   };
 

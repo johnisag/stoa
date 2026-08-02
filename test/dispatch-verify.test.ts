@@ -61,6 +61,7 @@ vi.mock("child_process", () => ({
     const childListeners = new Map<string, (...values: unknown[]) => void>();
     const stdoutListeners = new Map<string, (value: Buffer | string) => void>();
     const stderrListeners = new Map<string, (value: Buffer | string) => void>();
+    let delayedPassTimer: NodeJS.Timeout | null = null;
     const stream = (
       listeners: Map<string, (value: Buffer | string) => void>
     ) => ({
@@ -86,6 +87,7 @@ vi.mock("child_process", () => ({
       },
       kill: () => {
         state.killCalls += 1;
+        if (delayedPassTimer) clearTimeout(delayedPassTimer);
         child.signalCode = "SIGKILL";
         if (!state.exec.endsWith("-no-close")) {
           queueMicrotask(() => childListeners.get("close")?.(null, "SIGKILL"));
@@ -102,6 +104,12 @@ vi.mock("child_process", () => ({
         stdoutListeners.get("data")?.("ok\n");
         child.exitCode = 0;
         childListeners.get("close")?.(0, null);
+      } else if (state.exec === "slow-pass") {
+        delayedPassTimer = setTimeout(() => {
+          stdoutListeners.get("data")?.("ok\n");
+          child.exitCode = 0;
+          childListeners.get("close")?.(0, null);
+        }, 80);
       } else if (state.exec === "fail") {
         stdoutListeners.get("data")?.(state.failStdout);
         stderrListeners.get("data")?.(state.failStderr);
@@ -382,6 +390,16 @@ describe("runVerify (mocked execFile, no real build)", () => {
     state.exec = "pass";
     const r = await runVerify("/wt", "npx tsc --noEmit && npm test");
     expect(r.status).toBe("pass");
+  });
+
+  it("applies one deadline to the complete && sequence", async () => {
+    state.exec = "slow-pass";
+    const result = await runVerify("/wt", "npm first && npm second", {
+      timeoutMs: 100,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.output).toMatch(/timed out/i);
   });
 
   it("starts a detached no-shell process group for cross-platform tree teardown", async () => {

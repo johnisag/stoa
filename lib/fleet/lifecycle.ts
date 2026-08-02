@@ -27,6 +27,7 @@ import type {
   FleetTaskRow,
 } from "./types";
 import { reconcileFleetCancellationCleanup } from "./service";
+import { prepareFleetFairnessCursor } from "./fairness-cursor";
 import { fleetIntegrationIdentity } from "./merge-contract";
 import { resolveFleetMergeTarget } from "./merge-readiness";
 
@@ -1828,9 +1829,11 @@ function queueConfirmedCleanupTargets(
 async function reconcileDestructiveCancelCleanup(
   runtime: FleetLifecycleDeps
 ): Promise<void> {
-  const runs = runtime.db
-    .prepare(
-      `SELECT r.* FROM fleet_runs r
+  const claimRuns = (): FleetRunRow[] => {
+    let nextCursor = prepareFleetFairnessCursor(runtime.db, "cancellationPoll");
+    const selected = runtime.db
+      .prepare(
+        `SELECT r.* FROM fleet_runs r
        WHERE r.status = 'canceled'
          AND r.cancel_mode = 'cancel-and-clean-owned-worktrees'
          AND NOT EXISTS (
@@ -1848,62 +1851,101 @@ async function reconcileDestructiveCancelCleanup(
            WHERE e.fleet_run_id = r.id
              AND e.event_type = 'destructive_cancel_cleanup_reconciled'
          )
-       ORDER BY COALESCE(r.ended_at, r.updated_at), r.id
+       ORDER BY r.cancellation_poll_cursor, r.id
        LIMIT ?`
-    )
-    .all(FLEET_DESTRUCTIVE_CANCEL_MAX_PER_TICK) as FleetRunRow[];
-  for (const run of runs) {
-    const authorization = storedDestructiveConfirmation(run);
-    if (!authorization) {
-      throw new Error(
-        "destructive cancel has no valid exact target authorization"
-      );
-    }
-    const confirmation = {
-      confirm: true,
-      confirmation: run.id,
-      actor: "cancel-recovery",
-    };
-    const archived = archiveFleetRun(
-      run.id,
-      {
-        ...confirmation,
-        retentionDays: cancellationRetentionDays(run),
-      },
-      runtime
-    );
-    if ("error" in archived) {
-      throw new Error(`destructive cancel archive failed: ${archived.error}`);
-    }
-    const queued = transaction(runtime.db, () =>
-      queueConfirmedCleanupTargets(
-        runtime,
-        run.id,
-        authorization,
-        "cancel-recovery",
-        runtime.now().toISOString()
       )
+      .all(FLEET_DESTRUCTIVE_CANCEL_MAX_PER_TICK) as FleetRunRow[];
+    const advance = runtime.db.prepare(
+      `UPDATE fleet_runs SET cancellation_poll_cursor = ?
+       WHERE id = ? AND status = 'canceled'
+         AND cancel_mode = 'cancel-and-clean-owned-worktrees'`
     );
-    transaction(runtime.db, () => {
-      const alreadyRecorded = runtime.db
-        .prepare(
-          `SELECT 1 FROM fleet_events
-           WHERE fleet_run_id = ?
-             AND event_type = 'destructive_cancel_cleanup_reconciled'
-           LIMIT 1`
-        )
-        .get(run.id);
-      if (alreadyRecorded) return;
-      queries.createFleetEvent(runtime.db).run(
+    return selected.filter(
+      (run) => advance.run(++nextCursor, run.id).changes === 1
+    );
+  };
+  const runs = runtime.db.inTransaction
+    ? claimRuns()
+    : runtime.db.transaction(claimRuns).immediate();
+  for (const run of runs) {
+    try {
+      const authorization = storedDestructiveConfirmation(run);
+      if (!authorization) {
+        throw new Error(
+          "destructive cancel has no valid exact target authorization"
+        );
+      }
+      const confirmation = {
+        confirm: true,
+        confirmation: run.id,
+        actor: "cancel-recovery",
+      };
+      const archived = archiveFleetRun(
         run.id,
-        "destructive_cancel_cleanup_reconciled",
-        "cancel-recovery",
-        JSON.stringify({
-          queued,
-          targetSetDigest: authorization.targetSetDigest,
-        })
+        {
+          ...confirmation,
+          retentionDays: cancellationRetentionDays(run),
+        },
+        runtime
       );
-    });
+      if ("error" in archived) {
+        throw new Error(`destructive cancel archive failed: ${archived.error}`);
+      }
+      const queued = transaction(runtime.db, () =>
+        queueConfirmedCleanupTargets(
+          runtime,
+          run.id,
+          authorization,
+          "cancel-recovery",
+          runtime.now().toISOString()
+        )
+      );
+      transaction(runtime.db, () => {
+        const alreadyRecorded = runtime.db
+          .prepare(
+            `SELECT 1 FROM fleet_events
+             WHERE fleet_run_id = ?
+               AND event_type = 'destructive_cancel_cleanup_reconciled'
+             LIMIT 1`
+          )
+          .get(run.id);
+        if (alreadyRecorded) return;
+        queries.createFleetEvent(runtime.db).run(
+          run.id,
+          "destructive_cancel_cleanup_reconciled",
+          "cancel-recovery",
+          JSON.stringify({
+            queued,
+            targetSetDigest: authorization.targetSetDigest,
+          })
+        );
+      });
+    } catch (error) {
+      try {
+        const alreadyRecorded = runtime.db
+          .prepare(
+            `SELECT 1 FROM fleet_events WHERE fleet_run_id = ?
+             AND event_type = 'destructive_cancel_cleanup_failed' LIMIT 1`
+          )
+          .get(run.id);
+        if (alreadyRecorded) continue;
+        queries.createFleetEvent(runtime.db).run(
+          run.id,
+          "destructive_cancel_cleanup_failed",
+          "cancel-recovery",
+          JSON.stringify({
+            error: redactAndCapFleetText(
+              error instanceof Error ? error.message : String(error),
+              500
+            ).text,
+          }),
+          { controlPlane: true }
+        );
+      } catch {
+        // The cursor was already advanced atomically. A later bounded rotation
+        // retries the exact run even when failure reporting is unavailable.
+      }
+    }
   }
 }
 
@@ -2177,44 +2219,86 @@ export function reconcileFleetRunStatuses(
   limit = 64
 ): number {
   const runtime = lifecycleDeps(overrides);
-  const runs = runtime.db
-    .prepare(
-      `SELECT * FROM fleet_runs WHERE status IN ('running', 'reviewing', 'merging')
-       ORDER BY updated_at, id LIMIT ?`
-    )
-    .all(cappedPositiveInteger(limit, 64, 200)) as FleetRunRow[];
-  let changed = 0;
-  for (const run of runs) {
-    const tasks = runtime.db
+  const claimRuns = (): FleetRunRow[] => {
+    let nextCursor = prepareFleetFairnessCursor(runtime.db, "lifecyclePoll");
+    const selected = runtime.db
       .prepare(
-        `SELECT status, task_type FROM fleet_tasks WHERE fleet_run_id = ?`
+        `SELECT * FROM fleet_runs
+         WHERE status IN ('running', 'reviewing', 'merging')
+         ORDER BY lifecycle_poll_cursor, id LIMIT ?`
       )
-      .all(run.id) as FleetTaskRow[];
-    const status = deriveFleetRunStatus(run, tasks);
-    if (status === run.status) continue;
-    const nowIso = runtime.now().toISOString();
-    const applied = transaction(runtime.db, () => {
-      const update = runtime.db
+      .all(cappedPositiveInteger(limit, 64, 200)) as FleetRunRow[];
+    const advance = runtime.db.prepare(
+      `UPDATE fleet_runs SET lifecycle_poll_cursor = ?
+       WHERE id = ? AND status IN ('running', 'reviewing', 'merging')`
+    );
+    return selected.filter(
+      (run) => advance.run(++nextCursor, run.id).changes === 1
+    );
+  };
+  const runs = runtime.db.inTransaction
+    ? claimRuns()
+    : runtime.db.transaction(claimRuns).immediate();
+  let changed = 0;
+  let firstFailure: unknown;
+  for (const run of runs) {
+    try {
+      const tasks = runtime.db
         .prepare(
-          `UPDATE fleet_runs SET status = ?,
-           ended_at = CASE WHEN ? = 'completed' THEN COALESCE(ended_at, ?) ELSE ended_at END,
-           updated_at = ? WHERE id = ? AND status = ?`
+          `SELECT status, task_type FROM fleet_tasks WHERE fleet_run_id = ?`
         )
-        .run(status, status, nowIso, nowIso, run.id, run.status);
-      if (update.changes !== 1) return false;
-      queries
-        .createFleetEvent(runtime.db)
-        .run(
+        .all(run.id) as FleetTaskRow[];
+      const status = deriveFleetRunStatus(run, tasks);
+      if (status === run.status) continue;
+      const nowIso = runtime.now().toISOString();
+      const applied = transaction(runtime.db, () => {
+        const update = runtime.db
+          .prepare(
+            `UPDATE fleet_runs SET status = ?,
+             ended_at = CASE WHEN ? = 'completed' THEN COALESCE(ended_at, ?) ELSE ended_at END,
+             updated_at = ? WHERE id = ? AND status = ?`
+          )
+          .run(status, status, nowIso, nowIso, run.id, run.status);
+        if (update.changes !== 1) return false;
+        queries
+          .createFleetEvent(runtime.db)
+          .run(
+            run.id,
+            status === "completed" ? "run_completed" : "run_phase_derived",
+            "fleet-lifecycle",
+            JSON.stringify({ from: run.status, to: status })
+          );
+        return true;
+      });
+      if (applied) changed += 1;
+    } catch (error) {
+      firstFailure ??= error;
+      try {
+        const alreadyRecorded = runtime.db
+          .prepare(
+            `SELECT 1 FROM fleet_events WHERE fleet_run_id = ?
+             AND event_type = 'run_status_reconcile_failed' LIMIT 1`
+          )
+          .get(run.id);
+        if (alreadyRecorded) continue;
+        queries.createFleetEvent(runtime.db).run(
           run.id,
-          status === "completed" ? "run_completed" : "run_phase_derived",
+          "run_status_reconcile_failed",
           "fleet-lifecycle",
-          JSON.stringify({ from: run.status, to: status })
+          JSON.stringify({
+            error: redactAndCapFleetText(
+              error instanceof Error ? error.message : String(error),
+              500
+            ).text,
+          }),
+          { controlPlane: true }
         );
-      return true;
-    });
-    if (!applied) continue;
-    changed += 1;
+      } catch {
+        // Re-throw the original failure after every claimed run was attempted.
+      }
+    }
   }
+  if (firstFailure !== undefined) throw firstFailure;
   return changed;
 }
 

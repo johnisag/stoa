@@ -32,10 +32,18 @@ import {
   genericSessionRouteFailure,
 } from "@/lib/session-route-access";
 import {
+  claimConductorSessionDeletion,
   commitConductorSessionDeletion,
   ConductorSessionDeletionRejectedError,
-  planConductorSessionDeletion,
+  isSessionDeletionFenced,
 } from "@/lib/session-deletion";
+
+class SessionDeletionBackendStopError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "SessionDeletionBackendStopError";
+  }
+}
 
 // Sanitize a name for use as tmux session name
 function sanitizeTmuxName(name: string): string {
@@ -111,6 +119,12 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       );
     }
     assertGenericSessionRouteAccess(existing);
+    if (isSessionDeletionFenced(db, id)) {
+      return NextResponse.json(
+        { error: "Session deletion is in progress" },
+        { status: 409 }
+      );
+    }
 
     // Resolve the session's project root for path validation.
     const project = existing.project_id
@@ -310,7 +324,37 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       } catch (error) {
         if (completedBackendRename) {
           const { backend, oldKey, newKey } = completedBackendRename;
-          await backend.rename(newKey, oldKey).catch(() => undefined);
+          if (isSessionDeletionFenced(db, id)) {
+            // DELETE may have snapshotted/killed oldKey while this PATCH had the
+            // live process temporarily renamed to newKey. Do not move it back
+            // after that kill; stop both identities so neither can survive the
+            // deletion commit as a ghost process.
+            await Promise.allSettled([
+              backend.kill(newKey),
+              backend.kill(oldKey),
+            ]);
+          } else {
+            let rolledBack = false;
+            try {
+              await backend.rename(newKey, oldKey);
+              rolledBack = true;
+            } catch {
+              // A failed rollback would leave a live key that no DB row owns.
+              await backend.kill(newKey).catch(() => undefined);
+            }
+            // Close the remaining ordering where deletion publishes its fence
+            // while the rollback itself is in flight.
+            if (isSessionDeletionFenced(db, id)) {
+              await Promise.allSettled([
+                backend.kill(newKey),
+                backend.kill(oldKey),
+              ]);
+            } else if (!rolledBack) {
+              console.error(
+                `Failed to restore session backend key ${newKey} to ${oldKey}`
+              );
+            }
+          }
         }
         throw error;
       }
@@ -343,28 +387,46 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     }
     assertGenericSessionRouteAccess(existing);
 
-    // Validate the complete relationship boundary before killing any process.
+    // Claim the complete relationship boundary before killing any process.
     // Unknown internal roles fail closed; only ordinary orchestration workers
     // may be deleted and the five known Fleet roles may be detached.
-    const deletionPlan = planConductorSessionDeletion(db, id);
+    const deletionPlan = claimConductorSessionDeletion(db, id);
+    // Re-read after the claim: another Stoa process may have changed a mutable
+    // interactive session between the access check and our IMMEDIATE claim.
+    // The claim trigger freezes every backend/cleanup identity from here on.
+    const claimedSession = queries.getSession(db).get(id) as
+      Session | undefined;
+    if (!claimedSession) {
+      throw new ConductorSessionDeletionRejectedError(
+        "Session disappeared while deletion was being claimed."
+      );
+    }
     for (const worker of deletionPlan.interactiveWorkers) {
       try {
-        await killWorker(worker.id, false); // false = don't cleanup worktree yet
+        await killWorker(worker.id, false, "failed", {
+          failOnBackendError: true,
+        }); // false = don't cleanup worktree yet
       } catch (error) {
-        console.error(`Failed to kill worker ${worker.id}:`, error);
+        throw new SessionDeletionBackendStopError(
+          `Failed to stop worker ${worker.id}`,
+          { cause: error }
+        );
       }
     }
 
     // Kill this session's OWN agent process — not just its workers. Without it a
     // "deleted" agent lingers in the pty-host daemon (Tier-2/Windows default):
     // holding a CLI/auth seat, blocking idle-shutdown, resurrectable by key, and
-    // leaving the client on a live ghost pane. Best-effort + backend-agnostic; a
-    // missing/already-dead session must not fail the delete.
-    const backendKey = backendKeyForSession(existing);
+    // leaving the client on a live ghost pane. SessionBackend.kill is idempotent
+    // for a missing process; a rejection keeps the durable claim for a retry.
+    const backendKey = backendKeyForSession(claimedSession);
     try {
       await getSessionBackend().kill(backendKey);
     } catch (error) {
-      console.error(`Failed to kill session pty ${backendKey}:`, error);
+      throw new SessionDeletionBackendStopError(
+        `Failed to stop session backend ${backendKey}`,
+        { cause: error }
+      );
     }
 
     // Preserve Fleet evidence and delete the ordinary session graph as one DB
@@ -384,22 +446,25 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
     // Drop the conductor marker so a future session in this same dir can't
     // inherit this (now-dead) conductor's id from a stale .stoa-conductor file.
-    if (existing.working_directory) {
-      removeConductorMarker(existing.working_directory, existing.id);
+    if (claimedSession.working_directory) {
+      removeConductorMarker(
+        claimedSession.working_directory,
+        claimedSession.id
+      );
     }
 
     // Release port if this session had one assigned
-    if (existing.dev_server_port) {
+    if (claimedSession.dev_server_port) {
       releasePort(id);
     }
 
     // Multi-repo workspace session: tear down EVERY worktree this session created
     // (one per picked sub-repo), unregistering each from its parent repo, then
     // remove the workspace dir. Background + best-effort, like the single case.
-    if (existing.worktree_paths) {
+    if (claimedSession.worktree_paths) {
       let childPaths: string[] = [];
       try {
-        const parsed = JSON.parse(existing.worktree_paths);
+        const parsed = JSON.parse(claimedSession.worktree_paths);
         if (Array.isArray(parsed))
           childPaths = parsed.filter((p): p is string => typeof p === "string");
       } catch {
@@ -407,7 +472,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       }
       // Only reclaim worktrees Stoa created (under ~/.stoa/worktrees).
       const stoaChildren = childPaths.filter((p) => isStoaWorktree(p));
-      const workspaceDir = existing.working_directory;
+      const workspaceDir = claimedSession.working_directory;
       if (stoaChildren.length > 0) {
         runInBackground(
           () => removeWorkspace(workspaceDir, stoaChildren),
@@ -419,8 +484,11 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     // Clean up worktree in background (non-blocking). Fall back to the worktree's
     // parent dir when the owning repo can't be resolved (a broken worktree) so a
     // dead worktree is still removed rather than silently skipped.
-    if (existing.worktree_path && isStoaWorktree(existing.worktree_path)) {
-      const worktreePath = existing.worktree_path; // Capture for closure
+    if (
+      claimedSession.worktree_path &&
+      isStoaWorktree(claimedSession.worktree_path)
+    ) {
+      const worktreePath = claimedSession.worktree_path; // Capture for closure
       runInBackground(async () => {
         const mainRepoPath = await getMainRepoPath(worktreePath);
         await deleteWorktree(
@@ -453,6 +521,16 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
   } catch (error) {
     if (error instanceof ConductorSessionDeletionRejectedError) {
       return NextResponse.json({ error: error.message }, { status: 409 });
+    }
+    if (error instanceof SessionDeletionBackendStopError) {
+      console.error(error.message, error.cause);
+      return NextResponse.json(
+        {
+          error:
+            "Failed to stop the session backend. The deletion is safely claimed; retry to continue.",
+        },
+        { status: 503 }
+      );
     }
     console.error("Error deleting session:", error);
     return NextResponse.json(

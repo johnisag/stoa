@@ -875,7 +875,8 @@ export function failWorker(workerId: string): void {
 export async function killWorker(
   workerId: string,
   cleanupWorktree: boolean = false,
-  finalStatus: "completed" | "failed" = "failed"
+  finalStatus: "completed" | "failed" = "failed",
+  options: { failOnBackendError?: boolean } = {}
 ): Promise<void> {
   const session = findInteractiveWorkerSession(workerId);
   if (!session) {
@@ -891,8 +892,11 @@ export async function killWorker(
   // Kill tmux session
   try {
     await backend.kill(tmuxSessionName);
-  } catch {
-    // Ignore errors
+  } catch (error) {
+    // Generic worker cleanup remains best-effort. Session deletion opts into a
+    // strict stop so its durable DB claim stays retryable if the backend is
+    // temporarily unavailable rather than deleting a still-live process row.
+    if (options.failOnBackendError) throw error;
   }
 
   // Clean up worktree if requested

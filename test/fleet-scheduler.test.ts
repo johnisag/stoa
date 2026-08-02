@@ -274,6 +274,7 @@ function schedulerDeps(
     now: () => new Date("2026-08-01T12:00:00.000Z"),
     spawn,
     resolveBaseSha: async () => RUN_BASE_SHA,
+    detectCaseInsensitivePaths: async () => false,
     prepareAttempt: vi.fn(async ({ runId, taskId, attempt, baseRef }) => ({
       attemptDirectory: `C:\\fleet\\${runId}\\${taskId}\\${attempt}`,
       reportPath: `C:\\fleet\\${runId}\\${taskId}\\${attempt}\\report.json`,
@@ -753,6 +754,36 @@ describe("fleet scheduler", () => {
     }
   });
 
+  it("does not pause a landing whose one-shot authorization was already consumed", async () => {
+    const runId = addRun({ status: "merging", budget: 0.1 });
+    db.prepare(
+      `UPDATE fleet_runs
+       SET merge_requested_at = ?, merge_request_kind = 'automatic',
+           merge_target = 'local', spent_budget_usd = 0.2,
+           budget_stop_mode = 'hard-stop'
+       WHERE id = ?`
+    ).run("2026-08-01T11:59:00.000Z", runId);
+
+    await reconcileFleetRuns({
+      ...schedulerDeps(),
+      now: () => new Date("2026-08-01T12:00:00.000Z"),
+      sampleCosts: async () => 0,
+    });
+
+    expect(
+      db
+        .prepare(
+          `SELECT status, desired_state, pause_reason
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      status: "merging",
+      desired_state: "running",
+      pause_reason: null,
+    });
+  });
+
   it("rotates bounded cost sampling past unsupported accounts", async () => {
     const runId = addRun({ status: "draft", desiredState: "draft" });
     const unsupported = Array.from({ length: 8 }, (_, index) =>
@@ -1073,6 +1104,30 @@ describe("fleet scheduler", () => {
       )
       .all(conflictRun) as { status: string }[];
     expect(statuses.map((row) => row.status)).toEqual(["running", "ready"]);
+  });
+
+  it("serializes case-only overlaps only for case-insensitive repositories", async () => {
+    const insensitiveRun = addRun();
+    addTask(insensitiveRun, "Src/Foo.ts", 1);
+    addTask(insensitiveRun, "src/foo.ts", 2);
+    const insensitiveDetector = vi.fn(async () => true);
+    expect(
+      await reconcileFleetRun(insensitiveRun, {
+        ...schedulerDeps(),
+        detectCaseInsensitivePaths: insensitiveDetector,
+      })
+    ).toBe(1);
+    expect(insensitiveDetector).toHaveBeenCalledWith("C:\\repo");
+
+    const sensitiveRun = addRun();
+    addTask(sensitiveRun, "Src/Foo.ts", 1);
+    addTask(sensitiveRun, "src/foo.ts", 2);
+    expect(
+      await reconcileFleetRun(sensitiveRun, {
+        ...schedulerDeps(),
+        detectCaseInsensitivePaths: async () => false,
+      })
+    ).toBe(2);
   });
 
   it("pins a root task to the approved run SHA after its branch moves", async () => {

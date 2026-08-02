@@ -1645,8 +1645,7 @@ describe("FleetManagementView status drilldowns", () => {
   });
 
   it("renders mobile sections, exact task/worker controls, and supervisor evidence", async () => {
-    const onOpenSession = vi.fn();
-    render(<FleetManagementView onOpenSession={onOpenSession} />);
+    render(<FleetManagementView />);
     await screen.findByRole("heading", { name: "Autonomous delivery" });
 
     const nav = screen.getByRole("navigation", { name: "Fleet run sections" });
@@ -1658,8 +1657,8 @@ describe("FleetManagementView status drilldowns", () => {
       screen.getAllByText(/Latest event: worker waiting for operator/)
     ).toHaveLength(2);
     expect(
-      screen.getByRole("button", { name: "Open active session" })
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: "Open active session" })
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Inspect exact diff" }));
     expect(screen.getByText("Authoritative Git evidence")).toBeTruthy();
@@ -1670,14 +1669,12 @@ describe("FleetManagementView status drilldowns", () => {
     ).toBeTruthy();
   });
 
-  it("loads output for only the selected exact worker and opens its persisted session", async () => {
-    const onOpenSession = vi.fn();
-    render(<FleetManagementView onOpenSession={onOpenSession} />);
+  it("loads output for only the selected exact worker without exposing generic session attachment", async () => {
+    render(<FleetManagementView />);
     await screen.findByRole("heading", { name: "Autonomous delivery" });
     expect(state.outputHook).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open session" }));
-    expect(onOpenSession).toHaveBeenCalledWith("session-exact");
+    expect(screen.queryByRole("button", { name: "Open session" })).toBeNull();
     fireEvent.click(
       screen.getByRole("button", {
         name: "Rendered output for worker attempt 2",
@@ -1708,6 +1705,17 @@ describe("FleetManagementView status drilldowns", () => {
     expect(interrupt.textContent).toContain(
       "Interrupt operator_pause · notice delivered · stop unattempted"
     );
+  });
+
+  it("keeps the full desktop creation form reachable through sidebar scrolling", async () => {
+    render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+
+    const sidebar = document.getElementById("fleet-run-list");
+    expect(sidebar?.className).toContain("lg:overflow-y-auto");
+    expect(
+      screen.getByRole("button", { name: "Create and plan" })
+    ).toBeTruthy();
   });
 
   it("submits token, retry, provider, budget-policy, and every resource setting", async () => {

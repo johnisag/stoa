@@ -17,6 +17,8 @@ const state = vi.hoisted(() => ({
   sessions: [] as Record<string, unknown>[],
   exists: vi.fn(async () => false),
   create: vi.fn(async (_options: BackendCreateCall) => undefined),
+  kill: vi.fn(async (_key: string) => undefined),
+  deletionFenced: vi.fn((_sessionId: string) => false),
   wrapWithBanner: vi.fn((command: string) => `banner:${command}`),
 }));
 
@@ -36,7 +38,13 @@ vi.mock("@/lib/session-backend", () => ({
   getSessionBackend: () => ({
     exists: state.exists,
     create: state.create,
+    kill: state.kill,
   }),
+}));
+
+vi.mock("@/lib/session-deletion", () => ({
+  isSessionDeletionFenced: (_db: unknown, sessionId: string) =>
+    state.deletionFenced(sessionId),
 }));
 
 vi.mock("@/lib/banner", async (importOriginal) => {
@@ -86,6 +94,8 @@ describe("server-owned interactive tmux launch", () => {
     state.sessions = [state.session];
     state.exists.mockReset().mockResolvedValue(false);
     state.create.mockReset().mockResolvedValue(undefined);
+    state.kill.mockReset().mockResolvedValue(undefined);
+    state.deletionFenced.mockReset().mockReturnValue(false);
     state.wrapWithBanner.mockClear();
   });
 
@@ -206,6 +216,32 @@ describe("server-owned interactive tmux launch", () => {
     });
     expect(state.exists).not.toHaveBeenCalled();
     expect(state.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a launch whose session identity is already deletion-fenced", async () => {
+    state.deletionFenced.mockReturnValue(true);
+
+    const response = await POST(request() as never, context);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Session deletion is in progress",
+    });
+    expect(state.exists).not.toHaveBeenCalled();
+    expect(state.create).not.toHaveBeenCalled();
+  });
+
+  it("kills a process created while deletion publishes its fence", async () => {
+    state.deletionFenced.mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    const response = await POST(request() as never, context);
+
+    expect(response.status).toBe(409);
+    expect(state.create).toHaveBeenCalledTimes(1);
+    expect(state.kill).toHaveBeenCalledWith(`claude-${ID}`);
+    expect(await response.json()).toEqual({
+      error: "Session deletion is in progress",
+    });
   });
 });
 

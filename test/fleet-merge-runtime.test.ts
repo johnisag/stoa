@@ -1,3 +1,6 @@
+import { execFile } from "child_process";
+import { access, mkdtemp, readFile, rm, unlink, writeFile } from "fs/promises";
+import { promisify } from "util";
 import { beforeEach, describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
 import { resolve } from "path";
@@ -28,6 +31,9 @@ import type {
   FleetTaskRow,
 } from "@/lib/fleet/types";
 import type { FleetMergeRunRow } from "@/lib/fleet/merge-readiness";
+import { resolveBinary, tmpDir } from "@/lib/platform";
+
+const execFileAsync = promisify(execFile);
 
 const BASE = "a".repeat(40);
 const TASK = "b".repeat(40);
@@ -121,6 +127,8 @@ interface FakeGitOptions {
   dirtyLocalAfterFastForward?: boolean;
   localBranchAfterFastForward?: string;
   symbolicLocalTarget?: string;
+  symbolicIntegrationTarget?: string;
+  integrationBranchAfterWorktreeRemoval?: string;
   onMergeAbort?: () => void | Promise<void>;
   onCommitTree?: () => void | Promise<void>;
   now?: () => Date;
@@ -129,11 +137,13 @@ interface FakeGitOptions {
   prBase?: string;
   prBaseBranch?: string;
   prChecks?: unknown[];
+  requiredCheckRules?: unknown;
   github?: boolean;
   mergeThrowsAfterCompletion?: boolean;
   retargetOnMerge?: string;
   advanceBaseOnLanding?: string;
   originUrl?: string;
+  localUpdateRefFailures?: number;
 }
 
 type VerificationMutation = "tracked" | "staged" | "untracked" | "head";
@@ -394,6 +404,18 @@ function fakeRuntime(options: FakeGitOptions = {}) {
   let mergeChangesVisible = true;
   let integrationTrackedStatus = "";
   let integrationUntrackedStatus = "";
+  let localUpdateRefFailures = options.localUpdateRefFailures ?? 0;
+  let localTargetUpdates = 0;
+  let prViewFailures = 0;
+  let remoteReadFailures = 0;
+  let prChecks = options.prChecks ?? [{ name: "ci", conclusion: "SUCCESS" }];
+  let requiredCheckRules: unknown = options.requiredCheckRules ?? [
+    {
+      type: "required_status_checks",
+      parameters: { required_status_checks: [{ context: "ci" }] },
+    },
+  ];
+  let requiredCheckRuleResponses: unknown[] = [];
 
   const git = async (cwd: string, args: string[]) => {
     calls.push([cwd, ...args]);
@@ -455,6 +477,9 @@ function fakeRuntime(options: FakeGitOptions = {}) {
         stderr: "",
       };
     }
+    if (args[0] === "ls-files" && args.includes("--ignored")) {
+      return { stdout: "", stderr: "" };
+    }
     if (args[0] === "worktree" && args[1] === "add") {
       paths.add(integration.worktree);
       heads.set(integration.worktree, BASE);
@@ -463,15 +488,16 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "for-each-ref") {
-      if (
-        cwd === "/repo" &&
-        args.includes("--format=%(symref)") &&
-        args.at(-1) === "refs/heads/main"
-      ) {
+      if (cwd === "/repo" && args.includes("--format=%(symref)")) {
+        const ref = args.at(-1);
+        const symbolicTarget =
+          ref === "refs/heads/main"
+            ? options.symbolicLocalTarget
+            : ref === `refs/heads/${integration.branch}`
+              ? options.symbolicIntegrationTarget
+              : undefined;
         return {
-          stdout: options.symbolicLocalTarget
-            ? `refs/heads/${options.symbolicLocalTarget}\n`
-            : "\n",
+          stdout: symbolicTarget ? `refs/heads/${symbolicTarget}\n` : "\n",
           stderr: "",
         };
       }
@@ -523,11 +549,29 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       return { stdout: `${INTEGRATED}\n`, stderr: "" };
     }
     if (args[0] === "update-ref") {
+      if (args[1] === "--no-deref" && args[2] === "-d") {
+        const branch = args[3].slice("refs/heads/".length);
+        const current =
+          branch === integration.branch
+            ? integrationBranchDeleted
+              ? null
+              : (heads.get(integration.worktree) ?? null)
+            : (repoBranchHeads.get(branch) ?? null);
+        if (current !== args[4]) throw new Error("ref changed");
+        if (branch === integration.branch) integrationBranchDeleted = true;
+        else repoBranchHeads.delete(branch);
+        return { stdout: "", stderr: "" };
+      }
       const refIndex = args[1] === "--no-deref" ? 2 : 1;
       const branch = args[refIndex].slice("refs/heads/".length);
       const current = repoBranchHeads.get(branch);
       if (current !== args[refIndex + 2]) throw new Error("ref changed");
+      if (cwd === "/repo" && branch === "main" && localUpdateRefFailures > 0) {
+        localUpdateRefFailures--;
+        throw new Error("transient ref lock from antivirus scanner");
+      }
       repoBranchHeads.set(branch, args[refIndex + 1]);
+      if (cwd === "/repo" && branch === "main") localTargetUpdates++;
       if (branches.get(cwd) === branch) {
         heads.set(cwd, args[refIndex + 1]);
         localDirty = true;
@@ -577,6 +621,10 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       };
     }
     if (args[0] === "ls-remote") {
+      if (remoteReadFailures > 0) {
+        remoteReadFailures--;
+        throw new Error("temporary network failure reading remote refs");
+      }
       const ref = args.at(-1) ?? "";
       const branch = ref.startsWith("refs/heads/")
         ? ref.slice("refs/heads/".length)
@@ -647,7 +695,7 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       headRefOid: options.prHead ?? INTEGRATED,
       mergeCommit: prMerged ? { oid: MERGED } : null,
       mergeable: "MERGEABLE",
-      statusCheckRollup: options.prChecks ?? [{ conclusion: "SUCCESS" }],
+      statusCheckRollup: prChecks,
     });
 
   return {
@@ -663,6 +711,27 @@ function fakeRuntime(options: FakeGitOptions = {}) {
     },
     get prCreateCalls() {
       return prCreateCalls;
+    },
+    get localTargetUpdates() {
+      return localTargetUpdates;
+    },
+    setLocalDirty(value: boolean) {
+      localDirty = value;
+    },
+    failNextPrViews(count = 1) {
+      prViewFailures += count;
+    },
+    failNextRemoteReads(count = 1) {
+      remoteReadFailures += count;
+    },
+    setPrChecks(value: unknown[]) {
+      prChecks = value;
+    },
+    setRequiredCheckRules(value: unknown) {
+      requiredCheckRules = value;
+    },
+    setRequiredCheckRuleResponses(values: unknown[]) {
+      requiredCheckRuleResponses = [...values];
     },
     setPrBase(value: string) {
       prBase = value;
@@ -681,6 +750,11 @@ function fakeRuntime(options: FakeGitOptions = {}) {
     },
     remoteRefHead(branch: string) {
       return remoteBranchHeads.get(branch) ?? null;
+    },
+    integrationRefHead() {
+      return integrationBranchDeleted
+        ? null
+        : (heads.get(integration.worktree) ?? null);
     },
     markPrMerged() {
       prMerged = true;
@@ -720,16 +794,32 @@ function fakeRuntime(options: FakeGitOptions = {}) {
         return { status: "pass" as const, output: "" };
       },
       gh: async (_cwd: string, args: string[]) => {
+        if (args[0] === "api") {
+          const response = requiredCheckRuleResponses.length
+            ? requiredCheckRuleResponses.shift()
+            : requiredCheckRules;
+          return { stdout: JSON.stringify(response), stderr: "" };
+        }
         if (args[1] === "create") {
           prExists = true;
           prCreateCalls++;
           return { stdout: "created\n", stderr: "" };
         }
         if (!prExists) throw new Error("PR not found");
+        if (prViewFailures > 0) {
+          prViewFailures--;
+          throw new Error("temporary GitHub API transport failure");
+        }
         return { stdout: prJson(), stderr: "" };
       },
       removeWorktree: async (worktree: string) => {
         paths.delete(worktree);
+        if (options.integrationBranchAfterWorktreeRemoval) {
+          heads.set(
+            integration.worktree,
+            options.integrationBranchAfterWorktreeRemoval
+          );
+        }
       },
     },
   };
@@ -762,7 +852,10 @@ async function prepareClaimedTaskMerge(
     taskHeadSha: TASK,
     commands: ["npm test"],
   });
-  const claimed = __fleetMergeTesting.claimOperation(deps, operation.id);
+  const claimed = __fleetMergeTesting.claimOperation(deps, operation.id, {
+    integrationBranch: fake.integration.branch,
+    integrationWorktree: fake.integration.worktree,
+  });
   if (!claimed) throw new Error("test failed to claim task merge operation");
   return { deps, operation: claimed };
 }
@@ -804,6 +897,43 @@ describe("Fleet exact-SHA merge runtime", () => {
     db = new Database(":memory:");
     db.pragma("foreign_keys = ON");
     createSchema(db);
+  });
+
+  it("rotates an actionable 21st merge candidate past twenty inert runs", async () => {
+    seed(db);
+    const fake = fakeRuntime();
+    await requestFleetMerge(RUN_ID, "local", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    const insert = db.prepare(
+      `INSERT INTO fleet_runs
+       (id, name, goal, status, desired_state, automation_policy_hash,
+        automation_poll_cursor, merge_poll_cursor, settings_json)
+       VALUES (?, ?, 'inert', 'running', 'running', ?, 0, 0, '{}')`
+    );
+    for (let index = 0; index < 20; index++) {
+      const id = `inert-merge-${String(index).padStart(2, "0")}`;
+      insert.run(id, id, POLICY_HASH);
+    }
+    db.prepare(`UPDATE fleet_runs SET merge_poll_cursor = 1 WHERE id = ?`).run(
+      RUN_ID
+    );
+
+    await reconcileFleetMerges({ db, ...fake.overrides });
+    expect(
+      db
+        .prepare(`SELECT merge_poll_cursor FROM fleet_runs WHERE id = ?`)
+        .get(RUN_ID)
+    ).toEqual({ merge_poll_cursor: 1 });
+
+    await reconcileFleetMerges({ db, ...fake.overrides });
+    expect(
+      db
+        .prepare(`SELECT merge_poll_cursor FROM fleet_runs WHERE id = ?`)
+        .get(RUN_ID)
+    ).toEqual({ merge_poll_cursor: 22 });
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).not.toBe("idle");
   });
 
   it("derives and bounds merge ownership from verifier timeout configuration", () => {
@@ -1611,10 +1741,11 @@ describe("Fleet exact-SHA merge runtime", () => {
     expect(
       fake.calls.some(
         (call) =>
-          call[1] === "branch" &&
-          call[2] === "-D" &&
-          call[3] === "--" &&
-          call[4] === fake.integration.branch
+          call[1] === "update-ref" &&
+          call[2] === "--no-deref" &&
+          call[3] === "-d" &&
+          call[4] === `refs/heads/${fake.integration.branch}` &&
+          call[5] === INTEGRATED
       )
     ).toBe(true);
   });
@@ -1833,6 +1964,62 @@ describe("Fleet exact-SHA merge runtime", () => {
     }
   });
 
+  it("does not let a stale task operation roll the current integration head backward", async () => {
+    seed(db);
+    insertReadyTask(db, "task-two", 1, STALE, "/task-two", "npm test");
+    const fake = fakeRuntime();
+    await requestFleetMerge(RUN_ID, "local", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    db.prepare(
+      `UPDATE fleet_runs SET integration_state = 'integrating',
+       integration_branch = ?, integration_worktree = ?, integration_base_sha = ?,
+       integration_head_sha = ? WHERE id = ?`
+    ).run(
+      fake.integration.branch,
+      fake.integration.worktree,
+      BASE,
+      BASE,
+      RUN_ID
+    );
+    const staleRun = db
+      .prepare(`SELECT * FROM fleet_runs WHERE id = ?`)
+      .get(RUN_ID) as FleetMergeRunRow;
+    const task = db
+      .prepare(`SELECT * FROM fleet_tasks WHERE id = 'task-two'`)
+      .get() as FleetTaskRow;
+
+    db.prepare(
+      `UPDATE fleet_runs SET integration_head_sha = ? WHERE id = ?`
+    ).run(INTEGRATED, RUN_ID);
+    fake.heads.set(fake.integration.worktree, INTEGRATED);
+    const deps = __fleetMergeTesting.runtimeDeps({
+      db,
+      ...fake.overrides,
+      leaseOwner: "stale-h0-reconciler",
+    });
+
+    await __fleetMergeTesting.integrateTask(deps, staleRun, task);
+
+    expect(fake.heads.get(fake.integration.worktree)).toBe(INTEGRATED);
+    expect(
+      fake.calls.some(
+        (call) =>
+          (call[1] === "merge" && call[2] === "--abort") ||
+          (call[1] === "reset" && call[2] === "--hard")
+      )
+    ).toBe(false);
+    expect(
+      db
+        .prepare(`SELECT integration_head_sha FROM fleet_runs WHERE id = ?`)
+        .get(RUN_ID)
+    ).toEqual({ integration_head_sha: INTEGRATED });
+    expect(
+      db.prepare(`SELECT status FROM fleet_tasks WHERE id = 'task-two'`).get()
+    ).toEqual({ status: "ready_to_merge" });
+  });
+
   it.each<VerificationMutation>(["tracked", "staged", "untracked", "head"])(
     "rejects and removes %s verifier mutation from a task integration head",
     async (mutation) => {
@@ -1892,6 +2079,82 @@ describe("Fleet exact-SHA merge runtime", () => {
       });
     }
   );
+
+  it("removes ignored verifier output before a later verifier can observe it", async () => {
+    const gitBinary = resolveBinary("git");
+    if (!gitBinary) throw new Error("git is required for Fleet merge tests");
+    const repo = await mkdtemp(resolve(tmpDir(), "stoa-fleet-ignored-"));
+    const git = async (cwd: string, args: string[]) => {
+      const result = (await execFileAsync(gitBinary, args, {
+        cwd,
+        encoding: "utf8",
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+      })) as { stdout: string; stderr: string };
+      return { stdout: result.stdout, stderr: result.stderr };
+    };
+    try {
+      await git(repo, ["init"]);
+      await git(repo, ["config", "user.name", "Stoa Test"]);
+      await git(repo, ["config", "user.email", "stoa-test@localhost"]);
+      await writeFile(
+        resolve(repo, ".gitignore"),
+        "verification-cache.txt\ntrusted.cache\n",
+        "utf8"
+      );
+      await writeFile(resolve(repo, "tracked.txt"), "tracked\n", "utf8");
+      await git(repo, ["add", ".gitignore", "tracked.txt"]);
+      await git(repo, ["commit", "-m", "fixture"]);
+      const head = (await git(repo, ["rev-parse", "HEAD"])).stdout
+        .trim()
+        .toLowerCase();
+      const fake = fakeRuntime();
+      const deps = __fleetMergeTesting.runtimeDeps({
+        db,
+        ...fake.overrides,
+        git,
+      });
+
+      // Unknown ignored content predating operation ownership is preserved and
+      // rejected rather than erased as an assumed build artifact.
+      const trusted = resolve(repo, "trusted.cache");
+      await writeFile(trusted, "provisioned\n", "utf8");
+      await expect(
+        __fleetMergeTesting.assertExactIsolatedHead(
+          deps,
+          repo,
+          head,
+          "trusted baseline"
+        )
+      ).rejects.toThrow(/ignored workspace content/i);
+      expect(await readFile(trusted, "utf8")).toBe("provisioned\n");
+      await unlink(trusted);
+
+      await __fleetMergeTesting.assertExactIsolatedHead(
+        deps,
+        repo,
+        head,
+        "first verifier preflight"
+      );
+      const ignoredOutput = resolve(repo, "verification-cache.txt");
+      await writeFile(ignoredOutput, "created by verifier A\n", "utf8");
+      await __fleetMergeTesting.sanitizeExactVerificationHead(
+        deps,
+        repo,
+        head,
+        "first verifier boundary"
+      );
+
+      await expect(access(ignoredOutput)).rejects.toThrow();
+      const laterVerifierSawOutput = await access(ignoredOutput).then(
+        () => true,
+        () => false
+      );
+      expect(laterVerifierSawOutput).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
 
   it.each<VerificationMutation>(["tracked", "staged", "untracked", "head"])(
     "rejects and removes %s verifier mutation from the final integration head",
@@ -2051,7 +2314,10 @@ describe("Fleet exact-SHA merge runtime", () => {
       taskHeadSha: TASK,
       commands: ["npm test"],
     });
-    __fleetMergeTesting.claimOperation(deps, operation.id);
+    __fleetMergeTesting.claimOperation(deps, operation.id, {
+      integrationBranch: fake.integration.branch,
+      integrationWorktree: fake.integration.worktree,
+    });
     db.prepare(
       `UPDATE fleet_merge_operations
        SET expected_result_head_sha = ?,
@@ -2074,7 +2340,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     ).toBe("merged");
   });
 
-  it("rejects an unbound descendant that merely contains the task head", async () => {
+  it("rejects but never resets an unbound descendant that merely contains the task head", async () => {
     seed(db);
     const fake = fakeRuntime();
     await requestFleetMerge(RUN_ID, "local", "admin", {
@@ -2102,7 +2368,10 @@ describe("Fleet exact-SHA merge runtime", () => {
       taskHeadSha: TASK,
       commands: ["npm test"],
     });
-    __fleetMergeTesting.claimOperation(deps, operation.id);
+    __fleetMergeTesting.claimOperation(deps, operation.id, {
+      integrationBranch: fake.integration.branch,
+      integrationWorktree: fake.integration.worktree,
+    });
     db.prepare(
       `UPDATE fleet_merge_operations
        SET lease_expires_at = '2020-01-01T00:00:00.000Z' WHERE id = ?`
@@ -2110,7 +2379,10 @@ describe("Fleet exact-SHA merge runtime", () => {
 
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
 
-    expect(fake.heads.get(fake.integration.worktree)).toBe(BASE);
+    expect(fake.heads.get(fake.integration.worktree)).toBe(INTEGRATED);
+    expect(
+      fake.calls.some((call) => call[1] === "reset" && call[2] === "--hard")
+    ).toBe(false);
     expect(fake.calls.some((call) => call.includes("commit-tree"))).toBe(false);
     expect(
       db.prepare(`SELECT status FROM fleet_tasks WHERE id = ?`).get(TASK_ID)
@@ -2152,7 +2424,10 @@ describe("Fleet exact-SHA merge runtime", () => {
       taskHeadSha: TASK,
       commands: ["npm test"],
     });
-    __fleetMergeTesting.claimOperation(deps, operation.id);
+    __fleetMergeTesting.claimOperation(deps, operation.id, {
+      integrationBranch: fake.integration.branch,
+      integrationWorktree: fake.integration.worktree,
+    });
     db.prepare(
       `UPDATE fleet_merge_operations
        SET lease_expires_at = '2020-01-01T00:00:00.000Z' WHERE id = ?`
@@ -2180,6 +2455,51 @@ describe("Fleet exact-SHA merge runtime", () => {
       expected_result_head_sha: INTEGRATED,
       result_head_sha: INTEGRATED,
     });
+  });
+
+  it("refuses recovery when an expired operation no longer owns the durable integration head", async () => {
+    seed(db);
+    const fake = fakeRuntime();
+    const { operation } = await prepareClaimedTaskMerge(db, fake);
+    db.prepare(
+      `UPDATE fleet_merge_operations
+       SET lease_expires_at = '2020-01-01T00:00:00.000Z' WHERE id = ?`
+    ).run(operation.id);
+    db.prepare(
+      `UPDATE fleet_runs SET integration_head_sha = ? WHERE id = ?`
+    ).run(INTEGRATED, RUN_ID);
+    fake.startInterruptedMerge({ head: BASE });
+
+    await reconcileFleetMerges(
+      { db, ...fake.overrides, leaseOwner: "stale-recovery-reconciler" },
+      RUN_ID
+    );
+
+    expect(
+      fake.calls.some(
+        (call) =>
+          (call[1] === "merge" && call[2] === "--abort") ||
+          (call[1] === "reset" && call[2] === "--hard")
+      )
+    ).toBe(false);
+    expect(
+      db
+        .prepare(
+          `SELECT integration_state, integration_head_sha FROM fleet_runs
+           WHERE id = ?`
+        )
+        .get(RUN_ID)
+    ).toEqual({
+      integration_state: "awaiting_operator",
+      integration_head_sha: INTEGRATED,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT state, lease_owner FROM fleet_merge_operations WHERE id = ?`
+        )
+        .get(operation.id)
+    ).toEqual({ state: "running", lease_owner: "crashed-reconciler" });
   });
 
   it("fences an expired dirty-merge recovery before another reconciler can claim it", async () => {
@@ -2230,7 +2550,10 @@ describe("Fleet exact-SHA merge runtime", () => {
       commands: ["npm test"],
     });
     operationId = operation.id;
-    __fleetMergeTesting.claimOperation(crashedDeps, operation.id);
+    __fleetMergeTesting.claimOperation(crashedDeps, operation.id, {
+      integrationBranch: fake.integration.branch,
+      integrationWorktree: fake.integration.worktree,
+    });
     db.prepare(
       `UPDATE fleet_merge_operations
        SET lease_expires_at = '2020-01-01T00:00:00.000Z' WHERE id = ?`
@@ -2599,9 +2922,13 @@ describe("Fleet exact-SHA merge runtime", () => {
     }
   );
 
-  it("refuses a dirty local source checkout without moving its head", async () => {
+  it("durably retries an authorized local landing after a dirty checkout is cleaned", async () => {
     seed(db);
-    const fake = fakeRuntime({ dirtyLocal: true });
+    let now = Date.parse("2026-08-01T12:00:00.000Z");
+    const fake = fakeRuntime({
+      dirtyLocal: true,
+      now: () => new Date(now),
+    });
     await requestFleetMerge(RUN_ID, "local", "admin", {
       db,
       ...fake.overrides,
@@ -2612,8 +2939,84 @@ describe("Fleet exact-SHA merge runtime", () => {
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     expect(fake.heads.get("/repo")).toBe(BASE);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe("merging");
+    const waiting = db
+      .prepare(
+        `SELECT state, attempt_count, lease_expires_at
+         FROM fleet_merge_operations WHERE operation_type = 'local_finalize'`
+      )
+      .get() as {
+      state: string;
+      attempt_count: number;
+      lease_expires_at: string;
+    };
+    expect(waiting).toMatchObject({ state: "waiting", attempt_count: 1 });
+    expect(Date.parse(waiting.lease_expires_at)).toBeGreaterThan(now);
+
+    fake.setLocalDirty(false);
+    await reconcileFleetMerges(
+      { db, ...fake.overrides, leaseOwner: "restarted-before-backoff" },
+      RUN_ID
+    );
+    expect(fake.refHead("main")).toBe(BASE);
+    expect(
+      db
+        .prepare(
+          `SELECT attempt_count FROM fleet_merge_operations
+           WHERE operation_type = 'local_finalize'`
+        )
+        .get()
+    ).toEqual({ attempt_count: 1 });
+
+    now = Date.parse(waiting.lease_expires_at) + 1;
+    await reconcileFleetMerges(
+      { db, ...fake.overrides, leaseOwner: "restarted-after-backoff" },
+      RUN_ID
+    );
+    expect(fake.refHead("main")).toBe(INTEGRATED);
+    expect(fake.localTargetUpdates).toBe(1);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
-      "awaiting_operator"
+      "completed"
+    );
+  });
+
+  it("retries a transient local ref-lock failure and mutates the target exactly once", async () => {
+    seed(db);
+    let now = Date.parse("2026-08-01T12:00:00.000Z");
+    const fake = fakeRuntime({
+      localUpdateRefFailures: 1,
+      now: () => new Date(now),
+    });
+    await requestFleetMerge(RUN_ID, "local", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
+
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+
+    const retry = db
+      .prepare(
+        `SELECT state, lease_expires_at FROM fleet_merge_operations
+         WHERE operation_type = 'local_finalize'`
+      )
+      .get() as { state: string; lease_expires_at: string };
+    expect(retry.state).toBe("waiting");
+    expect(fake.refHead("main")).toBe(BASE);
+    expect(fake.localTargetUpdates).toBe(0);
+
+    now = Date.parse(retry.lease_expires_at) + 1;
+    await reconcileFleetMerges(
+      { db, ...fake.overrides, leaseOwner: "local-ref-retry" },
+      RUN_ID
+    );
+
+    expect(fake.refHead("main")).toBe(INTEGRATED);
+    expect(fake.localTargetUpdates).toBe(1);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
+      "completed"
     );
   });
 
@@ -2848,6 +3251,45 @@ describe("Fleet exact-SHA merge runtime", () => {
     ).toEqual({ count: 2 });
   });
 
+  it("leaves a concurrently moved integration ref intact after worktree removal", async () => {
+    seed(db);
+    const fake = fakeRuntime({
+      integrationBranchAfterWorktreeRemoval: STALE,
+    });
+    await requestFleetMerge(RUN_ID, "local", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
+      "completed"
+    );
+
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+
+    expect(fake.integrationRefHead()).toBe(STALE);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "cleanup_pending",
+      error: expect.stringContaining("ref changed"),
+    });
+    expect(
+      fake.calls.some(
+        (call) =>
+          call[1] === "update-ref" &&
+          call[2] === "--no-deref" &&
+          call[3] === "-d" &&
+          call[4] === `refs/heads/${fake.integration.branch}` &&
+          call[5] === INTEGRATED
+      )
+    ).toBe(true);
+    expect(
+      fake.calls.some((call) => call[1] === "branch" && call[2] === "-D")
+    ).toBe(false);
+  });
+
   it("aborts a canceled landing and replay-safely cleans only its exact Fleet workspace", async () => {
     seed(db);
     const fake = fakeRuntime();
@@ -3015,6 +3457,127 @@ describe("Fleet exact-SHA merge runtime", () => {
     );
   });
 
+  it("persists a transient PR-status retry across restart and lands exactly once", async () => {
+    seed(db);
+    let now = Date.parse("2026-08-01T12:00:00.000Z");
+    const fake = fakeRuntime({
+      github: true,
+      now: () => new Date(now),
+    });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 8; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+      const run = db
+        .prepare(`SELECT integration_pr_number FROM fleet_runs WHERE id = ?`)
+        .get(RUN_ID) as { integration_pr_number: number | null };
+      if (run.integration_pr_number !== null) break;
+    }
+    expect(fake.prCreateCalls).toBe(1);
+
+    fake.failNextPrViews();
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+
+    const waiting = db
+      .prepare(
+        `SELECT state, attempt_count, lease_expires_at
+         FROM fleet_merge_operations WHERE operation_type = 'github_merge'`
+      )
+      .get() as {
+      state: string;
+      attempt_count: number;
+      lease_expires_at: string;
+    };
+    expect(waiting).toMatchObject({ state: "waiting", attempt_count: 1 });
+    expect(Date.parse(waiting.lease_expires_at)).toBeGreaterThan(now);
+    expect(fake.landingUpdates).toBe(0);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
+      "waiting_ci"
+    );
+
+    await reconcileFleetMerges(
+      { db, ...fake.overrides, leaseOwner: "github-restart-before-backoff" },
+      RUN_ID
+    );
+    expect(fake.landingUpdates).toBe(0);
+    expect(
+      db
+        .prepare(
+          `SELECT attempt_count FROM fleet_merge_operations
+           WHERE operation_type = 'github_merge'`
+        )
+        .get()
+    ).toEqual({ attempt_count: 1 });
+
+    now = Date.parse(waiting.lease_expires_at) + 1;
+    await reconcileFleetMerges(
+      { db, ...fake.overrides, leaseOwner: "github-restart-after-backoff" },
+      RUN_ID
+    );
+    await reconcileFleetMerges(
+      { db, ...fake.overrides, leaseOwner: "github-restart-after-backoff" },
+      RUN_ID
+    );
+
+    expect(fake.remoteRefHead("main")).toBe(INTEGRATED);
+    expect(fake.landingPushCalls).toBe(1);
+    expect(fake.landingUpdates).toBe(1);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.mergeSha).toBe(
+      INTEGRATED
+    );
+  });
+
+  it("retries a transient pre-mutation remote read without duplicating landing", async () => {
+    seed(db);
+    let now = Date.parse("2026-08-01T12:00:00.000Z");
+    const fake = fakeRuntime({
+      github: true,
+      now: () => new Date(now),
+    });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 8; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+      const run = db
+        .prepare(`SELECT integration_pr_number FROM fleet_runs WHERE id = ?`)
+        .get(RUN_ID) as { integration_pr_number: number | null };
+      if (run.integration_pr_number !== null) break;
+    }
+
+    fake.failNextRemoteReads();
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+
+    const waiting = db
+      .prepare(
+        `SELECT state, lease_expires_at FROM fleet_merge_operations
+         WHERE operation_type = 'github_merge'`
+      )
+      .get() as { state: string; lease_expires_at: string };
+    expect(waiting.state).toBe("waiting");
+    expect(fake.remoteRefHead("main")).toBe(BASE);
+    expect(fake.landingPushCalls).toBe(0);
+
+    now = Date.parse(waiting.lease_expires_at) + 1;
+    await reconcileFleetMerges(
+      { db, ...fake.overrides, leaseOwner: "remote-read-restart" },
+      RUN_ID
+    );
+    await reconcileFleetMerges(
+      { db, ...fake.overrides, leaseOwner: "remote-read-restart" },
+      RUN_ID
+    );
+
+    expect(fake.remoteRefHead("main")).toBe(INTEGRATED);
+    expect(fake.landingPushCalls).toBe(1);
+    expect(fake.landingUpdates).toBe(1);
+  });
+
   it("refuses to publish when the checkout origin differs from the registered GitHub repository", async () => {
     seed(db);
     const fake = fakeRuntime({
@@ -3089,7 +3652,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     seed(db);
     const fake = fakeRuntime({
       github: true,
-      prChecks: [{ conclusion: "STALE", status: "COMPLETED" }],
+      prChecks: [{ name: "ci", conclusion: "STALE", status: "COMPLETED" }],
     });
     await requestFleetMerge(RUN_ID, "github_pr", "admin", {
       db,
@@ -3101,8 +3664,8 @@ describe("Fleet exact-SHA merge runtime", () => {
     }
 
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
-      state: "waiting_ci",
-      error: "GitHub checks are failing",
+      state: "awaiting_operator",
+      error: "A required GitHub check is failing",
     });
   });
 
@@ -3275,8 +3838,143 @@ describe("Fleet exact-SHA merge runtime", () => {
 
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
       state: "waiting_ci",
-      error: expect.stringContaining("not reported any checks"),
+      error: expect.stringContaining("required check: ci"),
       mergeSha: null,
+    });
+  });
+
+  it("waits until every authoritative required context has registered and passed", async () => {
+    seed(db);
+    const requiredRules = [
+      {
+        type: "required_status_checks",
+        parameters: {
+          required_status_checks: [{ context: "ci" }, { context: "windows" }],
+        },
+      },
+    ];
+    const fake = fakeRuntime({
+      github: true,
+      requiredCheckRules: requiredRules,
+      prChecks: [{ name: "ci", conclusion: "SUCCESS" }],
+    });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 8; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+    }
+
+    expect(fake.landingPushCalls).toBe(0);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "waiting_ci",
+      error: expect.stringContaining("windows"),
+    });
+
+    fake.setPrChecks([
+      { name: "ci", conclusion: "SUCCESS" },
+      { name: "windows", conclusion: "SUCCESS" },
+    ]);
+    for (let tick = 0; tick < 3; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    }
+    expect(fake.landingPushCalls).toBe(1);
+  });
+
+  it("does not land when a new required context appears during final recheck", async () => {
+    seed(db);
+    const ciOnly = [
+      {
+        type: "required_status_checks",
+        parameters: { required_status_checks: [{ context: "ci" }] },
+      },
+    ];
+    const ciAndWindows = [
+      {
+        type: "required_status_checks",
+        parameters: {
+          required_status_checks: [{ context: "ci" }, { context: "windows" }],
+        },
+      },
+    ];
+    const fake = fakeRuntime({ github: true, requiredCheckRules: ciOnly });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 8; tick++) {
+      const status = getFleetMergeStatus(RUN_ID, db)?.integration.state;
+      if (status === "waiting_ci") break;
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+    }
+    fake.setRequiredCheckRuleResponses([ciOnly, ciAndWindows]);
+
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+
+    expect(fake.landingPushCalls).toBe(0);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "waiting_ci",
+      error: expect.stringContaining("context set changed"),
+    });
+  });
+
+  it("fails closed on malformed or empty required-check rules", async () => {
+    seed(db);
+    const fake = fakeRuntime({
+      github: true,
+      requiredCheckRules: [
+        {
+          type: "required_status_checks",
+          parameters: { required_status_checks: [{ context: "" }] },
+        },
+      ],
+    });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 8; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+    }
+
+    expect(fake.landingPushCalls).toBe(0);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "waiting_ci",
+      error: expect.stringContaining("trustworthy required-check"),
+    });
+  });
+
+  it("rejects a same-name check when an app-bound required identity cannot be proven", async () => {
+    seed(db);
+    const fake = fakeRuntime({
+      github: true,
+      prChecks: [{ name: "ci", conclusion: "SUCCESS" }],
+      requiredCheckRules: [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: [{ context: "ci", integration_id: 12345 }],
+          },
+        },
+      ],
+    });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 8; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+    }
+
+    expect(fake.landingPushCalls).toBe(0);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "waiting_ci",
+      error: expect.stringContaining("app identity"),
     });
   });
 
@@ -3295,7 +3993,7 @@ describe("Fleet exact-SHA merge runtime", () => {
           state: "OPEN",
           headRefOid: TASK,
           mergeable: "MERGEABLE",
-          statusCheckRollup: [{ status: "IN_PROGRESS" }],
+          statusCheckRollup: [{ name: "ci", status: "IN_PROGRESS" }],
         })
       )?.checks
     ).toBe("pending");
@@ -3312,17 +4010,30 @@ describe("Fleet exact-SHA merge runtime", () => {
           statusCheckRollup,
         })
       )?.checks;
-    expect(checks([{ conclusion: "SUCCESS" }])).toBe("passing");
-    expect(checks([{ conclusion: "NEUTRAL" }])).toBe("passing");
-    expect(checks([{ conclusion: "SKIPPED" }])).toBe("passing");
-    expect(checks([{ status: "QUEUED" }])).toBe("pending");
-    expect(checks([{ conclusion: "STALE", status: "COMPLETED" }])).toBe(
+    expect(checks([{ name: "ci", conclusion: "SUCCESS" }])).toBe("passing");
+    expect(checks([{ name: "ci", conclusion: "NEUTRAL" }])).toBe("passing");
+    expect(checks([{ name: "ci", conclusion: "SKIPPED" }])).toBe("passing");
+    expect(checks([{ name: "ci", status: "QUEUED" }])).toBe("pending");
+    expect(
+      checks([{ name: "ci", conclusion: "STALE", status: "COMPLETED" }])
+    ).toBe("failing");
+    expect(checks([{ name: "ci", conclusion: "STARTUP_FAILURE" }])).toBe(
       "failing"
     );
-    expect(checks([{ conclusion: "STARTUP_FAILURE" }])).toBe("failing");
-    expect(checks([{ conclusion: "A_FUTURE_TERMINAL_VALUE" }])).toBe("failing");
-    expect(checks([{ status: "COMPLETED" }])).toBe("failing");
-    expect(checks([{ status: "A_FUTURE_TERMINAL_STATE" }])).toBe("failing");
+    expect(
+      checks([{ name: "ci", conclusion: "A_FUTURE_TERMINAL_VALUE" }])
+    ).toBe("failing");
+    expect(checks([{ name: "ci", status: "COMPLETED" }])).toBe("failing");
+    expect(checks([{ name: "ci", status: "A_FUTURE_TERMINAL_STATE" }])).toBe(
+      "failing"
+    );
     expect(checks([])).toBe("none");
+    expect(checks([{ conclusion: "SUCCESS" }])).toBeUndefined();
+    expect(
+      checks([
+        { name: "ci", conclusion: "SUCCESS" },
+        { name: "ci", conclusion: "SUCCESS" },
+      ])
+    ).toBeUndefined();
   });
 });

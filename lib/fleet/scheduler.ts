@@ -30,6 +30,7 @@ import {
   type FleetCostOwnerType,
 } from "./cost-runtime";
 import { fleetClaimsConflict } from "./conflicts";
+import { detectFleetCaseInsensitivePaths } from "./git-state";
 import {
   expectedFleetWorkerBranch,
   expectedFleetWorkerWorktreePath,
@@ -127,6 +128,7 @@ export interface FleetSchedulerDeps {
   sendMessage: (sessionId: string, message: string) => Promise<void>;
   sampleCosts: (sessions: Session[], nowMs: number) => Promise<number>;
   resolveBaseSha: (db: Database.Database, run: FleetRunRow) => Promise<string>;
+  detectCaseInsensitivePaths: typeof detectFleetCaseInsensitivePaths;
   prepareAttempt: typeof prepareFleetWorkerAttempt;
   collectReport: typeof collectFleetWorkerReport;
 }
@@ -178,6 +180,8 @@ function schedulerDeps(
         return persistCostSamples(db, sessions, costs, nowMs);
       }),
     resolveBaseSha: overrides.resolveBaseSha ?? resolveFleetRunCurrentBaseSha,
+    detectCaseInsensitivePaths:
+      overrides.detectCaseInsensitivePaths ?? detectFleetCaseInsensitivePaths,
     prepareAttempt: overrides.prepareAttempt ?? prepareFleetWorkerAttempt,
     collectReport: overrides.collectReport ?? collectFleetWorkerReport,
   };
@@ -414,6 +418,8 @@ function pauseFleetForBudget(
   const deadline = interrupt
     ? new Date(now.getTime() + FLEET_INTERRUPT_DEFAULT_GRACE_MS).toISOString()
     : null;
+  // Consumed landing authority cannot be revoked atomically. Keep this guard in
+  // the UPDATE so authorization racing budget enforcement cannot be paused.
   const changed = db
     .prepare(
       `UPDATE fleet_runs SET status = 'paused', desired_state = 'paused',
@@ -421,6 +427,7 @@ function pauseFleetForBudget(
        budget_interrupt_deadline_at = CASE WHEN ? THEN COALESCE(budget_interrupt_deadline_at, ?) ELSE budget_interrupt_deadline_at END,
        updated_at = ? WHERE id = ?
          AND status NOT IN ('completed', 'failed', 'canceled')
+         AND merge_requested_at IS NULL
          AND (status <> 'paused' OR (? = 1 AND budget_interrupt_deadline_at IS NULL))`
     )
     .run(
@@ -582,7 +589,8 @@ function failedBlockingDependency(
 function conflictsWithActiveTask(
   db: Database.Database,
   runId: string,
-  candidateClaims: string[]
+  candidateClaims: string[],
+  caseInsensitivePaths: boolean
 ): boolean {
   const rows = db
     .prepare(
@@ -593,16 +601,16 @@ function conflictsWithActiveTask(
     )
     .all(runId, ...ACTIVE_WORKER_STATUSES) as { id: string }[];
   return rows.some((row) =>
-    fleetClaimsConflict(candidateClaims, taskClaims(db, runId, row.id))
+    fleetClaimsConflict(candidateClaims, taskClaims(db, runId, row.id), {
+      caseInsensitive: caseInsensitivePaths,
+    })
   );
 }
 
-function resolveWorkingDirectory(
+function resolveRunWorkingDirectory(
   db: Database.Database,
-  run: FleetRunRow,
-  task: FleetTaskRow
+  run: FleetRunRow
 ): string | null {
-  if (task.working_directory) return task.working_directory;
   if (run.repo_id) {
     const repo = queries.getDispatchRepo(db).get(run.repo_id) as
       DispatchRepo | undefined;
@@ -614,6 +622,29 @@ function resolveWorkingDirectory(
     if (project?.working_directory) return project.working_directory;
   }
   return null;
+}
+
+function resolveWorkingDirectory(
+  db: Database.Database,
+  run: FleetRunRow,
+  task: FleetTaskRow
+): string | null {
+  if (task.working_directory) return task.working_directory;
+  return resolveRunWorkingDirectory(db, run);
+}
+
+function resolveClaimsWorkingDirectory(
+  db: Database.Database,
+  run: FleetRunRow
+): string | null {
+  const firstTask = db
+    .prepare(
+      `SELECT * FROM fleet_tasks WHERE fleet_run_id = ? ORDER BY sort_order LIMIT 1`
+    )
+    .get(run.id) as FleetTaskRow | undefined;
+  return firstTask
+    ? resolveWorkingDirectory(db, run, firstTask)
+    : resolveRunWorkingDirectory(db, run);
 }
 
 function resolveBaseBranch(
@@ -888,7 +919,11 @@ function findFleetOwnedSession(input: {
   return error ? { kind: "invalid", error } : { kind: "valid", session };
 }
 
-function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
+function leaseOne(
+  deps: FleetSchedulerDeps,
+  runId: string,
+  caseInsensitivePaths: boolean
+): LeasedTask | null {
   const { db, now } = deps;
   return transaction(db, () => {
     const run = queries.getFleetRun(db).get(runId) as FleetRunRow | undefined;
@@ -994,7 +1029,12 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
       }
       if (!dependenciesSatisfied(db, dependencies)) return false;
       if (
-        conflictsWithActiveTask(db, runId, taskClaims(db, runId, candidate.id))
+        conflictsWithActiveTask(
+          db,
+          runId,
+          taskClaims(db, runId, candidate.id),
+          caseInsensitivePaths
+        )
       )
         return false;
       const candidateProvider = candidate.agent_type ?? run.provider;
@@ -3331,6 +3371,7 @@ export async function reconcileFleetRun(
     await processFleetAuxiliaryInterrupts(deps, runId);
     const launchRun = queries.getFleetRun(deps.db).get(runId) as
       FleetRunRow | undefined;
+    let caseInsensitivePaths = false;
     if (
       launchRun &&
       runWantsFleetExecution(launchRun) &&
@@ -3362,10 +3403,19 @@ export async function reconcileFleetRun(
         );
         return 0;
       }
+      const claimsWorkingDirectory = resolveClaimsWorkingDirectory(
+        deps.db,
+        launchRun
+      );
+      if (claimsWorkingDirectory) {
+        caseInsensitivePaths = await deps.detectCaseInsensitivePaths(
+          claimsWorkingDirectory
+        );
+      }
     }
     const leases: LeasedTask[] = [];
     while (true) {
-      const lease = leaseOne(deps, runId);
+      const lease = leaseOne(deps, runId, caseInsensitivePaths);
       if (!lease) break;
       leases.push(lease);
     }

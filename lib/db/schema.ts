@@ -3,6 +3,7 @@ import { ensureSessionLaunchProfileSchema } from "./session-launch-profile-schem
 import { ensureFleetSessionOwnershipSchema } from "./fleet-session-ownership-schema";
 import { ensureFleetOwnedSessionRoleSchema } from "./fleet-session-role-schema";
 import { ensureFleetMergeProvenanceSchema } from "./fleet-merge-provenance-schema";
+import { ensureSessionDeletionClaimSchema } from "./session-deletion-claim-schema";
 
 const SAFE_FLEET_AUTOMATION_POLICY_JSON =
   '{"version":1,"automaticPlanning":false,"automaticPlanApproval":false,"automaticStart":false,"automaticFixes":false,"maxAutomaticFixRounds":0,"automaticMerge":false,"mergeTarget":"github_pr","allowSensitivePaths":false,"allowUnconfinedAgents":false,"plannerTaskCap":8,"cleanupPolicy":"preserve","retentionDays":null}';
@@ -1256,6 +1257,10 @@ export function createSchema(db: Database.Database): void {
       budget_interrupt_deadline_at TEXT,
       managed_supervisor_poll_cursor INTEGER NOT NULL DEFAULT 0,
       scheduler_poll_cursor INTEGER NOT NULL DEFAULT 0,
+      automation_poll_cursor INTEGER NOT NULL DEFAULT 0,
+      cancellation_poll_cursor INTEGER NOT NULL DEFAULT 0,
+      merge_poll_cursor INTEGER NOT NULL DEFAULT 0,
+      lifecycle_poll_cursor INTEGER NOT NULL DEFAULT 0,
       provider_caps_json TEXT NOT NULL DEFAULT '{}',
       resource_limits_json TEXT NOT NULL DEFAULT '{}',
       default_max_attempts INTEGER NOT NULL DEFAULT 2,
@@ -2009,4 +2014,5 @@ export function createSchema(db: Database.Database): void {
   ensureFleetSessionOwnershipSchema(db);
   ensureFleetOwnedSessionRoleSchema(db);
   ensureFleetMergeProvenanceSchema(db);
+  ensureSessionDeletionClaimSchema(db);
 }

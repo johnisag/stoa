@@ -103,9 +103,15 @@ beforeAll(() => {
 afterAll(() => db().close());
 
 beforeEach(() => {
-  db().exec(`DELETE FROM sessions;`);
-  state.backendKill.mockClear();
-  state.workerKill.mockClear();
+  db().exec(`
+    DROP TABLE IF EXISTS test_session_delete_blocker;
+    DELETE FROM session_deletion_claims;
+    DELETE FROM sessions;
+  `);
+  state.backendKill.mockReset();
+  state.backendKill.mockResolvedValue(undefined);
+  state.workerKill.mockReset();
+  state.workerKill.mockResolvedValue(undefined);
   state.clearQueue.mockClear();
   state.deleteChannels.mockClear();
   state.deleteSchedules.mockClear();
@@ -124,13 +130,71 @@ describe("DELETE /api/sessions/[id] conductor boundary", () => {
     const response = await remove("conductor");
 
     expect(response.status).toBe(200);
-    expect(state.workerKill).toHaveBeenCalledWith("ordinary", false);
+    expect(state.workerKill).toHaveBeenCalledWith("ordinary", false, "failed", {
+      failOnBackendError: true,
+    });
     expect(state.backendKill).toHaveBeenCalledWith("claude-conductor");
     expect(
       db()
         .prepare(`SELECT id, conductor_session_id FROM sessions ORDER BY id`)
         .all()
     ).toEqual([{ id: "reviewer", conductor_session_id: null }]);
+    expect(
+      db()
+        .prepare(
+          `SELECT session_id FROM session_deletion_claim_members ORDER BY session_id`
+        )
+        .all()
+    ).toEqual([{ session_id: "conductor" }, { session_id: "ordinary" }]);
+  });
+
+  it("rejects a child attached during the backend-stop window", async () => {
+    addSession({ id: "conductor" });
+    addSession({ id: "ordinary", conductorId: "conductor" });
+    state.workerKill.mockImplementationOnce(async () => {
+      expect(() =>
+        addSession({ id: "late-child", conductorId: "conductor" })
+      ).toThrow(/session deletion is in progress/i);
+    });
+
+    const response = await remove("conductor");
+
+    expect(response.status).toBe(200);
+    expect(db().prepare(`SELECT id FROM sessions ORDER BY id`).all()).toEqual(
+      []
+    );
+  });
+
+  it("keeps a failed backend stop claimed across a retry", async () => {
+    addSession({ id: "conductor" });
+    addSession({ id: "ordinary", conductorId: "conductor" });
+    state.backendKill.mockRejectedValueOnce(new Error("daemon unavailable"));
+
+    const failed = await remove("conductor");
+
+    expect(failed.status).toBe(503);
+    expect(
+      db()
+        .prepare(
+          `SELECT conductor_session_id, state FROM session_deletion_claims`
+        )
+        .get()
+    ).toEqual({ conductor_session_id: "conductor", state: "claimed" });
+    expect(() =>
+      addSession({ id: "late-child", conductorId: "conductor" })
+    ).toThrow(/session deletion is in progress/i);
+
+    const retried = await remove("conductor");
+
+    expect(retried.status).toBe(200);
+    expect(db().prepare(`SELECT id FROM sessions`).all()).toEqual([]);
+    expect(
+      db()
+        .prepare(
+          `SELECT conductor_session_id, state FROM session_deletion_claims`
+        )
+        .get()
+    ).toEqual({ conductor_session_id: "conductor", state: "deleted" });
   });
 
   it("rejects an unknown internal child before any backend process is killed", async () => {
@@ -151,5 +215,26 @@ describe("DELETE /api/sessions/[id] conductor boundary", () => {
         .prepare(`SELECT conductor_session_id FROM sessions WHERE id = ?`)
         .get("future-child")
     ).toEqual({ conductor_session_id: "conductor" });
+  });
+
+  it("rejects a restrictive foreign-key blocker before any backend stop", async () => {
+    addSession({ id: "conductor" });
+    db().exec(`
+      CREATE TABLE test_session_delete_blocker (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id)
+      );
+      INSERT INTO test_session_delete_blocker (id, session_id)
+      VALUES ('blocker', 'conductor');
+    `);
+
+    const response = await remove("conductor");
+
+    expect(response.status).toBe(409);
+    expect(state.workerKill).not.toHaveBeenCalled();
+    expect(state.backendKill).not.toHaveBeenCalled();
+    expect(db().prepare(`SELECT id FROM sessions`).all()).toEqual([
+      { id: "conductor" },
+    ]);
   });
 });

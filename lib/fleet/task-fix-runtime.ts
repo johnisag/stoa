@@ -475,7 +475,8 @@ function validateGitState(
   }
   const claims = compareFleetPathClaims(
     input.plannedClaims,
-    state.allTouchedPaths
+    state.allTouchedPaths,
+    { caseInsensitive: state.caseInsensitivePaths }
   );
   if (claims.hasDrift) {
     return `automatic fixer changed paths outside approved claims: ${

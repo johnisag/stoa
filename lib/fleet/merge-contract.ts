@@ -12,6 +12,48 @@ export interface FleetPrStatus {
   mergeSha: string | null;
   mergeable: string | null;
   checks: "none" | "passing" | "pending" | "failing";
+  checkContexts: Readonly<Record<string, "passing" | "pending" | "failing">>;
+}
+
+export interface FleetRequiredCheckSet {
+  checks: readonly {
+    context: string;
+    integrationId: number | null;
+  }[];
+}
+
+const MAX_GITHUB_CHECK_IDENTITIES = 256;
+const MAX_GITHUB_CHECK_IDENTITY_BYTES = 512;
+
+function boundedCheckIdentity(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  if (
+    Buffer.byteLength(value, "utf8") > MAX_GITHUB_CHECK_IDENTITY_BYTES ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    return null;
+  }
+  return value;
+}
+
+function parseCheckContexts(
+  value: unknown
+): Record<string, "passing" | "pending" | "failing"> | null {
+  if (!Array.isArray(value) || value.length > MAX_GITHUB_CHECK_IDENTITIES) {
+    return null;
+  }
+  const contexts: Record<string, "passing" | "pending" | "failing"> =
+    Object.create(null) as Record<string, "passing" | "pending" | "failing">;
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const row = item as Record<string, unknown>;
+    const identity = boundedCheckIdentity(row.name ?? row.context);
+    if (!identity || Object.hasOwn(contexts, identity)) return null;
+    const state = summarizeGitHubChecks([row]);
+    if (state === "none") return null;
+    contexts[identity] = state;
+  }
+  return contexts;
 }
 
 export function fleetIntegrationIdentity(runId: string): {
@@ -78,6 +120,8 @@ export function parseFleetPrStatus(value: string): FleetPrStatus | null {
       parsed.mergeCommit && typeof parsed.mergeCommit === "object"
         ? (parsed.mergeCommit as Record<string, unknown>).oid
         : null;
+    const checkContexts = parseCheckContexts(parsed.statusCheckRollup);
+    if (!checkContexts) return null;
     return {
       number,
       url: parsedUrl.toString(),
@@ -91,10 +135,95 @@ export function parseFleetPrStatus(value: string): FleetPrStatus | null {
       mergeSha: typeof mergeCommit === "string" ? mergeCommit : null,
       mergeable: typeof parsed.mergeable === "string" ? parsed.mergeable : null,
       checks: summarizeGitHubChecks(parsed.statusCheckRollup),
+      checkContexts,
     };
   } catch {
     return null;
   }
+}
+
+/** Parse the authoritative active rules that GitHub says apply to a branch. */
+export function parseFleetRequiredCheckRules(
+  value: string
+): FleetRequiredCheckSet | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed) || parsed.length > MAX_GITHUB_CHECK_IDENTITIES) {
+      return null;
+    }
+    const checks = new Map<
+      string,
+      { context: string; integrationId: number | null }
+    >();
+    for (const item of parsed) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const rule = item as Record<string, unknown>;
+      if (rule.type !== "required_status_checks") continue;
+      const parameters = rule.parameters;
+      if (
+        !parameters ||
+        typeof parameters !== "object" ||
+        Array.isArray(parameters)
+      ) {
+        return null;
+      }
+      const required = (parameters as Record<string, unknown>)[
+        "required_status_checks"
+      ];
+      if (
+        !Array.isArray(required) ||
+        required.length > MAX_GITHUB_CHECK_IDENTITIES
+      ) {
+        return null;
+      }
+      for (const entry of required) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return null;
+        }
+        const context = boundedCheckIdentity(
+          (entry as Record<string, unknown>).context
+        );
+        if (!context) return null;
+        const rawIntegrationId = (entry as Record<string, unknown>)[
+          "integration_id"
+        ];
+        const integrationId =
+          rawIntegrationId === null || rawIntegrationId === undefined
+            ? null
+            : Number(rawIntegrationId);
+        if (
+          integrationId !== null &&
+          (!Number.isSafeInteger(integrationId) || integrationId <= 0)
+        ) {
+          return null;
+        }
+        checks.set(`${context}\u0000${integrationId ?? ""}`, {
+          context,
+          integrationId,
+        });
+        if (checks.size > MAX_GITHUB_CHECK_IDENTITIES) return null;
+      }
+    }
+    return {
+      checks: [...checks.values()].sort(
+        (left, right) =>
+          left.context.localeCompare(right.context) ||
+          (left.integrationId ?? 0) - (right.integrationId ?? 0)
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function buildFleetRequiredCheckRulesArgs(
+  repoSlug: string,
+  baseBranch: string
+): string[] {
+  return [
+    "api",
+    `repos/${repoSlug}/rules/branches/${encodeURIComponent(baseBranch)}`,
+  ];
 }
 
 export function buildFleetPrViewArgs(

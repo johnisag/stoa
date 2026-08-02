@@ -75,6 +75,21 @@ describe("fresh schema sessions columns", () => {
   });
 });
 
+describe("fresh schema session deletion claims", () => {
+  it("has the durable claim/tombstone tables and relationship guards", () => {
+    expect(hasTable("session_deletion_claims")).toBe(true);
+    expect(hasTable("session_deletion_claim_members")).toBe(true);
+    for (const trigger of [
+      "trg_sessions_deletion_claim_insert_guard",
+      "trg_sessions_deletion_claim_attach_guard",
+      "trg_sessions_deletion_claim_member_update_guard",
+      "trg_sessions_deletion_claim_member_delete_guard",
+    ]) {
+      expect(hasTrigger(trigger)).toBe(true);
+    }
+  });
+});
+
 describe("fresh schema checkpoints (#44 — schema/migration parity)", () => {
   it("has the checkpoints table with its pin + lineage columns", () => {
     for (const col of [

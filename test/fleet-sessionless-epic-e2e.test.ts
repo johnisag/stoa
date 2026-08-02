@@ -111,6 +111,7 @@ function renderedGitState(input: {
     : [];
   return {
     repositoryRoot: input.root,
+    caseInsensitivePaths: false,
     baseSha: input.baseSha,
     headSha: input.headSha,
     currentBranch: input.branch,
@@ -472,6 +473,20 @@ function mergeRuntime(
         stderr: "",
       };
     }
+    if (
+      JSON.stringify(args) ===
+      JSON.stringify([
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "--no-empty-directory",
+        "-z",
+      ])
+    ) {
+      return { stdout: "", stderr: "" };
+    }
     if (args[0] === "worktree" && args[1] === "add") {
       existingPaths.add(integration.worktree);
       heads.set(integration.worktree, BASE_SHA);
@@ -480,11 +495,7 @@ function mergeRuntime(
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "for-each-ref") {
-      if (
-        cwd === PROJECT_PATH &&
-        args.includes("--format=%(symref)") &&
-        args.at(-1) === "refs/heads/main"
-      ) {
+      if (cwd === PROJECT_PATH && args.includes("--format=%(symref)")) {
         return { stdout: "\n", stderr: "" };
       }
       const head = heads.get(integration.worktree);
@@ -526,6 +537,21 @@ function mergeRuntime(
       return { stdout: `${INTEGRATION_HEAD_SHA}\n`, stderr: "" };
     }
     if (args[0] === "update-ref") {
+      if (args[1] === "--no-deref" && args[2] === "-d") {
+        const expectedRef = `refs/heads/${integration.branch}`;
+        const expectedHead = heads.get(integration.worktree);
+        if (
+          cwd !== PROJECT_PATH ||
+          args[3] !== expectedRef ||
+          !expectedHead ||
+          args[4] !== expectedHead ||
+          integrationBranchDeleted
+        ) {
+          throw new Error("invalid fake integration-ref deletion CAS");
+        }
+        integrationBranchDeleted = true;
+        return { stdout: "", stderr: "" };
+      }
       const refIndex = args[1] === "--no-deref" ? 2 : 1;
       const branch = args[refIndex]?.replace(/^refs\/heads\//, "");
       const newHead = args[refIndex + 1];
@@ -685,6 +711,20 @@ function multiTaskMergeRuntime(
         stderr: "",
       };
     }
+    if (
+      JSON.stringify(args) ===
+      JSON.stringify([
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "--no-empty-directory",
+        "-z",
+      ])
+    ) {
+      return { stdout: "", stderr: "" };
+    }
     if (args[0] === "worktree" && args[1] === "add") {
       existingPaths.add(integration.worktree);
       heads.set(integration.worktree, BASE_SHA);
@@ -693,11 +733,7 @@ function multiTaskMergeRuntime(
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "for-each-ref") {
-      if (
-        cwd === PROJECT_PATH &&
-        args.includes("--format=%(symref)") &&
-        args.at(-1) === "refs/heads/main"
-      ) {
+      if (cwd === PROJECT_PATH && args.includes("--format=%(symref)")) {
         return { stdout: "\n", stderr: "" };
       }
       const head = heads.get(integration.worktree);
@@ -748,6 +784,21 @@ function multiTaskMergeRuntime(
       return { stdout: `${nextHead}\n`, stderr: "" };
     }
     if (args[0] === "update-ref") {
+      if (args[1] === "--no-deref" && args[2] === "-d") {
+        const expectedRef = `refs/heads/${integration.branch}`;
+        const expectedHead = heads.get(integration.worktree);
+        if (
+          cwd !== PROJECT_PATH ||
+          args[3] !== expectedRef ||
+          !expectedHead ||
+          args[4] !== expectedHead ||
+          integrationBranchDeleted
+        ) {
+          throw new Error("invalid fake integration-ref deletion CAS");
+        }
+        integrationBranchDeleted = true;
+        return { stdout: "", stderr: "" };
+      }
       const refIndex = args[1] === "--no-deref" ? 2 : 1;
       const branch = args[refIndex]?.replace(/^refs\/heads\//, "");
       const newHead = args[refIndex + 1];
@@ -1373,6 +1424,16 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
           BASE_SHA,
         ],
       },
+      {
+        cwd: PROJECT_PATH,
+        args: [
+          "update-ref",
+          "--no-deref",
+          "-d",
+          `refs/heads/${merge.integration.branch}`,
+          INTEGRATION_HEAD_SHA,
+        ],
+      },
     ]);
     expect(
       merge.gitCalls.filter((call) => call.args[0] === "read-tree")
@@ -1836,6 +1897,16 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
           "refs/heads/main",
           merge.integrationHeads[2],
           BASE_SHA,
+        ],
+      },
+      {
+        cwd: PROJECT_PATH,
+        args: [
+          "update-ref",
+          "--no-deref",
+          "-d",
+          `refs/heads/${merge.integration.branch}`,
+          merge.integrationHeads[2],
         ],
       },
     ]);

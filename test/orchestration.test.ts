@@ -125,8 +125,8 @@ import { GET as listWorkers } from "@/app/api/orchestrate/workers/route";
 import { stoaHomeDir } from "@/lib/platform";
 import { internalSessionProfile } from "./internal-session-fixture";
 import {
+  claimConductorSessionDeletion,
   commitConductorSessionDeletion,
-  planConductorSessionDeletion,
 } from "@/lib/session-deletion";
 
 function db() {
@@ -363,7 +363,7 @@ describe("spawnWorker — conductor FK guard", () => {
       session_role: "fleet_task_reviewer",
     });
 
-    const plan = planConductorSessionDeletion(db(), conductor);
+    const plan = claimConductorSessionDeletion(db(), conductor);
     expect(plan.interactiveWorkers.map((row) => row.id)).toEqual([ordinary]);
     commitConductorSessionDeletion(db(), plan);
     expect(
@@ -674,6 +674,26 @@ describe("killWorker", () => {
       .prepare("SELECT worker_status FROM sessions WHERE id = ?")
       .get(worker.id) as { worker_status: string };
     expect(row.worker_status).toBe("completed");
+  });
+
+  it("surfaces backend failures when durable session deletion requests a strict stop", async () => {
+    const conductor = addSession();
+    const worker = await spawnWorker({
+      conductorSessionId: conductor,
+      task: "retryable deletion task",
+      workingDirectory: "/repo",
+      useWorktree: false,
+    });
+    backendKill.mockRejectedValueOnce(new Error("host unavailable"));
+
+    await expect(
+      killWorker(worker.id, false, "failed", { failOnBackendError: true })
+    ).rejects.toThrow(/host unavailable/i);
+    expect(
+      db()
+        .prepare(`SELECT worker_status FROM sessions WHERE id = ?`)
+        .get(worker.id)
+    ).toEqual({ worker_status: "running" });
   });
 });
 

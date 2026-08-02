@@ -50,6 +50,22 @@ const CONNECT_ATTEMPTS = 40;
 const CONNECT_RETRY_MS = 100;
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * A reachable daemon that speaks an incompatible protocol may still own live
+ * sessions. Unlike an unreachable daemon, it must never trigger Tier-1
+ * fallback because doing so would create a second process-ownership domain.
+ */
+export class PtyHostCompatibilityError extends Error {
+  constructor(reason: string) {
+    super(`incompatible pty-host daemon: ${reason}`);
+    this.name = "PtyHostCompatibilityError";
+  }
+}
+
+export function ptyHostFailureAllowsTier1Fallback(error: unknown): boolean {
+  return !(error instanceof PtyHostCompatibilityError);
+}
+
 export class HostClient {
   private socket: net.Socket | null = null;
   /** The exact socket that completed the version/capability handshake. */
@@ -220,7 +236,16 @@ export class HostClient {
         this.socket?.destroy();
         this.socket = null;
         this.negotiatedSocket = null;
-        throw err;
+        // Once a peer accepted our socket, an ownership domain may exist behind
+        // it even when it ignores, rejects, or closes during negotiation. Every
+        // post-connect handshake failure therefore fails closed as incompatible;
+        // Tier 1 is safe only when no daemon accepted a connection at all.
+        if (err instanceof PtyHostCompatibilityError) throw err;
+        const reason =
+          err instanceof Error && err.message.trim()
+            ? err.message.trim()
+            : "protocol handshake failed";
+        throw new PtyHostCompatibilityError(reason);
       }
 
       // If we reconnected while holding live subscriptions, re-attach them so
@@ -253,7 +278,7 @@ export class HostClient {
           clearTimeout(timer);
           const reason = ptyHostCompatibilityError(value);
           if (reason) {
-            reject(new Error(`incompatible pty-host daemon: ${reason}`));
+            reject(new PtyHostCompatibilityError(reason));
           } else {
             resolve();
           }

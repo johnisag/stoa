@@ -19,7 +19,10 @@ import {
   type PtyTransport,
 } from "./lib/session-backend/pty/transport";
 import { AttachSession } from "./lib/session-backend/pty/attach-session";
-import { getHostClient } from "./lib/session-backend/pty/host-client";
+import {
+  getHostClient,
+  ptyHostFailureAllowsTier1Fallback,
+} from "./lib/session-backend/pty/host-client";
 import {
   computeManagedStatuses,
   diffStatuses,
@@ -149,6 +152,7 @@ import { homeDir, defaultInteractiveShell } from "./lib/platform";
 import { getDb, queries, type Session } from "./lib/db";
 import { isGenericSessionLaunchAllowed } from "./lib/session-launch";
 import { genericBackendKeyAccessFailure } from "./lib/session-route-access";
+import { isSessionDeletionBackendKeyFenced } from "./lib/session-deletion";
 import { REMOTE_ADDR_HEADER, SCOPE_HEADER } from "./lib/api-security";
 import { resolveTokenScope } from "./lib/tokens";
 import { statusDetector, type SessionStatus } from "./lib/status-detector";
@@ -1445,12 +1449,16 @@ app.prepare().then(() => {
     // The attach state machine (incl. the sequence guard that stops a racing
     // re-attach from double-subscribing) lives in AttachSession; this handler
     // just maps WebSocket frames onto it.
-    const session = new AttachSession(transport, {
-      output: (data) => send({ type: "output", data }),
-      exit: (code) => send({ type: "exit", code }),
-      error: (message) => send({ type: "error", message }),
-      reset: () => send({ type: "reset" }),
-    });
+    const session = new AttachSession(
+      transport,
+      {
+        output: (data) => send({ type: "output", data }),
+        exit: (code) => send({ type: "exit", code }),
+        error: (message) => send({ type: "error", message }),
+        reset: () => send({ type: "reset" }),
+      },
+      (key) => isSessionDeletionBackendKeyFenced(getDb(), key)
+    );
 
     ws.on("message", (message: Buffer) => {
       try {
@@ -1501,8 +1509,10 @@ app.prepare().then(() => {
   // so the terminal path and the API/status path (getSessionBackend) agree. If
   // the daemon can't be reached we disable host mode globally and fall back to
   // the in-process registry (Tier 1) — terminals still work, just without
-  // restart-survival. getSessionBackend() is lazy, so flipping the env here
-  // (before its first call) makes the whole process consistently Tier 1.
+  // restart-survival. A reachable but incompatible daemon may still own live
+  // sessions, so that case stays on Tier 2 and fails terminal operations closed
+  // until the daemon and Stoa are restarted. getSessionBackend() is lazy, so
+  // flipping the env only for unreachable hosts keeps one ownership domain.
   (async () => {
     if (usePtyHost()) {
       try {
@@ -1511,12 +1521,19 @@ app.prepare().then(() => {
           "> pty-host daemon ready (Tier 2: sessions survive server restarts)"
         );
       } catch (err) {
-        process.env.STOA_PTY_HOST = "0";
-        resetSessionBackend(); // re-resolve to Tier 1 even if already cached
-        console.error(
-          "> pty-host daemon unavailable or incompatible; using in-process sessions (Tier 1) for this Stoa process. Restart the daemon, then restart Stoa to restore restart-surviving sessions:",
-          err instanceof Error ? err.message : err
-        );
+        if (ptyHostFailureAllowsTier1Fallback(err)) {
+          process.env.STOA_PTY_HOST = "0";
+          resetSessionBackend(); // re-resolve to Tier 1 even if already cached
+          console.error(
+            "> pty-host daemon unavailable; using in-process sessions (Tier 1) for this Stoa process. Restart Stoa after restoring the daemon to recover restart-surviving sessions:",
+            err instanceof Error ? err.message : err
+          );
+        } else {
+          console.error(
+            "> incompatible pty-host daemon may still own live sessions; refusing Tier 1 fallback to prevent duplicate agents. Restart the daemon, then restart Stoa before using terminal sessions:",
+            err instanceof Error ? err.message : err
+          );
+        }
       }
     }
     const fleetRuntime = await startRecoverableFleetRuntime({
@@ -1553,7 +1570,6 @@ app.prepare().then(() => {
         try {
           await reconcileFleetVerifications();
           await reconcileFleetTaskReviews();
-          await reconcileFleetMerges();
           await reconcileManagedFleetSupervisors();
           await reconcileFleetLifecycle();
         } catch (err) {
@@ -1568,10 +1584,13 @@ app.prepare().then(() => {
         await reconcileFleetRuns();
         await reconcileFleetVerifications();
         await reconcileFleetTaskReviews();
-        await reconcileFleetMerges();
         await reconcileManagedFleetSupervisors();
         await reconcileFleetLifecycle();
       },
+      // Merge verification may legitimately run up to its configured timeout.
+      // Keep it on an independent busy guard so landing one run cannot stall
+      // worker admission, reviews, supervision, or lifecycle for every run.
+      mergeTick: () => reconcileFleetMerges(),
       onRecoveryError: (err) =>
         console.error(
           "> Fleet recovery failed; automatic launches disabled:",
@@ -1580,6 +1599,7 @@ app.prepare().then(() => {
       onPlannerError: (err) => console.error("fleet planner tick failed:", err),
       onSchedulerError: (err) =>
         console.error("fleet scheduler tick failed:", err),
+      onMergeError: (err) => console.error("fleet merge tick failed:", err),
     });
     server.once("close", () => fleetRuntime.stop());
     // Dispatch startup catch-up: free slots held by workers that didn't survive

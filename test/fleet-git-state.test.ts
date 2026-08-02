@@ -21,6 +21,7 @@ function gitResult(stdout: string): { stdout: string; stderr: string } {
 }
 
 function installGitFixture(overrides?: {
+  caseInsensitive?: boolean;
   mergeBase?: string;
   headSha?: string;
   committed?: string;
@@ -35,6 +36,9 @@ function installGitFixture(overrides?: {
     }
     if (args.join(" ") === "rev-parse --show-toplevel") {
       return gitResult("C:/work/repo\n");
+    }
+    if (args.join(" ") === "config --bool --get core.ignorecase") {
+      return gitResult(`${overrides?.caseInsensitive ? "true" : "false"}\n`);
     }
     if (args.includes(`${BASE_SHA}^{commit}`))
       return gitResult(`${BASE_SHA}\n`);
@@ -99,6 +103,7 @@ describe("collectFleetGitState", () => {
   it("collects exact git truth for additions, deletions, renames, binary, dirty, and hostile paths", async () => {
     const oddPath = "src/odd\tname\nfile.ts";
     installGitFixture({
+      caseInsensitive: true,
       committed: [
         "A",
         "src\\new.ts",
@@ -137,6 +142,7 @@ describe("collectFleetGitState", () => {
 
     expect(state).toMatchObject({
       repositoryRoot: "C:/work/repo",
+      caseInsensitivePaths: true,
       baseSha: BASE_SHA,
       headSha: HEAD_SHA,
       currentBranch: "feature/fleet-worker",
@@ -312,6 +318,29 @@ describe("compareFleetPathClaims", () => {
     ]);
     expect(result.driftPaths).toEqual(["lib/fleetish/not-covered.ts"]);
     expect(result.hasDrift).toBe(true);
+  });
+
+  it("preserves display casing while applying repository case semantics", () => {
+    const caseInsensitive = compareFleetPathClaims(
+      ["Src/Foo.ts"],
+      ["src/foo.ts"],
+      { caseInsensitive: true }
+    );
+    expect(caseInsensitive).toMatchObject({
+      normalizedClaims: ["Src/Foo.ts"],
+      actualPaths: ["src/foo.ts"],
+      coveredPaths: ["src/foo.ts"],
+      driftPaths: [],
+      hasDrift: false,
+    });
+
+    expect(
+      compareFleetPathClaims(["Src/Foo.ts"], ["src/foo.ts"])
+    ).toMatchObject({
+      coveredPaths: [],
+      driftPaths: ["src/foo.ts"],
+      hasDrift: true,
+    });
   });
 
   it("treats __unknown__ and the legacy sentinel as wildcards", () => {

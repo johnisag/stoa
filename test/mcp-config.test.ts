@@ -29,6 +29,7 @@ import {
   writeConductorMarker,
   removeConductorMarker,
   planHermesRegistration,
+  _parseRegisteredHermesIdentityMarkerForTests,
   _mcpServerCommandForTests,
   _findStoaInstallRootForTests,
 } from "@/lib/mcp-config";
@@ -118,6 +119,73 @@ describe("ensureMcpConfig", () => {
     });
     writeFileSync(configPath, original);
     expect(() => ensureMcpConfig(dir, "s1")).toThrow(/user-owned stoa/);
+    expect(readFileSync(configPath, "utf-8")).toBe(original);
+  });
+
+  it("adopts only the exact prior Stoa schema bound to a durable local session", () => {
+    const configPath = path.join(dir, ".mcp.json");
+    const legacySessionId = "11111111-1111-4111-8111-111111111111";
+    const serverPath = path.join(
+      process.cwd(),
+      "mcp",
+      "orchestration-server.ts"
+    );
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          stoa: {
+            command: "npx",
+            args: ["tsx", serverPath],
+            env: {
+              STOA_URL: "http://localhost:3011",
+              CONDUCTOR_SESSION_ID: legacySessionId,
+            },
+          },
+        },
+      })
+    );
+    const observed: Array<[string, string]> = [];
+
+    ensureMcpConfig(dir, "new-session", {
+      isLegacyClaudeSessionOwned: (sessionId, workingDirectory) => {
+        observed.push([sessionId, workingDirectory]);
+        return sessionId === legacySessionId && workingDirectory === dir;
+      },
+    });
+
+    expect(observed).toEqual([[legacySessionId, dir]]);
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(config.mcpServers.stoa.env).toMatchObject({
+      STOA_MCP_CONFIG_OWNER: "stoa-managed-v1",
+      CONDUCTOR_SESSION_ID: "${STOA_CONDUCTOR_SESSION_ID}",
+    });
+  });
+
+  it("keeps an exact legacy-looking entry when no durable session owns it", () => {
+    const configPath = path.join(dir, ".mcp.json");
+    const original = JSON.stringify({
+      mcpServers: {
+        stoa: {
+          command: "npx",
+          args: [
+            "tsx",
+            path.join(process.cwd(), "mcp", "orchestration-server.ts"),
+          ],
+          env: {
+            STOA_URL: "http://localhost:3011",
+            CONDUCTOR_SESSION_ID: "22222222-2222-4222-8222-222222222222",
+          },
+        },
+      },
+    });
+    writeFileSync(configPath, original);
+
+    expect(() =>
+      ensureMcpConfig(dir, "new-session", {
+        isLegacyClaudeSessionOwned: () => false,
+      })
+    ).toThrow(/user-owned stoa/);
     expect(readFileSync(configPath, "utf-8")).toBe(original);
   });
 
@@ -570,6 +638,37 @@ describe("planHermesRegistration — ownership-safe global registration", () => 
       skip: true,
       removeFirst: false,
       conflict: false,
+    });
+  });
+
+  it("adopts the exact raw schema-v2 marker written by the prior Stoa release", () => {
+    const legacy = JSON.stringify({
+      schemaVersion: 2,
+      serverPath: "/abs/stoa/mcp/orchestration-server.ts",
+      command: "npx",
+      args: ["tsx", "/abs/stoa/mcp/orchestration-server.ts"],
+    });
+    const parsed = _parseRegisteredHermesIdentityMarkerForTests(`${legacy}\n`);
+
+    expect(parsed).toBe(legacy);
+    expect(planHermesRegistration(true, parsed, cur)).toEqual({
+      skip: false,
+      removeFirst: true,
+      conflict: false,
+    });
+  });
+
+  it("does not adopt a schema-v2 marker for another installation", () => {
+    const foreign = JSON.stringify({
+      schemaVersion: 2,
+      serverPath: "/other/stoa/mcp/orchestration-server.ts",
+      command: "npx",
+      args: ["tsx", "/other/stoa/mcp/orchestration-server.ts"],
+    });
+    expect(planHermesRegistration(true, foreign, cur)).toEqual({
+      skip: false,
+      removeFirst: false,
+      conflict: true,
     });
   });
 

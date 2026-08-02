@@ -52,6 +52,7 @@ function report(
 function gitState(overrides: Partial<FleetGitState> = {}): FleetGitState {
   return {
     repositoryRoot: "C:\\repo",
+    caseInsensitivePaths: false,
     baseSha: BASE,
     headSha: HEAD,
     currentBranch: "feature/fleet-task",
@@ -133,6 +134,56 @@ describe("Fleet worker report collection", () => {
     expect(deps.collectGitState).toHaveBeenCalledWith(
       expect.objectContaining({ baseSha: BASE, expectedHeadSha: HEAD })
     );
+  });
+
+  it("uses Git's case semantics for actual-vs-claim drift", async () => {
+    const changedPath = "src/foo.ts";
+    const state = gitState({
+      caseInsensitivePaths: true,
+      committedChanges: [
+        {
+          kind: "modified",
+          path: changedPath,
+          previousPath: null,
+          status: "M",
+          insertions: 2,
+          deletions: 1,
+          binary: false,
+        },
+      ],
+      committedPaths: [changedPath],
+      allTouchedPaths: [changedPath],
+    });
+    const text = report({ filesChanged: [changedPath] });
+    const result = await collectFleetWorkerReport(
+      {
+        reportPath: "C:\\fleet\\report.json",
+        worktreePath: "C:\\worktree",
+        expected,
+        plannedClaims: ["Src/Foo.ts"],
+        allowSensitivePaths: false,
+        nowMs: NOW.getTime(),
+      },
+      {
+        readArtifact: async () => ({
+          ok: true,
+          text,
+          bytes: Buffer.byteLength(text),
+        }),
+        collectGitState: async () => state,
+      }
+    );
+
+    expect(result).toMatchObject({
+      kind: "collected",
+      taskStatus: "verifying",
+      failureCode: null,
+      claimDrift: {
+        normalizedClaims: ["Src/Foo.ts"],
+        coveredPaths: [changedPath],
+        driftPaths: [],
+      },
+    });
   });
 
   it("rejects wrong identity and replay nonce before trusting testimony", async () => {

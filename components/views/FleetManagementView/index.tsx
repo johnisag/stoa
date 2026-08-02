@@ -695,13 +695,11 @@ function WorkerOperatorActions({
   worker,
   outputOpen,
   onToggleOutput,
-  onOpenSession,
 }: {
   runId: string;
   worker: FleetWorkerDto;
   outputOpen: boolean;
   onToggleOutput: () => void;
-  onOpenSession?: (sessionId: string) => void;
 }) {
   const messageWorker = useMessageFleetWorker(runId, worker.id);
   const killWorker = useKillFleetWorker(runId, worker.id);
@@ -716,15 +714,6 @@ function WorkerOperatorActions({
     <div className="mt-2 grid gap-1">
       {active && sessionId && (
         <div className="flex flex-wrap gap-1">
-          {onOpenSession && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onOpenSession(sessionId)}
-            >
-              Open session
-            </Button>
-          )}
           <Button
             size="sm"
             variant="outline"
@@ -1910,13 +1899,11 @@ function DestructiveFleetActionDialog({
 function RunDetail({
   detail,
   onBack,
-  onOpenSession,
   focusTaskId,
   selectionKey,
 }: {
   detail: FleetRunDetailDto;
   onBack: () => void;
-  onOpenSession?: (sessionId: string) => void;
   focusTaskId?: string;
   selectionKey?: string;
 }) {
@@ -3071,19 +3058,6 @@ function RunDetail({
                       )}
                     />
                     <div className="flex flex-wrap justify-end gap-1">
-                      {taskWorker?.sessionId &&
-                        ["running", "waiting_for_operator"].includes(
-                          taskWorker.status
-                        ) &&
-                        onOpenSession && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => onOpenSession(taskWorker.sessionId!)}
-                          >
-                            Open active session
-                          </Button>
-                        )}
                       {diffArtifact && (
                         <Button
                           size="sm"
@@ -3783,7 +3757,6 @@ function RunDetail({
                             outputWorkerId === worker.id ? null : worker.id
                           )
                         }
-                        onOpenSession={onOpenSession}
                       />
                       {outputWorkerId === worker.id &&
                         !!worker.sessionId &&
@@ -3884,13 +3857,11 @@ function RunDetail({
 
 export function FleetManagementView({
   onClose,
-  onOpenSession,
   initialRunId,
   initialTaskId,
   selectionKey,
 }: {
   onClose?: () => void;
-  onOpenSession?: (sessionId: string) => void;
   initialRunId?: string;
   initialTaskId?: string;
   selectionKey?: string;
@@ -4158,9 +4129,9 @@ export function FleetManagementView({
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto border-t lg:grid-cols-[22rem_minmax(0,1fr)] lg:overflow-hidden">
         <aside
           id="fleet-run-list"
-          className="flex min-h-0 flex-col gap-3 border-r p-4"
+          className="flex min-h-0 flex-col gap-3 border-r p-4 lg:overflow-y-auto"
         >
-          <section className="rounded-md border p-3">
+          <section className="shrink-0 rounded-md border p-3">
             <div className="mb-3 flex items-center gap-2">
               <Plus className="h-4 w-4" />
               <h3 className="text-sm font-medium">Draft run</h3>
@@ -4833,7 +4804,7 @@ export function FleetManagementView({
             </div>
           </section>
 
-          <section className="lg:min-h-0 lg:flex-1 lg:overflow-auto">
+          <section className="shrink-0">
             <div className="mb-2 flex items-center gap-2">
               <GitBranch className="h-4 w-4" />
               <h3 className="text-sm font-medium">Runs</h3>
@@ -4903,7 +4874,6 @@ export function FleetManagementView({
               </div>
               <RunDetail
                 detail={detail.data}
-                onOpenSession={onOpenSession}
                 focusTaskId={
                   detail.data.run.id === initialRunId
                     ? initialTaskId

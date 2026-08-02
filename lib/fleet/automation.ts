@@ -13,6 +13,7 @@ import {
 } from "./hash";
 import { classifySensitiveFleetPath } from "./git-state";
 import { fleetProviderRetryIsDue } from "./backoff";
+import { prepareFleetFairnessCursor } from "./fairness-cursor";
 import { startFleetPlanner } from "./planner";
 import { reconcileFleetPlanReviews } from "./plan-review";
 import { hasFourIndependentCleanPlanReviews } from "./plan-review-evidence";
@@ -1059,20 +1060,46 @@ export async function reconcileFleetAutomation(
   overrides: Partial<FleetAutomationDeps> = {}
 ): Promise<void> {
   const deps = automationDeps(overrides);
-  const runs = queries
-    .listFleetAutomationCandidates(deps.db)
-    .all(Math.max(1, Math.min(100, Math.trunc(limit)))) as FleetRunRow[];
+  const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+  const claim = (): FleetRunRow[] => {
+    let nextCursor = prepareFleetFairnessCursor(deps.db, "automationPoll");
+    const selected = queries
+      .listFleetAutomationCandidates(deps.db)
+      .all(boundedLimit) as FleetRunRow[];
+    const advance = deps.db.prepare(
+      `UPDATE fleet_runs SET automation_poll_cursor = ?
+       WHERE id = ? AND automation_policy_hash IS NOT NULL
+         AND status NOT IN ('completed', 'failed', 'canceled')`
+    );
+    return selected.filter(
+      (run) => advance.run(++nextCursor, run.id).changes === 1
+    );
+  };
+  const runs = deps.db.inTransaction
+    ? claim()
+    : deps.db.transaction(claim).immediate();
+  const persistenceFailures: unknown[] = [];
   for (const run of runs) {
     try {
       await reconcileOneFleetAutomation(deps, run);
     } catch (error) {
-      recordAutomationFailure(
-        deps.db,
-        run,
-        run.approval_state === "approved" ? "start" : "planning",
-        error,
-        deps.now().toISOString()
-      );
+      try {
+        recordAutomationFailure(
+          deps.db,
+          run,
+          run.approval_state === "approved" ? "start" : "planning",
+          error,
+          deps.now().toISOString()
+        );
+      } catch (persistenceError) {
+        persistenceFailures.push(persistenceError);
+      }
     }
+  }
+  if (persistenceFailures.length > 0) {
+    const first = persistenceFailures[0];
+    throw first instanceof Error
+      ? first
+      : new Error("failed to persist a Fleet automation error");
   }
 }

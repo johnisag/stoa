@@ -7,6 +7,8 @@ import {
   McpConfigConflictError,
 } from "@/lib/mcp-config";
 import { expandHome } from "@/lib/platform";
+import { normalizeWorktreePath } from "@/lib/worktrees";
+import { isGenericSessionLaunchAllowed } from "@/lib/session-launch";
 import {
   getProviderDefinition,
   isValidProviderId,
@@ -58,7 +60,23 @@ export async function POST(
       ensureHermesMcpRegistered();
       queries.updateSessionMcpArgs(db).run("[]", id);
     } else {
-      ensureProviderMcpConfig(agentType, workingDirectory, id);
+      ensureProviderMcpConfig(agentType, workingDirectory, id, {
+        isLegacyClaudeSessionOwned: (
+          legacySessionId,
+          configWorkingDirectory
+        ) => {
+          const legacy = queries.getSession(db).get(legacySessionId) as
+            Session | undefined;
+          return (
+            !!legacy &&
+            legacy.agent_type === "claude" &&
+            isGenericSessionLaunchAllowed(legacy) &&
+            legacy.mcp_launch_args !== null &&
+            normalizeWorktreePath(legacy.working_directory) ===
+              normalizeWorktreePath(configWorkingDirectory)
+          );
+        },
+      });
       queries.updateSessionMcpArgs(db).run("[]", id);
     }
 

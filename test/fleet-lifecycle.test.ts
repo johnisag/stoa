@@ -485,6 +485,20 @@ describe("Fleet archive and scoped cleanup", () => {
       stopSession: vi.fn(async () => stopAllowed),
     });
     await persistDestructiveAuthorization(deps);
+    const insertPoisonedCancel = db.prepare(
+      `INSERT INTO fleet_runs
+       (id, name, goal, status, desired_state, cancel_mode,
+        cancellation_poll_cursor, settings_json)
+       VALUES (?, ?, 'poisoned', 'canceled', 'canceled',
+        'cancel-and-clean-owned-worktrees', 0, '{}')`
+    );
+    for (let index = 0; index < 8; index++) {
+      const id = `poisoned-destructive-${index}`;
+      insertPoisonedCancel.run(id, id);
+    }
+    db.prepare(
+      `UPDATE fleet_runs SET cancellation_poll_cursor = 1 WHERE id = 'run-1'`
+    ).run();
 
     expect(
       db
@@ -506,6 +520,14 @@ describe("Fleet archive and scoped cleanup", () => {
     expect(
       db.prepare(`SELECT archived_at FROM fleet_runs WHERE id = 'run-1'`).get()
     ).toEqual({ archived_at: null });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_events
+           WHERE event_type = 'destructive_cancel_cleanup_failed'`
+        )
+        .get()
+    ).toEqual({ n: 8 });
 
     stopAllowed = true;
     expect(
@@ -665,9 +687,9 @@ describe("Fleet retention and run aggregation", () => {
     expect(
       db.prepare(`SELECT status FROM fleet_runs WHERE id = 'run-1'`).get()
     ).toEqual({ status: "running" });
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM fleet_events`).get()).toEqual({
-      n: 0,
-    });
+    expect(db.prepare(`SELECT event_type FROM fleet_events`).all()).toEqual([
+      { event_type: "run_status_reconcile_failed" },
+    ]);
   });
 
   it("prunes only eligible archived bodies while preserving evidence summaries", async () => {
@@ -927,6 +949,87 @@ describe("Fleet retention and run aggregation", () => {
       db
         .prepare(
           `SELECT COUNT(*) AS n FROM fleet_events WHERE event_type = 'run_completed'`
+        )
+        .get()
+    ).toEqual({ n: 1 });
+  });
+
+  it("rotates a transition-ready 65th run into the next status tick", () => {
+    addRun("running");
+    db.prepare(
+      `INSERT INTO fleet_tasks
+       (id, fleet_run_id, title, status, task_type, sort_order,
+        file_claims_json, approval_state)
+       VALUES ('done-65', 'run-1', 'Done', 'merged', 'task', 1, '[]',
+        'approved')`
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO fleet_runs
+       (id, name, goal, status, desired_state, lifecycle_poll_cursor,
+        settings_json)
+       VALUES (?, ?, 'stable', 'running', 'running', 0, '{}')`
+    );
+    for (let index = 0; index < 64; index++) {
+      const id = `stable-run-${String(index).padStart(2, "0")}`;
+      insert.run(id, id);
+    }
+    db.prepare(
+      `UPDATE fleet_runs SET lifecycle_poll_cursor = 1 WHERE id = ?`
+    ).run("run-1");
+
+    expect(reconcileFleetRunStatuses(lifecycleDeps())).toBe(0);
+    expect(
+      db.prepare(`SELECT status FROM fleet_runs WHERE id = 'run-1'`).get()
+    ).toEqual({
+      status: "running",
+    });
+    expect(reconcileFleetRunStatuses(lifecycleDeps())).toBe(1);
+    expect(
+      db.prepare(`SELECT status FROM fleet_runs WHERE id = 'run-1'`).get()
+    ).toEqual({
+      status: "completed",
+    });
+  });
+
+  it("continues status reconciliation after an earlier candidate fails", () => {
+    const insertRun = db.prepare(
+      `INSERT INTO fleet_runs
+       (id, name, goal, status, desired_state, settings_json)
+       VALUES (?, ?, 'finish', 'running', 'running', '{}')`
+    );
+    const insertTask = db.prepare(
+      `INSERT INTO fleet_tasks
+       (id, fleet_run_id, title, status, task_type, sort_order,
+        file_claims_json, approval_state)
+       VALUES (?, ?, 'Done', 'merged', 'task', 1, '[]', 'approved')`
+    );
+    insertRun.run("a-poison-status", "Poison");
+    insertTask.run("task-poison-status", "a-poison-status");
+    insertRun.run("b-healthy-status", "Healthy");
+    insertTask.run("task-healthy-status", "b-healthy-status");
+    db.exec(`
+      CREATE TRIGGER fail_poison_status
+      BEFORE UPDATE OF status ON fleet_runs
+      WHEN OLD.id = 'a-poison-status'
+      BEGIN
+        SELECT RAISE(ABORT, 'poison status transition');
+      END;
+    `);
+
+    expect(() => reconcileFleetRunStatuses(lifecycleDeps())).toThrow(
+      /poison status transition/
+    );
+    expect(
+      db
+        .prepare(`SELECT status FROM fleet_runs WHERE id = 'b-healthy-status'`)
+        .get()
+    ).toEqual({ status: "completed" });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_events
+           WHERE fleet_run_id = 'a-poison-status'
+             AND event_type = 'run_status_reconcile_failed'`
         )
         .get()
     ).toEqual({ n: 1 });

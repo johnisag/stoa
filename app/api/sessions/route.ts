@@ -669,7 +669,24 @@ export async function POST(request: NextRequest) {
           ensureProviderMcpConfig(
             agentType,
             expandHome(actualWorkingDirectory),
-            id
+            id,
+            {
+              isLegacyClaudeSessionOwned: (
+                legacySessionId,
+                configWorkingDirectory
+              ) => {
+                const legacy = queries.getSession(db).get(legacySessionId) as
+                  Session | undefined;
+                return (
+                  !!legacy &&
+                  legacy.agent_type === "claude" &&
+                  isGenericSessionLaunchAllowed(legacy) &&
+                  legacy.mcp_launch_args !== null &&
+                  normalizeWorktreePath(legacy.working_directory) ===
+                    normalizeWorktreePath(configWorkingDirectory)
+                );
+              },
+            }
           );
           // An empty argv list is an intentional persisted conductor sentinel:
           // launch paths use non-null mcp_launch_args to inject this session's

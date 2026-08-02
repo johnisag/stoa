@@ -4,13 +4,18 @@ import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
 import {
   claimFleetVerificationAttempt,
+  FLEET_VERIFICATION_LEASE_MS,
   fleetVerificationAttemptId,
   fleetVerificationInFlightCount,
   parseFleetVerificationSpec,
   reconcileFleetVerifications,
   type FleetVerificationDeps,
 } from "@/lib/fleet/verification";
-import { spawnArgs, type VerifyResult } from "@/lib/verification/runner";
+import {
+  spawnArgs,
+  VERIFY_TIMEOUT_MS,
+  type VerifyResult,
+} from "@/lib/verification/runner";
 
 const NOW = new Date("2026-08-01T12:00:00.000Z");
 const BASE = "a".repeat(40);
@@ -180,6 +185,12 @@ afterEach(async () => {
 });
 
 describe("Fleet verification command contract", () => {
+  it("keeps durable ownership beyond the complete verification deadline", () => {
+    expect(FLEET_VERIFICATION_LEASE_MS).toBeGreaterThanOrEqual(
+      VERIFY_TIMEOUT_MS + 60_000
+    );
+  });
+
   it("canonicalizes direct-argv steps and rejects shell syntax", () => {
     const parsed = parseFleetVerificationSpec(VERIFY_COMMAND);
     const spaced = parseFleetVerificationSpec(

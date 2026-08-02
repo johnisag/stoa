@@ -11,6 +11,11 @@ export interface AttachSink {
   reset(): void;
 }
 
+/** Synchronous because the production fence is a local SQLite lookup. Checking
+ * on both sides of attachStream closes a delete-vs-respawn race without adding
+ * another async gap around the process creation. */
+export type AttachFence = (key: string) => boolean;
+
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
@@ -56,8 +61,20 @@ export class AttachSession {
 
   constructor(
     private readonly transport: PtyTransport,
-    private readonly sink: AttachSink
+    private readonly sink: AttachSink,
+    private readonly isFenced: AttachFence = () => false
   ) {}
+
+  private fenceActive(key: string): boolean {
+    try {
+      return this.isFenced(key);
+    } catch (error) {
+      // The DB fence is authoritative. If it cannot be read, fail closed rather
+      // than create a process whose ownership may already have been deleted.
+      console.error("pty session-deletion fence check failed:", error);
+      return true;
+    }
+  }
 
   /** The session this client is currently bound to (drives write/command). */
   get key(): string | null {
@@ -77,6 +94,13 @@ export class AttachSession {
     this.currentKey = key;
     this.observer = observer;
     try {
+      if (this.fenceActive(key)) {
+        if (seq === this.attachSeq) {
+          this.currentKey = null;
+          this.sink.error("Session deletion is in progress");
+        }
+        return;
+      }
       const h = await this.transport.attachStream({
         key,
         spawn,
@@ -96,6 +120,22 @@ export class AttachSession {
         // A newer attach (or a detach) started while we awaited — don't leak
         // this subscription, or its onOutput would double every byte.
         h.detach();
+        return;
+      }
+      // A delete may publish its durable fence after the pre-check, kill the old
+      // process, and then race this create-if-missing attach. Tear down the newly
+      // attached process before exposing its snapshot. Completed deletions retain
+      // the backend-key tombstone, so a stale websocket cannot recreate it later.
+      if (this.fenceActive(key)) {
+        h.detach();
+        this.currentKey = null;
+        try {
+          await this.transport.kill(key);
+          this.sink.error("Session deletion is in progress");
+        } catch (error) {
+          console.error("pty deletion-race cleanup failed:", error);
+          this.sink.error("Session deletion cleanup failed");
+        }
         return;
       }
       this.handle = h;

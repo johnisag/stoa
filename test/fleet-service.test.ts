@@ -1096,6 +1096,23 @@ describe("Phase 3 worker completion", () => {
         .get(runId)
     ).toEqual({ reserved_budget_usd: 0.25, spent_budget_usd: 0 });
 
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        reconcileFleetCancellationCleanup({
+          db: db(),
+          stopSession: async () => false,
+        })
+      ).resolves.toBe(0);
+    }
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_events
+           WHERE fleet_run_id = ? AND event_type = 'cancel_cleanup_pending'`
+        )
+        .get(runId)
+    ).toEqual({ n: 1 });
+
     state.stopFleetSession = async () => true;
     await expect(
       reconcileFleetCancellationCleanup({
@@ -1119,6 +1136,92 @@ describe("Phase 3 worker completion", () => {
         )
         .get(runId)
     ).toEqual({ n: 1 });
+  });
+
+  it("completes a later cancellation when poisoned failure evidence cannot persist", async () => {
+    const { runId } = addRunningWorker();
+    const { previewFleetDestructiveAction } =
+      await import("@/lib/fleet/lifecycle");
+    const preview = await previewFleetDestructiveAction(runId, {
+      db: db(),
+      pathExists: () => false,
+    });
+    if ("error" in preview) throw new Error(preview.error);
+    state.stopFleetSession = async () => false;
+    await expect(
+      cancelFleetRun(runId, {
+        mode: "cancel-and-clean-owned-worktrees",
+        confirm: true,
+        confirmation: runId,
+        previewDigest: preview.targetDigest,
+      })
+    ).resolves.toMatchObject({ status: 409 });
+    const insert = db().prepare(
+      `INSERT INTO fleet_runs
+       (id, name, goal, status, desired_state, cancel_mode,
+        reserved_budget_usd, cancellation_poll_cursor, settings_json)
+       VALUES (?, ?, 'poisoned', 'canceled', 'canceled',
+        'cancel-and-clean-owned-worktrees', 1, 0, '{}')`
+    );
+    for (let index = 0; index < 8; index++) {
+      const id = `poisoned-cancel-${index}`;
+      insert.run(id, id);
+    }
+    db()
+      .prepare(
+        `UPDATE fleet_runs SET cancellation_poll_cursor = 1 WHERE id = ?`
+      )
+      .run(runId);
+    db().exec(`
+      CREATE TRIGGER poison_cancel_failure_evidence
+      BEFORE INSERT ON fleet_events
+      WHEN NEW.fleet_run_id = 'poisoned-cancel-0'
+       AND NEW.event_type = 'cancel_cleanup_recovery_failed'
+      BEGIN
+        SELECT RAISE(ABORT, 'poisoned failure evidence');
+      END;
+    `);
+
+    await expect(
+      reconcileFleetCancellationCleanup({
+        db: db(),
+        stopSession: async () => true,
+      })
+    ).resolves.toBe(0);
+    expect(
+      db()
+        .prepare(`SELECT status FROM fleet_workers WHERE id = 'fleet-worker'`)
+        .get()
+    ).toEqual({ status: "cleanup_pending" });
+
+    await expect(
+      reconcileFleetCancellationCleanup({
+        db: db(),
+        stopSession: async () => true,
+      })
+    ).resolves.toBe(1);
+    expect(
+      db()
+        .prepare(`SELECT status FROM fleet_workers WHERE id = 'fleet-worker'`)
+        .get()
+    ).toEqual({ status: "cleanup_complete" });
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_events
+           WHERE event_type = 'cancel_cleanup_recovery_failed'`
+        )
+        .get()
+    ).toEqual({ n: 7 });
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_events
+           WHERE fleet_run_id = 'poisoned-cancel-0'
+             AND event_type = 'cancel_cleanup_recovery_failed'`
+        )
+        .get()
+    ).toEqual({ n: 0 });
   });
 
   it("settles paid reviewers, fixers, and supervisors while refunding an unspawned owner", async () => {

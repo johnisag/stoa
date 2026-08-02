@@ -6,6 +6,7 @@
  */
 
 import { execFile, spawn, type ChildProcess } from "child_process";
+import { performance } from "node:perf_hooks";
 import { isWindows, killTreeArgs, resolveBinary } from "../platform";
 
 export const VERIFY_TIMEOUT_DEFAULT_MS = 600_000;
@@ -218,7 +219,7 @@ export interface VerifyResult {
 }
 
 export interface RunVerifyOptions {
-  /** Test/embedding override; production callers use VERIFY_TIMEOUT_MS. */
+  /** Total sequence deadline; production callers use VERIFY_TIMEOUT_MS. */
   timeoutMs?: number;
   /** Test/embedding override; production callers use VERIFY_MAX_OUTPUT_BUFFER. */
   maxOutputBuffer?: number;
@@ -464,7 +465,8 @@ async function runVerifyStep(
   args: string[],
   cwd: string,
   options: Required<RunVerifyOptions>,
-  onWindows: boolean
+  onWindows: boolean,
+  sequenceTimeoutMs = options.timeoutMs
 ): Promise<VerifyStepResult> {
   return new Promise<VerifyStepResult>((resolve) => {
     let child: ChildProcess;
@@ -512,7 +514,7 @@ async function runVerifyStep(
             code: null,
             killed: true,
             output: body,
-            reason: `timed out after ${Math.round(options.timeoutMs / 1000)}s`,
+            reason: `timed out after ${Math.round(sequenceTimeoutMs / 1000)}s`,
           }
         : {
             code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
@@ -625,14 +627,34 @@ export async function runVerify(
       VERIFY_MAX_OUTPUT_BUFFER
     ),
   };
+  const deadline = performance.now() + limits.timeoutMs;
 
   for (const step of parsed.steps) {
+    const remainingTimeoutMs = deadline - performance.now();
+    if (remainingTimeoutMs <= 0) {
+      return {
+        status: "error",
+        output:
+          `$ ${step.join(" ")}\n` +
+          `[timed out after ${Math.round(limits.timeoutMs / 1000)}s]`,
+      };
+    }
     const resolved = resolveBinary(step[0]);
     if (!resolved) {
       return { status: "error", output: `verify binary not found: ${step[0]}` };
     }
     const { file, args } = spawnArgs(resolved, step.slice(1), isWindows);
-    const result = await runVerifyStep(file, args, cwd, limits, isWindows);
+    const result = await runVerifyStep(
+      file,
+      args,
+      cwd,
+      {
+        ...limits,
+        timeoutMs: Math.max(1, Math.ceil(remainingTimeoutMs)),
+      },
+      isWindows,
+      limits.timeoutMs
+    );
     if (result.code === 0 && !result.killed) continue;
     const status = summarizeVerifyExit({
       ok: false,

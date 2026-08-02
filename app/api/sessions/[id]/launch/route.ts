@@ -19,6 +19,7 @@ import {
 } from "@/lib/session-route-access";
 import { parseJsonBody } from "@/lib/api-security";
 import { validateAgentCommand, wrapWithBanner } from "@/lib/banner";
+import { isSessionDeletionFenced } from "@/lib/session-deletion";
 
 const INITIAL_PROMPT_MAX_LENGTH = 200_000;
 
@@ -73,6 +74,12 @@ export async function POST(
     return NextResponse.json(
       { error: accessFailure.error },
       { status: accessFailure.status }
+    );
+  }
+  if (isSessionDeletionFenced(db, id)) {
+    return NextResponse.json(
+      { error: "Session deletion is in progress" },
+      { status: 409 }
     );
   }
 
@@ -145,6 +152,30 @@ export async function POST(
       args,
       env: sessionLaunchEnv(session!),
     });
+
+    // The delete route publishes its durable fence before stopping a process.
+    // Re-check after this asynchronous create to close the inverse ordering:
+    // launch checked first, delete killed the old process, then launch recreated
+    // it. A completed claim remains as a tombstone, so stale clients are fenced
+    // even after the sessions row has gone.
+    if (isSessionDeletionFenced(db, id)) {
+      try {
+        await backend.kill(sessionName);
+      } catch (error) {
+        console.error(
+          `Failed to stop session ${sessionName} after a deletion race:`,
+          error
+        );
+        return NextResponse.json(
+          { error: "Session deletion cleanup failed" },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json(
+        { error: "Session deletion is in progress" },
+        { status: 409 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
