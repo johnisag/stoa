@@ -30,6 +30,7 @@ import type {
   FleetTaskReviewRow,
   FleetVerificationRow,
 } from "@/lib/fleet/types";
+import { insertFleetOwnedSession } from "./fleet-session-fixture";
 
 const BASE_SHA = "a".repeat(40);
 const HEAD_SHA = "b".repeat(40);
@@ -314,27 +315,49 @@ function runtime(
       prompt: request.prompt,
       persistedPrompt: request.persistedPrompt,
     });
+    const sessionId = `${input.idPrefix ?? "runtime"}-review-session-${request.lens}`;
+    const worktreePath = `C:\\review-${request.lens}`;
+    const branchName = generateBranchName(request.branchFeature);
+    insertFleetOwnedSession(db, {
+      runId: request.contract.candidate.fleet_run_id,
+      ownerType: "task_review",
+      ownerId: request.ownerId,
+      sessionId,
+      provider: request.provider,
+      model: request.model,
+      approvalMode: request.approvalMode,
+      workingDirectory: worktreePath,
+      workerTask: request.persistedPrompt,
+      worktreePath,
+      branchName,
+      baseBranch: request.contract.candidate.task_head_sha,
+      conductorSessionId:
+        request.contract.candidate.conductor_session_id ?? null,
+    });
     return {
-      id: `review-session-${request.lens}`,
-      worktree_path: `C:\\review-${request.lens}`,
-      branch_name: generateBranchName(request.branchFeature),
+      id: sessionId,
+      worktree_path: worktreePath,
+      branch_name: branchName,
     };
   });
   const spawnFix = vi.fn(async (request) => {
-    const sessionId = "fix-session-1";
-    db.prepare(
-      `INSERT OR IGNORE INTO sessions
-       (id, name, tmux_name, agent_type, model, status, working_directory,
-        worker_task, worker_status, created_at, updated_at)
-       VALUES (?, 'fixer', ?, 'codex', '', 'running', ?, ?, 'running', ?, ?)`
-    ).run(
+    const sessionId = `${input.idPrefix ?? "runtime"}-fix-session`;
+    insertFleetOwnedSession(db, {
+      runId: request.contract.candidate.fleet_run_id,
+      ownerType: "fixer",
+      ownerId: request.ownerId,
       sessionId,
-      `codex-${sessionId}`,
-      TASK_WORKTREE,
-      request.persistedPrompt,
-      "2026-01-01T00:10:00.000Z",
-      "2026-01-01T00:10:00.000Z"
-    );
+      provider: request.provider,
+      model: request.model,
+      approvalMode: request.approvalMode,
+      workingDirectory: request.row.worktree_path,
+      workerTask: request.persistedPrompt,
+      worktreePath: request.row.worktree_path,
+      branchName: request.row.branch_name,
+      baseBranch: request.contract.candidate.task_base_branch ?? "main",
+      conductorSessionId:
+        request.contract.candidate.conductor_session_id ?? null,
+    });
     return { id: sessionId };
   });
   const removeWorktree = vi.fn(async () => {});
@@ -985,21 +1008,20 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
         "2025-12-31T00:00:00.000Z"
       );
     }
-    db.prepare(
-      `INSERT INTO sessions
-       (id, name, tmux_name, agent_type, model, status, working_directory,
-        worker_task, worker_status, worktree_path, branch_name, created_at,
-        updated_at)
-       VALUES ('recovered-session', 'review', 'codex-review', 'codex', '',
-         'running', ?, ?, 'running', ?, ?, ?, ?)`
-    ).run(
-      `C:\\recovered-review`,
-      `Persisted prompt ${resultPath}`,
-      `C:\\recovered-review`,
-      branch,
-      "2025-12-31T00:00:00.000Z",
-      "2025-12-31T00:00:00.000Z"
-    );
+    insertFleetOwnedSession(db, {
+      runId: RUN_ID,
+      ownerType: "task_review",
+      ownerId: "recover",
+      sessionId: "recovered-session",
+      provider: "codex",
+      model: null,
+      approvalMode: "full-bypass",
+      workingDirectory: "C:\\recovered-review",
+      workerTask: `Persisted prompt ${resultPath}`,
+      worktreePath: "C:\\recovered-review",
+      branchName: branch,
+      baseBranch: HEAD_SHA,
+    });
     const removeWorktree = vi.fn(async () => {});
     await reconcileFleetTaskReviews(
       {
@@ -1041,29 +1063,31 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
        WHERE id = ?`
     ).run(row.id);
     db.prepare(
-      `UPDATE fleet_cost_accounts SET provider = 'kilo'
+      `UPDATE fleet_cost_accounts SET provider = 'kilo', session_id = NULL
        WHERE fleet_run_id = ? AND owner_type = 'task_review' AND owner_id = ?`
     ).run(RUN_ID, row.request_id);
+    db.prepare(`DELETE FROM sessions WHERE id = ?`).run(
+      row.reviewer_session_id
+    );
     db.prepare(
       `UPDATE fleet_runtime_leases SET resource_key = 'kilo'
        WHERE fleet_run_id = ? AND owner_type = 'task_review' AND owner_id = ?
          AND resource_type = 'provider'`
     ).run(RUN_ID, row.request_id);
-    db.prepare(
-      `INSERT INTO sessions
-       (id, name, tmux_name, agent_type, model, status, working_directory,
-        worker_task, worker_status, worktree_path, branch_name, created_at,
-        updated_at)
-       VALUES ('recovered-kilo-reviewer', 'review', 'kilo-review', 'kilo', '',
-         'running', ?, ?, 'running', ?, ?, ?, ?)`
-    ).run(
-      "C:\\recovered-kilo-review",
-      `Persisted prompt ${row.result_path}`,
-      "C:\\recovered-kilo-review",
-      row.reviewer_branch_name,
-      "2026-01-01T00:09:00.000Z",
-      "2026-01-01T00:09:00.000Z"
-    );
+    insertFleetOwnedSession(db, {
+      runId: RUN_ID,
+      ownerType: "task_review",
+      ownerId: row.request_id,
+      sessionId: "recovered-kilo-reviewer",
+      provider: "kilo",
+      model: null,
+      approvalMode: "full-bypass",
+      workingDirectory: "C:\\recovered-kilo-review",
+      workerTask: `Persisted prompt ${row.result_path}`,
+      worktreePath: "C:\\recovered-kilo-review",
+      branchName: row.reviewer_branch_name,
+      baseBranch: HEAD_SHA,
+    });
     const stopSession = vi.fn(async () => true);
 
     await reconcileFleetTaskReviews(
@@ -1433,21 +1457,20 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
       now.toISOString(),
       row.id
     );
-    db.prepare(
-      `INSERT INTO sessions
-       (id, name, tmux_name, agent_type, model, status, working_directory,
-        worker_task, worker_status, worktree_path, branch_name, created_at,
-        updated_at)
-       VALUES ('recovered-kilo-fixer', 'fixer', 'kilo-fixer', 'kilo', '',
-         'running', ?, ?, 'running', ?, ?, ?, ?)`
-    ).run(
-      row.worktree_path,
-      `Persisted prompt ${resultPath}`,
-      row.worktree_path,
-      row.branch_name,
-      now.toISOString(),
-      now.toISOString()
-    );
+    insertFleetOwnedSession(db, {
+      runId: RUN_ID,
+      ownerType: "fixer",
+      ownerId: requestId,
+      sessionId: "recovered-kilo-fixer",
+      provider: "kilo",
+      model: null,
+      approvalMode: "full-bypass",
+      workingDirectory: row.worktree_path!,
+      workerTask: `Persisted prompt ${resultPath}`,
+      worktreePath: row.worktree_path!,
+      branchName: row.branch_name,
+      baseBranch: "main",
+    });
     const stopSession = vi.fn(async () => true);
     const removeResult = vi.fn(async () => true);
 

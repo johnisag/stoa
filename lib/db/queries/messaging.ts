@@ -25,8 +25,9 @@ export const messagingQueries = {
        (id, name, tmux_name, working_directory, conductor_session_id,
         worker_task, worker_status, model, group_path, agent_type, project_id,
         auto_approve, worktree_path, branch_name, base_branch,
-        fleet_ownership_key)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1, ?, ?, ?, ?)`
+        fleet_ownership_key, approval_mode, session_role, launch_profile_json,
+        launch_profile_hash)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
 
   // Messages

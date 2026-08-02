@@ -131,7 +131,21 @@ function installSessionLaunchProfileSchema(db: Database.Database): void {
           OR OLD.worktree_path IS NOT NEW.worktree_path
           OR OLD.branch_name IS NOT NEW.branch_name
           OR OLD.base_branch IS NOT NEW.base_branch
-          OR OLD.conductor_session_id IS NOT NEW.conductor_session_id
+          OR (
+            OLD.conductor_session_id IS NOT NEW.conductor_session_id
+            AND NOT (
+              OLD.session_role IN (
+                'fleet_worker',
+                'fleet_planner',
+                'fleet_plan_reviewer',
+                'fleet_task_reviewer',
+                'fleet_task_fixer'
+              )
+              AND
+              OLD.conductor_session_id IS NOT NULL
+              AND NEW.conductor_session_id IS NULL
+            )
+          )
           OR OLD.worker_task IS NOT NEW.worker_task
           OR OLD.auto_approve IS NOT NEW.auto_approve
           OR OLD.approval_mode IS NOT NEW.approval_mode

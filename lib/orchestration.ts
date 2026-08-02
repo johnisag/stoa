@@ -43,6 +43,10 @@ import {
   validateFleetWritableRootLayouts,
 } from "./container/mounts";
 import { isInteractiveSessionRole } from "./session-role";
+import {
+  fleetSessionProfile,
+  type FleetSessionOwner,
+} from "./fleet/session-profile";
 
 const execFileAsync = promisify(execFile);
 
@@ -60,6 +64,12 @@ export interface SpawnWorkerOptions {
   branchName?: string;
   baseBranch?: string;
   useWorktree?: boolean;
+  /** Existing Fleet-owned worktree identity used by an in-place fixer. */
+  attachedWorktree?: {
+    path: string;
+    branchName: string;
+    baseBranch: string;
+  };
   /** Fleet write tasks must fail closed instead of using the source checkout. */
   requireWorktree?: boolean;
   /** Treat backend start or task delivery failure as a rejected launch. */
@@ -84,6 +94,8 @@ export interface SpawnWorkerOptions {
   requireStrongIsolation?: boolean;
   /** Opaque, scheduler-issued identity for exact Fleet restart recovery. */
   fleetOwnershipKey?: string;
+  /** Durable owner identity for a server-owned Fleet agent session. */
+  fleetOwner?: FleetSessionOwner;
   /** Override the default worker approval policy (planners use prompt mode). */
   approvalMode?: ApprovalMode;
   model?: string;
@@ -351,6 +363,11 @@ export async function spawnWorker(
 
   // Expand ~ to home directory
   const workingDirectory = expandHome(rawWorkingDir);
+  if (useWorktree && options.attachedWorktree) {
+    throw new Error(
+      "Cannot create and attach a worker worktree simultaneously"
+    );
+  }
   const fleetWritableRoots = validateFleetSandboxWritableRoots(
     options.fleetWritableRoots ?? []
   );
@@ -386,10 +403,12 @@ export async function spawnWorker(
     }
   }
 
-  let worktreePath: string | null = null;
-  let actualWorkingDir = workingDirectory;
-  let actualBranchName = branchName;
-  let actualBaseBranch = baseBranch;
+  let worktreePath: string | null = options.attachedWorktree
+    ? expandHome(options.attachedWorktree.path)
+    : null;
+  let actualWorkingDir = worktreePath ?? workingDirectory;
+  let actualBranchName = options.attachedWorktree?.branchName ?? branchName;
+  let actualBaseBranch = options.attachedWorktree?.baseBranch ?? baseBranch;
 
   // Create worktree if requested
   if (useWorktree) {
@@ -439,6 +458,23 @@ export async function spawnWorker(
       provider: provider.id,
       id: sessionId,
     });
+    const internalProfile = options.fleetOwner
+      ? fleetSessionProfile({
+          ...options.fleetOwner,
+          sessionId,
+          backendKey: tmuxName,
+          provider: provider.id,
+          model: model || null,
+          approvalMode: options.approvalMode ?? null,
+          workingDirectory: actualWorkingDir,
+          conductorSessionId: conductorSessionId ?? null,
+          worktreePath,
+          branchName: worktreePath ? actualBranchName : null,
+          baseBranch: worktreePath ? actualBaseBranch : null,
+          fleetOwnershipKey: options.fleetOwnershipKey ?? null,
+          workerTask: task,
+        })
+      : null;
     queries.createWorkerSession(db).run(
       sessionId,
       sessionName,
@@ -453,7 +489,11 @@ export async function spawnWorker(
       worktreePath,
       worktreePath ? actualBranchName : null,
       worktreePath ? actualBaseBranch : null,
-      options.fleetOwnershipKey ?? null
+      options.fleetOwnershipKey ?? null,
+      options.approvalMode ?? null,
+      internalProfile?.role ?? "interactive",
+      internalProfile?.profileJson ?? null,
+      internalProfile?.profileHash ?? null
     );
 
     // Create the session and start the agent. Workers use auto-approve.

@@ -77,7 +77,13 @@ describe("Fleet detail metadata windows", () => {
     const tasks = queries
       .listFleetTasksForRun(db)
       .all("run-1") as FleetTaskRow[];
-    const result = loadFleetDetailArtifactMetadata(db, "run-1", tasks, 100);
+    const result = loadFleetDetailArtifactMetadata(
+      db,
+      "run-1",
+      tasks,
+      "plan-hash",
+      100
+    );
 
     expect(result.total).toBe(105);
     expect(result.hasMore).toBe(true);
@@ -89,6 +95,166 @@ describe("Fleet detail metadata windows", () => {
       "artifact-003"
     );
     expect(result.rows.every((artifact) => artifact.body === "")).toBe(true);
+  });
+
+  it("supplements the newest window with old blockers bound to the current plan and task head", () => {
+    const currentHead = "c".repeat(40);
+    db.prepare(
+      `UPDATE fleet_runs SET plan_hash = 'current-plan' WHERE id = 'run-1'`
+    ).run();
+    db.prepare(`UPDATE fleet_tasks SET head_sha = ? WHERE id = 'task-1'`).run(
+      currentHead
+    );
+    for (const input of [
+      {
+        id: "old-current-blocker",
+        planHash: "current-plan",
+        headSha: currentHead,
+        createdAt: "2026-08-01T00:00:00.000Z",
+      },
+      {
+        id: "old-plan-blocker",
+        planHash: "previous-plan",
+        headSha: currentHead,
+        createdAt: "2026-08-01T00:00:01.000Z",
+      },
+      {
+        id: "old-head-blocker",
+        planHash: "current-plan",
+        headSha: "b".repeat(40),
+        createdAt: "2026-08-01T00:00:02.000Z",
+      },
+    ]) {
+      queries
+        .createFleetArtifact(db)
+        .run(
+          input.id,
+          "run-1",
+          "task-1",
+          input.planHash,
+          "task_review_finding",
+          input.id,
+          "actionable evidence",
+          "blocker",
+          "reviewer"
+        );
+      db.prepare(
+        `UPDATE fleet_artifacts SET head_sha = ?, created_at = ? WHERE id = ?`
+      ).run(input.headSha, input.createdAt, input.id);
+    }
+    for (let index = 0; index < 105; index += 1) {
+      const id = `new-info-${String(index).padStart(3, "0")}`;
+      queries
+        .createFleetArtifact(db)
+        .run(
+          id,
+          "run-1",
+          null,
+          "current-plan",
+          "task_review_result",
+          `New info ${index}`,
+          "newer evidence",
+          "info",
+          "reviewer"
+        );
+      db.prepare(`UPDATE fleet_artifacts SET created_at = ? WHERE id = ?`).run(
+        `2026-08-02T00:00:00.${String(index).padStart(3, "0")}Z`,
+        id
+      );
+    }
+
+    const tasks = queries
+      .listFleetTasksForRun(db)
+      .all("run-1") as FleetTaskRow[];
+    const result = loadFleetDetailArtifactMetadata(
+      db,
+      "run-1",
+      tasks,
+      "current-plan",
+      100
+    );
+    const ids = result.rows.map((artifact) => artifact.id);
+
+    expect(result.total).toBe(108);
+    expect(result.hasMore).toBe(true);
+    expect(ids).toContain("old-current-blocker");
+    expect(ids).not.toContain("old-plan-blocker");
+    expect(ids).not.toContain("old-head-blocker");
+    expect(result.rows.every((artifact) => artifact.body === "")).toBe(true);
+  });
+
+  it("caps supplemental blockers and strips oversized metadata", () => {
+    const insert = db.prepare(
+      `INSERT INTO fleet_artifacts
+       (id, fleet_run_id, plan_hash, metadata_json, artifact_type, title, body,
+        severity, actor, created_at)
+       VALUES (?, 'run-1', 'plan-hash', ?, 'task_review_finding', ?, '',
+        'blocker', 'reviewer', ?)`
+    );
+    const oversized = JSON.stringify({ payload: "x".repeat(256 * 1024) });
+    const insertAll = db.transaction(() => {
+      for (let index = 0; index < 1_001; index += 1) {
+        const id = `bounded-blocker-${String(index).padStart(4, "0")}`;
+        insert.run(
+          id,
+          index === 999 ? oversized : "{}",
+          `Blocker ${index}`,
+          new Date(Date.UTC(2026, 7, 3) + index).toISOString()
+        );
+      }
+    });
+    insertAll();
+
+    const tasks = queries
+      .listFleetTasksForRun(db)
+      .all("run-1") as FleetTaskRow[];
+    const result = loadFleetDetailArtifactMetadata(
+      db,
+      "run-1",
+      tasks,
+      "plan-hash",
+      1
+    );
+
+    expect(result.rows).toHaveLength(1_000);
+    expect(result.hasMore).toBe(true);
+    expect(
+      result.rows.find((artifact) => artifact.id === "bounded-blocker-0999")
+        ?.metadata_json
+    ).toBe("{}");
+    expect(
+      Math.max(
+        ...result.rows.map((artifact) =>
+          Buffer.byteLength(artifact.metadata_json ?? "", "utf8")
+        )
+      )
+    ).toBe(2);
+  });
+
+  it("preserves rich metadata already admitted by the bounded recent window", () => {
+    const metadata = JSON.stringify({ action: "inspect-this-blocker" });
+    db.prepare(
+      `INSERT INTO fleet_artifacts
+       (id, fleet_run_id, plan_hash, metadata_json, artifact_type, title, body,
+        severity, actor, created_at)
+       VALUES ('recent-blocker', 'run-1', 'plan-hash', ?,
+        'task_review_finding', 'Recent blocker', '', 'blocker', 'reviewer',
+        '2026-08-04T00:00:00.000Z')`
+    ).run(metadata);
+
+    const tasks = queries
+      .listFleetTasksForRun(db)
+      .all("run-1") as FleetTaskRow[];
+    const result = loadFleetDetailArtifactMetadata(
+      db,
+      "run-1",
+      tasks,
+      "plan-hash",
+      1
+    );
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]?.metadata_json).toBe(metadata);
   });
 
   it("reports the full event count independently of the rendered window", () => {

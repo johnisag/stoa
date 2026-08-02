@@ -25,6 +25,7 @@ import type {
   FleetTaskRow,
 } from "@/lib/fleet/types";
 import type { FleetAgentProviderId } from "@/lib/fleet/auxiliary-provider";
+import { insertFleetOwnedSession } from "./fleet-session-fixture";
 
 const BASE_SHA = "a".repeat(40);
 const PLAN_HASH = "b".repeat(64);
@@ -284,15 +285,19 @@ describe("Fleet plan review runtime", () => {
           prompt,
           persistedPrompt,
           branchFeature,
+          approvalMode,
           provider,
           model,
+          ownerId,
         }: {
           lens: FleetPlanReviewLens;
           prompt: string;
           persistedPrompt: string;
           branchFeature: string;
+          approvalMode: string;
           provider: FleetAgentProviderId;
           model: string | null;
+          ownerId: string;
         }) => {
           const resultFilename = prompt.match(
             /STOA_FLEET_REVIEW_[a-f0-9]+\.json/
@@ -309,10 +314,26 @@ describe("Fleet plan review runtime", () => {
             model,
           };
           captures.push(capture);
+          const branchName = generateBranchName(branchFeature);
+          insertFleetOwnedSession(db, {
+            runId: contract.run.id,
+            ownerType: "plan_review",
+            ownerId,
+            sessionId: capture.sessionId,
+            provider,
+            model,
+            approvalMode,
+            workingDirectory: capture.worktree,
+            workerTask: persistedPrompt,
+            worktreePath: capture.worktree,
+            branchName,
+            baseBranch: contract.baseSha,
+            conductorSessionId: contract.run.conductor_session_id,
+          });
           return {
             id: capture.sessionId,
             worktree_path: capture.worktree,
-            branch_name: generateBranchName(branchFeature),
+            branch_name: branchName,
           };
         }
       ),
@@ -684,23 +705,37 @@ describe("Fleet plan review runtime", () => {
       )
       .get() as Record<string, string>;
     db.prepare(
+      `UPDATE fleet_cost_accounts SET session_id = NULL
+       WHERE fleet_run_id = ? AND owner_type = 'plan_review' AND owner_id = ?`
+    ).run(contract.run.id, row.request_id);
+    db.prepare(`DELETE FROM sessions WHERE id = ?`).run(
+      row.reviewer_session_id
+    );
+    db.prepare(
       `UPDATE fleet_reviews
        SET state = 'spawning', reviewer_session_id = '', worktree_path = NULL
        WHERE id = ?`
     ).run(row.id);
+    insertFleetOwnedSession(db, {
+      runId: contract.run.id,
+      ownerType: "plan_review",
+      ownerId: row.request_id,
+      sessionId: "session-recovered",
+      provider: "codex",
+      model: row.model || null,
+      approvalMode: "full-bypass",
+      workingDirectory: "C:\\reviews\\recovered",
+      workerTask: `Write ${row.result_filename}`,
+      worktreePath: "C:\\reviews\\recovered",
+      branchName: row.branch_name,
+      baseBranch: contract.baseSha,
+    });
     db.prepare(
-      `INSERT INTO sessions (
-         id, name, tmux_name, working_directory, group_path, agent_type,
-         worker_task, worker_status, worktree_path, branch_name
-       ) VALUES (?, 'Recovered reviewer', 'recovered-reviewer', ?, 'sessions',
-         'codex', ?, 'running', ?, ?)`
-    ).run(
-      "session-recovered",
-      "C:\\reviews\\recovered",
-      `Write ${row.result_filename}`,
-      "C:\\reviews\\recovered",
-      row.branch_name
-    );
+      `UPDATE fleet_cost_accounts
+       SET session_id = 'session-recovered',
+           session_key = 'codex-session-recovered'
+       WHERE fleet_run_id = ? AND owner_type = 'plan_review' AND owner_id = ?`
+    ).run(contract.run.id, row.request_id);
 
     await reconcileFleetPlanReviews(contract, {
       ...deps,
@@ -712,12 +747,13 @@ describe("Fleet plan review runtime", () => {
     expect(
       db
         .prepare(
-          `SELECT state, reviewer_session_id FROM fleet_reviews WHERE id = ?`
+          `SELECT state, reviewer_session_id, error FROM fleet_reviews WHERE id = ?`
         )
         .get(row.id)
     ).toMatchObject({
       state: "running",
       reviewer_session_id: "session-recovered",
+      error: null,
     });
   });
 
@@ -736,27 +772,31 @@ describe("Fleet plan review runtime", () => {
        WHERE id = ?`
     ).run(row.id);
     db.prepare(
-      `UPDATE fleet_cost_accounts SET provider = 'kilo'
+      `UPDATE fleet_cost_accounts SET provider = 'kilo', session_id = NULL
        WHERE fleet_run_id = ? AND owner_type = 'plan_review' AND owner_id = ?`
     ).run(contract.run.id, row.request_id);
+    db.prepare(`DELETE FROM sessions WHERE id = ?`).run(
+      row.reviewer_session_id
+    );
     db.prepare(
       `UPDATE fleet_runtime_leases SET resource_key = 'kilo'
        WHERE fleet_run_id = ? AND owner_type = 'plan_review' AND owner_id = ?
          AND resource_type = 'provider'`
     ).run(contract.run.id, row.request_id);
-    db.prepare(
-      `INSERT INTO sessions (
-         id, name, tmux_name, working_directory, group_path, agent_type,
-         worker_task, worker_status, worktree_path, branch_name
-       ) VALUES (?, 'Recovered Kilo critic', 'recovered-kilo-critic', ?,
-         'sessions', 'kilo', ?, 'running', ?, ?)`
-    ).run(
-      "session-recovered-kilo",
-      "C:\\reviews\\recovered-kilo",
-      `Write ${row.result_filename}`,
-      "C:\\reviews\\recovered-kilo",
-      row.branch_name
-    );
+    insertFleetOwnedSession(db, {
+      runId: contract.run.id,
+      ownerType: "plan_review",
+      ownerId: row.request_id,
+      sessionId: "session-recovered-kilo",
+      provider: "kilo",
+      model: null,
+      approvalMode: "full-bypass",
+      workingDirectory: "C:\\reviews\\recovered-kilo",
+      workerTask: `Write ${row.result_filename}`,
+      worktreePath: "C:\\reviews\\recovered-kilo",
+      branchName: row.branch_name,
+      baseBranch: contract.baseSha,
+    });
     const stopSession = vi.fn(async () => true);
 
     await reconcileFleetPlanReviews(contract, {

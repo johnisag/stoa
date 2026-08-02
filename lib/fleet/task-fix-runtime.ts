@@ -48,6 +48,10 @@ import {
 import type { FleetRunRow, FleetTaskFixRow } from "./types";
 import { assertFleetLaunchReady } from "./recovery-gate";
 import { isFleetUnattendedProvider } from "./provider-eligibility";
+import {
+  findFleetSessionByOwner,
+  fleetSessionProfileError,
+} from "./session-profile";
 
 const FIX_TIMEOUT_MS = 30 * 60 * 1_000;
 export const FLEET_TASK_FIX_SPAWN_RECOVERY_GRACE_MS = 90 * 1_000;
@@ -98,6 +102,7 @@ export interface FleetTaskFixRuntimeDeps {
     approvalMode: ApprovalMode;
     provider: FleetAgentProviderId;
     model: string | null;
+    ownerId: string;
   }) => Promise<FixSpawnResult>;
 }
 
@@ -234,6 +239,16 @@ function fixerProviderError(
   row: FleetTaskFixRow,
   session?: Session
 ): string | null {
+  if (row.fixer_session_id || session) {
+    const sessionId = session?.id ?? row.fixer_session_id;
+    const profileError = fleetSessionProfileError(session, {
+      runId: row.fleet_run_id,
+      ownerType: "fixer",
+      ownerId: row.request_id,
+      sessionId,
+    });
+    if (profileError) return profileError;
+  }
   const recoveredProvider = session?.agent_type?.trim() ?? "";
   const persistedProvider = row.provider?.trim() || recoveredProvider;
   if (
@@ -255,6 +270,15 @@ async function rejectIneligibleFixerSession(
   const message = fixerProviderError(row, session);
   if (!message) return row;
   const sessionId = session?.id ?? row.fixer_session_id;
+  const profileError =
+    sessionId && row.request_id
+      ? fleetSessionProfileError(session, {
+          runId: row.fleet_run_id,
+          ownerType: "fixer",
+          ownerId: row.request_id,
+          sessionId,
+        })
+      : null;
   const foreignSessionOwner = Boolean(
     sessionId &&
     sessionOwnedByAnotherFleetAccount(deps.db, {
@@ -263,7 +287,7 @@ async function rejectIneligibleFixerSession(
       sessionId,
     })
   );
-  if (session && !foreignSessionOwner) {
+  if (session && !foreignSessionOwner && !profileError) {
     deps.db
       .prepare(
         `UPDATE fleet_task_fixes SET fixer_session_id = ?, updated_at = ?
@@ -280,7 +304,7 @@ async function rejectIneligibleFixerSession(
   const latest = (deps.db
     .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
     .get(row.id) ?? row) as FleetTaskFixRow;
-  if (!foreignSessionOwner && sessionId) {
+  if (!foreignSessionOwner && !profileError && sessionId) {
     const stopped = await deps
       .stopSession(sessionId, "failed")
       .catch(() => false);
@@ -289,6 +313,7 @@ async function rejectIneligibleFixerSession(
   }
   if (
     !foreignSessionOwner &&
+    !profileError &&
     latest.result_path &&
     !(await deps.removeResult(latest.result_path))
   ) {
@@ -296,7 +321,9 @@ async function rejectIneligibleFixerSession(
   }
   recordFleetTaskFixFailure(deps, { ...latest, result_path: "" }, message, {
     sessionCreated:
-      !foreignSessionOwner && fixerSessionWasActivated(deps.db, latest),
+      !foreignSessionOwner &&
+      !profileError &&
+      fixerSessionWasActivated(deps.db, latest),
   });
   return (deps.db
     .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
@@ -605,6 +632,26 @@ async function cleanupFleetTaskFixLaunchRetry(
   row: FleetTaskFixRow
 ): Promise<boolean> {
   if (row.state !== "cleanup_pending" || !row.retry_not_before) return false;
+  const session = row.fixer_session_id
+    ? (queries.getSession(deps.db).get(row.fixer_session_id) as
+        Session | undefined)
+    : undefined;
+  const profileError = row.fixer_session_id
+    ? fleetSessionProfileError(session, {
+        runId: row.fleet_run_id,
+        ownerType: "fixer",
+        ownerId: row.request_id,
+        sessionId: row.fixer_session_id,
+      })
+    : null;
+  if (profileError) {
+    return recordFleetTaskFixFailure(
+      deps,
+      { ...row, result_path: "" },
+      profileError,
+      { sessionCreated: false }
+    );
+  }
   const foreignSessionOwner = Boolean(
     row.fixer_session_id &&
     sessionOwnedByAnotherFleetAccount(deps.db, {
@@ -715,14 +762,46 @@ export async function recoverSpawningFleetTaskFix(
   deps: FleetTaskFixRuntimeDeps,
   row: FleetTaskFixRow
 ): Promise<FleetTaskFixRow> {
-  if (!row.worktree_path || !row.result_path) return row;
-  const session = deps.db
-    .prepare(
-      `SELECT * FROM sessions
-       WHERE working_directory = ? AND instr(worker_task, ?) > 0
-       ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(row.worktree_path, row.result_path) as Session | undefined;
+  if (!row.request_id) return row;
+  const storedSession = row.fixer_session_id
+    ? (queries.getSession(deps.db).get(row.fixer_session_id) as
+        Session | undefined)
+    : undefined;
+  const recovered = row.fixer_session_id
+    ? storedSession
+      ? fleetSessionProfileError(storedSession, {
+          runId: row.fleet_run_id,
+          ownerType: "fixer",
+          ownerId: row.request_id,
+          sessionId: row.fixer_session_id,
+        })
+        ? ({
+            kind: "invalid",
+            error:
+              "Fleet session immutable launch profile does not match its owner",
+          } as const)
+        : ({ kind: "valid", session: storedSession } as const)
+      : ({
+          kind: "invalid",
+          error: "Fleet session identity is missing",
+        } as const)
+    : findFleetSessionByOwner(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "fixer",
+        ownerId: row.request_id,
+      });
+  if (recovered.kind === "invalid" || recovered.kind === "ambiguous") {
+    recordFleetTaskFixFailure(
+      deps,
+      { ...row, result_path: "" },
+      recovered.error,
+      { sessionCreated: false }
+    );
+    return (deps.db
+      .prepare(`SELECT * FROM fleet_task_fixes WHERE id = ?`)
+      .get(row.id) ?? row) as FleetTaskFixRow;
+  }
+  const session = recovered.kind === "valid" ? recovered.session : undefined;
   if (session) {
     if (fixerProviderError(row, session)) {
       return rejectIneligibleFixerSession(deps, row, session);
@@ -1049,9 +1128,17 @@ async function startFix(
       approvalMode: mode,
       provider: selection.provider,
       model: selection.model,
+      ownerId: requestId,
     });
     const session = queries.getSession(deps.db).get(spawned.id) as
       Session | undefined;
+    const profileError = fleetSessionProfileError(session, {
+      runId: row.fleet_run_id,
+      ownerType: "fixer",
+      ownerId: requestId,
+      sessionId: spawned.id,
+    });
+    if (profileError) throw new Error(profileError);
     if (
       session &&
       !activateFleetPaidSession(deps.db, {
@@ -1148,9 +1235,18 @@ async function startFix(
     const recoveredSession = sessionId
       ? (queries.getSession(deps.db).get(sessionId) as Session | undefined)
       : undefined;
+    const recoveredProfileError = sessionId
+      ? fleetSessionProfileError(recoveredSession, {
+          runId: row.fleet_run_id,
+          ownerType: "fixer",
+          ownerId: requestId,
+          sessionId,
+        })
+      : null;
     const ambiguousExternalState =
-      foreignSessionOwner || Boolean(sessionId && !recoveredSession);
-    if (recoveredSession && !foreignSessionOwner) {
+      foreignSessionOwner ||
+      Boolean(sessionId && (!recoveredSession || recoveredProfileError));
+    if (recoveredSession && !foreignSessionOwner && !recoveredProfileError) {
       activateFleetPaidSession(deps.db, {
         runId: row.fleet_run_id,
         ownerType: "fixer",

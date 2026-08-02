@@ -45,6 +45,10 @@ import type {
   FleetTaskRow,
 } from "./types";
 import { FLEET_PLAN_REVIEW_LENSES } from "./plan-review-evidence";
+import {
+  findFleetSessionByOwner,
+  fleetSessionProfileError,
+} from "./session-profile";
 
 export { FLEET_PLAN_REVIEW_LENSES } from "./plan-review-evidence";
 
@@ -168,6 +172,7 @@ interface FleetPlanReviewDeps {
     approvalMode: ApprovalMode;
     provider: FleetAgentProviderId;
     model: string | null;
+    ownerId: string;
   }) => Promise<ReviewSpawnResult>;
   readResult: typeof readBoundedRegularFile;
   sessionExists: (db: Database.Database, sessionId: string) => Promise<boolean>;
@@ -498,6 +503,7 @@ function dependencies(
         approvalMode,
         provider,
         model,
+        ownerId,
       }) =>
         spawnWorker({
           conductorSessionId: contract.run.conductor_session_id ?? null,
@@ -511,6 +517,11 @@ function dependencies(
           requireTaskDelivery: true,
           skipSetup: true,
           requireStrongIsolation: true,
+          fleetOwner: {
+            runId: contract.run.id,
+            ownerType: "plan_review",
+            ownerId,
+          },
           approvalMode,
           agentType: provider,
           model: model ?? undefined,
@@ -605,6 +616,16 @@ function planReviewProviderError(
   row: FleetPlanReviewRow,
   session?: Session
 ): string | null {
+  if (row.reviewer_session_id || session) {
+    const sessionId = session?.id ?? row.reviewer_session_id;
+    const profileError = fleetSessionProfileError(session, {
+      runId: row.fleet_run_id,
+      ownerType: "plan_review",
+      ownerId: row.request_id,
+      sessionId,
+    });
+    if (profileError) return profileError;
+  }
   const recoveredProvider = session?.agent_type?.trim() ?? "";
   const persistedProvider = row.provider?.trim() || recoveredProvider;
   if (
@@ -626,6 +647,15 @@ function rejectIneligiblePlanReviewSession(
   const message = planReviewProviderError(row, session);
   if (!message) return row;
   const sessionId = session?.id ?? row.reviewer_session_id;
+  const profileError =
+    sessionId && row.request_id
+      ? fleetSessionProfileError(session, {
+          runId: row.fleet_run_id,
+          ownerType: "plan_review",
+          ownerId: row.request_id,
+          sessionId,
+        })
+      : null;
   const foreignSessionOwner = Boolean(
     sessionId &&
     sessionOwnedByAnotherFleetAccount(deps.db, {
@@ -634,7 +664,7 @@ function rejectIneligiblePlanReviewSession(
       sessionId,
     })
   );
-  if (session && !foreignSessionOwner) {
+  if (session && !foreignSessionOwner && !profileError) {
     deps.db
       .prepare(
         `UPDATE fleet_reviews
@@ -660,7 +690,7 @@ function rejectIneligiblePlanReviewSession(
     findings: [failureFinding(message)],
     bytes: null,
     error: message,
-    preserveExternalState: foreignSessionOwner,
+    preserveExternalState: foreignSessionOwner || Boolean(profileError),
   });
   return (deps.db
     .prepare(`SELECT * FROM fleet_reviews WHERE id = ?`)
@@ -912,14 +942,29 @@ async function cleanupReview(
   deps: FleetPlanReviewDeps,
   row: FleetPlanReviewRow
 ): Promise<boolean> {
-  const foreignSessionOwner = Boolean(
+  const session = row.reviewer_session_id
+    ? (queries.getSession(deps.db).get(row.reviewer_session_id) as
+        Session | undefined)
+    : undefined;
+  const invalidSessionProfile = Boolean(
     row.reviewer_session_id &&
-    sessionOwnedByAnotherFleetAccount(deps.db, {
+    fleetSessionProfileError(session, {
       runId: row.fleet_run_id,
+      ownerType: "plan_review",
       ownerId: row.request_id,
       sessionId: row.reviewer_session_id,
     })
   );
+  const foreignSessionOwner =
+    invalidSessionProfile ||
+    Boolean(
+      row.reviewer_session_id &&
+      sessionOwnedByAnotherFleetAccount(deps.db, {
+        runId: row.fleet_run_id,
+        ownerId: row.request_id,
+        sessionId: row.reviewer_session_id,
+      })
+    );
   if (row.reviewer_session_id && !foreignSessionOwner) {
     const stopped = await deps
       .stopSession(
@@ -1031,14 +1076,47 @@ async function recoverSpawningReview(
   deps: FleetPlanReviewDeps,
   row: FleetPlanReviewRow
 ): Promise<FleetPlanReviewRow> {
-  if (!row.branch_name) return row;
-  const session = deps.db
-    .prepare(
-      `SELECT * FROM sessions
-       WHERE branch_name = ? AND instr(worker_task, ?) > 0
-       ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(row.branch_name, row.result_filename) as Session | undefined;
+  if (!row.request_id) return row;
+  const storedSession = row.reviewer_session_id
+    ? (queries.getSession(deps.db).get(row.reviewer_session_id) as
+        Session | undefined)
+    : undefined;
+  const recovered = row.reviewer_session_id
+    ? storedSession
+      ? fleetSessionProfileError(storedSession, {
+          runId: row.fleet_run_id,
+          ownerType: "plan_review",
+          ownerId: row.request_id,
+          sessionId: row.reviewer_session_id,
+        })
+        ? ({
+            kind: "invalid",
+            error:
+              "Fleet session immutable launch profile does not match its owner",
+          } as const)
+        : ({ kind: "valid", session: storedSession } as const)
+      : ({
+          kind: "invalid",
+          error: "Fleet session identity is missing",
+        } as const)
+    : findFleetSessionByOwner(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "plan_review",
+        ownerId: row.request_id,
+      });
+  if (recovered.kind === "invalid" || recovered.kind === "ambiguous") {
+    queueReviewResult(deps, row, {
+      verdict: "changes_requested",
+      findings: [failureFinding(recovered.error)],
+      bytes: null,
+      error: recovered.error,
+      preserveExternalState: true,
+    });
+    return (deps.db
+      .prepare(`SELECT * FROM fleet_reviews WHERE id = ?`)
+      .get(row.id) ?? row) as FleetPlanReviewRow;
+  }
+  const session = recovered.kind === "valid" ? recovered.session : undefined;
   if (session?.worktree_path) {
     const rejected = rejectIneligiblePlanReviewSession(deps, row, session);
     if (rejected.state !== "spawning") return rejected;
@@ -1142,7 +1220,7 @@ async function recoverSpawningReview(
     } else {
       clearFleetProviderCooldown(deps.db, selectedProvider);
     }
-  } else if (row.project_path) {
+  } else if (row.project_path && row.branch_name) {
     try {
       const worktrees = (
         await deps.git(
@@ -1354,9 +1432,17 @@ async function startReview(
       approvalMode: launchApprovalMode,
       provider: selection.provider,
       model: selection.model,
+      ownerId: requestId,
     });
     const session = queries.getSession(deps.db).get(spawned.id) as
       Session | undefined;
+    const profileError = fleetSessionProfileError(session, {
+      runId: contract.run.id,
+      ownerType: "plan_review",
+      ownerId: requestId,
+      sessionId: spawned.id,
+    });
+    if (profileError) throw new Error(profileError);
     if (!spawned.worktree_path || !spawned.branch_name) {
       throw new Error("plan reviewer started without an isolated worktree");
     }
@@ -1491,7 +1577,15 @@ async function startReview(
     const recoveredSession = sessionId
       ? (queries.getSession(deps.db).get(sessionId) as Session | undefined)
       : undefined;
-    if (recoveredSession && !foreignSessionOwner) {
+    const recoveredProfileError = sessionId
+      ? fleetSessionProfileError(recoveredSession, {
+          runId: contract.run.id,
+          ownerType: "plan_review",
+          ownerId: requestId,
+          sessionId,
+        })
+      : null;
+    if (recoveredSession && !foreignSessionOwner && !recoveredProfileError) {
       activateFleetPaidSession(deps.db, {
         runId: contract.run.id,
         ownerType: "plan_review",
@@ -1521,7 +1615,8 @@ async function startReview(
       1_000
     );
     const ambiguousExternalState =
-      foreignSessionOwner || Boolean(sessionId && !recoveredSession);
+      foreignSessionOwner ||
+      Boolean(sessionId && (!recoveredSession || recoveredProfileError));
     const retry = decideFleetAuxiliaryLaunchRetry(deps.db, {
       provider: selection.provider,
       previousFailureCount: latest.launch_failure_count,

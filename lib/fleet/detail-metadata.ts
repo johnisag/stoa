@@ -9,6 +9,18 @@ const ARTIFACT_METADATA_COLUMNS = `
   body_pruned_at, created_at
 `;
 
+const ACTIONABLE_ARTIFACT_METADATA_COLUMNS = `
+  id, fleet_run_id, task_id, worker_id, attempt, plan_hash,
+  base_sha, head_sha, content_hash, '{}' AS metadata_json, byte_count,
+  artifact_type, title, '' AS body, severity, actor,
+  body_pruned_at, created_at
+`;
+
+// The normal detail window is deliberately small. This larger, metadata-only
+// supplement keeps current blockers actionable without allowing one corrupted
+// run to make its detail response grow without limit.
+const ACTIONABLE_ARTIFACT_METADATA_LIMIT = 1_000;
+
 export interface FleetDetailArtifactMetadata {
   rows: FleetArtifactRow[];
   total: number;
@@ -31,14 +43,14 @@ function taskArtifactIds(tasks: FleetTaskRow[]): string[] {
 
 /**
  * Return the bounded newest artifact window plus every artifact referenced by a
- * task. The latter is bounded by the task graph and keeps exact report, diff,
- * and verification evidence discoverable even after newer review artifacts
- * push it outside the normal metadata window.
+ * task and current blocker metadata. Task references are bounded by the task
+ * graph; blockers have their own hard ceiling. Bodies remain excluded.
  */
 export function loadFleetDetailArtifactMetadata(
   db: Database.Database,
   runId: string,
   tasks: FleetTaskRow[],
+  currentPlanHash: string | null,
   recentLimit: number
 ): FleetDetailArtifactMetadata {
   if (!Number.isSafeInteger(recentLimit) || recentLimit < 1) {
@@ -59,6 +71,38 @@ export function loadFleetDetailArtifactMetadata(
     const row = referencedStatement.get(runId, artifactId) as
       FleetArtifactRow | undefined;
     if (row) rowsById.set(row.id, row);
+  }
+
+  const actionable = db
+    .prepare(
+      `SELECT ${ACTIONABLE_ARTIFACT_METADATA_COLUMNS}
+       FROM fleet_artifacts
+       WHERE fleet_run_id = ?
+         AND severity = 'blocker'
+         AND (plan_hash = ? OR plan_hash IS NULL)
+         AND (
+           task_id IS NULL OR
+           head_sha IS NULL OR
+           EXISTS (
+             SELECT 1
+             FROM fleet_tasks task
+             WHERE task.id = fleet_artifacts.task_id
+               AND task.fleet_run_id = fleet_artifacts.fleet_run_id
+               AND (task.head_sha IS NULL OR task.head_sha = fleet_artifacts.head_sha)
+           )
+         )
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(
+      runId,
+      currentPlanHash,
+      ACTIONABLE_ARTIFACT_METADATA_LIMIT
+    ) as FleetArtifactRow[];
+  for (const row of actionable) {
+    // Keep the richer row when this blocker is already in the bounded recent
+    // window or is task-referenced. Only the supplemental copy is compact.
+    if (!rowsById.has(row.id)) rowsById.set(row.id, row);
   }
 
   const rows = [...rowsById.values()].sort(

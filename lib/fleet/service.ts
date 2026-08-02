@@ -495,6 +495,7 @@ function fleetRunDetailFromDb(
     db,
     id,
     tasks,
+    run.plan_hash,
     FLEET_ARTIFACT_LIST_LIMIT
   );
   const verifications = queries

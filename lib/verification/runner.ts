@@ -8,13 +8,24 @@
 import { execFile, spawn, type ChildProcess } from "child_process";
 import { isWindows, killTreeArgs, resolveBinary } from "../platform";
 
-/** Hard ceiling for one verification run before it is killed. */
-export const VERIFY_TIMEOUT_MS = (() => {
-  const raw = process.env.STOA_VERIFY_TIMEOUT_MS;
-  if (raw == null) return 600_000;
+export const VERIFY_TIMEOUT_DEFAULT_MS = 600_000;
+// Fleet's durable verification/merge leases reserve one additional minute and
+// are capped at 24 hours. Keep the accepted process timeout below that same
+// boundary so no supported configuration can outlive its exclusive Git lease.
+export const VERIFY_TIMEOUT_MAX_MS = 24 * 60 * 60 * 1000 - 60_000;
+
+export function parseVerifyTimeoutMs(raw: string | undefined): number {
+  if (raw == null) return VERIFY_TIMEOUT_DEFAULT_MS;
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 600_000;
-})();
+  return Number.isFinite(n) && n > 0
+    ? Math.min(Math.floor(n), VERIFY_TIMEOUT_MAX_MS)
+    : VERIFY_TIMEOUT_DEFAULT_MS;
+}
+
+/** Hard ceiling for one verification run before it is killed. */
+export const VERIFY_TIMEOUT_MS = parseVerifyTimeoutMs(
+  process.env.STOA_VERIFY_TIMEOUT_MS
+);
 
 /** Maximum child-process output retained by Node before it aborts the step. */
 export const VERIFY_MAX_OUTPUT_BUFFER = 64 * 1024 * 1024;

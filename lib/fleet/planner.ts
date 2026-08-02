@@ -58,6 +58,10 @@ import {
   isFleetUnattendedProvider,
   type FleetUnattendedProviderId,
 } from "./provider-eligibility";
+import {
+  findFleetSessionByOwner,
+  fleetSessionProfileError,
+} from "./session-profile";
 
 const FLEET_PLAN_FILE_MAX_BYTES = 128 * 1024;
 const FLEET_PLANNER_TIMEOUT_MS = 15 * 60 * 1000;
@@ -301,6 +305,15 @@ async function plannerWorkspaceContractError(
     (planner.sessionId
       ? (queries.getSession(db).get(planner.sessionId) as Session | undefined)
       : undefined);
+  if (planner.sessionId) {
+    const profileError = fleetSessionProfileError(session, {
+      runId: run.id,
+      ownerType: "planner",
+      ownerId: planner.requestId as string,
+      sessionId: planner.sessionId,
+    });
+    if (profileError) return profileError;
+  }
   if (session && exactGitSha(session.base_branch) !== expectedBaseSha) {
     return "planner session base contract does not match the Fleet run";
   }
@@ -393,6 +406,18 @@ function plannerProviderBinding(
   const session = planner.sessionId
     ? (queries.getSession(db).get(planner.sessionId) as Session | undefined)
     : undefined;
+  if (planner.sessionId) {
+    if (!planner.requestId) {
+      return { error: "persisted Fleet planner owner identity is missing" };
+    }
+    const profileError = fleetSessionProfileError(session, {
+      runId: run.id,
+      ownerType: "planner",
+      ownerId: planner.requestId,
+      sessionId: planner.sessionId,
+    });
+    if (profileError) return { error: profileError };
+  }
   const recoveredProvider = session?.agent_type?.trim() ?? "";
   const persistedProvider = planner.provider?.trim();
   const selectedProvider =
@@ -878,6 +903,11 @@ export async function startFleetPlanner(
       fleetWritableRoots: [resultContract.attemptDirectory],
       fleetArtifactPaths: [resultContract.resultPath],
       requireStrongIsolation: true,
+      fleetOwner: {
+        runId: run.id,
+        ownerType: "planner",
+        ownerId: requestId,
+      },
       approvalMode,
       agentType: provider,
       model: provider === run.provider ? (run.model ?? undefined) : undefined,
@@ -1029,7 +1059,13 @@ export async function startFleetPlanner(
     ) {
       const recovered = queries.getSession(db).get(error.sessionId) as
         Session | undefined;
-      if (recovered) {
+      const recoveredProfileError = fleetSessionProfileError(recovered, {
+        runId,
+        ownerType: "planner",
+        ownerId: requestId,
+        sessionId: error.sessionId,
+      });
+      if (recovered && !recoveredProfileError) {
         const activated = activateFleetPaidSession(db, {
           runId,
           ownerType: "planner",
@@ -1047,6 +1083,7 @@ export async function startFleetPlanner(
         }
       } else {
         ambiguousOwnership = true;
+        if (recoveredProfileError) failedPlanner.error = recoveredProfileError;
       }
     }
     failedPlanner = {
@@ -1123,6 +1160,21 @@ async function cleanupPlanner(
   planner: PlannerSettings,
   finalStatus: "completed" | "failed" = "completed"
 ): Promise<boolean> {
+  if (planner.sessionId) {
+    if (!planner.requestId) return false;
+    const session = queries.getSession(getDb()).get(planner.sessionId) as
+      Session | undefined;
+    if (
+      fleetSessionProfileError(session, {
+        runId,
+        ownerType: "planner",
+        ownerId: planner.requestId,
+        sessionId: planner.sessionId,
+      })
+    ) {
+      return false;
+    }
+  }
   const stopped = planner.sessionId
     ? await stopFleetSession(planner.sessionId, finalStatus).catch(() => false)
     : true;
@@ -1232,23 +1284,34 @@ async function finalizePlannerCleanup(
 }
 
 async function recoverPlannerIdentity(
+  runId: string,
   planner: PlannerSettings
 ): Promise<PlannerSettings> {
-  if (!planner.branchName) return planner;
   const db = getDb();
-  const recovered = db
-    .prepare(
-      `SELECT * FROM sessions WHERE branch_name = ? ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(planner.branchName) as Session | undefined;
-  if (recovered) {
-    return {
-      ...planner,
-      sessionId: recovered.id,
-      worktreePath: recovered.worktree_path ?? planner.worktreePath,
-      branchName: recovered.branch_name ?? planner.branchName,
-    };
+  if (!planner.sessionId && planner.requestId) {
+    const recovered = findFleetSessionByOwner(db, {
+      runId,
+      ownerType: "planner",
+      ownerId: planner.requestId,
+    });
+    if (recovered.kind === "valid") {
+      return {
+        ...planner,
+        sessionId: recovered.session.id,
+        worktreePath: recovered.session.worktree_path ?? planner.worktreePath,
+        branchName: recovered.session.branch_name ?? planner.branchName,
+      };
+    }
+    if (recovered.kind !== "missing") {
+      return {
+        ...planner,
+        error: recovered.error,
+        ambiguousOwnership: true,
+        launchSettled: true,
+      };
+    }
   }
+  if (!planner.branchName) return planner;
   if (!planner.projectPath) return planner;
   try {
     const { stdout } = await runGit(
@@ -1295,7 +1358,9 @@ async function rejectInvalidPlannerContract(
   run: FleetRunRow,
   planner: PlannerSettings
 ): Promise<boolean> {
-  let error = await plannerWorkspaceContractError(getDb(), run, planner);
+  let error = planner.ambiguousOwnership
+    ? planner.error || "planner session ownership is ambiguous"
+    : await plannerWorkspaceContractError(getDb(), run, planner);
   if (!error && planner.state !== "starting" && !planner.worktreePath) {
     error = "planner runtime identity is incomplete";
   }
@@ -1328,9 +1393,9 @@ export async function cancelFleetPlanner(
     return detail ? { run: detail } : { error: "failed to read fleet run" };
   }
   if (planner.state === "starting") {
-    const recovered = await recoverPlannerIdentity(planner);
+    const recovered = await recoverPlannerIdentity(runId, planner);
     const providerError = plannerProviderBinding(db, run, recovered).error;
-    if (recovered.worktreePath && !providerError) {
+    if (recovered.sessionId && recovered.worktreePath && !providerError) {
       // Only validate when adopting a recovered launch. A legacy starting
       // record with no runtime identity still needs to remain cancelable; it
       // cannot produce an ingestible result, and cleanup has nothing to adopt.
@@ -1392,7 +1457,7 @@ export async function pollFleetPlanner(
   if (!run) return { error: "Fleet run not found", status: 404 };
   let planner = plannerSettings(run);
   if (planner.state === "cleanup_pending") {
-    const recovered = await recoverPlannerIdentity(planner);
+    const recovered = await recoverPlannerIdentity(runId, planner);
     if (
       recovered.sessionId !== planner.sessionId ||
       recovered.worktreePath !== planner.worktreePath
@@ -1411,7 +1476,7 @@ export async function pollFleetPlanner(
     return detail ? { run: detail } : { error: "failed to read fleet run" };
   }
   if (planner.state === "starting") {
-    const recovered = await recoverPlannerIdentity(planner);
+    const recovered = await recoverPlannerIdentity(runId, planner);
     planner = recovered;
     if (await rejectInvalidPlannerContract(run, planner)) {
       const detail = getFleetRunDetail(runId);
@@ -1421,7 +1486,7 @@ export async function pollFleetPlanner(
       const detail = getFleetRunDetail(runId);
       return detail ? { run: detail } : { error: "failed to read fleet run" };
     }
-    if (recovered.worktreePath) {
+    if (recovered.sessionId && recovered.worktreePath) {
       const running = {
         ...recovered,
         state: "running",
@@ -1460,7 +1525,7 @@ export async function pollFleetPlanner(
     Date.now() - startedAt > FLEET_PLANNER_TIMEOUT_MS
   ) {
     if (planner.state === "starting")
-      planner = await recoverPlannerIdentity(planner);
+      planner = await recoverPlannerIdentity(runId, planner);
     if (
       queuePlannerTerminal(
         runId,

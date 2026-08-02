@@ -1514,7 +1514,7 @@ app.prepare().then(() => {
         process.env.STOA_PTY_HOST = "0";
         resetSessionBackend(); // re-resolve to Tier 1 even if already cached
         console.error(
-          "> pty-host daemon unreachable; using in-process sessions (Tier 1):",
+          "> pty-host daemon unavailable or incompatible; using in-process sessions (Tier 1) for this Stoa process. Restart the daemon, then restart Stoa to restore restart-surviving sessions:",
           err instanceof Error ? err.message : err
         );
       }

@@ -1,6 +1,8 @@
 import type Database from "better-sqlite3";
 import { ensureSessionLaunchProfileSchema } from "./session-launch-profile-schema";
 import { ensureFleetSessionOwnershipSchema } from "./fleet-session-ownership-schema";
+import { ensureFleetOwnedSessionRoleSchema } from "./fleet-session-role-schema";
+import { ensureFleetMergeProvenanceSchema } from "./fleet-merge-provenance-schema";
 
 const SAFE_FLEET_AUTOMATION_POLICY_JSON =
   '{"version":1,"automaticPlanning":false,"automaticPlanApproval":false,"automaticStart":false,"automaticFixes":false,"maxAutomaticFixRounds":0,"automaticMerge":false,"mergeTarget":"github_pr","allowSensitivePaths":false,"allowUnconfinedAgents":false,"plannerTaskCap":8,"cleanupPolicy":"preserve","retentionDays":null}';
@@ -3382,6 +3384,16 @@ const migrations: Migration[] = [
     id: 79,
     name: "add_fleet_session_ownership",
     up: ensureFleetSessionOwnershipSchema,
+  },
+  {
+    id: 80,
+    name: "backfill_fleet_owned_session_roles",
+    up: ensureFleetOwnedSessionRoleSchema,
+  },
+  {
+    id: 81,
+    name: "bind_expected_fleet_merge_results",
+    up: ensureFleetMergeProvenanceSchema,
   },
 ];
 

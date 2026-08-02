@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
 import { backendKeyForSession } from "@/lib/providers/registry";
+import { fleetSessionProfileError } from "./session-profile";
 import { computeSessionCosts } from "@/lib/session-cost";
 import { persistCostSamples } from "@/lib/cost-history";
 import type { DispatchRepo } from "@/lib/dispatch/types";
@@ -752,6 +753,13 @@ function validateFleetOwnedSession(input: {
   session: Session;
 }): string | null {
   const { db, run, task, worker, session } = input;
+  const profileError = fleetSessionProfileError(session, {
+    runId: run.id,
+    ownerType: "worker",
+    ownerId: worker.id,
+    sessionId: session.id,
+  });
+  if (profileError) return profileError;
   if (
     worker.fleet_run_id !== run.id ||
     worker.task_id !== task.id ||
@@ -1349,12 +1357,24 @@ async function launchLease(
               .get(result.sessionId) as Session | undefined;
             if (!session) return queueLaunchCleanup("cost_session_missing");
             const currentWorker = deps.db
-              .prepare(
-                `SELECT reservation_usd, reservation_tokens,
-                        reservation_confidence, reservation_basis
-                 FROM fleet_workers WHERE id = ?`
-              )
+              .prepare(`SELECT * FROM fleet_workers WHERE id = ?`)
               .get(lease.workerId) as FleetWorkerRow | undefined;
+            const currentTask = deps.db
+              .prepare(`SELECT * FROM fleet_tasks WHERE id = ?`)
+              .get(lease.task.id) as FleetTaskRow | undefined;
+            if (
+              !currentWorker ||
+              !currentTask ||
+              validateFleetOwnedSession({
+                db: deps.db,
+                run: lease.run,
+                task: currentTask,
+                worker: currentWorker,
+                session,
+              })
+            ) {
+              return queueLaunchCleanup("session_profile_invalid");
+            }
             if (
               !registerFleetCostAccount(deps.db, {
                 runId: lease.run.id,
@@ -1403,12 +1423,24 @@ async function launchLease(
           Session | undefined;
         if (!session) return queueLaunchCleanup("cost_session_missing");
         const currentWorker = deps.db
-          .prepare(
-            `SELECT reservation_usd, reservation_tokens,
-                      reservation_confidence, reservation_basis
-               FROM fleet_workers WHERE id = ?`
-          )
+          .prepare(`SELECT * FROM fleet_workers WHERE id = ?`)
           .get(lease.workerId) as FleetWorkerRow | undefined;
+        const currentTask = deps.db
+          .prepare(`SELECT * FROM fleet_tasks WHERE id = ?`)
+          .get(lease.task.id) as FleetTaskRow | undefined;
+        if (
+          !currentWorker ||
+          !currentTask ||
+          validateFleetOwnedSession({
+            db: deps.db,
+            run: lease.run,
+            task: currentTask,
+            worker: currentWorker,
+            session,
+          })
+        ) {
+          return queueLaunchCleanup("session_profile_invalid");
+        }
         if (
           !registerFleetCostAccount(deps.db, {
             runId: lease.run.id,
@@ -2065,7 +2097,7 @@ async function pollActiveWorkers(
     )
     .all(runId) as FleetWorkerRow[];
   for (const worker of workers) {
-    const session = worker.session_id
+    const persistedSession = worker.session_id
       ? (queries.getSession(deps.db).get(worker.session_id) as
           Session | undefined)
       : undefined;
@@ -2076,8 +2108,24 @@ async function pollActiveWorkers(
           )
           .get(worker.task_id, runId) as FleetTaskRow | undefined)
       : undefined;
+    const sessionProfileError =
+      persistedSession && task
+        ? validateFleetOwnedSession({
+            db: deps.db,
+            run,
+            task,
+            worker,
+            session: persistedSession,
+          })
+        : null;
+    // Never read an artifact, probe a backend, deliver an interrupt, or stop a
+    // session whose exact Fleet owner profile cannot be proved. Keeping the
+    // persisted id on the worker preserves evidence while the task is moved to
+    // operator inspection below.
+    const session = sessionProfileError ? undefined : persistedSession;
     if (
       task &&
+      !sessionProfileError &&
       (await pollFleetWorkerReport(deps, run, task, worker, session))
     ) {
       continue;
@@ -2098,7 +2146,9 @@ async function pollActiveWorkers(
     let claimedCleanupCause: string | null = null;
     if (!session) {
       terminalStatus = "dead";
-      terminalCause = interruptTerminalCause ?? "session_missing";
+      terminalCause =
+        interruptTerminalCause ??
+        (sessionProfileError ? "session_profile_invalid" : "session_missing");
     } else if (
       session.worker_status === "completed" ||
       session.worker_status === "failed"
@@ -3240,6 +3290,18 @@ export async function reconcileFleetWorkerReport(
       ? (queries.getSession(deps.db).get(worker.session_id) as
           Session | undefined)
       : undefined;
+    if (
+      session &&
+      validateFleetOwnedSession({
+        db: deps.db,
+        run,
+        task,
+        worker,
+        session,
+      })
+    ) {
+      return false;
+    }
     return pollFleetWorkerReport(deps, run, task, worker, session, true);
   } finally {
     runLocks.delete(runId);

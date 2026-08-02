@@ -59,6 +59,7 @@ import {
   ingestGeneratedFleetRunPlan,
 } from "@/lib/fleet/service";
 import { startFleetPlanner } from "@/lib/fleet/planner";
+import { insertFleetOwnedSession } from "./fleet-session-fixture";
 import {
   reconcileFleetTaskReviews,
   type FleetTaskReviewDeps,
@@ -75,6 +76,7 @@ import {
   reconcileFleetVerifications,
   type FleetVerificationDeps,
 } from "@/lib/fleet/verification";
+import { isValidProviderId } from "@/lib/providers/registry";
 
 const BASE_SHA = "a".repeat(40);
 const TASK_HEAD_SHA = "b".repeat(40);
@@ -139,21 +141,34 @@ function insertSession(input: {
   id: string;
   worktree: string;
   branch: string;
+  spawn: Parameters<FleetSchedulerDeps["spawn"]>[0];
 }): void {
-  db.prepare(
-    `INSERT INTO sessions
-     (id, name, tmux_name, status, worker_status, working_directory, model,
-      group_path, agent_type, branch_name, worktree_path)
-     VALUES (?, ?, ?, 'running', 'working', ?, 'test-model', 'sessions',
-      'codex', ?, ?)`
-  ).run(
-    input.id,
-    input.id,
-    `codex-${input.id}`,
-    PROJECT_PATH,
-    input.branch,
-    input.worktree
-  );
+  const provider = input.spawn.task.agent_type;
+  const ownerId = input.spawn.reportContract?.workerId;
+  if (
+    !provider ||
+    !isValidProviderId(provider) ||
+    provider === "shell" ||
+    !ownerId
+  ) {
+    throw new Error("worker fixture is missing its exact launch identity");
+  }
+  insertFleetOwnedSession(db, {
+    runId: input.spawn.run.id,
+    ownerType: "worker",
+    ownerId,
+    sessionId: input.id,
+    provider,
+    model: input.spawn.task.model?.trim() || null,
+    approvalMode: "full-bypass",
+    workingDirectory: input.worktree,
+    workerTask: "sessionless Fleet E2E worker fixture",
+    worktreePath: input.worktree,
+    branchName: input.branch,
+    baseBranch: input.spawn.task.base_branch ?? "main",
+    conductorSessionId: input.spawn.run.conductor_session_id,
+    fleetOwnershipKey: input.spawn.sessionOwnershipKey,
+  });
 }
 
 function reportCollection(
@@ -231,23 +246,22 @@ function taskReviewRuntime(input: {
         );
       }
       const sessionId = `task-fix-session-${input.taskId}`;
-      db.prepare(
-        `INSERT INTO sessions
-         (id, name, tmux_name, agent_type, model, status, working_directory,
-          worker_task, worker_status, branch_name, worktree_path, created_at,
-          updated_at)
-         VALUES (?, 'automatic fixer', ?, 'codex', '', 'running', ?, ?,
-           'working', ?, ?, ?, ?)`
-      ).run(
+      insertFleetOwnedSession(db, {
+        runId: request.contract.candidate.fleet_run_id,
+        ownerType: "fixer",
+        ownerId: request.ownerId,
         sessionId,
-        `codex-${sessionId}`,
-        input.taskWorktree,
-        request.persistedPrompt,
-        input.taskBranch,
-        input.taskWorktree,
-        NOW.toISOString(),
-        NOW.toISOString()
-      );
+        provider: request.provider,
+        model: request.model,
+        approvalMode: request.approvalMode,
+        workingDirectory: input.taskWorktree,
+        workerTask: request.persistedPrompt,
+        worktreePath: input.taskWorktree,
+        branchName: input.taskBranch,
+        baseBranch: request.contract.candidate.task_base_branch ?? "main",
+        conductorSessionId:
+          request.contract.candidate.conductor_session_id ?? null,
+      });
       return { id: sessionId };
     }
   );
@@ -257,16 +271,35 @@ function taskReviewRuntime(input: {
       const reviewedHead =
         request.contract.candidate.task_head_sha ?? TASK_HEAD_SHA;
       const headLabel = reviewedHead.slice(0, 8);
+      const sessionId = `task-review-session-${input.taskId}-${headLabel}-${request.lens}`;
+      const worktreePath = path.join(
+        PROJECT_PATH,
+        ".stoa-review-worktrees",
+        input.taskId,
+        headLabel,
+        request.lens
+      );
+      const branchName = generateBranchName(request.branchFeature);
+      insertFleetOwnedSession(db, {
+        runId: request.contract.candidate.fleet_run_id,
+        ownerType: "task_review",
+        ownerId: request.ownerId,
+        sessionId,
+        provider: request.provider,
+        model: request.model,
+        approvalMode: request.approvalMode,
+        workingDirectory: worktreePath,
+        workerTask: request.persistedPrompt,
+        worktreePath,
+        branchName,
+        baseBranch: reviewedHead,
+        conductorSessionId:
+          request.contract.candidate.conductor_session_id ?? null,
+      });
       return {
-        id: `task-review-session-${input.taskId}-${headLabel}-${request.lens}`,
-        worktree_path: path.join(
-          PROJECT_PATH,
-          ".stoa-review-worktrees",
-          input.taskId,
-          headLabel,
-          request.lens
-        ),
-        branch_name: generateBranchName(request.branchFeature),
+        id: sessionId,
+        worktree_path: worktreePath,
+        branch_name: branchName,
       };
     }
   );
@@ -407,6 +440,7 @@ function mergeRuntime(
   let serial = 0;
   let integrationBranchDeleted = false;
   let localDirty = false;
+  let mergeInProgress = false;
 
   const git = async (cwd: string, args: string[]) => {
     gitCalls.push({ cwd, args: [...args] });
@@ -446,6 +480,13 @@ function mergeRuntime(
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "for-each-ref") {
+      if (
+        cwd === PROJECT_PATH &&
+        args.includes("--format=%(symref)") &&
+        args.at(-1) === "refs/heads/main"
+      ) {
+        return { stdout: "\n", stderr: "" };
+      }
       const head = heads.get(integration.worktree);
       return {
         stdout:
@@ -473,16 +514,22 @@ function mergeRuntime(
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "merge" && args[1] === "--no-ff") {
+      mergeInProgress = true;
       return { stdout: "", stderr: "" };
     }
-    if (args[0] === "-c" && args.includes("commit")) {
-      heads.set(integration.worktree, INTEGRATION_HEAD_SHA);
-      return { stdout: "", stderr: "" };
+    if (args[0] === "write-tree") {
+      if (!mergeInProgress) throw new Error("no fake merge tree");
+      return { stdout: `${"8".repeat(40)}\n`, stderr: "" };
+    }
+    if (args[0] === "-c" && args.includes("commit-tree")) {
+      if (!mergeInProgress) throw new Error("no fake merge to commit");
+      return { stdout: `${INTEGRATION_HEAD_SHA}\n`, stderr: "" };
     }
     if (args[0] === "update-ref") {
-      const branch = args[1]?.replace(/^refs\/heads\//, "");
-      const newHead = args[2];
-      const oldHead = args[3];
+      const refIndex = args[1] === "--no-deref" ? 2 : 1;
+      const branch = args[refIndex]?.replace(/^refs\/heads\//, "");
+      const newHead = args[refIndex + 1];
+      const oldHead = args[refIndex + 2];
       if (
         cwd !== PROJECT_PATH ||
         branch !== "main" ||
@@ -515,10 +562,15 @@ function mergeRuntime(
     }
     if (args[0] === "merge" && args[1] === "--abort") {
       heads.set(cwd, BASE_SHA);
+      mergeInProgress = false;
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "reset") {
       heads.set(cwd, args[2]);
+      mergeInProgress = false;
+      return { stdout: "", stderr: "" };
+    }
+    if (args[0] === "clean") {
       return { stdout: "", stderr: "" };
     }
     throw new Error(`unexpected fake Git call: ${cwd} ${args.join(" ")}`);
@@ -641,6 +693,13 @@ function multiTaskMergeRuntime(
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "for-each-ref") {
+      if (
+        cwd === PROJECT_PATH &&
+        args.includes("--format=%(symref)") &&
+        args.at(-1) === "refs/heads/main"
+      ) {
+        return { stdout: "\n", stderr: "" };
+      }
       const head = heads.get(integration.worktree);
       return {
         stdout:
@@ -675,21 +734,24 @@ function multiTaskMergeRuntime(
       }
       return { stdout: "", stderr: "" };
     }
-    if (args[0] === "-c" && args.includes("commit")) {
+    if (args[0] === "write-tree") {
+      if (!pendingTaskHead) throw new Error("no pending integration tree");
+      return { stdout: `${"8".repeat(40)}\n`, stderr: "" };
+    }
+    if (args[0] === "-c" && args.includes("commit-tree")) {
       const currentHead = heads.get(integration.worktree);
       const nextHead = integrationHeads[integrationCommit++];
       if (!currentHead || !pendingTaskHead || !nextHead) {
         throw new Error("unexpected integration commit");
       }
       recordCommit(nextHead, [currentHead, pendingTaskHead]);
-      heads.set(integration.worktree, nextHead);
-      pendingTaskHead = null;
-      return { stdout: "", stderr: "" };
+      return { stdout: `${nextHead}\n`, stderr: "" };
     }
     if (args[0] === "update-ref") {
-      const branch = args[1]?.replace(/^refs\/heads\//, "");
-      const newHead = args[2];
-      const oldHead = args[3];
+      const refIndex = args[1] === "--no-deref" ? 2 : 1;
+      const branch = args[refIndex]?.replace(/^refs\/heads\//, "");
+      const newHead = args[refIndex + 1];
+      const oldHead = args[refIndex + 2];
       if (
         cwd !== PROJECT_PATH ||
         branch !== "main" ||
@@ -729,6 +791,9 @@ function multiTaskMergeRuntime(
       if (!resetHead) throw new Error("reset target is missing");
       heads.set(cwd, resetHead);
       pendingTaskHead = null;
+      return { stdout: "", stderr: "" };
+    }
+    if (args[0] === "clean") {
       return { stdout: "", stderr: "" };
     }
     throw new Error(`unexpected fake Git call: ${cwd} ${args.join(" ")}`);
@@ -882,6 +947,7 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
         id: sessionId,
         worktree: taskWorktree,
         branch: taskBranch,
+        spawn: input,
       });
       return {
         sessionId,
@@ -1299,24 +1365,25 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
     ).toEqual([
       {
         cwd: PROJECT_PATH,
-        args: ["update-ref", "refs/heads/main", INTEGRATION_HEAD_SHA, BASE_SHA],
+        args: [
+          "update-ref",
+          "--no-deref",
+          "refs/heads/main",
+          INTEGRATION_HEAD_SHA,
+          BASE_SHA,
+        ],
       },
     ]);
     expect(
       merge.gitCalls.filter((call) => call.args[0] === "read-tree")
-    ).toEqual([
-      {
-        cwd: PROJECT_PATH,
-        args: ["read-tree", "-u", "-m", BASE_SHA, INTEGRATION_HEAD_SHA],
-      },
-    ]);
+    ).toEqual([]);
     expect(
       merge.gitCalls.some(
         (call) => call.args[0] === "merge" && call.args[1] === "--ff-only"
       )
     ).toBe(false);
     expect(merge.projectHead()).toBe(INTEGRATION_HEAD_SHA);
-    expect(merge.projectClean()).toBe(true);
+    expect(merge.projectClean()).toBe(false);
     expect(
       db
         .prepare(`SELECT status, head_sha FROM fleet_tasks WHERE id = ?`)
@@ -1508,7 +1575,7 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
       merge.registerTask(fixture);
       spawnOrder.push(input.task.title);
       const sessionId = `worker-session-${input.task.id}`;
-      insertSession({ id: sessionId, worktree, branch });
+      insertSession({ id: sessionId, worktree, branch, spawn: input });
       return { sessionId, worktreePath: worktree, branchName: branch };
     });
     const collectReport = vi.fn<FleetSchedulerDeps["collectReport"]>(
@@ -1765,6 +1832,7 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
         cwd: PROJECT_PATH,
         args: [
           "update-ref",
+          "--no-deref",
           "refs/heads/main",
           merge.integrationHeads[2],
           BASE_SHA,
@@ -1773,19 +1841,14 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
     ]);
     expect(
       merge.gitCalls.filter((call) => call.args[0] === "read-tree")
-    ).toEqual([
-      {
-        cwd: PROJECT_PATH,
-        args: ["read-tree", "-u", "-m", BASE_SHA, merge.integrationHeads[2]],
-      },
-    ]);
+    ).toEqual([]);
     expect(
       merge.gitCalls.some(
         (call) => call.args[0] === "merge" && call.args[1] === "--ff-only"
       )
     ).toBe(false);
     expect(merge.projectHead()).toBe(merge.integrationHeads[2]);
-    expect(merge.projectClean()).toBe(true);
+    expect(merge.projectClean()).toBe(false);
     expect(
       db
         .prepare(

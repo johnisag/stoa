@@ -31,6 +31,11 @@ import {
   backendKeyOwners,
   genericSessionRouteFailure,
 } from "@/lib/session-route-access";
+import {
+  commitConductorSessionDeletion,
+  ConductorSessionDeletionRejectedError,
+  planConductorSessionDeletion,
+} from "@/lib/session-deletion";
 
 // Sanitize a name for use as tmux session name
 function sanitizeTmuxName(name: string): string {
@@ -338,20 +343,16 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     }
     assertGenericSessionRouteAccess(existing);
 
-    // If this is a conductor, delete all its workers first
-    const workers = queries.getWorkersByConductor(db).all(id) as Session[];
-    for (const worker of workers) {
+    // Validate the complete relationship boundary before killing any process.
+    // Unknown internal roles fail closed; only ordinary orchestration workers
+    // may be deleted and the five known Fleet roles may be detached.
+    const deletionPlan = planConductorSessionDeletion(db, id);
+    for (const worker of deletionPlan.interactiveWorkers) {
       try {
         await killWorker(worker.id, false); // false = don't cleanup worktree yet
       } catch (error) {
         console.error(`Failed to kill worker ${worker.id}:`, error);
       }
-      queries.deleteSession(db).run(worker.id);
-      clearQueue(worker.id);
-      // Orphan cleanup: channel_messages + schedules have no FK cascade on
-      // session_id, so remove this worker's rows explicitly (else they linger).
-      deleteChannelMessagesForSession(worker.id);
-      deleteSchedulesForSession(worker.id);
     }
 
     // Kill this session's OWN agent process — not just its workers. Without it a
@@ -366,6 +367,21 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       console.error(`Failed to kill session pty ${backendKey}:`, error);
     }
 
+    // Preserve Fleet evidence and delete the ordinary session graph as one DB
+    // commit. A trigger/FK failure rolls the detachment and every row deletion
+    // back together. The helper also revalidates the pre-kill snapshot.
+    commitConductorSessionDeletion(db, deletionPlan);
+
+    for (const worker of deletionPlan.interactiveWorkers) {
+      clearQueue(worker.id);
+      // channel_messages + schedules have no session FK cascade.
+      deleteChannelMessagesForSession(worker.id);
+      deleteSchedulesForSession(worker.id);
+    }
+    clearQueue(id);
+    deleteChannelMessagesForSession(id);
+    deleteSchedulesForSession(id);
+
     // Drop the conductor marker so a future session in this same dir can't
     // inherit this (now-dead) conductor's id from a stale .stoa-conductor file.
     if (existing.working_directory) {
@@ -376,15 +392,6 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     if (existing.dev_server_port) {
       releasePort(id);
     }
-
-    // Delete from database immediately for instant UI feedback
-    queries.deleteSession(db).run(id);
-    clearQueue(id);
-    // Orphan cleanup: channel_messages + schedules have no FK cascade on
-    // session_id, so remove this session's rows explicitly (else a deleted
-    // session leaves dead channel messages and un-fireable schedules behind).
-    deleteChannelMessagesForSession(id);
-    deleteSchedulesForSession(id);
 
     // Multi-repo workspace session: tear down EVERY worktree this session created
     // (one per picked sub-repo), unregistering each from its parent repo, then
@@ -425,8 +432,8 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     }
 
     // Also cleanup worker worktrees in background
-    if (workers.length > 0) {
-      for (const worker of workers) {
+    if (deletionPlan.interactiveWorkers.length > 0) {
+      for (const worker of deletionPlan.interactiveWorkers) {
         if (worker.worktree_path && isStoaWorktree(worker.worktree_path)) {
           const worktreePath = worker.worktree_path; // Capture for closure
           const workerId = worker.id; // Capture ID for task name
@@ -444,6 +451,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof ConductorSessionDeletionRejectedError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
     console.error("Error deleting session:", error);
     return NextResponse.json(
       { error: "Failed to delete session" },

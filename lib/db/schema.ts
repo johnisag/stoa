@@ -1,6 +1,8 @@
 import type Database from "better-sqlite3";
 import { ensureSessionLaunchProfileSchema } from "./session-launch-profile-schema";
 import { ensureFleetSessionOwnershipSchema } from "./fleet-session-ownership-schema";
+import { ensureFleetOwnedSessionRoleSchema } from "./fleet-session-role-schema";
+import { ensureFleetMergeProvenanceSchema } from "./fleet-merge-provenance-schema";
 
 const SAFE_FLEET_AUTOMATION_POLICY_JSON =
   '{"version":1,"automaticPlanning":false,"automaticPlanApproval":false,"automaticStart":false,"automaticFixes":false,"maxAutomaticFixRounds":0,"automaticMerge":false,"mergeTarget":"github_pr","allowSensitivePaths":false,"allowUnconfinedAgents":false,"plannerTaskCap":8,"cleanupPolicy":"preserve","retentionDays":null}';
@@ -648,6 +650,10 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
         ddl: "expected_base_sha TEXT NOT NULL DEFAULT ''",
       },
       { name: "expected_task_head_sha", ddl: "expected_task_head_sha TEXT" },
+      {
+        name: "expected_result_head_sha",
+        ddl: "expected_result_head_sha TEXT",
+      },
       { name: "result_head_sha", ddl: "result_head_sha TEXT" },
       {
         name: "verification_commands_json",
@@ -1729,6 +1735,7 @@ export function createSchema(db: Database.Database): void {
       target TEXT,
       expected_base_sha TEXT NOT NULL,
       expected_task_head_sha TEXT,
+      expected_result_head_sha TEXT,
       result_head_sha TEXT,
       verification_commands_json TEXT NOT NULL DEFAULT '[]',
       verification_output_hash TEXT,
@@ -2000,4 +2007,6 @@ export function createSchema(db: Database.Database): void {
   // profile columns or a dropped enforcement trigger.
   ensureSessionLaunchProfileSchema(db);
   ensureFleetSessionOwnershipSchema(db);
+  ensureFleetOwnedSessionRoleSchema(db);
+  ensureFleetMergeProvenanceSchema(db);
 }

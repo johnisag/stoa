@@ -30,6 +30,8 @@ import {
   FleetSpawnError,
   type FleetSpawnInput,
 } from "@/lib/fleet/spawn";
+import { isValidProviderId } from "@/lib/providers/registry";
+import { insertFleetOwnedSession } from "./fleet-session-fixture";
 
 let db: InstanceType<typeof Database>;
 let serial = 0;
@@ -94,7 +96,10 @@ function addTask(runId: string, claim: string, order: number) {
   return id;
 }
 
-function fakeSpawnResult(input: string | FleetSpawnInput) {
+function fakeSpawnResult(
+  input: string | FleetSpawnInput,
+  owner?: { runId: string; ownerId: string; ownershipKey?: string | null }
+) {
   const taskId = typeof input === "string" ? input : input.task.id;
   const sessionId = `session-${taskId}`;
   const worktreePath =
@@ -117,29 +122,62 @@ function fakeSpawnResult(input: string | FleetSpawnInput) {
     typeof input === "string"
       ? null
       : (input.task.model ?? input.run.model ?? null);
-  const ownershipKey =
-    typeof input === "string" ? null : input.sessionOwnershipKey;
-  const conductorSessionId =
-    typeof input === "string" ? null : input.run.conductor_session_id;
-  db.prepare(
-    `INSERT OR IGNORE INTO sessions
-      (id, name, tmux_name, status, working_directory, model, group_path,
-       agent_type, worktree_path, branch_name, base_branch,
-       conductor_session_id, fleet_ownership_key)
-     VALUES (?, ?, ?, 'running', ?, ?, 'sessions', ?, ?, ?, ?, ?, ?)`
-  ).run(
+  const persisted =
+    typeof input === "string"
+      ? (db
+          .prepare(
+            `SELECT worker.id AS owner_id, worker.session_ownership_key,
+                    run.id AS run_id, run.conductor_session_id
+             FROM fleet_workers worker
+             JOIN fleet_runs run ON run.id = worker.fleet_run_id
+             WHERE worker.task_id = ? AND worker.status = 'spawning'
+             ORDER BY worker.created_at DESC, worker.id DESC LIMIT 1`
+          )
+          .get(taskId) as
+          | {
+              owner_id: string;
+              session_ownership_key: string | null;
+              run_id: string;
+              conductor_session_id: string | null;
+            }
+          | undefined)
+      : null;
+  const ownerId =
+    typeof input === "string"
+      ? (persisted?.owner_id ?? owner?.ownerId)
+      : input.reportContract?.workerId;
+  const runId =
+    typeof input === "string"
+      ? (persisted?.run_id ?? owner?.runId)
+      : input.run.id;
+  if (!ownerId || !runId) {
+    throw new Error("fake Fleet spawn is missing its durable worker owner");
+  }
+  if (!isValidProviderId(provider) || provider === "shell") {
+    throw new Error("fake Fleet spawn is missing its launch provider");
+  }
+  insertFleetOwnedSession(db, {
+    runId,
+    ownerType: "worker",
+    ownerId,
     sessionId,
-    taskId,
-    `${provider}-${sessionId}`,
-    worktreePath,
-    model,
     provider,
+    model,
+    approvalMode: "full-bypass",
+    workingDirectory: worktreePath,
+    workerTask: `Fleet worker ${taskId}`,
     worktreePath,
     branchName,
-    baseSha,
-    conductorSessionId,
-    ownershipKey
-  );
+    baseBranch: baseSha,
+    conductorSessionId:
+      typeof input === "string"
+        ? (persisted?.conductor_session_id ?? null)
+        : input.run.conductor_session_id,
+    fleetOwnershipKey:
+      typeof input === "string"
+        ? (persisted?.session_ownership_key ?? owner?.ownershipKey ?? null)
+        : input.sessionOwnershipKey,
+  });
   return { sessionId, worktreePath, branchName };
 }
 
@@ -1289,7 +1327,10 @@ describe("fleet scheduler", () => {
   it("recovers an in-flight worker while the run is presented as reviewing", async () => {
     const runId = addRun({ status: "reviewing" });
     const taskId = addTask(runId, "lib/recovery-review.ts", 1);
-    const spawned = fakeSpawnResult(taskId);
+    const spawned = fakeSpawnResult(taskId, {
+      runId,
+      ownerId: "reviewing-recovery-worker",
+    });
     db.prepare(
       `UPDATE fleet_tasks SET status = 'spawning', current_attempt = 1,
        base_sha = ?, worktree_path = ?, branch_name = ? WHERE id = ?`
@@ -1359,9 +1400,9 @@ describe("fleet scheduler", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const spawn = vi.fn(async ({ task }) => {
+    const spawn = vi.fn(async (input: FleetSpawnInput) => {
       await gate;
-      return fakeSpawnResult(task.id);
+      return fakeSpawnResult(input);
     });
     const first = reconcileFleetRun(runId, schedulerDeps(spawn));
     await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
@@ -1377,9 +1418,9 @@ describe("fleet scheduler", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const spawn = vi.fn(async ({ task }) => {
+    const spawn = vi.fn(async (input: FleetSpawnInput) => {
       await gate;
-      return fakeSpawnResult(task.id);
+      return fakeSpawnResult(input);
     });
     const stopSession = vi.fn(async () => {});
     const running = reconcileFleetRun(runId, {
@@ -1469,9 +1510,9 @@ describe("fleet scheduler", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const spawn = vi.fn(async ({ task }) => {
+    const spawn = vi.fn(async (input: FleetSpawnInput) => {
       await gate;
-      return fakeSpawnResult(task.id);
+      return fakeSpawnResult(input);
     });
     const stopSession = vi.fn(async () => {});
     const deps = { ...schedulerDeps(spawn), stopSession };
@@ -1514,9 +1555,9 @@ describe("fleet scheduler", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const spawn = vi.fn(async ({ task }) => {
+    const spawn = vi.fn(async (input: FleetSpawnInput) => {
       await gate;
-      return fakeSpawnResult(task.id);
+      return fakeSpawnResult(input);
     });
     const stopSession = vi.fn(async () => {
       throw new Error("still alive");
@@ -1986,7 +2027,10 @@ describe("fleet scheduler", () => {
   it("fences concurrent recovery accounting for one expired worker", async () => {
     const runId = addRun({ recovery: 1 });
     const taskId = addTask(runId, "lib/a.ts", 1);
-    const session = fakeSpawnResult(taskId);
+    const session = fakeSpawnResult(taskId, {
+      runId,
+      ownerId: "concurrent-recovery",
+    });
     db.prepare(
       `UPDATE fleet_runs SET reserved_budget_usd = 0.25 WHERE id = ?`
     ).run(runId);
@@ -2286,7 +2330,10 @@ describe("fleet scheduler", () => {
   it("finishes durable canceled cleanup during startup recovery", async () => {
     const runId = addRun({ status: "canceled" });
     const taskId = addTask(runId, "lib/a.ts", 1);
-    const session = fakeSpawnResult(taskId);
+    const session = fakeSpawnResult(taskId, {
+      runId,
+      ownerId: "cleanup-worker",
+    });
     db.prepare(
       `UPDATE fleet_tasks SET status = 'canceled', current_attempt = 1,
        base_sha = ?, worktree_path = ?, branch_name = ? WHERE id = ?`

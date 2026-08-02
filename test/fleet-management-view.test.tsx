@@ -1072,9 +1072,7 @@ describe("FleetManagementView status drilldowns", () => {
     render(<FleetManagementView />);
 
     expect(await screen.findByText("Showing 1 of 143 artifacts")).toBeTruthy();
-    expect(
-      screen.getByText(/every task-referenced report, diff, and verification/)
-    ).toBeTruthy();
+    expect(screen.getByText(/current actionable blockers/)).toBeTruthy();
     expect(screen.getByText("Showing the newest 2 of 87 events.")).toBeTruthy();
   });
 
@@ -1344,101 +1342,139 @@ describe("FleetManagementView status drilldowns", () => {
     ).toBe(false);
   });
 
-  it("requires a second exact confirmation before a staged head can land", async () => {
-    const planHash = "1".repeat(64);
-    const executionHash = "2".repeat(64);
-    const baseSha = "a".repeat(40);
-    const integrationHeadSha = "c".repeat(40);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  it.each([
+    {
+      target: "github_pr" as const,
+      button: "Authorize GitHub landing",
+    },
+    {
+      target: "local" as const,
+      button: "Authorize local branch-ref fast-forward",
+    },
+  ])(
+    "requires a second exact confirmation before a staged head can land through $target",
+    async ({ target, button }) => {
+      const planHash = "1".repeat(64);
+      const executionHash = "2".repeat(64);
+      const baseSha = "a".repeat(40);
+      const integrationHeadSha = "c".repeat(40);
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      state.detail = {
+        ...state.detail!,
+        run: {
+          ...state.detail!.run,
+          status: "merging",
+          planHash,
+          approvedPlanHash: planHash,
+          integrationState: "ready_to_finalize",
+          integrationBaseSha: baseSha,
+          integrationHeadSha,
+          mergeRequestedAt: null,
+          mergeRequestedBy: "operator",
+          mergeRequestKind: "manual",
+          mergeTarget: target,
+        },
+      };
+      state.mergeStatus = {
+        readiness: {
+          runId: "run-1",
+          requested: false,
+          target,
+          integrationState: "ready_to_finalize",
+          readyTaskIds: [],
+          waitingTaskIds: [],
+          mergedTaskIds: ["task-active", "task-blocked"],
+          blockers: [],
+          allTasksIntegrated: true,
+          canFinalize: true,
+        },
+        integration: {
+          state: "ready_to_finalize",
+          target,
+          requestedAt: null,
+          requestedBy: "operator",
+          requestKind: "manual",
+          branch: "stoa/fleet/integration-run-1",
+          worktree: "C:\\repo\\.stoa-worktrees\\integration-run-1",
+          baseSha,
+          headSha: integrationHeadSha,
+          prNumber: null,
+          prUrl: null,
+          prHeadSha: null,
+          mergeSha: null,
+          error: null,
+        },
+        operations: [
+          {
+            id: "final-verify-1",
+            taskId: null,
+            type: "final_verify",
+            state: "completed",
+            resultHeadSha: integrationHeadSha,
+            attemptCount: 1,
+            error: null,
+            updatedAt: "2026-08-01T10:01:00.000Z",
+          },
+        ],
+        retry: {
+          action: null,
+          state: "not_applicable",
+          available: false,
+          reason: null,
+          operationId: null,
+          attemptCount: 0,
+          maxAttempts: 3,
+          preconditions: null,
+        },
+      };
+
+      render(<FleetManagementView />);
+      await screen.findByRole("heading", { name: "Autonomous delivery" });
+      expect(state.landingMutation).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: button }));
+
+      expect(confirm).toHaveBeenCalledWith(
+        expect.stringContaining(`Integration head: ${integrationHeadSha}`)
+      );
+      if (target === "local") {
+        expect(confirm).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /approved local branch ref.*source checkout index and files unchanged/i
+          )
+        );
+      }
+      await waitFor(() =>
+        expect(state.landingMutation).toHaveBeenCalledWith({
+          target,
+          expectedPlanHash: planHash,
+          expectedExecutionHash: executionHash,
+          expectedBaseSha: baseSha,
+          expectedIntegrationHeadSha: integrationHeadSha,
+        })
+      );
+      expect(state.mergeMutation).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps the local checkout refresh warning visible after landing completes", async () => {
     state.detail = {
       ...state.detail!,
       run: {
         ...state.detail!.run,
-        status: "merging",
-        planHash,
-        approvedPlanHash: planHash,
-        integrationState: "ready_to_finalize",
-        integrationBaseSha: baseSha,
-        integrationHeadSha,
-        mergeRequestedAt: null,
-        mergeRequestedBy: "operator",
-        mergeRequestKind: "manual",
-        mergeTarget: "github_pr",
-      },
-    };
-    state.mergeStatus = {
-      readiness: {
-        runId: "run-1",
-        requested: false,
-        target: "github_pr",
-        integrationState: "ready_to_finalize",
-        readyTaskIds: [],
-        waitingTaskIds: [],
-        mergedTaskIds: ["task-active", "task-blocked"],
-        blockers: [],
-        allTasksIntegrated: true,
-        canFinalize: true,
-      },
-      integration: {
-        state: "ready_to_finalize",
-        target: "github_pr",
-        requestedAt: null,
-        requestedBy: "operator",
-        requestKind: "manual",
-        branch: "stoa/fleet/integration-run-1",
-        worktree: "C:\\repo\\.stoa-worktrees\\integration-run-1",
-        baseSha,
-        headSha: integrationHeadSha,
-        prNumber: null,
-        prUrl: null,
-        prHeadSha: null,
-        mergeSha: null,
-        error: null,
-      },
-      operations: [
-        {
-          id: "final-verify-1",
-          taskId: null,
-          type: "final_verify",
-          state: "completed",
-          resultHeadSha: integrationHeadSha,
-          attemptCount: 1,
-          error: null,
-          updatedAt: "2026-08-01T10:01:00.000Z",
-        },
-      ],
-      retry: {
-        action: null,
-        state: "not_applicable",
-        available: false,
-        reason: null,
-        operationId: null,
-        attemptCount: 0,
-        maxAttempts: 3,
-        preconditions: null,
+        status: "completed",
+        mergeTarget: "local",
+        integrationState: "completed",
       },
     };
 
     render(<FleetManagementView />);
-    await screen.findByRole("heading", { name: "Autonomous delivery" });
-    expect(state.landingMutation).not.toHaveBeenCalled();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Authorize GitHub landing" })
-    );
 
-    expect(confirm).toHaveBeenCalledWith(
-      expect.stringContaining(`Integration head: ${integrationHeadSha}`)
-    );
-    await waitFor(() =>
-      expect(state.landingMutation).toHaveBeenCalledWith({
-        target: "github_pr",
-        expectedPlanHash: planHash,
-        expectedExecutionHash: executionHash,
-        expectedBaseSha: baseSha,
-        expectedIntegrationHeadSha: integrationHeadSha,
-      })
-    );
-    expect(state.mergeMutation).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText(/approved local branch ref was advanced/i)
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Refresh that checkout explicitly when it is safe/i)
+    ).toBeTruthy();
   });
 
   it("offers one exact same-target retry when final verification is safely retryable", async () => {
@@ -1940,6 +1976,55 @@ describe("FleetManagementView status drilldowns", () => {
       screen.getByText(
         /Manual approval does not make Fleet workers interactive/
       )
+    ).toBeTruthy();
+  });
+
+  it("requires a repository or project for imported plans even with automation off", async () => {
+    render(<FleetManagementView />);
+    fireEvent.click(await screen.findByLabelText("Fleet input mode"));
+    fireEvent.click(await screen.findByText(/Existing Markdown task plan/));
+    fireEvent.click(screen.getByLabelText("Plan automatically"));
+    fireEvent.change(screen.getByLabelText("Fleet run name"), {
+      target: { value: "Imported manual plan" },
+    });
+    fireEvent.change(screen.getByLabelText("Fleet task plan"), {
+      target: { value: "- [ ] Implement the bound task" },
+    });
+
+    const create = screen.getByRole("button", { name: "Import plan draft" });
+    expect((create as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByText(/before importing an executable task plan/)
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Repository"));
+    fireEvent.click(await screen.findByText("acme/stoa"));
+    expect((create as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(
+      screen.getByLabelText("Allow unconfined unattended agents")
+    );
+    expect((create as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("describes preferred provider allocation and imported auto-merge accurately", async () => {
+    render(<FleetManagementView />);
+    expect(await screen.findByText("Preferred/default provider")).toBeTruthy();
+    expect(
+      screen.getByText(/allocates available agents automatically/)
+    ).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Fleet input mode"));
+    fireEvent.click(await screen.findByText(/Existing Markdown task plan/));
+    fireEvent.click(screen.getByLabelText("Repository"));
+    fireEvent.click(await screen.findByText("acme/stoa"));
+    fireEvent.click(
+      screen.getByLabelText("Allow unconfined unattended agents")
+    );
+    fireEvent.click(screen.getByLabelText("Approve plans automatically"));
+    fireEvent.click(screen.getByLabelText("Start approved work automatically"));
+    fireEvent.click(screen.getByLabelText("Merge green results automatically"));
+
+    expect(
+      screen.getByRole("button", { name: "Import plan-to-merged run" })
     ).toBeTruthy();
   });
 

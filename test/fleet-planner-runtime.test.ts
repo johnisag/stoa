@@ -32,6 +32,7 @@ const state = vi.hoisted(() => ({
     kimi: false,
   },
   spawn: vi.fn(),
+  persistSpawn: null as unknown,
   stop: vi.fn(async () => true),
   remove: vi.fn(async () => undefined),
   runGit: vi.fn(),
@@ -88,7 +89,15 @@ vi.mock("@/lib/orchestration", () => {
       super(message);
     }
   }
-  return { WorkerSpawnError, spawnWorker: state.spawn };
+  return {
+    WorkerSpawnError,
+    spawnWorker: async (options: unknown) => {
+      const spawned = await state.spawn(options);
+      const persist = state.persistSpawn as
+        ((launch: unknown, result: unknown) => unknown) | null;
+      return persist ? persist(options, spawned) : spawned;
+    },
+  };
 });
 
 vi.mock("@/lib/fleet/stop", () => ({
@@ -112,6 +121,7 @@ import { reserveFleetPaidSession } from "@/lib/fleet/session-admission";
 import { hashFleetAutomationPolicy } from "@/lib/fleet/hash";
 import { createDraftFleetRun as createDraftFleetRunService } from "@/lib/fleet/service";
 import type { FleetRunRow } from "@/lib/fleet/types";
+import { insertFleetOwnedSession } from "./fleet-session-fixture";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
@@ -168,6 +178,28 @@ beforeEach(() => {
       stderr: "",
     })
   );
+  state.persistSpawn = (options: any, spawned: any) => {
+    const existing = db()
+      .prepare(`SELECT * FROM sessions WHERE id = ?`)
+      .get(spawned.id);
+    if (existing) return existing;
+    return insertFleetOwnedSession(db(), {
+      runId: options.fleetOwner.runId,
+      ownerType: "planner",
+      ownerId: options.fleetOwner.ownerId,
+      sessionId: spawned.id,
+      provider: options.agentType,
+      model: options.model ?? null,
+      approvalMode: options.approvalMode,
+      workingDirectory: spawned.worktree_path ?? options.workingDirectory,
+      workerTask: options.task,
+      worktreePath: spawned.worktree_path ?? null,
+      branchName: spawned.branch_name ?? null,
+      baseBranch: spawned.base_branch ?? options.baseBranch ?? null,
+      conductorSessionId: options.conductorSessionId ?? null,
+      fleetOwnershipKey: options.fleetOwnershipKey ?? null,
+    });
+  };
   db().exec(`
     DELETE FROM fleet_events;
     DELETE FROM fleet_provider_cooldowns;
@@ -1108,9 +1140,36 @@ describe("Fleet planner lifecycle", () => {
           BASE_A,
           runId
         );
-      state.runGit.mockResolvedValueOnce({
-        stdout: `worktree ${worktree}\nHEAD abc\nbranch refs/heads/feature/fleet-plan-recover\n\n`,
-        stderr: "",
+      const run = db()
+        .prepare(`SELECT * FROM fleet_runs WHERE id = ?`)
+        .get(runId) as FleetRunRow;
+      const now = new Date();
+      expect(
+        reserveFleetPaidSession(db(), {
+          run,
+          ownerType: "planner",
+          ownerId: requestId,
+          taskType: "planning",
+          provider: "claude",
+          model: run.model,
+          repositoryKey: "C:\\repo",
+          now,
+          leaseExpiresAt: new Date(now.getTime() + 90_000).toISOString(),
+        })
+      ).toMatchObject({ admitted: true });
+      insertFleetOwnedSession(db(), {
+        runId,
+        ownerType: "planner",
+        ownerId: requestId,
+        sessionId: "recovered-planner-session",
+        provider: "claude",
+        model: run.model,
+        approvalMode: "full-bypass",
+        workingDirectory: worktree,
+        workerTask: "Write planner result",
+        worktreePath: worktree,
+        branchName: "feature/fleet-plan-recover",
+        baseBranch: BASE_A,
       });
 
       const recovered = await pollFleetPlanner(runId);
@@ -1202,16 +1261,20 @@ describe("Fleet planner lifecycle", () => {
           BASE_A,
           runId
         );
-      db()
-        .prepare(
-          `INSERT INTO sessions (
-             id, name, tmux_name, working_directory, group_path, agent_type,
-             worker_task, worker_status, worktree_path, branch_name, base_branch
-           ) VALUES ('recovered-kilo-planner', 'Recovered Kilo planner',
-             'recovered-kilo-planner', ?, 'sessions', 'kilo',
-             'Write planner result', 'running', ?, ?, ?)`
-        )
-        .run(worktree, worktree, branchName, BASE_A);
+      insertFleetOwnedSession(db(), {
+        runId,
+        ownerType: "planner",
+        ownerId: requestId,
+        sessionId: "recovered-kilo-planner",
+        provider: "kilo",
+        model: null,
+        approvalMode: "full-bypass",
+        workingDirectory: worktree,
+        workerTask: "Write planner result",
+        worktreePath: worktree,
+        branchName,
+        baseBranch: BASE_A,
+      });
       const run = db()
         .prepare(`SELECT * FROM fleet_runs WHERE id = ?`)
         .get(runId) as FleetRunRow;

@@ -13,6 +13,7 @@ import {
   readWorktreeLock,
   restoreSnapshot,
   captureSnapshot,
+  snapshotsRoot,
   type SnapshotManifest,
 } from "@/lib/env-snapshot";
 
@@ -64,6 +65,13 @@ const SAMPLE = {
 };
 
 describe("env-snapshot pure helpers", () => {
+  it("expands a tilde-aware STOA_HOME for the snapshot store", () => {
+    process.env.STOA_HOME = "~/.stoa-snapshot-test";
+    expect(snapshotsRoot()).toBe(
+      path.join(os.homedir(), ".stoa-snapshot-test", "env-snapshots")
+    );
+  });
+
   it("hashLockfile is deterministic and content-sensitive", () => {
     expect(hashLockfile("abc")).toBe(hashLockfile("abc"));
     expect(hashLockfile("abc")).not.toBe(hashLockfile("abcd"));

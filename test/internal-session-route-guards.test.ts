@@ -36,6 +36,8 @@ vi.mock("@/lib/db", () => {
         get: (id: string) =>
           id === state.session.id ? state.session : undefined,
       }),
+      getAllSessions: () => ({ all: () => [state.session] }),
+      getAllGroups: () => ({ all: () => [] }),
       createSession: () => ({ run: state.createSession }),
       getSessionMessages: () => ({ all: () => [] }),
       createMessage: () => ({ run: vi.fn() }),
@@ -85,6 +87,12 @@ import { POST as repairMcp } from "@/app/api/sessions/[id]/mcp-config/route";
 import { POST as queuePrompt } from "@/app/api/sessions/[id]/queue/route";
 import { GET as preview } from "@/app/api/sessions/[id]/preview/route";
 import { genericSessionRouteFailure } from "@/lib/session-route-access";
+import { genericBackendKeyAccessFailure } from "@/lib/session-route-access";
+import { GET as listSessions } from "@/app/api/sessions/route";
+import {
+  PATCH as patchSession,
+  DELETE as deleteSession,
+} from "@/app/api/sessions/[id]/route";
 
 function request(body: Record<string, unknown>, method = "POST"): Request {
   return new Request("http://localhost/api/sessions/internal-supervisor", {
@@ -126,6 +134,45 @@ describe("internal session generic-route isolation", () => {
       } as never)
     ).toBeNull();
   });
+
+  it.each([
+    "fleet_worker",
+    "fleet_planner",
+    "fleet_plan_reviewer",
+    "fleet_task_reviewer",
+    "fleet_task_fixer",
+  ])(
+    "hides and rejects the %s owner role on generic boundaries",
+    async (role) => {
+      const prior = state.session.session_role;
+      state.session.session_role = role;
+      try {
+        const listed = await listSessions();
+        const listedBody = await listed.json();
+        const patched = await patchSession(
+          request({ name: "must not mutate" }, "PATCH") as never,
+          context
+        );
+        const deleted = await deleteSession(
+          request({}, "DELETE") as never,
+          context
+        );
+
+        expect(listedBody.sessions).toEqual([]);
+        expect(patched.status).toBe(409);
+        expect(deleted.status).toBe(409);
+        expect(
+          genericBackendKeyAccessFailure(
+            [state.session] as never,
+            state.session.tmux_name
+          )
+        ).toMatch(/internal sessions/i);
+        expect(state.kill).not.toHaveBeenCalled();
+      } finally {
+        state.session.session_role = prior;
+      }
+    }
+  );
 
   it("rejects plain and snapshot forks before allocating a session or worktree", async () => {
     const plain = await forkSession(

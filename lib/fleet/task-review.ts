@@ -49,6 +49,10 @@ import {
   recoverSpawningFleetTaskFix,
 } from "./task-fix-runtime";
 import {
+  findFleetSessionByOwner,
+  fleetSessionProfileError,
+} from "./session-profile";
+import {
   buildFleetTaskFixPrompt,
   buildFleetTaskReviewPrompt,
   FLEET_TASK_REVIEW_FINDING_BODY_MAX_CHARS as FINDING_BODY_MAX_CHARS,
@@ -146,6 +150,7 @@ export interface FleetTaskReviewDeps {
     approvalMode: ApprovalMode;
     provider: FleetAgentProviderId;
     model: string | null;
+    ownerId: string;
   }) => Promise<ReviewSpawnResult>;
   spawnFix: (input: {
     contract: TaskFixContract;
@@ -155,6 +160,7 @@ export interface FleetTaskReviewDeps {
     approvalMode: ApprovalMode;
     provider: FleetAgentProviderId;
     model: string | null;
+    ownerId: string;
   }) => Promise<FixSpawnResult>;
 }
 
@@ -266,6 +272,7 @@ function dependencies(
         approvalMode: mode,
         provider: reviewProvider,
         model,
+        ownerId,
       }) =>
         spawnWorker({
           conductorSessionId: contract.candidate.conductor_session_id ?? null,
@@ -282,6 +289,11 @@ function dependencies(
           fleetWritableRoots: [dirname(resultPath)],
           fleetArtifactPaths: [resultPath],
           requireStrongIsolation: true,
+          fleetOwner: {
+            runId: contract.candidate.fleet_run_id,
+            ownerType: "task_review",
+            ownerId,
+          },
           approvalMode: mode,
           agentType: reviewProvider,
           model: model ?? undefined,
@@ -296,6 +308,7 @@ function dependencies(
         approvalMode: mode,
         provider: fixerProvider,
         model,
+        ownerId,
       }) => {
         const session = await spawnWorker({
           conductorSessionId: contract.candidate.conductor_session_id ?? null,
@@ -303,23 +316,24 @@ function dependencies(
           deliveryTask: prompt,
           workingDirectory: row.worktree_path!,
           useWorktree: false,
+          attachedWorktree: {
+            path: row.worktree_path!,
+            branchName: row.branch_name!,
+            baseBranch: contract.candidate.task_base_branch ?? "main",
+          },
           requireTaskDelivery: true,
           fleetWritableRoots: [dirname(row.result_path!)],
           fleetArtifactPaths: [row.result_path!],
           requireStrongIsolation: true,
+          fleetOwner: {
+            runId: contract.candidate.fleet_run_id,
+            ownerType: "fixer",
+            ownerId,
+          },
           approvalMode: mode,
           agentType: fixerProvider,
           model: model ?? undefined,
         });
-        queries
-          .updateSessionWorktree(getDb())
-          .run(
-            row.worktree_path,
-            row.branch_name,
-            contract.candidate.task_base_branch ?? "main",
-            null,
-            session.id
-          );
         return { id: session.id };
       }),
   };
@@ -404,6 +418,16 @@ function taskReviewProviderError(
   row: FleetTaskReviewRow,
   session?: Session
 ): string | null {
+  if (row.reviewer_session_id || session) {
+    const sessionId = session?.id ?? row.reviewer_session_id;
+    const profileError = fleetSessionProfileError(session, {
+      runId: row.fleet_run_id,
+      ownerType: "task_review",
+      ownerId: row.request_id,
+      sessionId,
+    });
+    if (profileError) return profileError;
+  }
   const recoveredProvider = session?.agent_type?.trim() ?? "";
   const persistedProvider = row.provider?.trim() || recoveredProvider;
   if (
@@ -425,6 +449,15 @@ function rejectIneligibleTaskReviewSession(
   const message = taskReviewProviderError(row, session);
   if (!message) return row;
   const sessionId = session?.id ?? row.reviewer_session_id;
+  const profileError =
+    sessionId && row.request_id
+      ? fleetSessionProfileError(session, {
+          runId: row.fleet_run_id,
+          ownerType: "task_review",
+          ownerId: row.request_id,
+          sessionId,
+        })
+      : null;
   const foreignSessionOwner = Boolean(
     sessionId &&
     sessionOwnedByAnotherFleetAccount(deps.db, {
@@ -433,7 +466,7 @@ function rejectIneligibleTaskReviewSession(
       sessionId,
     })
   );
-  if (session && !foreignSessionOwner) {
+  if (session && !foreignSessionOwner && !profileError) {
     deps.db
       .prepare(
         `UPDATE fleet_task_reviews
@@ -459,7 +492,7 @@ function rejectIneligibleTaskReviewSession(
     findings: [failureFinding(message)],
     bytes: null,
     error: message,
-    preserveExternalState: foreignSessionOwner,
+    preserveExternalState: foreignSessionOwner || Boolean(profileError),
   });
   return (deps.db
     .prepare(`SELECT * FROM fleet_task_reviews WHERE id = ?`)
@@ -1136,14 +1169,29 @@ async function cleanupReview(
   deps: FleetTaskReviewDeps,
   row: FleetTaskReviewRow
 ): Promise<boolean> {
-  const foreignSessionOwner = Boolean(
+  const session = row.reviewer_session_id
+    ? (queries.getSession(deps.db).get(row.reviewer_session_id) as
+        Session | undefined)
+    : undefined;
+  const invalidSessionProfile = Boolean(
     row.reviewer_session_id &&
-    sessionOwnedByAnotherFleetAccount(deps.db, {
+    fleetSessionProfileError(session, {
       runId: row.fleet_run_id,
+      ownerType: "task_review",
       ownerId: row.request_id,
       sessionId: row.reviewer_session_id,
     })
   );
+  const foreignSessionOwner =
+    invalidSessionProfile ||
+    Boolean(
+      row.reviewer_session_id &&
+      sessionOwnedByAnotherFleetAccount(deps.db, {
+        runId: row.fleet_run_id,
+        ownerId: row.request_id,
+        sessionId: row.reviewer_session_id,
+      })
+    );
   if (row.reviewer_session_id && !foreignSessionOwner) {
     const stopped = await deps
       .stopSession(
@@ -1272,14 +1320,47 @@ async function recoverSpawningReview(
   deps: FleetTaskReviewDeps,
   row: FleetTaskReviewRow
 ): Promise<FleetTaskReviewRow> {
-  if (!row.reviewer_branch_name || !row.result_path) return row;
-  const session = deps.db
-    .prepare(
-      `SELECT * FROM sessions
-       WHERE branch_name = ? AND instr(worker_task, ?) > 0
-       ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(row.reviewer_branch_name, row.result_path) as Session | undefined;
+  if (!row.request_id) return row;
+  const storedSession = row.reviewer_session_id
+    ? (queries.getSession(deps.db).get(row.reviewer_session_id) as
+        Session | undefined)
+    : undefined;
+  const recovered = row.reviewer_session_id
+    ? storedSession
+      ? fleetSessionProfileError(storedSession, {
+          runId: row.fleet_run_id,
+          ownerType: "task_review",
+          ownerId: row.request_id,
+          sessionId: row.reviewer_session_id,
+        })
+        ? ({
+            kind: "invalid",
+            error:
+              "Fleet session immutable launch profile does not match its owner",
+          } as const)
+        : ({ kind: "valid", session: storedSession } as const)
+      : ({
+          kind: "invalid",
+          error: "Fleet session identity is missing",
+        } as const)
+    : findFleetSessionByOwner(deps.db, {
+        runId: row.fleet_run_id,
+        ownerType: "task_review",
+        ownerId: row.request_id,
+      });
+  if (recovered.kind === "invalid" || recovered.kind === "ambiguous") {
+    queueReviewResult(deps, row, {
+      verdict: "changes_requested",
+      findings: [failureFinding(recovered.error)],
+      bytes: null,
+      error: recovered.error,
+      preserveExternalState: true,
+    });
+    return (deps.db
+      .prepare(`SELECT * FROM fleet_task_reviews WHERE id = ?`)
+      .get(row.id) ?? row) as FleetTaskReviewRow;
+  }
+  const session = recovered.kind === "valid" ? recovered.session : undefined;
   if (session?.worktree_path) {
     const rejected = rejectIneligibleTaskReviewSession(deps, row, session);
     if (rejected.state !== "spawning") return rejected;
@@ -1371,7 +1452,7 @@ async function recoverSpawningReview(
     } else {
       clearFleetProviderCooldown(deps.db, selectedProvider);
     }
-  } else if (row.project_path) {
+  } else if (row.project_path && row.reviewer_branch_name) {
     try {
       const worktrees = (
         await deps.git(
@@ -1597,9 +1678,17 @@ async function startReview(
       approvalMode: launchApprovalMode,
       provider: selection.provider,
       model: selection.model,
+      ownerId: requestId,
     });
     const session = queries.getSession(deps.db).get(spawned.id) as
       Session | undefined;
+    const profileError = fleetSessionProfileError(session, {
+      runId: row.fleet_run_id,
+      ownerType: "task_review",
+      ownerId: requestId,
+      sessionId: spawned.id,
+    });
+    if (profileError) throw new Error(profileError);
     if (!spawned.worktree_path || !spawned.branch_name) {
       throw new Error("task reviewer started without an isolated worktree");
     }
@@ -1739,9 +1828,18 @@ async function startReview(
     const recoveredSession = sessionId
       ? (queries.getSession(deps.db).get(sessionId) as Session | undefined)
       : undefined;
+    const recoveredProfileError = sessionId
+      ? fleetSessionProfileError(recoveredSession, {
+          runId: row.fleet_run_id,
+          ownerType: "task_review",
+          ownerId: requestId,
+          sessionId,
+        })
+      : null;
     const ambiguousExternalState =
-      foreignSessionOwner || Boolean(sessionId && !recoveredSession);
-    if (recoveredSession && !foreignSessionOwner) {
+      foreignSessionOwner ||
+      Boolean(sessionId && (!recoveredSession || recoveredProfileError));
+    if (recoveredSession && !foreignSessionOwner && !recoveredProfileError) {
       activateFleetPaidSession(deps.db, {
         runId: row.fleet_run_id,
         ownerType: "task_review",

@@ -16,6 +16,7 @@ import type {
   FleetGitState,
 } from "@/lib/fleet/git-state";
 import type { FleetTaskCompletionReport } from "@/lib/fleet/report";
+import { insertFleetOwnedSession } from "./fleet-session-fixture";
 
 const NOW = new Date("2026-08-01T12:00:00.000Z");
 const NONCE = "n".repeat(43);
@@ -237,27 +238,32 @@ function addRuntimeWorker(index: number) {
   db.prepare(
     `INSERT INTO fleet_tasks
      (id, fleet_run_id, title, status, task_type, sort_order, file_claims_json,
-      approval_state, working_directory, base_sha, worktree_path)
+      approval_state, working_directory, base_sha, worktree_path,
+      current_attempt)
      VALUES (?, 'run-1', ?, 'running', 'task', ?, '["lib"]', 'approved',
-      'C:\\repo', ?, ?)`
+      'C:\\repo', ?, ?, 1)`
   ).run(taskId, taskId, index, BASE, `C:\\wt\\${index}`);
   db.prepare(
     `INSERT INTO fleet_task_claims
      (id, fleet_run_id, task_id, path, claim_type, confidence)
      VALUES (?, 'run-1', ?, 'lib', 'exclusive', 1)`
   ).run(`claim-${index}`, taskId);
-  db.prepare(
-    `INSERT INTO sessions
-     (id, name, tmux_name, status, worker_status, working_directory,
-      group_path, agent_type, branch_name, worktree_path)
-     VALUES (?, ?, ?, 'running', 'working', 'C:\\repo', 'sessions', 'codex', ?, ?)`
-  ).run(
+  insertFleetOwnedSession(db, {
+    runId: "run-1",
+    ownerType: "worker",
+    ownerId: workerId,
     sessionId,
-    sessionId,
-    sessionId,
-    `feature/${index}`,
-    `C:\\wt\\${index}`
-  );
+    provider: "codex",
+    model: null,
+    approvalMode: "full-bypass",
+    workingDirectory: `C:\\wt\\${index}`,
+    workerTask: `Fleet report runtime worker ${index}`,
+    worktreePath: `C:\\wt\\${index}`,
+    branchName: `feature/${index}`,
+    baseBranch: BASE,
+    conductorSessionId: null,
+    fleetOwnershipKey: null,
+  });
   db.prepare(
     `INSERT INTO fleet_workers
      (id, fleet_run_id, task_id, session_id, status, provider, attempt,

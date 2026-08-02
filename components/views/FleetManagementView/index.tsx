@@ -3279,6 +3279,20 @@ function RunDetail({
                   mergeStatus.data?.integration.error}
               </div>
             )}
+            {detail.run.status === "completed" &&
+              detail.run.mergeTarget === "local" &&
+              detail.run.integrationState === "completed" && (
+                <div
+                  className="rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-800 dark:text-amber-200"
+                  role="status"
+                >
+                  The approved local branch ref was advanced. Fleet
+                  intentionally left the source checkout index and files
+                  unchanged so a concurrent branch switch could not overwrite
+                  unrelated work. Refresh that checkout explicitly when it is
+                  safe.
+                </div>
+              )}
             {manualMergeIntentActive && (
               <div className="rounded border border-blue-500/40 bg-blue-500/5 p-2 text-xs">
                 <div className="font-medium">
@@ -3359,7 +3373,7 @@ function RunDetail({
                         const action =
                           manualLandingPreconditions.target === "github_pr"
                             ? "push the integration branch, open or reuse its GitHub PR, wait for required checks, and fast-forward the configured target ref with an exact old-OID lease"
-                            : "fast-forward the local base checkout";
+                            : "fast-forward the approved local branch ref while leaving the source checkout index and files unchanged";
                         if (
                           !window.confirm(
                             `Authorize Fleet to ${action}?\n\nBase: ${manualLandingPreconditions.expectedBaseSha}\nIntegration head: ${manualLandingPreconditions.expectedIntegrationHeadSha}\n\nThis is the external landing authorization and locks pause, cancel, and exact approval controls.`
@@ -3377,7 +3391,7 @@ function RunDetail({
                       )}
                       {manualLandingPreconditions.target === "github_pr"
                         ? "Authorize GitHub landing"
-                        : "Authorize local fast-forward"}
+                        : "Authorize local branch-ref fast-forward"}
                     </Button>
                   </div>
                 )}
@@ -3538,9 +3552,10 @@ function RunDetail({
           </div>
           {detail.artifactHasMore && (
             <p className="text-muted-foreground text-xs" role="status">
-              The newest artifact window and every task-referenced report, diff,
-              and verification record are shown. Older unreferenced metadata is
-              omitted from this view.
+              The newest artifact window, up to 1,000 current actionable
+              blockers, and every task-referenced report, diff, and verification
+              record are shown. Older unreferenced metadata is omitted from this
+              view.
             </p>
           )}
           {detail.artifacts.length > 0 && (
@@ -4036,9 +4051,9 @@ export function FleetManagementView({
     }
   }
 
-  const automaticPlanNeedsTarget =
-    autoPlan && repoId === NONE && projectId === NONE;
   const executableTargetSelected = repoId !== NONE || projectId !== NONE;
+  const draftNeedsTarget =
+    !executableTargetSelected && (autoPlan || inputMode === "plan");
   const unattendedAgentLaunchEnabled =
     executableTargetSelected ||
     reviewPolicy !== "manual" ||
@@ -4460,21 +4475,31 @@ export function FleetManagementView({
                 </label>
               )}
               <div className="grid grid-cols-2 gap-2">
-                <Input
-                  aria-label="Provider"
-                  placeholder="Provider"
-                  maxLength={FLEET_PROVIDER_MAX}
-                  value={provider}
-                  onChange={(event) => setProvider(event.target.value)}
-                />
-                <Input
-                  aria-label="Model"
-                  placeholder="Model"
-                  maxLength={FLEET_MODEL_MAX}
-                  value={model}
-                  onChange={(event) => setModel(event.target.value)}
-                />
+                <label className="grid gap-1 text-xs">
+                  <span>Preferred/default provider</span>
+                  <Input
+                    aria-label="Preferred/default provider"
+                    placeholder="Provider"
+                    maxLength={FLEET_PROVIDER_MAX}
+                    value={provider}
+                    onChange={(event) => setProvider(event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-xs">
+                  <span>Preferred model</span>
+                  <Input
+                    aria-label="Preferred model"
+                    placeholder="Model"
+                    maxLength={FLEET_MODEL_MAX}
+                    value={model}
+                    onChange={(event) => setModel(event.target.value)}
+                  />
+                </label>
               </div>
+              <p className="text-muted-foreground text-xs">
+                Fleet allocates available agents automatically. The provider is
+                the preferred default when a task has no exact allocation.
+              </p>
               <Select
                 value={reviewPolicy}
                 onValueChange={(value) => {
@@ -4722,7 +4747,7 @@ export function FleetManagementView({
                 disabled={
                   !name.trim() ||
                   !goal.trim() ||
-                  automaticPlanNeedsTarget ||
+                  draftNeedsTarget ||
                   unattendedConsentMissing ||
                   !draftSettingsValid ||
                   createPending
@@ -4734,13 +4759,19 @@ export function FleetManagementView({
                 ) : (
                   <Plus className="h-4 w-4" />
                 )}
-                {autoMerge
-                  ? "Create epic-to-merged run"
-                  : autoStart
-                    ? "Create autonomous run"
-                    : autoPlan
-                      ? "Create and plan"
-                      : "Create draft"}
+                {inputMode === "plan"
+                  ? autoMerge
+                    ? "Import plan-to-merged run"
+                    : autoStart
+                      ? "Import and start plan"
+                      : "Import plan draft"
+                  : autoMerge
+                    ? "Create epic-to-merged run"
+                    : autoStart
+                      ? "Create autonomous run"
+                      : autoPlan
+                        ? "Create and plan"
+                        : "Create draft"}
               </Button>
               {unattendedConsentMissing && (
                 <div className="text-xs text-amber-700 dark:text-amber-300">
@@ -4792,11 +4823,11 @@ export function FleetManagementView({
                   {createError}
                 </div>
               )}
-              {automaticPlanNeedsTarget && (
+              {draftNeedsTarget && (
                 <div className="text-muted-foreground text-xs">
-                  Select a repository or project to create and plan
-                  automatically. Turn automatic planning off to save a goal-only
-                  draft.
+                  {inputMode === "plan"
+                    ? "Select a repository or project before importing an executable task plan."
+                    : "Select a repository or project to create and plan automatically. Turn automatic planning off to save a goal-only draft."}
                 </div>
               )}
             </div>

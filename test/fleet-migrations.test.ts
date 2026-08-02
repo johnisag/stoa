@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { runMigrations } from "@/lib/db/migrations";
 import { createSchema } from "@/lib/db/schema";
 import { queries } from "@/lib/db/queries";
+import { ensureFleetOwnedSessionRoleSchema } from "@/lib/db/fleet-session-role-schema";
 
 function markAppliedThrough(db: InstanceType<typeof Database>, id: number) {
   db.exec(`
@@ -1371,6 +1372,153 @@ describe("fleet migrations", () => {
         )
         .get()
     ).toEqual({ count: 4 });
+    db.close();
+  });
+
+  it("migration 80 hides and profile-binds legacy Fleet worker sessions", () => {
+    const db = new Database(":memory:");
+    createSchema(db);
+    db.exec(`
+      INSERT INTO fleet_runs (id, name, goal)
+      VALUES ('run-80', 'Legacy run', 'Backfill internal roles');
+      INSERT INTO sessions
+        (id, name, tmux_name, working_directory, agent_type, model,
+         worker_task, session_role)
+      VALUES
+        ('session-80', 'Legacy Fleet worker', 'claude-session-80', '/repo',
+         'claude', 'sonnet', 'legacy task', 'interactive'),
+        ('review-session-80', 'Legacy plan reviewer', 'codex-review-80', '/repo',
+         'codex', 'gpt-5', 'legacy review', 'interactive');
+      INSERT INTO fleet_workers
+        (id, fleet_run_id, session_id, status, provider, model)
+      VALUES
+        ('worker-80', 'run-80', 'session-80', 'running', 'claude', 'sonnet');
+      INSERT INTO fleet_reviews
+        (id, fleet_run_id, subject_hash, policy_hash, execution_hash, base_sha,
+         lens, reviewer_session_id, verdict)
+      VALUES
+        ('review-80', 'run-80', 'subject', 'policy', 'execution',
+         '${"a".repeat(40)}', 'correctness_security', 'review-session-80',
+         'clean');
+    `);
+
+    ensureFleetOwnedSessionRoleSchema(db);
+
+    const session = db
+      .prepare(
+        `SELECT session_role, launch_profile_json, launch_profile_hash
+         FROM sessions WHERE id = 'session-80'`
+      )
+      .get() as {
+      session_role: string;
+      launch_profile_json: string;
+      launch_profile_hash: string;
+    };
+    expect(session.session_role).toBe("fleet_worker");
+    expect(JSON.parse(session.launch_profile_json)).toMatchObject({
+      role: "fleet_worker",
+      fleetRunId: "run-80",
+      ownerType: "worker",
+      ownerId: "worker-80",
+      sessionId: "session-80",
+    });
+    expect(session.launch_profile_hash).toMatch(/^[0-9a-f]{64}$/);
+    const reviewSession = db
+      .prepare(
+        `SELECT session_role, launch_profile_json
+         FROM sessions WHERE id = 'review-session-80'`
+      )
+      .get() as { session_role: string; launch_profile_json: string };
+    expect(reviewSession.session_role).toBe("fleet_plan_reviewer");
+    expect(JSON.parse(reviewSession.launch_profile_json)).toMatchObject({
+      role: "fleet_plan_reviewer",
+      ownerType: "plan_review",
+      ownerId: "review-80",
+    });
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE sessions SET session_role = 'interactive'
+           WHERE id = 'session-80'`
+        )
+        .run()
+    ).toThrow(/immutable/i);
+
+    // Replay is idempotent and does not need the historical worker row to keep
+    // the already-owned session hidden.
+    db.exec(`DELETE FROM fleet_workers WHERE id = 'worker-80'`);
+    expect(() => ensureFleetOwnedSessionRoleSchema(db)).not.toThrow();
+    expect(
+      db
+        .prepare(`SELECT session_role FROM sessions WHERE id = 'session-80'`)
+        .get()
+    ).toEqual({ session_role: "fleet_worker" });
+    db.close();
+  });
+
+  it("migration 81 durably validates and freezes expected Fleet merge results", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 80);
+    db.exec(`
+      CREATE TABLE fleet_merge_operations (id TEXT PRIMARY KEY);
+    `);
+
+    runMigrations(db);
+
+    expectColumns(db, "fleet_merge_operations", ["expected_result_head_sha"]);
+    const expected = "a".repeat(40);
+    db.prepare(
+      `INSERT INTO fleet_merge_operations (id, expected_result_head_sha)
+       VALUES ('operation-81', ?)`
+    ).run(expected);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO fleet_merge_operations (id, expected_result_head_sha)
+           VALUES ('sha256-operation-81', ?)`
+        )
+        .run("c".repeat(64))
+    ).not.toThrow();
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE fleet_merge_operations SET expected_result_head_sha = ?
+           WHERE id = 'operation-81'`
+        )
+        .run("b".repeat(40))
+    ).toThrow(/immutable/i);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO fleet_merge_operations (id, expected_result_head_sha)
+           VALUES ('invalid-operation-81', 'ABC')`
+        )
+        .run()
+    ).toThrow(/invalid/i);
+
+    db.exec(`
+      DELETE FROM _migrations WHERE id = 81;
+      DROP TRIGGER trg_fleet_merge_expected_result_immutable;
+      DROP TRIGGER trg_fleet_merge_expected_result_update_valid;
+    `);
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(
+      db
+        .prepare(`SELECT COUNT(*) AS count FROM _migrations WHERE id = 81`)
+        .get()
+    ).toEqual({ count: 1 });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM sqlite_master
+           WHERE type = 'trigger' AND name IN (
+             'trg_fleet_merge_expected_result_insert_valid',
+             'trg_fleet_merge_expected_result_update_valid',
+             'trg_fleet_merge_expected_result_immutable'
+           )`
+        )
+        .get()
+    ).toEqual({ count: 3 });
     db.close();
   });
 });

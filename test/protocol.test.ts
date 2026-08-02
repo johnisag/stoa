@@ -2,6 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   encode,
   createDecoder,
+  currentPtyHostHandshake,
+  ptyHostCompatibilityError,
+  PTY_HOST_PROTOCOL_VERSION,
+  PTY_HOST_REQUIRED_CAPABILITIES,
   type ClientMessage,
   type HostMessage,
 } from "@/lib/session-backend/pty/protocol";
@@ -13,6 +17,28 @@ function collect() {
 }
 
 describe("pty-host IPC protocol framing (length-prefixed binary)", () => {
+  it("advertises the current spawn-security protocol contract", () => {
+    const handshake = currentPtyHostHandshake();
+    expect(handshake).toEqual({
+      protocolVersion: PTY_HOST_PROTOCOL_VERSION,
+      capabilities: [...PTY_HOST_REQUIRED_CAPABILITIES],
+    });
+    expect(ptyHostCompatibilityError(handshake)).toBeNull();
+    expect(ptyHostCompatibilityError(undefined)).toContain("handshake");
+    expect(
+      ptyHostCompatibilityError({
+        protocolVersion: PTY_HOST_PROTOCOL_VERSION,
+        capabilities: ["spawn.envMode.replace"],
+      })
+    ).toContain("spawn.fleetWritableRoots");
+    expect(
+      ptyHostCompatibilityError({
+        protocolVersion: PTY_HOST_PROTOCOL_VERSION - 1,
+        capabilities: [...PTY_HOST_REQUIRED_CAPABILITIES],
+      })
+    ).toContain("incompatible");
+  });
+
   it("round-trips a control message", () => {
     const { got, decode } = collect();
     decode(encode({ t: "res", id: 1, ok: true }));

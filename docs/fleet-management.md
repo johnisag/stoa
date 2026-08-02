@@ -335,6 +335,14 @@ Implemented on `feat/fleet-autonomous-delivery`:
   unattached Stoa-managed worktree. Server validation owns the repository,
   registration, on-disk, active-session, and branch checks; client-supplied
   worktree identity is never trusted.
+- The Windows-default Tier 2 pty client performs an explicit protocol-v2 and
+  capability handshake before sending any spawn. A surviving legacy or
+  incompatible daemon cannot receive requests carrying Fleet environment
+  replacement or writable roots: Stoa fails closed to Tier 1 and logs that the
+  daemon and Stoa must be restarted to restore restart-surviving sessions; the
+  backend choice remains process-wide after the startup probe. Reconnect
+  ownership is bound to the exact socket, so a delayed close from a superseded
+  socket cannot reject requests issued through its negotiated replacement.
 - Deterministic automatic allocation across installed, unattended-capable agent
   CLIs. Valid planner suggestions are honored; missing/unavailable suggestions
   are balanced across eligible providers. Kilo remains available for ordinary
@@ -394,13 +402,18 @@ Implemented on `feat/fleet-autonomous-delivery`:
   closed until it succeeds. While blocked, only persisted planner polling and
   lifecycle/cancellation cleanup continue; verification, review/fix, merge,
   automation admission, and worker scheduling remain closed.
-- Every new worker attempt persists a unique immutable opaque session-ownership
-  key before spawn, and the session receives the same key in its atomic insert.
-  Restart recovery and cleanup use exact-key lookup and validate the
-  run/task/attempt, provider/model, base, worktree/branch, and conductor
-  identity before adopting or stopping a session. Prompt text and
-  `spawn_request_id` substrings are never session identity; legacy attempts may
-  recover only through an already-linked exact session id.
+- Every worker, planner, plan reviewer, task reviewer, and fixer session is
+  inserted with an internal role plus a canonical immutable launch profile. The
+  profile binds its exact run/owner/session tuple, backend key, provider/model,
+  approval mode, working directory, worktree/branch/base, ownership key,
+  conductor provenance, and prompt hash; its SHA-256 is persisted alongside the
+  canonical JSON. Restart recovery and cleanup require that complete profile.
+  Prompt/path/branch searches and `spawn_request_id` substrings are never
+  identity fallbacks; cross-run, duplicate, wrong-role/hash, and mutable decoy
+  sessions fail closed. Deleting an optional interactive conductor may clear
+  only the known Fleet child's live conductor FK; the original conductor stays
+  hash-bound in its immutable profile and every other launch field must still
+  match.
 - Automatic start resolves the current target-branch commit immediately before
   its compare-and-set transition, and the scheduler resolves it again before it
   leases any worker. Drift or a resolution failure durably pauses and blocks the
@@ -428,7 +441,10 @@ Implemented on `feat/fleet-autonomous-delivery`:
   Windows tree termination or the bounded POSIX freeze/group/descendant sweep
   before the result settles. A fully reparented POSIX escape still requires
   future cgroup, container, or native job containment for a hard prevention
-  guarantee.
+  guarantee. `STOA_VERIFY_TIMEOUT_MS` is capped at 24 hours minus the one-minute
+  lease margin; Fleet merge and verifier leases are derived from that accepted
+  timeout so a configured long-running verifier cannot outlive exclusive Git
+  ownership.
 - Containerized Fleet delivery honors a custom `STOA_HOME` without mounting the
   state root itself. Generic containers receive no Stoa-state mount; Fleet may
   mount only `fleet/<run>/planner/<request>`,
@@ -458,22 +474,30 @@ Implemented on `feat/fleet-autonomous-delivery`:
   no-force integration-branch push, GitHub PR, required-check wait, and an exact
   old-OID-leased fast-forward of the configured remote target ref.
   Local landing adds a repository-keyed in-process guard to its durable resource
-  lease and checks branch, head, and cleanliness together before, after, and
-  during recovery. GitHub landing binds the expected base branch name, pinned
-  base commit, and exact head. It verifies the checkout's `origin` slug against
-  the registered repository and retains that exact verified URL for subsequent
-  reads and pushes. It does not use GitHub's PR merge mutation, because that API
-  can pin the head but cannot atomically pin the target ref's old commit; Git
-  receive-pack performs that exact compare-and-swap instead.
+  lease, requires the selected checkout to be on the clean bound base before
+  landing, and compare-and-swaps only the approved branch ref. The target ref is
+  authoritative during recovery; Fleet deliberately does not refresh an ambient
+  index or worktree after the ref update because another process could have
+  switched that checkout. The completed-run UI keeps an explicit checkout
+  refresh warning visible. GitHub landing binds the expected base branch name,
+  pinned base commit, and exact head. It verifies the checkout's `origin` slug
+  against the registered repository and retains that exact verified URL for
+  subsequent reads and pushes. It does not use GitHub's PR merge mutation,
+  because that API can pin the head but cannot atomically pin the target ref's
+  old commit; Git receive-pack performs that exact compare-and-swap instead.
 - Explicit archival and exact-ownership cleanup, bounded artifact pruning,
   retention metadata, outcome/cost analytics, and operator task/worker controls.
   Archived and terminal runs retain their evidence but contribute zero ambient
   attention; list and detail responses preserve the archive timestamp. Run-list
   polling always returns every unarchived nonterminal run and caps only terminal
   or archived history to the 100 most recently updated rows. Run detail returns
-  the newest 100 artifact metadata rows plus every task-referenced report, diff,
-  and verification artifact, with the total and any omitted metadata disclosed;
-  its newest-50 event timeline is disclosed the same way.
+  the newest 100 artifact metadata rows plus up to 1,000 current actionable
+  blocker rows and every task-referenced report, diff, and verification
+  artifact, with the total and any omitted metadata disclosed. The supplemental
+  blocker projection keeps identity, binding, title, severity, actor, and byte
+  count but omits body and `metadata_json`; blockers already admitted by the
+  bounded recent or task-reference windows retain their normal metadata. The
+  newest-50 event timeline is disclosed the same way.
   Lifecycle safety events bypass exhausted data-plane event quotas, so archive
   and external cleanup completion cannot be rolled back after a filesystem side
   effect. Cost sampling and hard-stop interrupts cover planner, plan-review,
@@ -492,13 +516,17 @@ Implemented on `feat/fleet-autonomous-delivery`:
   advice cannot execute work or mint approval. A failed Fleet run rejects a new
   supervisor and drives any starting or running owned supervisor through failed
   cleanup and cost settlement instead of leaving it active.
-- Managed supervisor terminals use an internal session role and are reachable
-  only through the owning Fleet supervisor lifecycle. Generic session lists,
+- All server-owned Fleet agent terminals (planner, plan reviewer, worker, task
+  reviewer, fixer, and managed supervisor) use internal session roles and are
+  reachable only through their owning Fleet lifecycle. Generic session lists,
   worktree selectors, terminal WebSocket attachment, session actions, worker
   orchestration, monitor/search/cost/audit/analytics surfaces, and kill-all omit
-  or reject internal sessions. Explicit unknown future roles fail closed rather
-  than becoming interactive by accident; legacy null/empty and `interactive`
-  rows remain compatible.
+  or reject internal sessions. Deleting an ordinary conductor atomically deletes
+  only its interactive worker graph and detaches the five known Fleet roles;
+  unknown future internal roles and other FK blockers reject the operation
+  before backend processes are stopped. Explicit unknown roles fail closed
+  rather than becoming interactive by accident; legacy null/empty and
+  `interactive` rows remain compatible.
 - MCP SDK v2 with current/legacy date-version negotiation and direct scoped
   Fleet tools. Admin HTTP routes issue/revoke hash-only stored capabilities;
   reusable `fleet:read` tokens are run-scoped (with `*` reserved for listing),
@@ -519,9 +547,11 @@ Delivery status:
 
 - The feature implementation and focused subsystem tests are complete on the
   working branch. The phase ledger is updated as integration evidence lands.
-- Repository-wide typecheck/tests/build, four independent final diff reviews,
-  the GitHub OS matrix, and the final merge are release gates, not optional
-  follow-ups.
+- The repository-wide local gate is green on the current uncommitted candidate:
+  Prettier, TypeScript, surface guards, `npm test` (406 files, 4,674 passed,
+  2 skipped), and the production build pass with the existing Turbopack warning.
+  Four independent exact-head reviews, the GitHub OS matrix, and the final merge
+  remain release gates, not optional follow-ups.
 - MCP protocol-native Tasks are not advertised because the SDK does not expose
   the draft extension used by Fleet. Subscriptions are replaced by bounded
   polling plus full snapshot refetch after reconnect. Sampling is not advertised
@@ -1761,10 +1791,14 @@ worktree ownership/cleanup. Merge leases and progress survive restart.
   that disallow this exact fast-forward leave Fleet awaiting operator action
   instead of falling back to GitHub's base-unpinned merge mutation.
 - For local landing, serialize attempts for the same repository within one Stoa
-  server in addition to the durable resource lease. Read branch, head, and
-  cleanliness together before and after the exact fast-forward and during
-  recovery; never certify a branch switch, dirty checkout, or unrelated user
-  work.
+  server in addition to the durable resource lease. Require the selected source
+  checkout to be the clean bound branch before the exact old-OID ref
+  compare-and-swap, then certify and recover from the explicit target ref only.
+  Never run `read-tree`, `reset`, `checkout`, or another ambient worktree update
+  after that ref mutation: a concurrent branch switch must not expose unrelated
+  user files to a later Git process. If the target branch remains checked out,
+  its index/worktree is intentionally left untouched for the operator's next safe
+  refresh.
 
 ## API plan
 
@@ -1991,9 +2025,9 @@ The implemented run surface provides:
 - Event timeline.
 - Bounded lazy artifact and rendered-output reads bound to the exact run,
   worker/session, and attempt. Artifact metadata includes the newest bounded
-  window plus every task-referenced report, diff, and verification record; the
-  UI discloses omitted artifact/event history rather than presenting a partial
-  response as complete.
+  window, up to 1,000 current actionable blockers, and every task-referenced
+  report, diff, and verification record; the UI discloses omitted artifact/event history
+  rather than presenting a partial response as complete.
 - Merge queue.
 - Advisory, hash-bound supervisor evidence.
 - Exact task controls for skip closure, manual launch, read-only conversion,
@@ -2340,8 +2374,9 @@ Integration tests with fakes:
 - GitHub landing rejects same-SHA retargets before landing; the external update
   names the configured target ref and compare-and-swaps its pinned old OID, so a
   concurrent retarget cannot redirect it and a concurrent base advance cannot
-  be overwritten. Local landing advances only the approved target ref and
-  refuses to overwrite a concurrent branch switch or newly dirty checkout.
+  be overwritten. Local landing advances only the approved target ref and never
+  follows it with an ambient index/worktree mutation, so a concurrent branch
+  switch cannot redirect the landing or expose unrelated files to overwrite.
 
 UI tests:
 
@@ -2356,6 +2391,9 @@ UI tests:
 - Creation-time unattended-agent consent for every target-bound executable run,
   including manual review and imported plans; unbound goal drafts remain safe
   to save without execution authority.
+- Imported plans always require a registered repository or project, even when
+  automatic planning is disabled; the UI blocks the draft on the same target
+  precondition enforced by the source service.
 - Actionable approval attention, current-plan blocker visibility, polling-stable
   approval edits, and internal planner lifecycle copy.
 - Client-side planner-cap, automatic-fix-round, and retention bounds.
@@ -2365,9 +2403,9 @@ UI tests:
   archive timestamp and durable evidence remain visible.
 - Every unarchived nonterminal/actionable run remains visible beyond 100 rows;
   only terminal or archived history is capped to the newest 100.
-- Task-referenced report, diff, and verification metadata remains discoverable
-  beyond the newest-100 artifact window, and omitted artifact/event totals are
-  disclosed in run detail.
+- Up to 1,000 current actionable blockers and every task-referenced report, diff, and
+  verification metadata remain discoverable beyond the newest-100 artifact
+  window, and omitted artifact/event totals are disclosed in run detail.
 - Historical exact-head blockers remain in Artifacts but leave urgent attention
   after a clean descendant head; unresolved/malformed current evidence remains
   visible and fail-closed.
@@ -2414,7 +2452,7 @@ itself need another bookkeeping PR.
 | Phase 2: Plan ingestion and decomposition           | Completed                         | Merged via PR #395               | Local gate green on branch head: `npx tsc --noEmit`, `npx prettier --check .`, `npm test` (313 files, 3582 tests), and `npm run build` pass with existing Turbopack warning; browser smoke passed; final independent review clean; PR #395 final head `0efe58b` had PR-head CI run `29002393867` green     | Merged 2026-07-09 as `983d123`; merged-state main push CI run `29002655048` green on `983d123`; bookkeeping recorded by gated PR path | Phase 3/3A completed via PR #398              | Delivered durable plan ingestion, stable plan hashes, approval, critic artifacts, blocker gates, route body caps, and partial-schema repair.                                                                                                                                                                                                      |
 | Phase 3: Scheduler and worker launch                | Completed                         | Merged via PR #398               | Historical branch gates and independent reviews were green.                                                                                                                                                                                                                                                | Merged on `main` as part of `fb3cf30`.                                                                                                | None                                          | Durable leases, idempotent/recoverable spawn, admission caps, conflict avoidance, lifecycle controls, and bounded 40-task scheduling are in `main`.                                                                                                                                                                                               |
 | Phase 3A: Automatic planner, allocation, MCP SDK v2 | Completed                         | Merged via PR #398               | Historical branch gates, MCP negotiation coverage, and independent reviews were green.                                                                                                                                                                                                                     | Merged on `main` as `fb3cf30`.                                                                                                        | None                                          | Dedicated planner sessions, automatic provider allocation, exact execution hashes, and the SDK v2/current+legacy transport boundary are in `main`; the current delivery branch further restricts Fleet allocation to verified unattended-capable providers.                                                                                       |
-| Phase 4: Artifact contract and status aggregation   | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Repository-wide local gate green after review remediation: Prettier, TypeScript, surface guard, `npm test` (401 files, 4621 passed, 2 skipped), and production build pass with the existing Turbopack warning; final exact-head independent review pending.                                                | Pending PR CI and merge.                                                                                                              | Complete exact-head review, PR CI, and merge. | Nonce/attempt JSON reports, bounded collection, Git-derived exact heads/claims/sensitive paths, fair 40-worker capture, all-active run visibility with bounded terminal history, task-referenced evidence beyond bounded metadata windows, exact restart ownership, missing-report quarantine, recovery, and Fleet Board handoff are implemented. |
+| Phase 4: Artifact contract and status aggregation   | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Repository-wide local gate green on the current candidate after review remediation: Prettier, TypeScript, surface guard, `npm test` (406 files, 4,674 passed, 2 skipped), and production build pass with the existing Turbopack warning; final exact-head independent review pending.                      | Pending PR CI and merge.                                                                                                              | Complete exact-head review, PR CI, and merge. | Nonce/attempt JSON reports, bounded collection, Git-derived exact heads/claims/sensitive paths, fair 40-worker capture, all-active run visibility with bounded terminal history, task-referenced evidence beyond bounded metadata windows, exact restart ownership, missing-report quarantine, recovery, and Fleet Board handoff are implemented. |
 | Phase 5: Verify and review gates                    | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Repository-wide local gate green after review remediation; focused direct-argv verification and exact-head four-lane review/fix/control suites are green, including restart between fixer launch and result collection; final exact-head independent review pending.                                       | Pending PR CI and merge.                                                                                                              | Complete exact-head review, PR CI, and merge. | Clean-worktree verification with a secret-stripped OS/toolchain environment, four independent lanes, immutable findings, bounded descendant-head fixes, stale-evidence invalidation, and exact budget/concurrency/task/claim controls are implemented.                                                                                            |
 | Phase 6: Merge integration                          | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Repository-wide local gate green after review remediation; focused merge/readiness/control, multi-task sessionless E2E, and blocker-to-fixed-head-to-merge E2E suites are green; final exact-head independent review pending.                                                                              | Pending PR CI and merge.                                                                                                              | Complete exact-head review, PR CI, and merge. | Dependency-ordered staging and final verification stay controllable until exact landing authority is consumed; local and GitHub landing name the approved target ref and use old-OID compare-and-swap, with registered-origin, exact-head, ancestry, cleanliness, concurrent-base, and retarget checks.                                           |
 | Phase 7: Lifecycle hardening                        | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Repository-wide local gate green after review remediation; focused startup/lifecycle/cost/retry/source/analytics/executor/migration and durable fairness-cursor suites are green; final exact-head independent review pending.                                                                             | Pending PR CI and merge.                                                                                                              | Complete exact-head review, PR CI, and merge. | Fail-closed startup retry, immutable exact worker/session ownership, fresh-base and unattended-consent admission, bounded active reconciliation, overflow-safe fairness cursors, transient auxiliary retry, all-owner cost/pause/cancel, unified `STOA_HOME`, cleanup/retention/analytics, and a remote-executor seam are implemented.            |
@@ -2589,15 +2627,21 @@ Definition of done:
 
 Status: Implemented; release gate pending. Fleet owns a durable integration
 lease/worktree and applies tasks in dependency order, with per-task and final
-verification. Internal staging does not freeze approval controls or consume
+verification. Each task merge first writes the exact merge tree and two-parent
+commit object, durably binds that expected commit to the operation, and only
+then moves the Fleet-owned integration branch. Restart recovery accepts that
+exact commit (or its bound base) only; an arbitrary descendant that merely
+contains the task head is rejected. Internal staging does not freeze approval controls or consume
 external merge authority. For manual operation, `/merge` or `fleet:merge` stages
 only; `/merge/authorize`, or `fleet_authorize_landing` with a separate
 `fleet:land` capability, revalidates the plan/execution/base/final integration
-head and consumes the one-shot landing authorization. Local landing requires an
-exact clean fast-forward through an old-OID compare-and-swap on the approved
-target ref, then refreshes the matching checkout without overwriting concurrent
-branch switches or local edits. It checks branch/head/cleanliness before, after,
-and during recovery under a same-repository in-process guard. GitHub
+head and consumes the one-shot landing authorization. Local landing requires a
+clean bound source checkout before an old-OID compare-and-swap on the approved
+target ref. It then validates and recovers against that explicit ref and never
+refreshes the ambient index/worktree; this prevents a later Git process from
+touching a checkout that switched branches during landing. A still-checked-out
+target may therefore need an operator-initiated refresh after Fleet completes.
+GitHub
 landing publishes the integration branch without force and rechecks required
 CI, an explicit pass-conclusion allowlist, PR head identity, expected target
 branch, the registered repository slug against the checkout's `origin`, and the

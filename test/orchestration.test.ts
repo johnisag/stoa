@@ -124,6 +124,10 @@ import {
 import { GET as listWorkers } from "@/app/api/orchestrate/workers/route";
 import { stoaHomeDir } from "@/lib/platform";
 import { internalSessionProfile } from "./internal-session-fixture";
+import {
+  commitConductorSessionDeletion,
+  planConductorSessionDeletion,
+} from "@/lib/session-deletion";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
@@ -317,6 +321,63 @@ describe("spawnWorker — conductor FK guard", () => {
     const workers = await getWorkers(conductor);
     expect(workers).toHaveLength(1);
     expect(workers[0].task).toBe("implement the feature");
+  });
+
+  it("persists Fleet agents with an immutable owner-specific launch profile", async () => {
+    const conductor = addSession();
+    const worker = await spawnWorker({
+      conductorSessionId: conductor,
+      task: "review the approved plan",
+      workingDirectory: "/repo",
+      useWorktree: false,
+      approvalMode: "full-bypass",
+      fleetOwner: {
+        runId: RUN_A,
+        ownerType: "plan_review",
+        ownerId: REQUEST_A,
+      },
+    });
+    const profile = JSON.parse(worker.launch_profile_json!);
+    expect(worker.session_role).toBe("fleet_plan_reviewer");
+    expect(profile).toMatchObject({
+      version: 1,
+      role: "fleet_plan_reviewer",
+      fleetRunId: RUN_A,
+      ownerType: "plan_review",
+      ownerId: REQUEST_A,
+      sessionId: worker.id,
+    });
+    expect(worker.launch_profile_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(() =>
+      db()
+        .prepare(`UPDATE sessions SET model = 'generic-mutation' WHERE id = ?`)
+        .run(worker.id)
+    ).toThrow(/immutable/i);
+  });
+
+  it("keeps Fleet children out of generic conductor cascades", () => {
+    const conductor = addSession();
+    const ordinary = addSession({ conductor_session_id: conductor });
+    const fleetChild = addSession({
+      conductor_session_id: conductor,
+      session_role: "fleet_task_reviewer",
+    });
+
+    const plan = planConductorSessionDeletion(db(), conductor);
+    expect(plan.interactiveWorkers.map((row) => row.id)).toEqual([ordinary]);
+    commitConductorSessionDeletion(db(), plan);
+    expect(
+      db()
+        .prepare(
+          `SELECT id, session_role, conductor_session_id
+           FROM sessions WHERE id = ?`
+        )
+        .get(fleetChild)
+    ).toEqual({
+      id: fleetChild,
+      session_role: "fleet_task_reviewer",
+      conductor_session_id: null,
+    });
   });
 
   it("delivers an ephemeral task without persisting its secret payload", async () => {

@@ -26,6 +26,7 @@ import {
   hostAddress,
   encode,
   createDecoder,
+  currentPtyHostHandshake,
   type ClientMessage,
   type HostMessage,
 } from "./protocol";
@@ -72,7 +73,15 @@ function send(conn: Conn, msg: HostMessage) {
 async function handleMessage(conn: Conn, msg: ClientMessage) {
   switch (msg.t) {
     case "ping":
-      send(conn, { t: "res", id: msg.id, ok: true });
+      // A ping is also the wire handshake. Older daemons reply with no value,
+      // which lets a newly-started server reject them immediately instead of
+      // silently sending security-sensitive spawn fields they do not honor.
+      send(conn, {
+        t: "res",
+        id: msg.id,
+        ok: true,
+        value: currentPtyHostHandshake(),
+      });
       break;
 
     case "spawn":

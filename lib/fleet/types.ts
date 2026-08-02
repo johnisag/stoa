@@ -497,6 +497,7 @@ export interface FleetMergeOperationRow {
   target: FleetMergeTarget | null;
   expected_base_sha: string;
   expected_task_head_sha: string | null;
+  expected_result_head_sha: string | null;
   result_head_sha: string | null;
   verification_commands_json: string;
   verification_output_hash: string | null;

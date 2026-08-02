@@ -133,6 +133,11 @@ export async function spawnFleetWorker(
         : [],
       requireStrongIsolation: true,
       fleetOwnershipKey: input.sessionOwnershipKey,
+      fleetOwner: {
+        runId: input.run.id,
+        ownerType: "worker",
+        ownerId: input.reportContract?.workerId ?? input.spawnRequestId,
+      },
       approvalMode,
       model: input.task.model ?? undefined,
       requireExactModel: true,

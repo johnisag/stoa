@@ -172,6 +172,7 @@ import {
 } from "../lib/dispatch/verify";
 import {
   buildVerificationEnvironment,
+  parseVerifyTimeoutMs,
   parseVerifySteps,
   runVerify,
   spawnArgs,
@@ -179,6 +180,8 @@ import {
   VERIFY_MAX_OUTPUT_BUFFER,
   VERIFY_OUTPUT_TAIL_MAX,
   VERIFY_TIMEOUT_MS,
+  VERIFY_TIMEOUT_DEFAULT_MS,
+  VERIFY_TIMEOUT_MAX_MS,
 } from "../lib/verification/runner";
 
 describe("Dispatch verification adapter", () => {
@@ -186,6 +189,19 @@ describe("Dispatch verification adapter", () => {
     expect(dispatchParseVerifySteps).toBe(parseVerifySteps);
     expect(dispatchSpawnArgs).toBe(spawnArgs);
     expect(dispatchRunVerify).toBe(runVerify);
+  });
+});
+
+describe("verification timeout configuration", () => {
+  it("caps the configured process timeout below the durable 24-hour lease", () => {
+    expect(parseVerifyTimeoutMs(undefined)).toBe(VERIFY_TIMEOUT_DEFAULT_MS);
+    expect(parseVerifyTimeoutMs("1200000")).toBe(1_200_000);
+    expect(parseVerifyTimeoutMs(String(48 * 60 * 60 * 1000))).toBe(
+      VERIFY_TIMEOUT_MAX_MS
+    );
+    expect(parseVerifyTimeoutMs("not-a-number")).toBe(
+      VERIFY_TIMEOUT_DEFAULT_MS
+    );
   });
 });
 
