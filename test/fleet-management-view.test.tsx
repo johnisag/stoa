@@ -32,6 +32,13 @@ const state = vi.hoisted(() => ({
   cleanupMutation: vi.fn(async (_input: unknown) => undefined),
   mergeMutation: vi.fn(async (_input: unknown) => undefined),
   landingMutation: vi.fn(async (_input: unknown) => undefined),
+  landingRetryMutation: vi.fn(async (_input: unknown) => undefined),
+  reposLoading: false,
+  reposError: null as Error | null,
+  projectsLoading: false,
+  projectsError: null as Error | null,
+  reposRefetch: vi.fn(async () => undefined),
+  projectsRefetch: vi.fn(async () => undefined),
   mergeStatus: null as FleetMergeStatusDto | null,
   cancellationPreview: null as FleetDestructiveActionPreview | null,
   cleanupPreview: null as {
@@ -64,10 +71,22 @@ vi.mock("@/data/dispatch/queries", () => ({
     data: [
       { id: "repo-1", repo_slug: "acme/stoa", base_branch: "release/main" },
     ],
+    isLoading: state.reposLoading,
+    isFetching: false,
+    isError: state.reposError !== null,
+    error: state.reposError,
+    refetch: state.reposRefetch,
   }),
 }));
 vi.mock("@/data/projects/queries", () => ({
-  useProjectsQuery: () => ({ data: [] }),
+  useProjectsQuery: () => ({
+    data: [],
+    isLoading: state.projectsLoading,
+    isFetching: false,
+    isError: state.projectsError !== null,
+    error: state.projectsError,
+    refetch: state.projectsRefetch,
+  }),
 }));
 vi.mock("@/data/fleet/queries", () => ({
   useFleetRunsQuery: () => ({
@@ -214,6 +233,10 @@ vi.mock("@/data/fleet/queries", () => ({
   useAuthorizeFleetLanding: () => ({
     ...mutation(),
     mutateAsync: state.landingMutation,
+  }),
+  useRetryFleetLanding: () => ({
+    ...mutation(),
+    mutateAsync: state.landingRetryMutation,
   }),
   useRetryFleetTask: mutation,
   useReconcileFleetTaskVerification: mutation,
@@ -818,6 +841,13 @@ describe("FleetManagementView status drilldowns", () => {
     state.cleanupMutation.mockClear();
     state.mergeMutation.mockClear();
     state.landingMutation.mockClear();
+    state.landingRetryMutation.mockClear();
+    state.reposLoading = false;
+    state.reposError = null;
+    state.projectsLoading = false;
+    state.projectsError = null;
+    state.reposRefetch.mockClear();
+    state.projectsRefetch.mockClear();
     state.createMutation.mockClear();
   });
 
@@ -1581,6 +1611,122 @@ describe("FleetManagementView status drilldowns", () => {
     );
   });
 
+  it("retries an already-authorized failed landing only with the displayed exact bindings", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const planHash = "1".repeat(64);
+    const executionHash = "2".repeat(64);
+    const baseSha = "a".repeat(40);
+    const integrationHeadSha = "c".repeat(40);
+    state.detail = {
+      ...state.detail!,
+      run: {
+        ...state.detail!.run,
+        status: "merging",
+        planHash,
+        approvedPlanHash: planHash,
+        automationBaseSha: baseSha,
+        integrationState: "awaiting_operator",
+        integrationError: "The local target could not be updated",
+        integrationBaseSha: baseSha,
+        integrationHeadSha,
+        mergeRequestedAt: "2026-08-01T10:01:00.000Z",
+        mergeRequestedBy: "operator",
+        mergeRequestKind: "manual",
+        mergeTarget: "local",
+      },
+    };
+    state.mergeStatus = {
+      readiness: {
+        runId: "run-1",
+        requested: true,
+        target: "local",
+        integrationState: "awaiting_operator",
+        readyTaskIds: [],
+        waitingTaskIds: [],
+        mergedTaskIds: ["task-active", "task-blocked"],
+        blockers: [],
+        allTasksIntegrated: true,
+        canFinalize: true,
+      },
+      integration: {
+        state: "awaiting_operator",
+        target: "local",
+        requestedAt: "2026-08-01T10:01:00.000Z",
+        requestedBy: "operator",
+        requestKind: "manual",
+        branch: "stoa/fleet/integration-run-1",
+        worktree: "C:\\repo\\.stoa-worktrees\\integration-run-1",
+        baseSha,
+        headSha: integrationHeadSha,
+        prNumber: null,
+        prUrl: null,
+        prHeadSha: null,
+        mergeSha: null,
+        error: "The local target could not be updated",
+      },
+      operations: [
+        {
+          id: "local-land-1",
+          taskId: null,
+          type: "local_finalize",
+          state: "failed",
+          attemptCount: 1,
+          error: "The local target could not be updated",
+          updatedAt: "2026-08-01T10:02:00.000Z",
+        },
+      ],
+      retry: {
+        action: "retry_landing",
+        state: "available",
+        available: true,
+        reason: null,
+        operationId: "local-land-1",
+        attemptCount: 1,
+        maxAttempts: 3,
+        preconditions: {
+          planHash,
+          executionHash,
+          baseSha,
+          integrationHeadSha,
+        },
+        target: "local",
+        targetRef: "refs/heads/main",
+        requiredTargetSha: baseSha,
+        integrationHeadSha,
+        instructions:
+          "Remediate the local target and retry the already-authorized landing.",
+      },
+    };
+
+    render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+    expect(screen.getByText("landing recovery available")).toBeTruthy();
+    expect(screen.getByText("refs/heads/main")).toBeTruthy();
+    expect(screen.getAllByText(baseSha).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(integrationHeadSha).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/does not issue new landing authority/i)
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Prove target and retry landing" })
+    );
+    await waitFor(() =>
+      expect(state.landingRetryMutation).toHaveBeenCalledWith({
+        target: "local",
+        expectedOperationId: "local-land-1",
+        expectedPlanHash: planHash,
+        expectedExecutionHash: executionHash,
+        expectedBaseSha: baseSha,
+        expectedIntegrationHeadSha: integrationHeadSha,
+      })
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining(`Target must equal: ${baseSha}`)
+    );
+    expect(state.landingMutation).not.toHaveBeenCalled();
+  });
+
   it("locks interrupt and exact controls after external landing authorization", async () => {
     state.detail = {
       ...state.detail!,
@@ -2012,6 +2158,43 @@ describe("FleetManagementView status drilldowns", () => {
       screen.getByLabelText("Allow unconfined unattended agents")
     );
     expect((create as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("shows target loading without claiming that the operator missed a selection", async () => {
+    state.reposLoading = true;
+    state.projectsLoading = true;
+
+    render(<FleetManagementView />);
+
+    expect(
+      await screen.findByText("Loading repositories and projects")
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/Select a repository or project to create and plan/)
+    ).toBeNull();
+    expect(
+      (screen.getByLabelText("Repository") as HTMLButtonElement).disabled
+    ).toBe(true);
+    expect(
+      (screen.getByLabelText("Project") as HTMLButtonElement).disabled
+    ).toBe(true);
+  });
+
+  it("shows target query errors with a retry instead of missing-selection validation", async () => {
+    state.reposError = new Error("repository lookup failed");
+
+    render(<FleetManagementView />);
+
+    expect(
+      await screen.findByText(/Could not load repositories or projects/)
+    ).toBeTruthy();
+    expect(screen.getByText(/repository lookup failed/)).toBeTruthy();
+    expect(
+      screen.queryByText(/Select a repository or project to create and plan/)
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry targets" }));
+    expect(state.reposRefetch).toHaveBeenCalledTimes(1);
+    expect(state.projectsRefetch).toHaveBeenCalledTimes(1);
   });
 
   it("describes preferred provider allocation and imported auto-merge accurately", async () => {

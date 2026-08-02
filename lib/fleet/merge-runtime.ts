@@ -43,9 +43,12 @@ import {
   buildFleetPrCreateArgs,
   buildFleetPrViewArgs,
   buildFleetRequiredCheckRulesArgs,
+  FLEET_REQUIRED_RULES_MAX_PAGE_BYTES,
+  FLEET_REQUIRED_RULES_MAX_PAGES,
+  FLEET_REQUIRED_RULES_PAGE_SIZE,
   fleetIntegrationIdentity,
   parseFleetPrStatus,
-  parseFleetRequiredCheckRules,
+  parseFleetRequiredCheckRulePages,
   type FleetPrStatus,
   type FleetRequiredCheckSet,
 } from "./merge-contract";
@@ -101,7 +104,7 @@ const FLEET_LANDING_RETRY_MAX_MS = 5 * 60_000;
 const localLandingRepositories = new Set<string>();
 
 export interface FleetFinalVerificationRetryStatus {
-  action: "retry_final_verification" | null;
+  action: "retry_final_verification" | "retry_landing" | null;
   state: "not_applicable" | "available" | "blocked" | "exhausted";
   available: boolean;
   reason: string | null;
@@ -114,6 +117,11 @@ export interface FleetFinalVerificationRetryStatus {
     baseSha: string;
     integrationHeadSha: string;
   } | null;
+  target: FleetMergeTarget | null;
+  targetRef: string | null;
+  requiredTargetSha: string | null;
+  integrationHeadSha: string | null;
+  instructions: string | null;
 }
 
 export interface FleetMergeStatus extends FleetMergeStatusBase {
@@ -3106,20 +3114,56 @@ async function readRequiredGitHubChecks(
   repoSlug: string,
   baseBranch: string
 ): Promise<FleetRequiredCheckSet> {
-  let result: GitResult;
-  try {
-    result = await deps.gh(
-      cwd,
-      buildFleetRequiredCheckRulesArgs(repoSlug, baseBranch)
-    );
-  } catch (error) {
-    throw retryableLandingError(
-      "GitHub required-check rules are temporarily unavailable",
-      error,
-      "waiting_ci"
-    );
+  const pages: string[] = [];
+  for (let page = 1; page <= FLEET_REQUIRED_RULES_MAX_PAGES; page++) {
+    let result: GitResult;
+    try {
+      result = await deps.gh(
+        cwd,
+        buildFleetRequiredCheckRulesArgs(repoSlug, baseBranch, page)
+      );
+    } catch (error) {
+      throw retryableLandingError(
+        "GitHub required-check rules are temporarily unavailable",
+        error,
+        "waiting_ci"
+      );
+    }
+    if (
+      Buffer.byteLength(result.stdout, "utf8") >
+      FLEET_REQUIRED_RULES_MAX_PAGE_BYTES
+    ) {
+      throw new FleetMergeLandingRetryable(
+        "GitHub required-check rules exceeded the bounded response size; automatic landing is disabled",
+        "waiting_ci"
+      );
+    }
+    pages.push(result.stdout);
+    let itemCount: number;
+    try {
+      const parsed = JSON.parse(result.stdout) as unknown;
+      if (
+        !Array.isArray(parsed) ||
+        parsed.length > FLEET_REQUIRED_RULES_PAGE_SIZE
+      ) {
+        throw new Error("malformed GitHub rules page");
+      }
+      itemCount = parsed.length;
+    } catch {
+      throw new FleetMergeLandingRetryable(
+        "GitHub returned malformed required-check rule pagination; automatic landing is disabled",
+        "waiting_ci"
+      );
+    }
+    if (itemCount < FLEET_REQUIRED_RULES_PAGE_SIZE) break;
+    if (page === FLEET_REQUIRED_RULES_MAX_PAGES) {
+      throw new FleetMergeLandingRetryable(
+        "GitHub required-check rule pagination exceeded the bounded page limit; automatic landing is disabled",
+        "waiting_ci"
+      );
+    }
   }
-  const required = parseFleetRequiredCheckRules(result.stdout);
+  const required = parseFleetRequiredCheckRulePages(pages);
   if (!required || required.checks.length === 0) {
     throw new FleetMergeLandingRetryable(
       "GitHub returned no trustworthy required-check context set; automatic landing is disabled",
@@ -3764,6 +3808,11 @@ function unavailableFinalVerificationRetry(
     attemptCount: input.attemptCount ?? 0,
     maxAttempts: FLEET_FINAL_VERIFICATION_MAX_ATTEMPTS,
     preconditions: null,
+    target: input.target ?? null,
+    targetRef: input.targetRef ?? null,
+    requiredTargetSha: input.requiredTargetSha ?? null,
+    integrationHeadSha: input.integrationHeadSha ?? null,
+    instructions: input.instructions ?? null,
   };
 }
 
@@ -3975,6 +4024,131 @@ function inspectManualFinalVerificationRetry(
       baseSha: current.automation_base_sha,
       integrationHeadSha: current.integration_head_sha,
     },
+    target: null,
+    targetRef: null,
+    requiredTargetSha: null,
+    integrationHeadSha: null,
+    instructions: null,
+  };
+}
+
+function inspectFailedLandingRecovery(
+  db: Database.Database,
+  runId: string
+): FleetFinalVerificationRetryStatus {
+  const exact = exactApprovedFleetExecution(db, runId);
+  const run = exact?.run;
+  if (
+    !run ||
+    run.merge_requested_at === null ||
+    !run.merge_requested_by ||
+    (run.merge_target !== "local" && run.merge_target !== "github_pr")
+  ) {
+    return unavailableFinalVerificationRetry();
+  }
+  const target = run.merge_target;
+  const operationType = target === "local" ? "local_finalize" : "github_merge";
+  const operation = db
+    .prepare(
+      `SELECT * FROM fleet_merge_operations
+       WHERE fleet_run_id = ? AND operation_type = ? AND state = 'failed'
+       ORDER BY created_at DESC, id DESC LIMIT 1`
+    )
+    .get(runId, operationType) as FleetMergeOperationRow | undefined;
+  if (!operation) return unavailableFinalVerificationRetry();
+
+  const tasks = queries.listFleetTasksForRun(db).all(runId) as FleetTaskRow[];
+  const resolvedTarget = resolveFleetMergeTarget(db, run, tasks);
+  const blocked = (reason: string) =>
+    unavailableFinalVerificationRetry({
+      action: "retry_landing",
+      state: "blocked",
+      reason,
+      operationId: operation.id,
+      attemptCount: operation.attempt_count,
+      target,
+      targetRef: resolvedTarget
+        ? `refs/heads/${resolvedTarget.baseBranch}`
+        : null,
+      requiredTargetSha: run.integration_base_sha,
+      integrationHeadSha: run.integration_head_sha,
+    });
+
+  if (
+    ["completed", "failed", "canceled"].includes(run.status) ||
+    (run.desired_state ?? "running") !== "running" ||
+    !["running", "reviewing", "merging"].includes(run.status)
+  ) {
+    return blocked(`Fleet run cannot retry landing from ${run.status}`);
+  }
+  if (run.recovery_required === 1) {
+    return blocked(
+      "Fleet startup recovery must finish before retrying landing"
+    );
+  }
+  if (run.integration_state !== "awaiting_operator") {
+    return blocked("Landing is not waiting for an operator recovery action");
+  }
+  if (
+    !validSha(run.automation_base_sha) ||
+    run.integration_base_sha !== run.automation_base_sha ||
+    !validSha(run.integration_head_sha) ||
+    !resolvedTarget ||
+    (target === "github_pr" && !resolvedTarget.repoSlug)
+  ) {
+    return blocked(
+      "The exact landing repository, base, or head is unavailable"
+    );
+  }
+  if (
+    operation.task_id !== null ||
+    operation.target !== target ||
+    operation.expected_base_sha !== run.integration_head_sha ||
+    operation.expected_task_head_sha !== null ||
+    operation.result_head_sha !== null ||
+    operation.lease_owner !== null ||
+    operation.lease_expires_at !== null
+  ) {
+    return blocked("The failed landing operation is not retry-safe");
+  }
+  const reservedResources = db
+    .prepare(
+      `SELECT 1 FROM fleet_runtime_leases
+       WHERE owner_type = 'merge_operation' AND owner_id = ?
+         AND status = 'reserved' LIMIT 1`
+    )
+    .get(operation.id);
+  if (reservedResources) {
+    return blocked("Landing resource cleanup is still pending");
+  }
+
+  const targetRef = `refs/heads/${resolvedTarget.baseBranch}`;
+  const displayTarget =
+    target === "github_pr" && resolvedTarget.repoSlug
+      ? `${resolvedTarget.repoSlug}:${targetRef}`
+      : targetRef;
+  return {
+    action: "retry_landing",
+    state: "available",
+    available: true,
+    reason: null,
+    operationId: operation.id,
+    attemptCount: operation.attempt_count,
+    maxAttempts: FLEET_FINAL_VERIFICATION_MAX_ATTEMPTS,
+    preconditions: {
+      planHash: run.plan_hash!,
+      executionHash: exact.executionHash,
+      baseSha: run.automation_base_sha,
+      integrationHeadSha: run.integration_head_sha,
+    },
+    target,
+    targetRef: displayTarget,
+    requiredTargetSha: run.integration_base_sha,
+    integrationHeadSha: run.integration_head_sha,
+    instructions:
+      target === "local"
+        ? "Remediate the displayed local checkout or ref error, then retry. Stoa will re-read the exact target ref and every landing gate; it will proceed only if the ref still equals the bound base or already equals the exact integration head."
+        : "Remediate the displayed PR, required-check, or branch error, then retry. Stoa will re-read GitHub, the exact remote target ref, and every landing gate; it will proceed only if the ref still equals the bound base or already equals the exact integration head.",
   };
 }
 
@@ -3983,9 +4157,15 @@ export function getFleetMergeStatus(
   db: Database.Database = getDb()
 ): FleetMergeStatus | null {
   const status = readFleetMergeStatus(runId, db);
-  return status
-    ? { ...status, retry: inspectManualFinalVerificationRetry(db, runId) }
-    : null;
+  if (!status) return null;
+  const finalVerificationRetry = inspectManualFinalVerificationRetry(db, runId);
+  return {
+    ...status,
+    retry:
+      finalVerificationRetry.action !== null
+        ? finalVerificationRetry
+        : inspectFailedLandingRecovery(db, runId),
+  };
 }
 
 function autoMergeEligible(
@@ -4152,6 +4332,10 @@ interface FleetManualLandingPreconditions {
   executionHash: string;
   baseSha: string;
   integrationHeadSha: string;
+}
+
+interface FleetLandingRecoveryPreconditions extends FleetManualLandingPreconditions {
+  operationId: string;
 }
 
 function consumeManualMergeIntent(
@@ -4648,6 +4832,195 @@ export async function authorizeFleetManualLanding(
   return readiness
     ? { readiness }
     : { error: "Fleet run not found", status: 404 };
+}
+
+/**
+ * Reopen a failed, already-authorized landing without minting or replaying
+ * landing authority. The external target is read authoritatively first. Only
+ * the bound base (safe to retry) or exact integration head (safe to recover)
+ * can pass; an unreadable or third SHA remains locked for operator inspection.
+ */
+export async function retryFailedFleetLanding(
+  runId: string,
+  target: FleetMergeTarget,
+  actor: string,
+  expected: FleetLandingRecoveryPreconditions,
+  overrides: Partial<FleetMergeRuntimeDeps> = {}
+): Promise<
+  | { reopened: true; observedTargetSha: string }
+  | { error: string; status?: number }
+> {
+  const deps = runtimeDeps(overrides);
+  const recoveryBlocked = fleetLaunchBlockedResult(deps.db, runId);
+  if (recoveryBlocked) return recoveryBlocked;
+  if (
+    (target !== "local" && target !== "github_pr") ||
+    !expected.operationId ||
+    expected.operationId.length > 128 ||
+    /[\u0000-\u001f\u007f]/.test(expected.operationId) ||
+    !validSha(expected.baseSha) ||
+    !validSha(expected.integrationHeadSha) ||
+    !/^[0-9a-f]{64}$/i.test(expected.planHash) ||
+    !/^[0-9a-f]{64}$/i.test(expected.executionHash)
+  ) {
+    return {
+      error: "Exact failed-landing recovery preconditions are required",
+      status: 400,
+    };
+  }
+  const recovery = inspectFailedLandingRecovery(deps.db, runId);
+  const recoveryPreconditions = recovery.preconditions;
+  if (
+    !recovery.available ||
+    recovery.action !== "retry_landing" ||
+    recovery.operationId !== expected.operationId ||
+    recovery.target !== target ||
+    !recoveryPreconditions ||
+    recoveryPreconditions.planHash !== expected.planHash ||
+    recoveryPreconditions.executionHash !== expected.executionHash ||
+    recoveryPreconditions.baseSha !== expected.baseSha ||
+    recoveryPreconditions.integrationHeadSha !== expected.integrationHeadSha
+  ) {
+    return {
+      error: recovery.reason ?? "Failed landing recovery preconditions changed",
+      status: 409,
+    };
+  }
+
+  const run = queries.getFleetRun(deps.db).get(runId) as FleetMergeRunRow;
+  const tasks = queries
+    .listFleetTasksForRun(deps.db)
+    .all(runId) as FleetTaskRow[];
+  const resolvedTarget = resolveFleetMergeTarget(deps.db, run, tasks);
+  if (!resolvedTarget || (target === "github_pr" && !resolvedTarget.repoSlug)) {
+    return { error: "Fleet landing target is unavailable", status: 409 };
+  }
+
+  let observedTargetSha: string;
+  try {
+    if (target === "local") {
+      observedTargetSha = await localLandingTargetHead(
+        deps,
+        resolvedTarget.repoPath,
+        `refs/heads/${resolvedTarget.baseBranch}`
+      );
+    } else {
+      const githubRemote = await verifiedGitHubLandingRemoteUrl(
+        deps,
+        resolvedTarget.repoPath,
+        resolvedTarget.repoSlug!
+      );
+      const observed = await landingRemoteBranchHead(
+        deps,
+        resolvedTarget.repoPath,
+        resolvedTarget.baseBranch,
+        githubRemote
+      );
+      if (!observed) {
+        return {
+          error:
+            "GitHub target ref is missing; landing recovery remains locked",
+          status: 409,
+        };
+      }
+      observedTargetSha = observed;
+    }
+  } catch (error) {
+    return {
+      error: `Authoritative target-ref proof failed: ${boundedError(error)}`,
+      status: 503,
+    };
+  }
+  if (
+    observedTargetSha !== expected.baseSha &&
+    observedTargetSha !== expected.integrationHeadSha
+  ) {
+    return {
+      error: `Target ref is ${observedTargetSha}, not the required base ${expected.baseSha} or exact integration head ${expected.integrationHeadSha}; landing recovery remains locked`,
+      status: 409,
+    };
+  }
+
+  try {
+    transaction(deps.db, () => {
+      const current = inspectFailedLandingRecovery(deps.db, runId);
+      const currentPreconditions = current.preconditions;
+      if (
+        !current.available ||
+        current.action !== "retry_landing" ||
+        current.operationId !== expected.operationId ||
+        current.target !== target ||
+        !currentPreconditions ||
+        currentPreconditions.planHash !== expected.planHash ||
+        currentPreconditions.executionHash !== expected.executionHash ||
+        currentPreconditions.baseSha !== expected.baseSha ||
+        currentPreconditions.integrationHeadSha !== expected.integrationHeadSha
+      ) {
+        throw new Error("Failed landing recovery preconditions changed");
+      }
+      const now = deps.now().toISOString();
+      const reopened = deps.db
+        .prepare(
+          `UPDATE fleet_merge_operations
+           SET state = 'waiting', error = 'operator requested exact-bound landing recovery',
+               completed_at = NULL, updated_at = ?
+           WHERE id = ? AND fleet_run_id = ? AND state = 'failed'
+             AND expected_base_sha = ? AND expected_task_head_sha IS NULL
+             AND result_head_sha IS NULL AND lease_owner IS NULL
+             AND lease_expires_at IS NULL`
+        )
+        .run(now, expected.operationId, runId, expected.integrationHeadSha);
+      if (reopened.changes !== 1) {
+        throw new Error("Failed landing operation changed");
+      }
+      const runChanged = deps.db
+        .prepare(
+          `UPDATE fleet_runs
+           SET integration_state = 'merging', integration_error = NULL,
+               integration_updated_at = ?, updated_at = ?
+           WHERE id = ? AND merge_requested_at IS NOT NULL
+             AND merge_target = ? AND integration_state = 'awaiting_operator'
+             AND status IN ('running','reviewing','merging')
+             AND desired_state = 'running' AND recovery_required = 0
+             AND plan_hash = ? AND approved_plan_hash = ?
+             AND automation_base_sha = ? AND integration_base_sha = ?
+             AND integration_head_sha = ?`
+        )
+        .run(
+          now,
+          now,
+          runId,
+          target,
+          expected.planHash,
+          expected.planHash,
+          expected.baseSha,
+          expected.baseSha,
+          expected.integrationHeadSha
+        );
+      if (runChanged.changes !== 1) {
+        throw new Error("Failed landing run changed");
+      }
+      createEvent(
+        deps.db,
+        runId,
+        "fleet_landing_retry_scheduled",
+        {
+          recovery: "operator_exact_bound",
+          actor: actor.trim().slice(0, 80) || "operator",
+          operationId: expected.operationId,
+          target,
+          targetRef: current.targetRef,
+          observedTargetSha,
+          requiredBaseSha: expected.baseSha,
+          integrationHeadSha: expected.integrationHeadSha,
+        },
+        { controlPlane: true }
+      );
+    });
+  } catch (error) {
+    return { error: boundedError(error), status: 409 };
+  }
+  return { reopened: true, observedTargetSha };
 }
 
 function normalizedIntegrationPath(value: string): string {

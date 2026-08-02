@@ -285,6 +285,31 @@ describe("atomic conductor session deletion", () => {
     ).toBe(true);
   });
 
+  it("prevents another session from reusing a completed backend-key tombstone", () => {
+    addSession({ id: "conductor" });
+    database
+      .prepare(`UPDATE sessions SET tmux_name = ? WHERE id = ?`)
+      .run("retired-backend-key", "conductor");
+    const plan = claimConductorSessionDeletion(database, "conductor");
+    commitConductorSessionDeletion(database, plan);
+
+    expect(() =>
+      database
+        .prepare(
+          `INSERT INTO sessions (id, name, tmux_name, agent_type)
+           VALUES ('replacement', 'Replacement', 'retired-backend-key', 'claude')`
+        )
+        .run()
+    ).toThrow(/session deletion is in progress/i);
+
+    addSession({ id: "unrelated" });
+    expect(() =>
+      database
+        .prepare(`UPDATE sessions SET tmux_name = ? WHERE id = ?`)
+        .run("retired-backend-key", "unrelated")
+    ).toThrow(/session deletion is in progress/i);
+  });
+
   it("migration 82 repairs a missing deletion-claim trigger", () => {
     database.exec(`
       DROP TRIGGER trg_sessions_deletion_claim_attach_guard;

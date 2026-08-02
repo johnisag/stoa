@@ -336,7 +336,7 @@ export interface FleetMergeStatusDto {
     updatedAt: string;
   }>;
   retry: {
-    action: "retry_final_verification" | null;
+    action: "retry_final_verification" | "retry_landing" | null;
     state: "not_applicable" | "available" | "blocked" | "exhausted";
     available: boolean;
     reason: string | null;
@@ -349,6 +349,11 @@ export interface FleetMergeStatusDto {
       baseSha: string;
       integrationHeadSha: string;
     } | null;
+    target?: FleetMergeTarget | null;
+    targetRef?: string | null;
+    requiredTargetSha?: string | null;
+    integrationHeadSha?: string | null;
+    instructions?: string | null;
   };
 }
 
@@ -556,6 +561,35 @@ export function useAuthorizeFleetLanding(runId: string | null) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || "Failed to authorize Fleet landing");
+      }
+      return data as FleetMergeStatusDto;
+    },
+    onSuccess: (status) => {
+      if (!runId) return;
+      qc.setQueryData([...fleetKeys.run(runId), "merge"], status);
+      qc.invalidateQueries({ queryKey: fleetKeys.run(runId) });
+      qc.invalidateQueries({ queryKey: fleetKeys.runs() });
+    },
+  });
+}
+
+export function useRetryFleetLanding(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0,
+    mutationFn: async (input: FleetLandingRecoveryInput) => {
+      if (!runId) throw new Error("No fleet run selected");
+      const res = await fetch(
+        `/api/fleet/runs/${encodeURIComponent(runId)}/merge/retry`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to retry Fleet landing");
       }
       return data as FleetMergeStatusDto;
     },
@@ -877,6 +911,10 @@ export interface FleetLandingAuthorizationInput {
   expectedExecutionHash: string;
   expectedBaseSha: string;
   expectedIntegrationHeadSha: string;
+}
+
+export interface FleetLandingRecoveryInput extends FleetLandingAuthorizationInput {
+  expectedOperationId: string;
 }
 
 function useFleetTaskOperatorAction<TInput>(

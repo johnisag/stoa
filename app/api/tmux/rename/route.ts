@@ -5,6 +5,56 @@ import { getManagedSessionPattern } from "@/lib/providers/registry";
 import { parseJsonBody, requireLocalhost } from "@/lib/api-security";
 import { backendKeyOwners } from "@/lib/session-route-access";
 import { isInteractiveSessionRole } from "@/lib/session-role";
+import { isSessionDeletionBoundaryFenced } from "@/lib/session-deletion";
+
+class SessionRenameDeletionRaceError extends Error {
+  constructor() {
+    super("Session deletion is in progress");
+    this.name = "SessionRenameDeletionRaceError";
+  }
+}
+
+async function killRenameCandidates(
+  backend: ReturnType<typeof getSessionBackend>,
+  oldName: string,
+  newName: string
+): Promise<void> {
+  await Promise.allSettled([backend.kill(newName), backend.kill(oldName)]);
+}
+
+/** Restore a failed rename only while both process identities remain unfenced.
+ * A deletion claim can publish during the rollback await, so check once before
+ * and once after it; either fence turns rollback into two-key cleanup. */
+async function rollbackRenameOrStop(
+  db: ReturnType<typeof getDb>,
+  sessionId: string,
+  backend: ReturnType<typeof getSessionBackend>,
+  oldName: string,
+  newName: string
+): Promise<boolean> {
+  const fenced = () =>
+    isSessionDeletionBoundaryFenced(db, sessionId, [oldName, newName]);
+  if (fenced()) {
+    await killRenameCandidates(backend, oldName, newName);
+    return true;
+  }
+
+  let rolledBack = false;
+  try {
+    await backend.rename(newName, oldName);
+    rolledBack = true;
+  } catch {
+    // A failed rollback can leave the target as an unowned live key. Defer its
+    // cleanup until after the mandatory post-rollback fence check below.
+  }
+
+  if (fenced()) {
+    await killRenameCandidates(backend, oldName, newName);
+    return true;
+  }
+  if (!rolledBack) await backend.kill(newName).catch(() => undefined);
+  return false;
+}
 
 // POST /api/tmux/rename - Rename a tmux session
 export async function POST(request: NextRequest) {
@@ -49,6 +99,14 @@ export async function POST(request: NextRequest) {
       { status: 409 }
     );
   }
+  const deletionFenced = () =>
+    isSessionDeletionBoundaryFenced(db, owner.id, [oldName, newName]);
+  if (deletionFenced()) {
+    return NextResponse.json(
+      { error: "Session deletion is in progress" },
+      { status: 409 }
+    );
+  }
   if (oldName === newName) {
     return NextResponse.json({ success: true, newName });
   }
@@ -67,10 +125,17 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
+    if (deletionFenced()) {
+      return NextResponse.json(
+        { error: "Session deletion is in progress" },
+        { status: 409 }
+      );
+    }
     await backend.rename(oldName, newName);
 
     try {
       db.transaction(() => {
+        if (deletionFenced()) throw new SessionRenameDeletionRaceError();
         const current = queries.getAllSessions(db).all() as Session[];
         const currentOwners = backendKeyOwners(current, oldName);
         if (
@@ -91,17 +156,29 @@ export async function POST(request: NextRequest) {
         if (updated.changes !== 1) {
           throw new Error("Session rename was not persisted");
         }
+        if (deletionFenced()) throw new SessionRenameDeletionRaceError();
       })();
     } catch (error) {
-      // Keep the durable key and live process aligned. If rollback itself fails,
-      // the request still fails and recovery can see the unchanged DB owner.
-      await backend.rename(newName, oldName).catch(() => undefined);
+      const fenced = await rollbackRenameOrStop(
+        db,
+        owner.id,
+        backend,
+        oldName,
+        newName
+      );
+      if (fenced) throw new SessionRenameDeletionRaceError();
       throw error;
     }
 
     return NextResponse.json({ success: true, newName });
   } catch (error) {
     console.error("Error renaming tmux session:", error);
+    if (error instanceof SessionRenameDeletionRaceError) {
+      return NextResponse.json(
+        { error: "Session deletion is in progress" },
+        { status: 409 }
+      );
+    }
     return NextResponse.json(
       { error: "Failed to rename tmux session" },
       { status: 500 }

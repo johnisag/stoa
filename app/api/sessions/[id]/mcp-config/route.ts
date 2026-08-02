@@ -5,6 +5,7 @@ import {
   ensureHermesMcpRegistered,
   ensureProviderMcpConfig,
   McpConfigConflictError,
+  McpConfigSetupError,
 } from "@/lib/mcp-config";
 import { expandHome } from "@/lib/platform";
 import { normalizeWorktreePath } from "@/lib/worktrees";
@@ -82,6 +83,9 @@ export async function POST(
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof McpConfigSetupError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
     if (error instanceof McpConfigConflictError) {
       return NextResponse.json({ error: error.message }, { status: 409 });
     }

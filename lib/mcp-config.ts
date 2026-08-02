@@ -14,6 +14,8 @@ import {
   rmSync,
   renameSync,
   statSync,
+  lstatSync,
+  realpathSync,
 } from "fs";
 import { execFileSync } from "child_process";
 import { randomUUID } from "crypto";
@@ -157,6 +159,118 @@ export class McpConfigConflictError extends Error {
   }
 }
 
+/** A transient provider/CLI failure that leaves orchestration unconfigured. */
+export class McpConfigSetupError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "McpConfigSetupError";
+  }
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
+}
+
+/**
+ * Resolve a project-owned config path without following repository-controlled
+ * symlink/junction parents. The selected project root itself may be an alias,
+ * so it is canonicalized once; every child component is then required to be a
+ * real directory below that canonical root. This also makes subsequent writes
+ * use the canonical parent instead of traversing the repository alias again.
+ */
+function resolveProjectConfigPath(
+  workingDirectory: string,
+  relativePath: string,
+  createParents: boolean
+): string {
+  const normalized = path.normalize(relativePath);
+  if (
+    path.isAbsolute(relativePath) ||
+    normalized === ".." ||
+    normalized.startsWith(`..${path.sep}`)
+  ) {
+    throw new McpConfigConflictError(
+      `Cannot configure orchestration outside the selected project: ${relativePath}`
+    );
+  }
+
+  let root: string;
+  try {
+    root = realpathSync.native(path.resolve(workingDirectory));
+    if (!statSync(root).isDirectory()) throw new Error("not a directory");
+  } catch {
+    throw new McpConfigConflictError(
+      `Cannot configure orchestration: project directory is unavailable: ${workingDirectory}`
+    );
+  }
+
+  const relativeParent = path.dirname(normalized);
+  const components =
+    relativeParent === "." ? [] : relativeParent.split(path.sep);
+  let parent = root;
+  for (let index = 0; index < components.length; index++) {
+    const component = components[index];
+    const candidate = path.join(parent, component);
+    if (!existsSync(candidate)) {
+      if (!createParents) {
+        parent = path.join(parent, ...components.slice(index));
+        break;
+      }
+      mkdirSync(candidate);
+    }
+
+    let entry;
+    try {
+      entry = lstatSync(candidate);
+    } catch {
+      throw new McpConfigConflictError(
+        `Cannot configure orchestration: project config directory changed while it was being checked: ${candidate}`
+      );
+    }
+    // Node reports Windows directory junctions as symbolic links too.
+    if (entry.isSymbolicLink() || !entry.isDirectory()) {
+      throw new McpConfigConflictError(
+        `Cannot configure orchestration through a symlink or junction: ${candidate}`
+      );
+    }
+    const canonical = realpathSync.native(candidate);
+    if (!isPathWithin(root, canonical)) {
+      throw new McpConfigConflictError(
+        `Cannot configure orchestration outside the selected project: ${candidate}`
+      );
+    }
+    parent = canonical;
+  }
+
+  const configPath = path.join(parent, path.basename(normalized));
+  if (existsSync(configPath)) {
+    const entry = lstatSync(configPath);
+    if (entry.isSymbolicLink()) {
+      throw new McpConfigConflictError(
+        `Cannot configure orchestration through a symlink or junction: ${configPath}`
+      );
+    }
+    if (!entry.isFile()) {
+      throw new McpConfigConflictError(
+        `Cannot configure orchestration through a non-file config path: ${configPath}`
+      );
+    }
+    const canonical = realpathSync.native(configPath);
+    if (!isPathWithin(root, canonical)) {
+      throw new McpConfigConflictError(
+        `Cannot configure orchestration outside the selected project: ${configPath}`
+      );
+    }
+  }
+  return configPath;
+}
+
 function assertStoaEntryMayBeUpdated(
   environment: Record<string, unknown>,
   providerName: string,
@@ -296,10 +410,20 @@ function writeJsonAtomically(
   configPath: string,
   config: Record<string, unknown>
 ): void {
+  writeTextAtomically(configPath, JSON.stringify(config, null, 2) + "\n");
+}
+
+function writeTextAtomically(configPath: string, source: string): void {
   const tempPath = `${configPath}.stoa-${process.pid}-${randomUUID()}.tmp`;
-  const mode = existsSync(configPath) ? statSync(configPath).mode : undefined;
+  const existing = existsSync(configPath) ? lstatSync(configPath) : null;
+  if (existing?.isSymbolicLink()) {
+    throw new McpConfigConflictError(
+      `Cannot configure orchestration through a symlink or junction: ${configPath}`
+    );
+  }
+  const mode = existing?.mode;
   try {
-    writeFileSync(tempPath, JSON.stringify(config, null, 2) + "\n", {
+    writeFileSync(tempPath, source, {
       encoding: "utf-8",
       flag: "wx",
       mode,
@@ -316,8 +440,11 @@ function writeProjectConfig(
   relativePath: string,
   config: Record<string, unknown>
 ): void {
-  const configPath = path.join(workingDirectory, relativePath);
-  mkdirSync(path.dirname(configPath), { recursive: true });
+  const configPath = resolveProjectConfigPath(
+    workingDirectory,
+    relativePath,
+    true
+  );
   writeJsonAtomically(configPath, config);
   ensureGitExcluded(workingDirectory, relativePath);
 }
@@ -330,7 +457,11 @@ export function ensureMcpConfig(
   _sessionId: string,
   ownership: McpConfigOwnershipDeps = {}
 ): void {
-  const configPath = path.join(workingDirectory, CLAUDE_MCP_CONFIG_PATH);
+  const configPath = resolveProjectConfigPath(
+    workingDirectory,
+    CLAUDE_MCP_CONFIG_PATH,
+    false
+  );
   const orchestrationServerPath = getOrchestrationServerPath();
   const config = readJsonObjectForUpdate(configPath, "Claude");
   const servers = readServerMapForUpdate(
@@ -399,7 +530,11 @@ export function ensureKiloMcpConfig(
   workingDirectory: string,
   _sessionId: string
 ): void {
-  const configPath = path.join(workingDirectory, KILO_MCP_CONFIG_PATH);
+  const configPath = resolveProjectConfigPath(
+    workingDirectory,
+    KILO_MCP_CONFIG_PATH,
+    false
+  );
   const config = readJsonObjectForUpdate(configPath, "Kilo");
   const servers = readServerMapForUpdate(config, "mcp", configPath, "Kilo");
   const existingStoa = readNestedObjectForUpdate(
@@ -448,7 +583,11 @@ export function ensureKimiMcpConfig(
   workingDirectory: string,
   _sessionId: string
 ): void {
-  const configPath = path.join(workingDirectory, KIMI_MCP_CONFIG_PATH);
+  const configPath = resolveProjectConfigPath(
+    workingDirectory,
+    KIMI_MCP_CONFIG_PATH,
+    false
+  );
   const config = readJsonObjectForUpdate(configPath, "Kimi");
   const servers = readServerMapForUpdate(
     config,
@@ -623,13 +762,17 @@ export function writeConductorMarker(
   workingDirectory: string,
   sessionId: string
 ): void {
-  const markerPath = path.join(workingDirectory, CONDUCTOR_MARKER_FILE);
   if (parseConductorMarker(sessionId) !== sessionId) {
     throw new McpConfigConflictError(
       "Cannot configure Hermes orchestration: invalid conductor session id"
     );
   }
-  writeFileSync(markerPath, sessionId + "\n");
+  const markerPath = resolveProjectConfigPath(
+    workingDirectory,
+    CONDUCTOR_MARKER_FILE,
+    true
+  );
+  writeTextAtomically(markerPath, sessionId + "\n");
   ensureGitExcluded(workingDirectory, CONDUCTOR_MARKER_FILE);
 }
 
@@ -647,7 +790,11 @@ export function removeConductorMarker(
   sessionId: string
 ): void {
   try {
-    const markerPath = path.join(workingDirectory, CONDUCTOR_MARKER_FILE);
+    const markerPath = resolveProjectConfigPath(
+      workingDirectory,
+      CONDUCTOR_MARKER_FILE,
+      false
+    );
     if (!existsSync(markerPath)) return;
     if (parseConductorMarker(readFileSync(markerPath, "utf-8")) === sessionId)
       rmSync(markerPath, { force: true });
@@ -729,16 +876,12 @@ function readRegisteredHermesIdentity(): string | null {
 }
 
 function writeRegisteredHermesIdentity(identity: string): void {
-  try {
-    mkdirSync(path.dirname(HERMES_PATH_MARKER), { recursive: true });
-    writeJsonAtomically(HERMES_PATH_MARKER, {
-      schemaVersion: 1,
-      owner: "stoa",
-      identity,
-    });
-  } catch {
-    // ignore — worst case we re-register once next time
-  }
+  mkdirSync(path.dirname(HERMES_PATH_MARKER), { recursive: true });
+  writeJsonAtomically(HERMES_PATH_MARKER, {
+    schemaVersion: 1,
+    owner: "stoa",
+    identity,
+  });
 }
 
 function legacyHermesIdentityMatchesCurrent(
@@ -792,18 +935,80 @@ export function planHermesRegistration(
   stoaListed: boolean,
   recordedIdentity: string | null,
   currentIdentity: string
-): { skip: boolean; removeFirst: boolean; conflict: boolean } {
+): { skip: boolean; replaceExisting: boolean; conflict: boolean } {
   if (stoaListed && recordedIdentity === currentIdentity)
-    return { skip: true, removeFirst: false, conflict: false };
+    return { skip: true, replaceExisting: false, conflict: false };
   if (
     stoaListed &&
     recordedIdentity != null &&
     legacyHermesIdentityMatchesCurrent(recordedIdentity, currentIdentity)
   ) {
-    return { skip: false, removeFirst: true, conflict: false };
+    return { skip: false, replaceExisting: true, conflict: false };
   }
-  if (stoaListed) return { skip: false, removeFirst: false, conflict: true };
-  return { skip: false, removeFirst: false, conflict: false };
+  if (stoaListed)
+    return { skip: false, replaceExisting: false, conflict: true };
+  return { skip: false, replaceExisting: false, conflict: false };
+}
+
+interface HermesExecOptions {
+  encoding: "utf-8";
+  input?: string;
+  stdio: ["ignore" | "pipe", "pipe", "ignore"];
+  timeout: number;
+  killSignal: "SIGKILL";
+  windowsHide: true;
+}
+
+interface HermesRegistrationDeps {
+  exec?: (
+    executable: string,
+    args: string[],
+    options: HermesExecOptions
+  ) => string;
+  resolveExecutable?: () => string;
+  serverPath?: string;
+  readIdentity?: () => string | null;
+  writeIdentity?: (identity: string) => void;
+}
+
+function stripAnsi(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function hermesListsStoa(value: string): boolean {
+  return stripAnsi(value)
+    .split(/\r?\n/)
+    .some((line) => /^\s*stoa(?:\s|$)/.test(line));
+}
+
+function hermesReportedSavedAllTools(value: string): boolean {
+  return stripAnsi(value)
+    .split(/\r?\n/)
+    .some((line) => {
+      const match = line.match(
+        /\bSaved\s+['"]stoa['"]\s+to\s+.+\s+\((\d+)\/(\d+)\s+tools enabled\)\s*$/i
+      );
+      if (!match) return false;
+      const enabled = Number(match[1]);
+      const discovered = Number(match[2]);
+      return (
+        Number.isSafeInteger(enabled) &&
+        Number.isSafeInteger(discovered) &&
+        discovered > 0 &&
+        enabled === discovered
+      );
+    });
+}
+
+function hermesSetupError(error: unknown): McpConfigSetupError {
+  const detail =
+    error instanceof Error && error.message.trim()
+      ? error.message.trim()
+      : "Hermes MCP registration failed";
+  return new McpConfigSetupError(
+    `Cannot configure Hermes orchestration: ${detail}`
+  );
 }
 
 /**
@@ -814,62 +1019,100 @@ export function planHermesRegistration(
  * ("Enable all N tools?") and discovery-first (it spawns the server to list
  * tools), so we auto-confirm via stdin. Every shell-out is bounded by a timeout
  * + SIGKILL so a slow/hung MCP discovery can't block the session-create request.
- * Ordinary CLI/discovery failures remain best-effort; ownership conflicts throw.
+ * CLI/discovery failures throw and callers must not mark a session as a
+ * conductor until this returns. Legacy migration approves Hermes' overwrite
+ * prompt but never removes the prior entry before discovery and save complete.
  */
-export function ensureHermesMcpRegistered(): void {
+function ensureHermesMcpRegisteredWithDeps(
+  deps: HermesRegistrationDeps = {}
+): true {
   try {
-    const hermes = resolveBinary("hermes") || "hermes";
-    const serverPath = getOrchestrationServerPath();
+    const exec =
+      deps.exec ??
+      ((executable, args, options) =>
+        execFileSync(executable, args, options) as string);
+    const hermes =
+      deps.resolveExecutable?.() ?? resolveBinary("hermes") ?? "hermes";
+    const serverPath = deps.serverPath ?? getOrchestrationServerPath();
     const identity = hermesRegistrationIdentity(serverPath);
-    const list = execFileSync(hermes, ["mcp", "list"], {
+    const list = exec(hermes, ["mcp", "list"], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 10000,
       killSignal: "SIGKILL",
       windowsHide: true,
     });
-    const stoaListed = /(^|\s)stoa(\s|$)/m.test(list);
+    const stoaListed = hermesListsStoa(list);
     const plan = planHermesRegistration(
       stoaListed,
-      readRegisteredHermesIdentity(),
+      (deps.readIdentity ?? readRegisteredHermesIdentity)(),
       identity
     );
-    if (plan.skip) return;
+    if (plan.skip) return true;
     if (plan.conflict) {
       throw new McpConfigConflictError(
         "Cannot configure Hermes orchestration: global MCP server 'stoa' exists but is not proven to be owned by this Stoa installation"
       );
     }
-    if (plan.removeFirst) {
-      execFileSync(hermes, ["mcp", "remove", "stoa"], {
-        stdio: "ignore",
-        timeout: 10000,
-        killSignal: "SIGKILL",
-        windowsHide: true,
-      });
-    }
-    execFileSync(hermes, buildHermesRegisterArgs(serverPath), {
-      input: "y\n", // auto-accept the "Enable all tools?" prompt
-      stdio: ["pipe", "ignore", "ignore"],
+    const addOutput = exec(hermes, buildHermesRegisterArgs(serverPath), {
+      input: plan.replaceExisting ? "y\n\n" : "\n",
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
       timeout: 20000,
       killSignal: "SIGKILL",
       windowsHide: true,
     });
-    writeRegisteredHermesIdentity(identity);
+    if (!hermesReportedSavedAllTools(addOutput)) {
+      throw new McpConfigSetupError(
+        "Cannot configure Hermes orchestration: Hermes did not confirm that at least one discovered orchestration tool was enabled"
+      );
+    }
+    const verifiedList = exec(hermes, ["mcp", "list"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10000,
+      killSignal: "SIGKILL",
+      windowsHide: true,
+    });
+    if (!hermesListsStoa(verifiedList)) {
+      throw new McpConfigSetupError(
+        "Cannot configure Hermes orchestration: the saved stoa MCP server was not visible during verification"
+      );
+    }
+    (deps.writeIdentity ?? writeRegisteredHermesIdentity)(identity);
+    return true;
   } catch (error) {
-    if (error instanceof McpConfigConflictError) throw error;
-    // Hermes missing / not configured / add failed / timed out — leave it.
+    if (
+      error instanceof McpConfigConflictError ||
+      error instanceof McpConfigSetupError
+    ) {
+      throw error;
+    }
+    throw hermesSetupError(error);
   }
+}
+
+export function ensureHermesMcpRegistered(): true {
+  return ensureHermesMcpRegisteredWithDeps();
+}
+
+export function _ensureHermesMcpRegisteredForTests(
+  deps: HermesRegistrationDeps
+): true {
+  return ensureHermesMcpRegisteredWithDeps(deps);
 }
 
 /**
  * Check if .mcp.json exists and has stoa configured
  */
 export function hasMcpConfig(workingDirectory: string): boolean {
-  const configPath = path.join(workingDirectory, ".mcp.json");
-  if (!existsSync(configPath)) return false;
-
   try {
+    const configPath = resolveProjectConfigPath(
+      workingDirectory,
+      CLAUDE_MCP_CONFIG_PATH,
+      false
+    );
+    if (!existsSync(configPath)) return false;
     const config = JSON.parse(readFileSync(configPath, "utf-8"));
     return !!config.mcpServers?.["stoa"];
   } catch {

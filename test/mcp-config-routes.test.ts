@@ -113,6 +113,7 @@ vi.mock("@/lib/mcp-config", async (importOriginal) => {
 import { POST as createSession } from "@/app/api/sessions/route";
 import { POST as repairMcpConfig } from "@/app/api/sessions/[id]/mcp-config/route";
 import { sessionLaunchEnv } from "@/lib/session-launch";
+import { McpConfigSetupError } from "@/lib/mcp-config";
 
 function request(body: Record<string, unknown>): Request {
   return new Request("http://localhost/api/sessions", {
@@ -172,7 +173,7 @@ describe("session routes use provider-native orchestration wiring", () => {
     state.session = undefined;
     state.sessions.clear();
     state.persistedMcpArgs = [];
-    hermes.register.mockReset();
+    hermes.register.mockReset().mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -241,6 +242,37 @@ describe("session routes use provider-native orchestration wiring", () => {
     expect(hermes.register).toHaveBeenCalledTimes(1);
     expect(hermesResult.body.session?.mcp_launch_args).toBe("[]");
     expect(existsSync(path.join(hermesDir, ".mcp.json"))).toBe(false);
+  });
+
+  it("does not persist a Hermes conductor sentinel when registration fails", async () => {
+    hermes.register.mockImplementationOnce(() => {
+      throw new McpConfigSetupError(
+        "Cannot configure Hermes orchestration: add failed"
+      );
+    });
+    const created = await createConductor("hermes", dir);
+    expect(created.response.status).toBe(503);
+    expect(created.body.error).toMatch(/add failed/);
+    expect(state.sessions.size).toBe(0);
+    expect(state.persistedMcpArgs).toEqual([]);
+
+    setSession("hermes-repair-failed", "hermes", dir);
+    hermes.register.mockImplementationOnce(() => {
+      throw new McpConfigSetupError(
+        "Cannot configure Hermes orchestration: verification failed"
+      );
+    });
+    const repaired = await repairMcpConfig(
+      request({}) as never,
+      routeContext("hermes-repair-failed")
+    );
+    expect(repaired.status).toBe(503);
+    expect(await repaired.json()).toEqual({
+      error: "Cannot configure Hermes orchestration: verification failed",
+    });
+    expect(
+      state.sessions.get("hermes-repair-failed")?.mcp_launch_args
+    ).toBeNull();
   });
 
   it("allows two conductors to share a cwd without baking either identity", async () => {

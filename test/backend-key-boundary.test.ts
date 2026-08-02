@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   exists: vi.fn<(key: string) => Promise<boolean>>(),
   kill: vi.fn<(key: string) => Promise<void>>(),
   deletionFenced: vi.fn<(sessionId: string) => boolean>(),
+  backendKeyFenced: vi.fn<(backendKey: string) => boolean>(),
   failNextRun: false,
 }));
 
@@ -48,8 +49,13 @@ vi.mock("@/lib/session-backend", () => ({
 }));
 
 vi.mock("@/lib/session-deletion", () => ({
-  isSessionDeletionFenced: (_db: unknown, sessionId: string) =>
-    state.deletionFenced(sessionId),
+  isSessionDeletionBoundaryFenced: (
+    _db: unknown,
+    sessionId: string,
+    backendKeys: readonly string[]
+  ) =>
+    state.deletionFenced(sessionId) ||
+    backendKeys.some((backendKey) => state.backendKeyFenced(backendKey)),
 }));
 
 vi.mock("@/lib/projects", () => ({ getProject: () => null }));
@@ -140,6 +146,7 @@ describe("backend-key ownership boundary", () => {
       state.liveKeys.delete(key);
     });
     state.deletionFenced.mockReset().mockReturnValue(false);
+    state.backendKeyFenced.mockReset().mockReturnValue(false);
   });
 
   it("uses the canonical fallback for unknown-provider internal rows", () => {
@@ -186,6 +193,77 @@ describe("backend-key ownership boundary", () => {
     expect(state.sql[0].args).toEqual([RENAMED_KEY, VISIBLE_ID]);
   });
 
+  it("rejects direct reuse of a completed backend-key tombstone", async () => {
+    state.backendKeyFenced.mockImplementation(
+      (backendKey) => backendKey === RENAMED_KEY
+    );
+
+    const response = await renameSession(
+      request("http://localhost/api/tmux/rename", {
+        oldName: VISIBLE_KEY,
+        newName: RENAMED_KEY,
+      }) as never
+    );
+
+    expect(response.status).toBe(409);
+    expect(state.exists).not.toHaveBeenCalled();
+    expect(state.rename).not.toHaveBeenCalled();
+    expect(state.sql).toHaveLength(0);
+  });
+
+  it("kills both direct-rename identities when deletion fences the source during rename", async () => {
+    state.rename.mockImplementationOnce(async (oldKey, newKey) => {
+      state.liveKeys.delete(oldKey);
+      state.liveKeys.add(newKey);
+      state.backendKeyFenced.mockImplementation(
+        (backendKey) => backendKey === oldKey
+      );
+    });
+
+    const response = await renameSession(
+      request("http://localhost/api/tmux/rename", {
+        oldName: VISIBLE_KEY,
+        newName: RENAMED_KEY,
+      }) as never
+    );
+
+    expect(response.status).toBe(409);
+    expect(state.kill).toHaveBeenCalledWith(RENAMED_KEY);
+    expect(state.kill).toHaveBeenCalledWith(VISIBLE_KEY);
+    expect(state.liveKeys.has(VISIBLE_KEY)).toBe(false);
+    expect(state.liveKeys.has(RENAMED_KEY)).toBe(false);
+    expect(state.sql).toHaveLength(0);
+  });
+
+  it("checks fences after a direct-rename rollback before preserving the source", async () => {
+    state.failNextRun = true;
+    let renameCount = 0;
+    state.rename.mockImplementation(async (oldKey, newKey) => {
+      renameCount += 1;
+      state.liveKeys.delete(oldKey);
+      state.liveKeys.add(newKey);
+      if (renameCount === 2) {
+        state.backendKeyFenced.mockImplementation(
+          (backendKey) => backendKey === VISIBLE_KEY
+        );
+      }
+    });
+
+    const response = await renameSession(
+      request("http://localhost/api/tmux/rename", {
+        oldName: VISIBLE_KEY,
+        newName: RENAMED_KEY,
+      }) as never
+    );
+
+    expect(response.status).toBe(409);
+    expect(state.rename).toHaveBeenNthCalledWith(2, RENAMED_KEY, VISIBLE_KEY);
+    expect(state.kill).toHaveBeenCalledWith(RENAMED_KEY);
+    expect(state.kill).toHaveBeenCalledWith(VISIBLE_KEY);
+    expect(state.liveKeys.has(RENAMED_KEY)).toBe(false);
+    expect(state.liveKeys.has(VISIBLE_KEY)).toBe(false);
+  });
+
   it("session PATCH rejects an internal-key collision before backend effects", async () => {
     const response = await patchSession(
       request(`http://localhost/api/sessions/${VISIBLE_ID}`, {
@@ -195,6 +273,24 @@ describe("backend-key ownership boundary", () => {
     );
 
     expect(response.status).toBe(409);
+    expect(state.rename).not.toHaveBeenCalled();
+    expect(state.sql).toHaveLength(0);
+  });
+
+  it("session PATCH rejects reuse of a completed backend-key tombstone", async () => {
+    state.backendKeyFenced.mockImplementation(
+      (backendKey) => backendKey === "visible-renamed"
+    );
+
+    const response = await patchSession(
+      request(`http://localhost/api/sessions/${VISIBLE_ID}`, {
+        name: "Visible renamed",
+      }) as never,
+      { params: Promise.resolve({ id: VISIBLE_ID }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(state.exists).not.toHaveBeenCalled();
     expect(state.rename).not.toHaveBeenCalled();
     expect(state.sql).toHaveLength(0);
   });
@@ -216,8 +312,11 @@ describe("backend-key ownership boundary", () => {
   });
 
   it("kills both rename identities when deletion wins before PATCH persistence", async () => {
-    state.deletionFenced.mockReturnValueOnce(false).mockReturnValueOnce(true);
-    state.failNextRun = true;
+    state.rename.mockImplementationOnce(async (oldKey, newKey) => {
+      state.liveKeys.delete(oldKey);
+      state.liveKeys.add(newKey);
+      state.deletionFenced.mockReturnValue(true);
+    });
 
     const response = await patchSession(
       request(`http://localhost/api/sessions/${VISIBLE_ID}`, {
@@ -226,12 +325,45 @@ describe("backend-key ownership boundary", () => {
       { params: Promise.resolve({ id: VISIBLE_ID }) }
     );
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(409);
     expect(state.rename).toHaveBeenCalledTimes(1);
     expect(state.rename).toHaveBeenCalledWith(VISIBLE_KEY, "visible-renamed");
     expect(state.kill).toHaveBeenCalledWith("visible-renamed");
     expect(state.kill).toHaveBeenCalledWith(VISIBLE_KEY);
     expect(state.liveKeys.has(VISIBLE_KEY)).toBe(false);
     expect(state.liveKeys.has("visible-renamed")).toBe(false);
+  });
+
+  it("checks fences after PATCH rollback and kills both candidate keys", async () => {
+    state.failNextRun = true;
+    let renameCount = 0;
+    state.rename.mockImplementation(async (oldKey, newKey) => {
+      renameCount += 1;
+      state.liveKeys.delete(oldKey);
+      state.liveKeys.add(newKey);
+      if (renameCount === 2) {
+        state.backendKeyFenced.mockImplementation(
+          (backendKey) => backendKey === VISIBLE_KEY
+        );
+      }
+    });
+
+    const response = await patchSession(
+      request(`http://localhost/api/sessions/${VISIBLE_ID}`, {
+        name: "Visible renamed",
+      }) as never,
+      { params: Promise.resolve({ id: VISIBLE_ID }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(state.rename).toHaveBeenNthCalledWith(
+      2,
+      "visible-renamed",
+      VISIBLE_KEY
+    );
+    expect(state.kill).toHaveBeenCalledWith("visible-renamed");
+    expect(state.kill).toHaveBeenCalledWith(VISIBLE_KEY);
+    expect(state.liveKeys.has("visible-renamed")).toBe(false);
+    expect(state.liveKeys.has(VISIBLE_KEY)).toBe(false);
   });
 });

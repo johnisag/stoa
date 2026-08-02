@@ -73,13 +73,27 @@ function installSessionDeletionClaimSchema(db: Database.Database): void {
         SELECT 1 FROM session_deletion_claim_members
         WHERE session_id = NEW.parent_session_id
       )
+    ) OR EXISTS (
+      SELECT 1 FROM session_deletion_claim_members
+      WHERE disposition = 'delete'
+        AND backend_key = CASE
+          WHEN NEW.tmux_name IS NOT NULL AND NEW.tmux_name <> ''
+            THEN NEW.tmux_name
+          WHEN NEW.agent_type IN (
+            'claude', 'codex', 'hermes', 'kilo', 'kimi', 'shell'
+          )
+            THEN NEW.agent_type || '-' || NEW.id
+          ELSE 'claude-' || NEW.id
+        END
     )
     BEGIN
       SELECT RAISE(ABORT, 'session deletion is in progress');
     END;
 
     CREATE TRIGGER trg_sessions_deletion_claim_attach_guard
-    BEFORE UPDATE OF id, conductor_session_id, parent_session_id ON sessions
+    BEFORE UPDATE OF
+      id, conductor_session_id, parent_session_id, tmux_name, agent_type
+    ON sessions
     WHEN EXISTS (
       SELECT 1 FROM session_deletion_claim_members
       WHERE session_id = NEW.id AND NEW.id IS NOT OLD.id
@@ -96,6 +110,39 @@ function installSessionDeletionClaimSchema(db: Database.Database): void {
       AND EXISTS (
         SELECT 1 FROM session_deletion_claim_members
         WHERE session_id = NEW.parent_session_id
+      )
+    ) OR (
+      CASE
+        WHEN OLD.tmux_name IS NOT NULL AND OLD.tmux_name <> ''
+          THEN OLD.tmux_name
+        WHEN OLD.agent_type IN (
+          'claude', 'codex', 'hermes', 'kilo', 'kimi', 'shell'
+        )
+          THEN OLD.agent_type || '-' || OLD.id
+        ELSE 'claude-' || OLD.id
+      END
+      IS NOT
+      CASE
+        WHEN NEW.tmux_name IS NOT NULL AND NEW.tmux_name <> ''
+          THEN NEW.tmux_name
+        WHEN NEW.agent_type IN (
+          'claude', 'codex', 'hermes', 'kilo', 'kimi', 'shell'
+        )
+          THEN NEW.agent_type || '-' || NEW.id
+        ELSE 'claude-' || NEW.id
+      END
+      AND EXISTS (
+        SELECT 1 FROM session_deletion_claim_members
+        WHERE disposition = 'delete'
+          AND backend_key = CASE
+            WHEN NEW.tmux_name IS NOT NULL AND NEW.tmux_name <> ''
+              THEN NEW.tmux_name
+            WHEN NEW.agent_type IN (
+              'claude', 'codex', 'hermes', 'kilo', 'kimi', 'shell'
+            )
+              THEN NEW.agent_type || '-' || NEW.id
+            ELSE 'claude-' || NEW.id
+          END
       )
     )
     BEGIN
@@ -154,9 +201,13 @@ function installSessionDeletionClaimSchema(db: Database.Database): void {
     ).map((entry) => entry.name)
   );
   if (
-    !["id", "conductor_session_id", "parent_session_id"].every((column) =>
-      sessionColumns.has(column)
-    )
+    ![
+      "id",
+      "conductor_session_id",
+      "parent_session_id",
+      "tmux_name",
+      "agent_type",
+    ].every((column) => sessionColumns.has(column))
   ) {
     db.exec(`
       DROP TRIGGER IF EXISTS trg_sessions_deletion_claim_insert_guard;

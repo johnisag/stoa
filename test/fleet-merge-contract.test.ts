@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { dirname, resolve } from "path";
 import {
+  buildFleetRequiredCheckRulesArgs,
   buildFleetPrViewArgs,
+  FLEET_REQUIRED_RULES_MAX_PAGE_BYTES,
+  FLEET_REQUIRED_RULES_MAX_PAGES,
+  FLEET_REQUIRED_RULES_PAGE_SIZE,
   fleetIntegrationIdentity,
   parseFleetPrStatus,
+  parseFleetRequiredCheckRulePages,
 } from "@/lib/fleet/merge-contract";
 
 const originalStoaHome = process.env.STOA_HOME;
@@ -46,5 +51,75 @@ describe("fleet GitHub PR target identity", () => {
         })
       )
     ).toMatchObject({ baseRefName: "main" });
+  });
+
+  it("retrieves branch rules through explicit direct-argv pagination", () => {
+    expect(
+      buildFleetRequiredCheckRulesArgs("owner/repo", "release/v2", 2)
+    ).toEqual([
+      "api",
+      "--method",
+      "GET",
+      "repos/owner/repo/rules/branches/release%2Fv2",
+      "-f",
+      `per_page=${FLEET_REQUIRED_RULES_PAGE_SIZE}`,
+      "-f",
+      "page=2",
+    ]);
+  });
+
+  it("flattens all bounded rule pages and preserves app identity", () => {
+    const filler = Array.from(
+      { length: FLEET_REQUIRED_RULES_PAGE_SIZE },
+      (_, index) => ({ type: `non_check_rule_${index}` })
+    );
+    expect(
+      parseFleetRequiredCheckRulePages([
+        JSON.stringify(filler),
+        JSON.stringify([
+          {
+            type: "required_status_checks",
+            parameters: {
+              required_status_checks: [
+                { context: "page-two-ci", integration_id: 4242 },
+              ],
+            },
+          },
+        ]),
+      ])
+    ).toEqual({
+      checks: [{ context: "page-two-ci", integrationId: 4242 }],
+    });
+  });
+
+  it("fails closed on truncated, over-page, and oversized rule responses", () => {
+    const fullPage = JSON.stringify(
+      Array.from({ length: FLEET_REQUIRED_RULES_PAGE_SIZE }, (_, index) => ({
+        type: `rule_${index}`,
+      }))
+    );
+    expect(parseFleetRequiredCheckRulePages([fullPage])).toBeNull();
+    expect(
+      parseFleetRequiredCheckRulePages(
+        Array.from({ length: FLEET_REQUIRED_RULES_MAX_PAGES + 1 }, () => "[]")
+      )
+    ).toBeNull();
+    expect(
+      parseFleetRequiredCheckRulePages([
+        JSON.stringify([
+          {
+            type: "required_status_checks",
+            parameters: {
+              required_status_checks: [
+                {
+                  context: "x".repeat(FLEET_REQUIRED_RULES_MAX_PAGE_BYTES + 1),
+                },
+              ],
+            },
+          },
+        ]),
+      ])
+    ).toBeNull();
+    expect(parseFleetRequiredCheckRulePages(["[truncated"])).toBeNull();
   });
 });

@@ -24,6 +24,10 @@ export interface FleetRequiredCheckSet {
 
 const MAX_GITHUB_CHECK_IDENTITIES = 256;
 const MAX_GITHUB_CHECK_IDENTITY_BYTES = 512;
+export const FLEET_REQUIRED_RULES_PAGE_SIZE = 100;
+export const FLEET_REQUIRED_RULES_MAX_PAGES = 10;
+export const FLEET_REQUIRED_RULES_MAX_PAGE_BYTES = 256 * 1024;
+export const FLEET_REQUIRED_RULES_MAX_TOTAL_BYTES = 1024 * 1024;
 
 function boundedCheckIdentity(value: unknown): string | null {
   if (typeof value !== "string" || value.length === 0) return null;
@@ -143,14 +147,10 @@ export function parseFleetPrStatus(value: string): FleetPrStatus | null {
 }
 
 /** Parse the authoritative active rules that GitHub says apply to a branch. */
-export function parseFleetRequiredCheckRules(
-  value: string
+function parseFleetRequiredCheckRuleItems(
+  parsed: readonly unknown[]
 ): FleetRequiredCheckSet | null {
   try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!Array.isArray(parsed) || parsed.length > MAX_GITHUB_CHECK_IDENTITIES) {
-      return null;
-    }
     const checks = new Map<
       string,
       { context: string; integrationId: number | null }
@@ -216,13 +216,91 @@ export function parseFleetRequiredCheckRules(
   }
 }
 
+export function parseFleetRequiredCheckRules(
+  value: string
+): FleetRequiredCheckSet | null {
+  try {
+    if (
+      Buffer.byteLength(value, "utf8") > FLEET_REQUIRED_RULES_MAX_TOTAL_BYTES
+    ) {
+      return null;
+    }
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parseFleetRequiredCheckRuleItems(parsed);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse a complete, explicitly paged rules response. The final page must be
+ * short; a full final page means the caller stopped at its page cap and cannot
+ * prove it saw every active rule. Per-page and aggregate byte/item caps keep a
+ * hostile or unexpectedly large API response bounded and fail closed.
+ */
+export function parseFleetRequiredCheckRulePages(
+  pages: readonly string[]
+): FleetRequiredCheckSet | null {
+  if (pages.length === 0 || pages.length > FLEET_REQUIRED_RULES_MAX_PAGES) {
+    return null;
+  }
+  let totalBytes = 0;
+  const items: unknown[] = [];
+  let lastPageLength = 0;
+  try {
+    for (let index = 0; index < pages.length; index++) {
+      const source = pages[index];
+      const pageBytes = Buffer.byteLength(source, "utf8");
+      totalBytes += pageBytes;
+      if (
+        pageBytes > FLEET_REQUIRED_RULES_MAX_PAGE_BYTES ||
+        totalBytes > FLEET_REQUIRED_RULES_MAX_TOTAL_BYTES
+      ) {
+        return null;
+      }
+      const page = JSON.parse(source) as unknown;
+      if (
+        !Array.isArray(page) ||
+        page.length > FLEET_REQUIRED_RULES_PAGE_SIZE ||
+        (index < pages.length - 1 &&
+          page.length !== FLEET_REQUIRED_RULES_PAGE_SIZE)
+      ) {
+        return null;
+      }
+      lastPageLength = page.length;
+      items.push(...page);
+    }
+    if (
+      pages.length === FLEET_REQUIRED_RULES_MAX_PAGES &&
+      items.length ===
+        FLEET_REQUIRED_RULES_MAX_PAGES * FLEET_REQUIRED_RULES_PAGE_SIZE
+    ) {
+      return null;
+    }
+    if (lastPageLength === FLEET_REQUIRED_RULES_PAGE_SIZE) {
+      return null;
+    }
+    return parseFleetRequiredCheckRuleItems(items);
+  } catch {
+    return null;
+  }
+}
+
 export function buildFleetRequiredCheckRulesArgs(
   repoSlug: string,
-  baseBranch: string
+  baseBranch: string,
+  page = 1
 ): string[] {
   return [
     "api",
+    "--method",
+    "GET",
     `repos/${repoSlug}/rules/branches/${encodeURIComponent(baseBranch)}`,
+    "-f",
+    `per_page=${FLEET_REQUIRED_RULES_PAGE_SIZE}`,
+    "-f",
+    `page=${page}`,
   ];
 }
 

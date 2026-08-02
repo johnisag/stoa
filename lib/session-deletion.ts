@@ -86,6 +86,23 @@ export function isSessionDeletionBackendKeyFenced(
   );
 }
 
+/** One process-side deletion fence check for a durable session identity and
+ * every backend key an in-flight create/rename could make live. Keep this
+ * shared so tmux and PTY-facing routes cannot accidentally protect only the
+ * session id while reusing a completed backend-key tombstone. */
+export function isSessionDeletionBoundaryFenced(
+  db: Database.Database,
+  sessionId: string,
+  backendKeys: readonly string[]
+): boolean {
+  return (
+    isSessionDeletionFenced(db, sessionId) ||
+    backendKeys.some((backendKey) =>
+      isSessionDeletionBackendKeyFenced(db, backendKey)
+    )
+  );
+}
+
 export class ConductorSessionDeletionRejectedError extends Error {
   constructor(message: string) {
     super(message);

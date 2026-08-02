@@ -65,6 +65,7 @@ import {
   useFleetMergeStatus,
   useRequestFleetMerge,
   useAuthorizeFleetLanding,
+  useRetryFleetLanding,
   useFleetSupervisorSnapshot,
   useRetryFleetTask,
   useReconcileFleetTaskVerification,
@@ -1946,6 +1947,7 @@ function RunDetail({
   );
   const requestMerge = useRequestFleetMerge(detail.run.id);
   const authorizeLanding = useAuthorizeFleetLanding(detail.run.id);
+  const retryLanding = useRetryFleetLanding(detail.run.id);
   const supervisor = useFleetSupervisorSnapshot(
     detail.run.id,
     detail.tasks.length > 0
@@ -2182,6 +2184,10 @@ function RunDetail({
   const finalVerificationRetry = manualMergeIntentActive
     ? mergeStatus.data?.retry
     : null;
+  const landingRetry =
+    externalLandingActive && mergeStatus.data?.retry.action === "retry_landing"
+      ? mergeStatus.data.retry
+      : null;
   const interruptControlOpen =
     ["running", "reviewing", "merging"].includes(detail.run.status) &&
     !externalLandingActive;
@@ -2232,7 +2238,8 @@ function RunDetail({
     cleanupPreview.error?.message ??
     mergeStatus.error?.message ??
     requestMerge.error?.message ??
-    authorizeLanding.error?.message;
+    authorizeLanding.error?.message ??
+    retryLanding.error?.message;
   const resetLifecycleErrors = () => {
     resumeRun.reset();
     pauseRun.reset();
@@ -2242,6 +2249,7 @@ function RunDetail({
     cleanupRun.reset();
     requestMerge.reset();
     authorizeLanding.reset();
+    retryLanding.reset();
   };
   const attention = useMemo(
     () =>
@@ -3197,7 +3205,11 @@ function RunDetail({
             </span>
             <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
               {externalLandingActive
-                ? "landing authorized"
+                ? landingRetry?.state === "available"
+                  ? "landing recovery available"
+                  : landingRetry?.state === "blocked"
+                    ? "landing recovery blocked"
+                    : "landing authorized"
                 : manualMergeIntentActive
                   ? finalVerificationRetry?.state === "available"
                     ? "verification retry available"
@@ -3267,6 +3279,83 @@ function RunDetail({
                   safe.
                 </div>
               )}
+            {landingRetry && (
+              <div className="grid gap-2 rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs">
+                <div className="font-medium">Exact-bound landing recovery</div>
+                <p className="text-muted-foreground">
+                  {landingRetry.available
+                    ? landingRetry.instructions
+                    : (landingRetry.reason ??
+                      "Landing recovery is not currently safe.")}
+                </p>
+                <dl className="grid gap-1 md:grid-cols-[auto_minmax(0,1fr)]">
+                  <dt className="text-muted-foreground">Target ref</dt>
+                  <dd className="font-mono break-all">
+                    {landingRetry.targetRef ?? "Unavailable"}
+                  </dd>
+                  <dt className="text-muted-foreground">
+                    Required current SHA
+                  </dt>
+                  <dd className="font-mono break-all">
+                    {landingRetry.requiredTargetSha ?? "Unavailable"}
+                  </dd>
+                  <dt className="text-muted-foreground">Exact result SHA</dt>
+                  <dd className="font-mono break-all">
+                    {landingRetry.integrationHeadSha ?? "Unavailable"}
+                  </dd>
+                </dl>
+                <p className="text-muted-foreground">
+                  This does not issue new landing authority. The server will
+                  keep the run locked if the target cannot be read or has moved
+                  to any other SHA.
+                </p>
+                {landingRetry.available &&
+                  landingRetry.operationId &&
+                  landingRetry.preconditions &&
+                  landingRetry.target && (
+                    <Button
+                      className="w-fit"
+                      size="sm"
+                      variant="outline"
+                      disabled={retryLanding.isPending}
+                      onClick={() => {
+                        const retry = landingRetry.preconditions;
+                        if (
+                          !retry ||
+                          !landingRetry.operationId ||
+                          !landingRetry.target
+                        ) {
+                          return;
+                        }
+                        resetLifecycleErrors();
+                        if (
+                          !window.confirm(
+                            `Retry the already-authorized exact landing?\n\nTarget: ${landingRetry.targetRef}\nTarget must equal: ${landingRetry.requiredTargetSha}\nExact result: ${landingRetry.integrationHeadSha}\n\nThe server will re-read the authoritative target ref and every landing gate. No new landing authority is issued.`
+                          )
+                        ) {
+                          return;
+                        }
+                        void retryLanding
+                          .mutateAsync({
+                            target: landingRetry.target,
+                            expectedOperationId: landingRetry.operationId,
+                            expectedPlanHash: retry.planHash,
+                            expectedExecutionHash: retry.executionHash,
+                            expectedBaseSha: retry.baseSha,
+                            expectedIntegrationHeadSha:
+                              retry.integrationHeadSha,
+                          })
+                          .catch(() => undefined);
+                      }}
+                    >
+                      {retryLanding.isPending && (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      )}
+                      Prove target and retry landing
+                    </Button>
+                  )}
+              </div>
+            )}
             {manualMergeIntentActive && (
               <div className="rounded border border-blue-500/40 bg-blue-500/5 p-2 text-xs">
                 <div className="font-medium">
@@ -4023,6 +4112,8 @@ export function FleetManagementView({
   }
 
   const executableTargetSelected = repoId !== NONE || projectId !== NONE;
+  const targetQueriesLoading = repos.isLoading || projects.isLoading;
+  const targetQueriesError = repos.error?.message ?? projects.error?.message;
   const draftNeedsTarget =
     !executableTargetSelected && (autoPlan || inputMode === "plan");
   const unattendedAgentLaunchEnabled =
@@ -4194,6 +4285,7 @@ export function FleetManagementView({
               )}
               <Select
                 value={repoId}
+                disabled={repos.isLoading || repos.isError}
                 onValueChange={(value) => {
                   setRepoId(value);
                   if (value !== NONE) setProjectId(NONE);
@@ -4213,6 +4305,7 @@ export function FleetManagementView({
               </Select>
               <Select
                 value={projectId}
+                disabled={projects.isLoading || projects.isError}
                 onValueChange={(value) => {
                   setProjectId(value);
                   if (value !== NONE) setRepoId(NONE);
@@ -4230,6 +4323,40 @@ export function FleetManagementView({
                   ))}
                 </SelectContent>
               </Select>
+              {targetQueriesLoading && (
+                <div
+                  className="text-muted-foreground flex items-center gap-2 text-xs"
+                  role="status"
+                >
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading
+                  repositories and projects
+                </div>
+              )}
+              {targetQueriesError && (
+                <div
+                  className="text-destructive grid gap-2 rounded border px-3 py-2 text-xs"
+                  role="alert"
+                >
+                  <span>
+                    Could not load repositories or projects:{" "}
+                    {targetQueriesError}
+                  </span>
+                  <Button
+                    className="w-fit"
+                    size="sm"
+                    variant="outline"
+                    disabled={repos.isFetching || projects.isFetching}
+                    onClick={() => {
+                      void Promise.all([repos.refetch(), projects.refetch()]);
+                    }}
+                  >
+                    {(repos.isFetching || projects.isFetching) && (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    )}
+                    Retry targets
+                  </Button>
+                </div>
+              )}
               {selectedRepo?.base_branch && (
                 <div
                   className="bg-muted/30 rounded border px-3 py-2 text-xs"
@@ -4794,13 +4921,15 @@ export function FleetManagementView({
                   {createError}
                 </div>
               )}
-              {draftNeedsTarget && (
-                <div className="text-muted-foreground text-xs">
-                  {inputMode === "plan"
-                    ? "Select a repository or project before importing an executable task plan."
-                    : "Select a repository or project to create and plan automatically. Turn automatic planning off to save a goal-only draft."}
-                </div>
-              )}
+              {draftNeedsTarget &&
+                !targetQueriesLoading &&
+                !targetQueriesError && (
+                  <div className="text-muted-foreground text-xs">
+                    {inputMode === "plan"
+                      ? "Select a repository or project before importing an executable task plan."
+                      : "Select a repository or project to create and plan automatically. Turn automatic planning off to save a goal-only draft."}
+                  </div>
+                )}
             </div>
           </section>
 

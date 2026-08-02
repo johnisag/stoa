@@ -35,7 +35,7 @@ import {
   claimConductorSessionDeletion,
   commitConductorSessionDeletion,
   ConductorSessionDeletionRejectedError,
-  isSessionDeletionFenced,
+  isSessionDeletionBoundaryFenced,
 } from "@/lib/session-deletion";
 
 class SessionDeletionBackendStopError extends Error {
@@ -43,6 +43,52 @@ class SessionDeletionBackendStopError extends Error {
     super(message, options);
     this.name = "SessionDeletionBackendStopError";
   }
+}
+
+class SessionRenameDeletionRaceError extends Error {
+  constructor() {
+    super("Session deletion is in progress");
+    this.name = "SessionRenameDeletionRaceError";
+  }
+}
+
+async function killRenameCandidates(
+  backend: ReturnType<typeof getSessionBackend>,
+  oldKey: string,
+  newKey: string
+): Promise<void> {
+  await Promise.allSettled([backend.kill(newKey), backend.kill(oldKey)]);
+}
+
+async function rollbackRenameOrStop(
+  db: ReturnType<typeof getDb>,
+  sessionId: string,
+  backend: ReturnType<typeof getSessionBackend>,
+  oldKey: string,
+  newKey: string
+): Promise<boolean> {
+  const fenced = () =>
+    isSessionDeletionBoundaryFenced(db, sessionId, [oldKey, newKey]);
+  if (fenced()) {
+    await killRenameCandidates(backend, oldKey, newKey);
+    return true;
+  }
+
+  let rolledBack = false;
+  try {
+    await backend.rename(newKey, oldKey);
+    rolledBack = true;
+  } catch {
+    // Check the durable fence again before deciding whether only the orphaned
+    // target is safe to stop.
+  }
+
+  if (fenced()) {
+    await killRenameCandidates(backend, oldKey, newKey);
+    return true;
+  }
+  if (!rolledBack) await backend.kill(newKey).catch(() => undefined);
+  return false;
 }
 
 // Sanitize a name for use as tmux session name
@@ -119,7 +165,9 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       );
     }
     assertGenericSessionRouteAccess(existing);
-    if (isSessionDeletionFenced(db, id)) {
+    if (
+      isSessionDeletionBoundaryFenced(db, id, [backendKeyForSession(existing)])
+    ) {
       return NextResponse.json(
         { error: "Session deletion is in progress" },
         { status: 409 }
@@ -154,11 +202,19 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       }
       const newTmuxName = sanitizeTmuxName(sanitized);
       const oldTmuxName = backendKeyForSession(existing);
+      const renameDeletionFenced = () =>
+        isSessionDeletionBoundaryFenced(db, id, [oldTmuxName, newTmuxName]);
 
       // Rename only a live backend and persist the new key only after that
       // rename succeeds. A requested key owned by any other row (especially an
       // internal session) or orphan live process is globally reserved.
       if (newTmuxName && newTmuxName !== oldTmuxName) {
+        if (renameDeletionFenced()) {
+          return NextResponse.json(
+            { error: "Session deletion is in progress" },
+            { status: 409 }
+          );
+        }
         const allSessions = queries.getAllSessions(db).all() as Session[];
         if (
           backendKeyOwners(allSessions, newTmuxName, existing.id).length > 0
@@ -177,6 +233,12 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
                 { status: 409 }
               );
             }
+            if (renameDeletionFenced()) {
+              return NextResponse.json(
+                { error: "Session deletion is in progress" },
+                { status: 409 }
+              );
+            }
             await backend.rename(oldTmuxName, newTmuxName);
             updates.push("tmux_name = ?");
             values.push(newTmuxName);
@@ -185,6 +247,13 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
               newKey: newTmuxName,
               backend,
             };
+            if (renameDeletionFenced()) {
+              await killRenameCandidates(backend, oldTmuxName, newTmuxName);
+              return NextResponse.json(
+                { error: "Session deletion is in progress" },
+                { status: 409 }
+              );
+            }
           }
         } catch (error) {
           console.error("Failed to rename session backend:", error);
@@ -306,55 +375,53 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       values.push(id);
 
       try {
-        if (completedBackendRename) {
-          const current = queries.getAllSessions(db).all() as Session[];
-          if (
-            backendKeyOwners(
-              current,
-              completedBackendRename.newKey,
-              existing.id
-            ).length > 0
-          ) {
-            throw new Error("Session key was reserved during rename");
+        const persistUpdates = () => {
+          if (completedBackendRename) {
+            if (
+              isSessionDeletionBoundaryFenced(db, id, [
+                completedBackendRename.oldKey,
+                completedBackendRename.newKey,
+              ])
+            ) {
+              throw new SessionRenameDeletionRaceError();
+            }
+            const current = queries.getAllSessions(db).all() as Session[];
+            if (
+              backendKeyOwners(
+                current,
+                completedBackendRename.newKey,
+                existing.id
+              ).length > 0
+            ) {
+              throw new Error("Session key was reserved during rename");
+            }
           }
-        }
-        db.prepare(
-          `UPDATE sessions SET ${updates.join(", ")} WHERE id = ?`
-        ).run(...values);
+          db.prepare(
+            `UPDATE sessions SET ${updates.join(", ")} WHERE id = ?`
+          ).run(...values);
+          if (
+            completedBackendRename &&
+            isSessionDeletionBoundaryFenced(db, id, [
+              completedBackendRename.oldKey,
+              completedBackendRename.newKey,
+            ])
+          ) {
+            throw new SessionRenameDeletionRaceError();
+          }
+        };
+        if (completedBackendRename) db.transaction(persistUpdates)();
+        else persistUpdates();
       } catch (error) {
         if (completedBackendRename) {
           const { backend, oldKey, newKey } = completedBackendRename;
-          if (isSessionDeletionFenced(db, id)) {
-            // DELETE may have snapshotted/killed oldKey while this PATCH had the
-            // live process temporarily renamed to newKey. Do not move it back
-            // after that kill; stop both identities so neither can survive the
-            // deletion commit as a ghost process.
-            await Promise.allSettled([
-              backend.kill(newKey),
-              backend.kill(oldKey),
-            ]);
-          } else {
-            let rolledBack = false;
-            try {
-              await backend.rename(newKey, oldKey);
-              rolledBack = true;
-            } catch {
-              // A failed rollback would leave a live key that no DB row owns.
-              await backend.kill(newKey).catch(() => undefined);
-            }
-            // Close the remaining ordering where deletion publishes its fence
-            // while the rollback itself is in flight.
-            if (isSessionDeletionFenced(db, id)) {
-              await Promise.allSettled([
-                backend.kill(newKey),
-                backend.kill(oldKey),
-              ]);
-            } else if (!rolledBack) {
-              console.error(
-                `Failed to restore session backend key ${newKey} to ${oldKey}`
-              );
-            }
-          }
+          const fenced = await rollbackRenameOrStop(
+            db,
+            id,
+            backend,
+            oldKey,
+            newKey
+          );
+          if (fenced) throw new SessionRenameDeletionRaceError();
         }
         throw error;
       }
@@ -364,6 +431,12 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ session });
   } catch (error) {
     console.error("Error updating session:", error);
+    if (error instanceof SessionRenameDeletionRaceError) {
+      return NextResponse.json(
+        { error: "Session deletion is in progress" },
+        { status: 409 }
+      );
+    }
     return NextResponse.json(
       { error: "Failed to update session" },
       { status: 500 }

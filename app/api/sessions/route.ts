@@ -22,6 +22,7 @@ import {
   buildCodexOrchestrationArgs,
   ensureHermesMcpRegistered,
   McpConfigConflictError,
+  McpConfigSetupError,
 } from "@/lib/mcp-config";
 import { expandHome, homeDir, isWindows } from "@/lib/platform";
 import { getLessonsBlockForCwd } from "@/lib/dispatch/lessons";
@@ -694,6 +695,10 @@ export async function POST(request: NextRequest) {
           queries.updateSessionMcpArgs(db).run("[]", id);
         }
       } catch (err) {
+        if (err instanceof McpConfigSetupError) {
+          queries.deleteSession(db).run(id);
+          return NextResponse.json({ error: err.message }, { status: 503 });
+        }
         if (err instanceof McpConfigConflictError) {
           // Never leave a launchable session that could inherit another
           // conductor's MCP identity. The generated/attached worktree remains

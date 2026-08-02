@@ -3,7 +3,7 @@
  * orchestration" option drives: each must write `stoa` with THIS session's id,
  * merge non-destructively, and locally git-exclude generated project files.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   mkdtempSync,
   rmSync,
@@ -11,6 +11,7 @@ import {
   writeFileSync,
   existsSync,
   mkdirSync,
+  symlinkSync,
 } from "fs";
 import { execFileSync, spawnSync } from "child_process";
 import { tmpdir } from "os";
@@ -32,6 +33,8 @@ import {
   _parseRegisteredHermesIdentityMarkerForTests,
   _mcpServerCommandForTests,
   _findStoaInstallRootForTests,
+  _ensureHermesMcpRegisteredForTests,
+  McpConfigSetupError,
 } from "@/lib/mcp-config";
 import { CONDUCTOR_MARKER_FILE } from "@/lib/conductor-marker";
 
@@ -225,6 +228,33 @@ describe("ensureMcpConfig", () => {
     expect(() => ensureMcpConfig(dir, "s1")).not.toThrow();
     expect(existsSync(path.join(dir, ".mcp.json"))).toBe(true);
   });
+
+  it("rejects a final config-file symlink without modifying its target", () => {
+    const outsideDir = mkdtempSync(path.join(tmpdir(), "stoa-mcp-outside-"));
+    const outside = path.join(outsideDir, "outside-config.json");
+    const original = JSON.stringify({ owner: "outside" });
+    writeFileSync(outside, original);
+    try {
+      try {
+        symlinkSync(outside, path.join(dir, ".mcp.json"), "file");
+      } catch (error) {
+        // Some Windows CI workers do not grant file-symlink privilege. The
+        // junction-parent test below still exercises Windows reparse points.
+        if (
+          process.platform === "win32" &&
+          (error as NodeJS.ErrnoException).code === "EPERM"
+        ) {
+          return;
+        }
+        throw error;
+      }
+
+      expect(() => ensureMcpConfig(dir, "s1")).toThrow(/symlink or junction/);
+      expect(readFileSync(outside, "utf-8")).toBe(original);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("provider-native project MCP configs", () => {
@@ -280,6 +310,41 @@ describe("provider-native project MCP configs", () => {
       CONDUCTOR_SESSION_ID: "${STOA_CONDUCTOR_SESSION_ID}",
       STOA_MCP_CONFIG_OWNER: "stoa-managed-v1",
     });
+  });
+
+  it("rejects provider config directories redirected outside the project", () => {
+    const cases = [
+      {
+        directory: ".kilo",
+        file: "kilo.json",
+        write: ensureKiloMcpConfig,
+      },
+      {
+        directory: ".kimi-code",
+        file: "mcp.json",
+        write: ensureKimiMcpConfig,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const project = path.join(dir, `project-${testCase.directory.slice(1)}`);
+      const outside = mkdtempSync(path.join(tmpdir(), "stoa-mcp-outside-"));
+      mkdirSync(project);
+      try {
+        symlinkSync(
+          outside,
+          path.join(project, testCase.directory),
+          process.platform === "win32" ? "junction" : "dir"
+        );
+
+        expect(() => testCase.write(project, "session")).toThrow(
+          /symlink or junction/
+        );
+        expect(existsSync(path.join(outside, testCase.file))).toBe(false);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    }
   });
 
   it("preserves unrelated Kilo keys and is generic across two sessions", () => {
@@ -636,7 +701,7 @@ describe("planHermesRegistration — ownership-safe global registration", () => 
   it("skips when listed AND recorded at the current registration identity", () => {
     expect(planHermesRegistration(true, cur, cur)).toEqual({
       skip: true,
-      removeFirst: false,
+      replaceExisting: false,
       conflict: false,
     });
   });
@@ -653,7 +718,7 @@ describe("planHermesRegistration — ownership-safe global registration", () => 
     expect(parsed).toBe(legacy);
     expect(planHermesRegistration(true, parsed, cur)).toEqual({
       skip: false,
-      removeFirst: true,
+      replaceExisting: true,
       conflict: false,
     });
   });
@@ -667,7 +732,7 @@ describe("planHermesRegistration — ownership-safe global registration", () => 
     });
     expect(planHermesRegistration(true, foreign, cur)).toEqual({
       skip: false,
-      removeFirst: false,
+      replaceExisting: false,
       conflict: true,
     });
   });
@@ -677,7 +742,7 @@ describe("planHermesRegistration — ownership-safe global registration", () => 
       planHermesRegistration(true, JSON.stringify({ old: true }), cur)
     ).toEqual({
       skip: false,
-      removeFirst: false,
+      replaceExisting: false,
       conflict: true,
     });
   });
@@ -685,13 +750,13 @@ describe("planHermesRegistration — ownership-safe global registration", () => 
   it("treats the old path-only marker format as stale", () => {
     expect(
       planHermesRegistration(true, "/abs/stoa/mcp/orchestration-server.ts", cur)
-    ).toEqual({ skip: false, removeFirst: false, conflict: true });
+    ).toEqual({ skip: false, replaceExisting: false, conflict: true });
   });
 
   it("preserves a user-owned global stoa entry when no marker proves ownership", () => {
     expect(planHermesRegistration(true, null, cur)).toEqual({
       skip: false,
-      removeFirst: false,
+      replaceExisting: false,
       conflict: true,
     });
   });
@@ -699,9 +764,139 @@ describe("planHermesRegistration — ownership-safe global registration", () => 
   it("adds fresh (no remove) when not listed at all", () => {
     expect(planHermesRegistration(false, null, cur)).toEqual({
       skip: false,
-      removeFirst: false,
+      replaceExisting: false,
       conflict: false,
     });
+  });
+});
+
+describe("ensureHermesMcpRegistered — verified, non-destructive setup", () => {
+  const serverPath = path.join(process.cwd(), "mcp", "orchestration-server.ts");
+
+  it("throws when Hermes add fails and never records ownership", () => {
+    const writeIdentity = vi.fn();
+    const exec = vi.fn((_executable: string, args: string[]) => {
+      if (args[1] === "list") return "No MCP servers configured";
+      throw new Error("add failed");
+    });
+
+    expect(() =>
+      _ensureHermesMcpRegisteredForTests({
+        exec,
+        resolveExecutable: () => "hermes",
+        serverPath,
+        readIdentity: () => null,
+        writeIdentity,
+      })
+    ).toThrow(McpConfigSetupError);
+    expect(writeIdentity).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the post-add list is stale or missing stoa", () => {
+    const writeIdentity = vi.fn();
+    let listCalls = 0;
+    const exec = vi.fn((_executable: string, args: string[]) => {
+      if (args[1] === "list") {
+        listCalls++;
+        return "other-server /tools/stoa enabled";
+      }
+      return "Saved 'stoa' to /home/test/.hermes/config.yaml (7/7 tools enabled)";
+    });
+
+    expect(() =>
+      _ensureHermesMcpRegisteredForTests({
+        exec,
+        resolveExecutable: () => "hermes",
+        serverPath,
+        readIdentity: () => null,
+        writeIdentity,
+      })
+    ).toThrow(/not visible during verification/);
+    expect(listCalls).toBe(2);
+    expect(writeIdentity).not.toHaveBeenCalled();
+  });
+
+  it("rejects a saved Hermes server that discovered zero tools", () => {
+    const writeIdentity = vi.fn();
+    let listCalls = 0;
+    const exec = vi.fn((_executable: string, args: string[]) => {
+      if (args[1] === "list") {
+        listCalls++;
+        return "No MCP servers configured";
+      }
+      return "Saved 'stoa' to config";
+    });
+
+    expect(() =>
+      _ensureHermesMcpRegisteredForTests({
+        exec,
+        resolveExecutable: () => "hermes",
+        serverPath,
+        readIdentity: () => null,
+        writeIdentity,
+      })
+    ).toThrow(/at least one discovered orchestration tool was enabled/);
+    expect(listCalls).toBe(1);
+    expect(writeIdentity).not.toHaveBeenCalled();
+  });
+
+  it("never removes a legacy entry before an overwrite attempt that fails", () => {
+    const legacyIdentity = JSON.stringify({
+      schemaVersion: 2,
+      serverPath,
+      command: "npx",
+      args: ["tsx", serverPath],
+    });
+    const writeIdentity = vi.fn();
+    const exec = vi.fn(
+      (_executable: string, args: string[], _options: { input?: string }) => {
+        if (args[1] === "list") return "stoa stdio all enabled";
+        if (args[1] === "add") throw new Error("discovery failed");
+        throw new Error(`unexpected Hermes command: ${args.join(" ")}`);
+      }
+    );
+
+    expect(() =>
+      _ensureHermesMcpRegisteredForTests({
+        exec,
+        resolveExecutable: () => "hermes",
+        serverPath,
+        readIdentity: () => legacyIdentity,
+        writeIdentity,
+      })
+    ).toThrow(McpConfigSetupError);
+    expect(exec.mock.calls.some(([, args]) => args[1] === "remove")).toBe(
+      false
+    );
+    expect(
+      exec.mock.calls.find(([, args]) => args[1] === "add")?.[2].input
+    ).toBe("y\n\n");
+    expect(writeIdentity).not.toHaveBeenCalled();
+  });
+
+  it("records ownership only after add and post-list verification", () => {
+    const writeIdentity = vi.fn();
+    let listCalls = 0;
+    const exec = vi.fn((_executable: string, args: string[]) => {
+      if (args[1] === "list") {
+        listCalls++;
+        return listCalls === 1
+          ? "No MCP servers configured"
+          : "stoa stdio all enabled";
+      }
+      return "Saved 'stoa' to /home/test/.hermes/config.yaml (7/7 tools enabled)";
+    });
+
+    expect(
+      _ensureHermesMcpRegisteredForTests({
+        exec,
+        resolveExecutable: () => "hermes",
+        serverPath,
+        readIdentity: () => null,
+        writeIdentity,
+      })
+    ).toBe(true);
+    expect(writeIdentity).toHaveBeenCalledTimes(1);
   });
 });
 

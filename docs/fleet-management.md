@@ -245,14 +245,24 @@ be bypassed with a tool-supplied conductor id. The old git-excluded
 Hermes sessions do not write it.
 
 Valid project configs retain unrelated keys, use atomic writes, and keep
-generated paths locally git-excluded. Claude, Kilo, and Kimi all fail closed on
-malformed or structurally incompatible JSON and leave the original file
-byte-for-byte intact. Stoa updates an existing `stoa` entry only when its
-ownership marker is present; an unowned project entry, or a listed global Hermes
-entry without the exact recorded Stoa identity, is preserved and reported as a
-409 conflict rather than removed or overwritten. Transient Hermes discovery
-failures remain best-effort, and `POST /api/sessions/[id]/mcp-config` can repair
-an existing session.
+generated paths locally git-excluded. Their canonical parent chain must remain
+inside the canonical project root; symlink, Windows junction/reparse-point,
+non-directory parent, final-symlink, and non-file targets fail closed before a
+write, so a hostile checkout cannot redirect `.mcp.json`, `.kilo/kilo.json`,
+`.kimi-code/mcp.json`, or ownership markers outside the repository. Claude,
+Kilo, and Kimi also fail closed on malformed or structurally incompatible JSON
+and leave the original file byte-for-byte intact. Stoa updates an existing
+`stoa` entry only when its ownership marker is present; an unowned project
+entry, or a listed global Hermes entry without the exact recorded Stoa identity,
+is preserved and reported as a 409 conflict rather than removed or overwritten.
+Hermes registration is add-first and never removes the prior entry; Stoa
+requires Hermes' positive discovery result with at least one tool and all
+discovered tools enabled, plus a fresh exact-name listing, before persisting
+orchestration readiness. Zero-tool discovery, add, stale-list, or verification
+failures surface as retryable setup errors, and a newly created session row is
+rolled back rather than advertised as MCP-ready. `POST
+/api/sessions/[id]/mcp-config` can repair an existing session through the same
+verified boundary.
 
 Any orchestration-enabled Claude, Codex, Hermes, Kilo, or Kimi session can act
 as a conductor, and workers get their own git worktrees. Kilo remains fully
@@ -484,9 +494,20 @@ Implemented on `feat/fleet-autonomous-delivery`:
   refresh warning visible. GitHub landing binds the expected base branch name,
   pinned base commit, and exact head. It verifies the checkout's `origin` slug
   against the registered repository and retains that exact verified URL for
-  subsequent reads and pushes. It does not use GitHub's PR merge mutation,
+  subsequent reads and pushes. Active branch rules are fetched through bounded
+  pagination (at most ten 100-rule pages with per-page and aggregate byte caps);
+  malformed, oversized, truncated, empty, changing, or app-bound required-check
+  sets fail closed, so a required status check on a later page cannot be omitted
+  from the landing decision. It does not use GitHub's PR merge mutation,
   because that API can pin the head but cannot atomically pin the target ref's
   old commit; Git receive-pack performs that exact compare-and-swap instead.
+  A non-retryable landing precondition failure exposes an admin-only exact-bound
+  recovery action. It binds the failed operation, approved plan and execution,
+  base, integration head, and landing target; the server proves the
+  authoritative target ref is still the bound base or already the exact result
+  before reopening the existing consumed operation. It never issues fresh
+  landing authority, and the UI shows the target ref, required target SHA, exact
+  result SHA, and remediation instructions.
 - Explicit archival and exact-ownership cleanup, bounded artifact pruning,
   retention metadata, outcome/cost analytics, and operator task/worker controls.
   Archived and terminal runs retain their evidence but contribute zero ambient
@@ -547,15 +568,16 @@ Implemented on `feat/fleet-autonomous-delivery`:
 
 Delivery status:
 
-- The feature architecture and review remediation are implemented on the
-  working branch. Exact-head review found release-blocking fairness, landing,
-  and ordinary-session races; the current candidate includes their regression
-  fixes and focused coverage.
-- The repository-wide local gate is green on the combined remediation
-  candidate: Prettier, TypeScript, surface guards, `npm test` (406 files, 4,729
-  passed, 2 skipped), and the 90-page production build pass with the existing
-  Turbopack NFT advisory. Four clean independent exact-head reviews, the GitHub
-  OS matrix, and the final merge remain mandatory release gates.
+- The feature architecture is implemented on the working branch. The first
+  exact-head review of `ab776c5` rejected that candidate for backend-key
+  tombstone, landing recovery, active-rule pagination, and MCP configuration
+  safety gaps. The current uncommitted remediation tree includes focused
+  regression fixes for every finding.
+- The combined remediation tree passes the repository-wide local gate:
+  Prettier, TypeScript, surface guards, `npm test` (407 files, 4,756 passed, 2
+  skipped), and the 90-page production build. One clean four-agent exact-head
+  review, the GitHub OS matrix, and the final merge remain mandatory release
+  gates.
 - MCP protocol-native Tasks are not advertised because the SDK does not expose
   the draft extension used by Fleet. Subscriptions are replaced by bounded
   polling plus full snapshot refetch after reconnect. Sampling is not advertised
@@ -1896,6 +1918,8 @@ Implemented routes:
 - `GET /api/fleet/runs/[id]/workers/[workerId]/output` (bounded lazy read)
 - `GET/POST /api/fleet/runs/[id]/merge`
 - `POST /api/fleet/runs/[id]/merge/authorize` (separate exact-head landing)
+- `POST /api/fleet/runs/[id]/merge/retry` (admin-only retry of the same consumed,
+  exact-bound failed landing after authoritative target-ref proof)
 - `GET/POST /api/fleet/runs/[id]/supervisor`
 - `GET/POST/DELETE /api/fleet/runs/[id]/supervisor/session`
 - `POST /api/fleet/runs/[id]/archive`
@@ -2183,8 +2207,11 @@ available. Preserved artifact display may be truncated without invalidating the
 destructive target digest because artifacts are not removed by these actions.
 
 Both cancel modes remain available during internal staging and lock once
-external landing authority is consumed. Persist interrupt/cancel requests and
-terminal evidence. Resume remains fail-closed until worker interrupts are
+external landing authority is consumed. A failed external landing remains
+locked to prevent contradictory terminal mutations; only the exact-bound admin
+retry above can reopen its existing consumed operation after the target ref and
+every approved contract dimension are re-proven. Persist interrupt/cancel
+requests and terminal evidence. Resume remains fail-closed until worker interrupts are
 terminal and every auxiliary session is terminal with its reservation released;
 malformed or ambiguous ownership also blocks resume. Restart recovery must not
 resurrect canceled work or delete preserved worktrees. A canceled or failed run
@@ -2454,10 +2481,12 @@ phase/slice branch before commit. Update post-merge fields only after the merge
 truth exists; if that requires a bookkeeping PR, that PR is gated but does not
 itself need another bookkeeping PR.
 
-Current remediation note: the previous pushed candidate (`003dcc0`) was
-rejected by exact-head review. The combined remediation candidate now has a
-fresh green local gate (406 test files, 4,729 passed, 2 skipped); the required
-clean four-agent exact-head review, PR CI, and merge remain pending.
+Current remediation note: the earlier candidate (`003dcc0`) and the first
+post-review checkpoint (`ab776c5`) were both rejected by exact-head review. The
+current uncommitted remediation tree has a fresh green local gate (407 test
+files, 4,756 passed, 2 skipped) and no blocker or major finding in its combined
+pre-commit evaluation. It still requires one clean four-agent review of the
+committed exact head; PR CI and merge remain pending after that.
 
 | Phase                                               | Status                            | Active branch/slice              | Pre-merge evidence                                                                                                                                                                                                                                                                                         | Post-merge reconciliation                                                                                                             | Current next action                           | Notes                                                                                                                                                                                                                                                                                                                                             |
 | --------------------------------------------------- | --------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
