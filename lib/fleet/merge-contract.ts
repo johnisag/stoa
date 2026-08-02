@@ -158,7 +158,14 @@ function parseFleetRequiredCheckRuleItems(
     for (const item of parsed) {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const rule = item as Record<string, unknown>;
-      if (rule.type !== "required_status_checks") continue;
+      // Fleet advances the target ref with an exact compare-and-swap instead of
+      // asking GitHub's merge endpoint to apply repository rules. Consequently
+      // it may trust only rule types it enforces authoritatively itself. Unknown
+      // and currently unsupported active rules (required workflows, reviews,
+      // deployments, signatures, code scanning, merge queues, and future rule
+      // types) must fail closed: ignoring one could let a bypass-capable token
+      // land before GitHub has even registered the corresponding check.
+      if (rule.type !== "required_status_checks") return null;
       const parameters = rule.parameters;
       if (
         !parameters ||

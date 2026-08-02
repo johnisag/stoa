@@ -3164,7 +3164,13 @@ async function readRequiredGitHubChecks(
     }
   }
   const required = parseFleetRequiredCheckRulePages(pages);
-  if (!required || required.checks.length === 0) {
+  if (!required) {
+    throw new FleetMergeLandingRetryable(
+      "GitHub returned unsupported or malformed active branch rules; automatic landing is disabled",
+      "waiting_ci"
+    );
+  }
+  if (required.checks.length === 0) {
     throw new FleetMergeLandingRetryable(
       "GitHub returned no trustworthy required-check context set; automatic landing is disabled",
       "waiting_ci"
@@ -5021,6 +5027,252 @@ export async function retryFailedFleetLanding(
     return { error: boundedError(error), status: 409 };
   }
   return { reopened: true, observedTargetSha };
+}
+
+/**
+ * Terminally settle an exact failed landing after the authoritative target has
+ * diverged from both SHAs Stoa was allowed to land. This is intentionally not
+ * a Git recovery operation: it only reads the target and records the terminal
+ * decision. The failed operation and integration workspace remain as evidence.
+ */
+export async function abandonDivergedFleetLanding(
+  runId: string,
+  target: FleetMergeTarget,
+  actor: string,
+  expected: FleetLandingRecoveryPreconditions,
+  overrides: Partial<FleetMergeRuntimeDeps> = {}
+): Promise<
+  | { abandoned: true; observedTargetSha: string }
+  | { error: string; status?: number }
+> {
+  const deps = runtimeDeps(overrides);
+  const recoveryBlocked = fleetLaunchBlockedResult(deps.db, runId);
+  if (recoveryBlocked) return recoveryBlocked;
+  if (
+    (target !== "local" && target !== "github_pr") ||
+    !expected.operationId ||
+    expected.operationId.length > 128 ||
+    /[\u0000-\u001f\u007f]/.test(expected.operationId) ||
+    !validSha(expected.baseSha) ||
+    !validSha(expected.integrationHeadSha) ||
+    !/^[0-9a-f]{64}$/i.test(expected.planHash) ||
+    !/^[0-9a-f]{64}$/i.test(expected.executionHash)
+  ) {
+    return {
+      error: "Exact failed-landing recovery preconditions are required",
+      status: 400,
+    };
+  }
+
+  const recovery = inspectFailedLandingRecovery(deps.db, runId);
+  const recoveryPreconditions = recovery.preconditions;
+  if (
+    !recovery.available ||
+    recovery.action !== "retry_landing" ||
+    recovery.operationId !== expected.operationId ||
+    recovery.target !== target ||
+    !recoveryPreconditions ||
+    recoveryPreconditions.planHash !== expected.planHash ||
+    recoveryPreconditions.executionHash !== expected.executionHash ||
+    recoveryPreconditions.baseSha !== expected.baseSha ||
+    recoveryPreconditions.integrationHeadSha !== expected.integrationHeadSha
+  ) {
+    return {
+      error: recovery.reason ?? "Failed landing recovery preconditions changed",
+      status: 409,
+    };
+  }
+
+  const liveMergeAuthorization = deps.db
+    .prepare(
+      `SELECT 1 FROM fleet_action_authorizations
+       WHERE fleet_run_id = ? AND action = 'merge' AND status = 'authorized'
+       LIMIT 1`
+    )
+    .get(runId);
+  const liveMergeOperation = deps.db
+    .prepare(
+      `SELECT 1 FROM fleet_merge_operations
+       WHERE fleet_run_id = ? AND id <> ?
+         AND state IN ('pending','running','waiting') LIMIT 1`
+    )
+    .get(runId, expected.operationId);
+  if (liveMergeAuthorization || liveMergeOperation) {
+    return {
+      error: "A live Fleet landing action still exists",
+      status: 409,
+    };
+  }
+
+  const run = queries.getFleetRun(deps.db).get(runId) as FleetMergeRunRow;
+  const tasks = queries
+    .listFleetTasksForRun(deps.db)
+    .all(runId) as FleetTaskRow[];
+  const resolvedTarget = resolveFleetMergeTarget(deps.db, run, tasks);
+  if (!resolvedTarget || (target === "github_pr" && !resolvedTarget.repoSlug)) {
+    return { error: "Fleet landing target is unavailable", status: 409 };
+  }
+
+  let observedTargetSha: string;
+  try {
+    if (target === "local") {
+      observedTargetSha = await localLandingTargetHead(
+        deps,
+        resolvedTarget.repoPath,
+        `refs/heads/${resolvedTarget.baseBranch}`
+      );
+    } else {
+      const githubRemote = await verifiedGitHubLandingRemoteUrl(
+        deps,
+        resolvedTarget.repoPath,
+        resolvedTarget.repoSlug!
+      );
+      const observed = await landingRemoteBranchHead(
+        deps,
+        resolvedTarget.repoPath,
+        resolvedTarget.baseBranch,
+        githubRemote
+      );
+      if (!observed) {
+        return {
+          error:
+            "GitHub target ref is missing; terminal landing recovery remains locked",
+          status: 409,
+        };
+      }
+      observedTargetSha = observed;
+    }
+  } catch (error) {
+    return {
+      error: `Authoritative target-ref proof failed: ${boundedError(error)}`,
+      status: 503,
+    };
+  }
+  if (
+    !validSha(observedTargetSha) ||
+    observedTargetSha === expected.baseSha ||
+    observedTargetSha === expected.integrationHeadSha
+  ) {
+    return {
+      error: `Target ref is ${observedTargetSha}; terminal abandonment requires a valid third SHA distinct from the bound base and exact integration head`,
+      status: 409,
+    };
+  }
+
+  try {
+    transaction(deps.db, () => {
+      const current = inspectFailedLandingRecovery(deps.db, runId);
+      const currentPreconditions = current.preconditions;
+      if (
+        !current.available ||
+        current.action !== "retry_landing" ||
+        current.operationId !== expected.operationId ||
+        current.target !== target ||
+        !currentPreconditions ||
+        currentPreconditions.planHash !== expected.planHash ||
+        currentPreconditions.executionHash !== expected.executionHash ||
+        currentPreconditions.baseSha !== expected.baseSha ||
+        currentPreconditions.integrationHeadSha !== expected.integrationHeadSha
+      ) {
+        throw new Error("Failed landing recovery preconditions changed");
+      }
+      const conflictingActivity = deps.db
+        .prepare(
+          `SELECT 1
+           WHERE EXISTS (
+             SELECT 1 FROM fleet_action_authorizations
+             WHERE fleet_run_id = ? AND action = 'merge'
+               AND status = 'authorized'
+           ) OR EXISTS (
+             SELECT 1 FROM fleet_merge_operations
+             WHERE fleet_run_id = ? AND id <> ?
+               AND state IN ('pending','running','waiting')
+           ) OR EXISTS (
+             SELECT 1 FROM fleet_runtime_leases
+             WHERE owner_type = 'merge_operation' AND owner_id = ?
+               AND status = 'reserved'
+           )`
+        )
+        .get(runId, runId, expected.operationId, expected.operationId);
+      if (conflictingActivity) {
+        throw new Error(
+          "A live Fleet landing lease, action, or resource exists"
+        );
+      }
+
+      const now = deps.now();
+      const nowIso = now.toISOString();
+      const terminalError =
+        `Landing abandoned after authoritative target divergence: observed ${observedTargetSha}; ` +
+        `bound base ${expected.baseSha}; exact integration head ${expected.integrationHeadSha}`;
+      const runChanged = deps.db
+        .prepare(
+          `UPDATE fleet_runs
+           SET status = 'failed', integration_state = 'failed',
+               integration_error = ?, ended_at = COALESCE(ended_at, ?),
+               integration_updated_at = ?, updated_at = ?
+           WHERE id = ? AND merge_requested_at IS NOT NULL
+             AND merge_target = ? AND integration_state = 'awaiting_operator'
+             AND status IN ('running','reviewing','merging')
+             AND desired_state = 'running' AND recovery_required = 0
+             AND plan_hash = ? AND approved_plan_hash = ?
+             AND automation_base_sha = ? AND integration_base_sha = ?
+             AND integration_head_sha = ?
+             AND EXISTS (
+               SELECT 1 FROM fleet_merge_operations operation
+               WHERE operation.id = ? AND operation.fleet_run_id = fleet_runs.id
+                 AND operation.state = 'failed'
+                 AND operation.target = ?
+                 AND operation.expected_base_sha = ?
+                 AND operation.expected_task_head_sha IS NULL
+                 AND operation.result_head_sha IS NULL
+                 AND operation.lease_owner IS NULL
+                 AND operation.lease_expires_at IS NULL
+             )`
+        )
+        .run(
+          terminalError,
+          nowIso,
+          nowIso,
+          nowIso,
+          runId,
+          target,
+          expected.planHash,
+          expected.planHash,
+          expected.baseSha,
+          expected.baseSha,
+          expected.integrationHeadSha,
+          expected.operationId,
+          target,
+          expected.integrationHeadSha
+        );
+      if (runChanged.changes !== 1) {
+        throw new Error("Failed landing run changed");
+      }
+      releaseIntegrationWorkspaceResources(deps, runId, now);
+      createEvent(
+        deps.db,
+        runId,
+        "fleet_landing_abandoned",
+        {
+          recovery: "operator_exact_bound_terminal",
+          actor: actor.trim().slice(0, 80) || "operator",
+          operationId: expected.operationId,
+          target,
+          targetRef: current.targetRef,
+          observedTargetSha,
+          requiredBaseSha: expected.baseSha,
+          integrationHeadSha: expected.integrationHeadSha,
+          outcome: "failed",
+          worktreePreserved: true,
+        },
+        { controlPlane: true }
+      );
+    });
+  } catch (error) {
+    return { error: boundedError(error), status: 409 };
+  }
+  return { abandoned: true, observedTargetSha };
 }
 
 function normalizedIntegrationPath(value: string): string {

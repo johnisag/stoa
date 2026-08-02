@@ -317,6 +317,31 @@ describe("home-tree sandboxing", () => {
       rmSync(target, { recursive: true, force: true });
     }
   });
+
+  it("protects one authority reached through two different filesystem aliases", () => {
+    const container = mkdtempSync(join(tmpdir(), "stoa-authority-aliases-"));
+    const target = mkdtempSync(join(tmpdir(), "stoa-authority-shared-target-"));
+    const configuredAlias = join(container, "configured-state");
+    const secondAlias = join(container, "second-state");
+    const previous = process.env.STOA_HOME;
+    try {
+      writeFileSync(join(target, "token"), "secret");
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      symlinkSync(target, configuredAlias, linkType);
+      symlinkSync(target, secondAlias, linkType);
+      process.env.STOA_HOME = configuredAlias;
+
+      const aliasedToken = join(secondAlias, "token");
+      expect(resolveSandboxedPath(aliasedToken, [secondAlias]).allowed).toBe(
+        false
+      );
+    } finally {
+      if (previous === undefined) delete process.env.STOA_HOME;
+      else process.env.STOA_HOME = previous;
+      rmSync(container, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("implicit managed-worktree root", () => {

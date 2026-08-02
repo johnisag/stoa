@@ -271,12 +271,57 @@ function resolveProjectConfigPath(
   return configPath;
 }
 
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index]))
+    );
+  }
+  if (!isPlainObjectRecord(left) || !isPlainObjectRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] && jsonValuesEqual(left[key], right[key])
+    )
+  );
+}
+
+function priorManagedEntry(
+  entry: Record<string, unknown>,
+  environmentKey: "env" | "environment"
+): Record<string, unknown> {
+  const environment = entry[environmentKey];
+  if (!isPlainObjectRecord(environment)) return entry;
+  return {
+    ...entry,
+    [environmentKey]: {
+      ...environment,
+      [STOA_MCP_OWNER_KEY]: STOA_MCP_OWNER_VALUE,
+    },
+  };
+}
+
+/** A repository-controlled owner value is not authority. Existing entries are
+ * reusable only when the whole record is already the harmless strict record
+ * Stoa would write (or that same record with the previous marker). */
 function assertStoaEntryMayBeUpdated(
-  environment: Record<string, unknown>,
+  existing: Record<string, unknown>,
+  managed: Record<string, unknown>,
+  environmentKey: "env" | "environment",
   providerName: string,
   configPath: string
 ): void {
-  if (environment[STOA_MCP_OWNER_KEY] !== STOA_MCP_OWNER_VALUE) {
+  if (
+    !jsonValuesEqual(existing, managed) &&
+    !jsonValuesEqual(existing, priorManagedEntry(managed, environmentKey))
+  ) {
     throw new McpConfigConflictError(
       `Cannot configure ${providerName} orchestration: ${configPath} already contains a user-owned stoa MCP server`
     );
@@ -337,7 +382,11 @@ function legacyClaudeConductorSessionId(
 function hermesRegistrationIdentity(serverPath: string): string {
   const mcp = mcpServerCommand();
   return JSON.stringify({
-    schemaVersion: 3,
+    // Schema 4 means the entry passed positive Hermes discovery (N/N tools,
+    // N > 0) and a fresh exact-name list before this identity was recorded.
+    // Schema 3 was written by older Stoa builds before that proof existed, so
+    // it must migrate through `mcp add` instead of taking the skip path.
+    schemaVersion: 4,
     serverPath,
     command: mcp.command,
     args: [...mcp.argsPrefix, serverPath],
@@ -485,6 +534,15 @@ export function ensureMcpConfig(
     "Claude",
     "mcpServers.stoa.env"
   );
+  const mcp = mcpServerCommand();
+  const managedStoa = {
+    command: mcp.command,
+    args: [...mcp.argsPrefix, orchestrationServerPath],
+    env: {
+      STOA_URL,
+      CONDUCTOR_SESSION_ID: CONDUCTOR_ENV_PLACEHOLDER,
+    },
+  };
   if (hasStoa) {
     const legacySessionId = legacyClaudeConductorSessionId(
       existingStoa,
@@ -498,23 +556,18 @@ export function ensureMcpConfig(
         workingDirectory
       ) === true;
     if (!legacyOwned) {
-      assertStoaEntryMayBeUpdated(existingEnv, "Claude", configPath);
+      assertStoaEntryMayBeUpdated(
+        existingStoa,
+        managedStoa,
+        "env",
+        "Claude",
+        configPath
+      );
     }
   }
-  const mcp = mcpServerCommand();
   config.mcpServers = {
     ...servers,
-    stoa: {
-      ...existingStoa,
-      command: mcp.command,
-      args: [...mcp.argsPrefix, orchestrationServerPath],
-      env: {
-        ...existingEnv,
-        STOA_URL,
-        CONDUCTOR_SESSION_ID: CONDUCTOR_ENV_PLACEHOLDER,
-        [STOA_MCP_OWNER_KEY]: STOA_MCP_OWNER_VALUE,
-      },
-    },
+    stoa: managedStoa,
   };
   writeProjectConfig(workingDirectory, CLAUDE_MCP_CONFIG_PATH, config);
 }
@@ -544,32 +597,29 @@ export function ensureKiloMcpConfig(
     "Kilo",
     "mcp.stoa"
   );
-  const existingEnvironment = readNestedObjectForUpdate(
-    existingStoa,
-    "environment",
-    configPath,
-    "Kilo",
-    "mcp.stoa.environment"
-  );
-  if (Object.prototype.hasOwnProperty.call(servers, "stoa")) {
-    assertStoaEntryMayBeUpdated(existingEnvironment, "Kilo", configPath);
-  }
   const mcp = mcpServerCommand();
+  const managedStoa = {
+    type: "local",
+    command: [mcp.command, ...mcp.argsPrefix, getOrchestrationServerPath()],
+    environment: {
+      STOA_URL,
+      CONDUCTOR_SESSION_ID: KILO_CONDUCTOR_ENV_PLACEHOLDER,
+    },
+    enabled: true,
+  };
+  if (Object.prototype.hasOwnProperty.call(servers, "stoa")) {
+    assertStoaEntryMayBeUpdated(
+      existingStoa,
+      managedStoa,
+      "environment",
+      "Kilo",
+      configPath
+    );
+  }
 
   config.mcp = {
     ...servers,
-    stoa: {
-      ...existingStoa,
-      type: "local",
-      command: [mcp.command, ...mcp.argsPrefix, getOrchestrationServerPath()],
-      environment: {
-        ...existingEnvironment,
-        STOA_URL,
-        CONDUCTOR_SESSION_ID: KILO_CONDUCTOR_ENV_PLACEHOLDER,
-        [STOA_MCP_OWNER_KEY]: STOA_MCP_OWNER_VALUE,
-      },
-      enabled: true,
-    },
+    stoa: managedStoa,
   };
 
   writeProjectConfig(workingDirectory, KILO_MCP_CONFIG_PATH, config);
@@ -602,41 +652,30 @@ export function ensureKimiMcpConfig(
     "Kimi",
     "mcpServers.stoa"
   );
-  const existingEnv = readNestedObjectForUpdate(
-    existingStoa,
-    "env",
-    configPath,
-    "Kimi",
-    "mcpServers.stoa.env"
-  );
-  if (Object.prototype.hasOwnProperty.call(servers, "stoa")) {
-    assertStoaEntryMayBeUpdated(existingEnv, "Kimi", configPath);
-  }
-  // Kimi dispatches on an explicit `transport` before it considers `command`.
-  // Reusing a prior remote stoa entry verbatim could therefore leave this new
-  // local command inert. Preserve common/stdio options, but remove remote-only
-  // fields and pin the transport below.
-  const existingStdio = { ...existingStoa };
-  delete existingStdio.url;
-  delete existingStdio.headers;
-  delete existingStdio.bearerTokenEnvVar;
   const mcp = mcpServerCommand();
+  const managedStoa = {
+    transport: "stdio",
+    command: mcp.command,
+    args: [...mcp.argsPrefix, getOrchestrationServerPath()],
+    env: {
+      STOA_URL,
+      CONDUCTOR_SESSION_ID: CONDUCTOR_ENV_PLACEHOLDER,
+    },
+    enabled: true,
+  };
+  if (Object.prototype.hasOwnProperty.call(servers, "stoa")) {
+    assertStoaEntryMayBeUpdated(
+      existingStoa,
+      managedStoa,
+      "env",
+      "Kimi",
+      configPath
+    );
+  }
 
   config.mcpServers = {
     ...servers,
-    stoa: {
-      ...existingStdio,
-      transport: "stdio",
-      command: mcp.command,
-      args: [...mcp.argsPrefix, getOrchestrationServerPath()],
-      env: {
-        ...existingEnv,
-        STOA_URL,
-        CONDUCTOR_SESSION_ID: CONDUCTOR_ENV_PLACEHOLDER,
-        [STOA_MCP_OWNER_KEY]: STOA_MCP_OWNER_VALUE,
-      },
-      enabled: true,
-    },
+    stoa: managedStoa,
   };
 
   writeProjectConfig(workingDirectory, KIMI_MCP_CONFIG_PATH, config);
@@ -894,8 +933,47 @@ function legacyHermesIdentityMatchesCurrent(
     if (
       !isPlainObjectRecord(legacy) ||
       !isPlainObjectRecord(current) ||
+      current.schemaVersion !== 4 ||
+      !objectHasOnlyKeys(current, [
+        "schemaVersion",
+        "serverPath",
+        "command",
+        "args",
+        "env",
+      ])
+    ) {
+      return false;
+    }
+
+    // Schema 3 proves ownership of the same Stoa stdio entry, but not that the
+    // old add discovered any tools. Recognize only the exact old Stoa shape so
+    // it can be replaced add-first and earn a schema-4 verified marker.
+    if (legacy.schemaVersion === 3) {
+      return (
+        objectHasOnlyKeys(legacy, [
+          "schemaVersion",
+          "serverPath",
+          "command",
+          "args",
+          "env",
+        ]) &&
+        typeof legacy.serverPath === "string" &&
+        legacy.serverPath === current.serverPath &&
+        typeof legacy.command === "string" &&
+        path.isAbsolute(legacy.command) &&
+        Array.isArray(legacy.args) &&
+        Array.isArray(current.args) &&
+        legacy.args.every((value) => typeof value === "string") &&
+        JSON.stringify(legacy.args) === JSON.stringify(current.args) &&
+        isPlainObjectRecord(legacy.env) &&
+        isPlainObjectRecord(current.env) &&
+        objectHasOnlyKeys(legacy.env, ["CONDUCTOR_SESSION_ID"]) &&
+        JSON.stringify(legacy.env) === JSON.stringify(current.env)
+      );
+    }
+
+    if (
       legacy.schemaVersion !== 2 ||
-      current.schemaVersion !== 3 ||
       !objectHasOnlyKeys(legacy, [
         "schemaVersion",
         "serverPath",

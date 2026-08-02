@@ -65,6 +65,7 @@ import {
   useFleetMergeStatus,
   useRequestFleetMerge,
   useAuthorizeFleetLanding,
+  useAbandonFleetLanding,
   useRetryFleetLanding,
   useFleetSupervisorSnapshot,
   useRetryFleetTask,
@@ -1948,6 +1949,7 @@ function RunDetail({
   const requestMerge = useRequestFleetMerge(detail.run.id);
   const authorizeLanding = useAuthorizeFleetLanding(detail.run.id);
   const retryLanding = useRetryFleetLanding(detail.run.id);
+  const abandonLanding = useAbandonFleetLanding(detail.run.id);
   const supervisor = useFleetSupervisorSnapshot(
     detail.run.id,
     detail.tasks.length > 0
@@ -2239,7 +2241,8 @@ function RunDetail({
     mergeStatus.error?.message ??
     requestMerge.error?.message ??
     authorizeLanding.error?.message ??
-    retryLanding.error?.message;
+    retryLanding.error?.message ??
+    abandonLanding.error?.message;
   const resetLifecycleErrors = () => {
     resumeRun.reset();
     pauseRun.reset();
@@ -2250,6 +2253,7 @@ function RunDetail({
     requestMerge.reset();
     authorizeLanding.reset();
     retryLanding.reset();
+    abandonLanding.reset();
   };
   const attention = useMemo(
     () =>
@@ -3353,6 +3357,62 @@ function RunDetail({
                       )}
                       Prove target and retry landing
                     </Button>
+                  )}
+                {landingRetry.available &&
+                  landingRetry.operationId &&
+                  landingRetry.preconditions &&
+                  landingRetry.target && (
+                    <div className="grid gap-2 border-t border-amber-500/20 pt-2">
+                      <p className="text-muted-foreground">
+                        If the authoritative target has moved to a third SHA,
+                        you can terminally fail this run without changing Git.
+                        The failed operation, evidence, integration branch, and
+                        worktree are preserved so the run can be archived and
+                        inspected.
+                      </p>
+                      <Button
+                        className="w-fit"
+                        size="sm"
+                        variant="destructive"
+                        disabled={
+                          retryLanding.isPending || abandonLanding.isPending
+                        }
+                        onClick={() => {
+                          const binding = landingRetry.preconditions;
+                          if (
+                            !binding ||
+                            !landingRetry.operationId ||
+                            !landingRetry.target
+                          ) {
+                            return;
+                          }
+                          resetLifecycleErrors();
+                          if (
+                            !window.confirm(
+                              `Abandon this failed landing only if the authoritative target diverged?\n\nRun: ${detail.run.id}\nTarget: ${landingRetry.targetRef}\nBound base: ${binding.baseSha}\nExact result: ${binding.integrationHeadSha}\n\nThe server will proceed only if it reads a valid third SHA. No Git ref is changed. The run becomes terminal failed; evidence, branch, and worktree are preserved for inspection and archival.`
+                            )
+                          ) {
+                            return;
+                          }
+                          void abandonLanding
+                            .mutateAsync({
+                              target: landingRetry.target,
+                              expectedOperationId: landingRetry.operationId,
+                              expectedPlanHash: binding.planHash,
+                              expectedExecutionHash: binding.executionHash,
+                              expectedBaseSha: binding.baseSha,
+                              expectedIntegrationHeadSha:
+                                binding.integrationHeadSha,
+                            })
+                            .catch(() => undefined);
+                        }}
+                      >
+                        {abandonLanding.isPending && (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        )}
+                        Abandon diverged landing
+                      </Button>
+                    </div>
                   )}
               </div>
             )}

@@ -71,7 +71,10 @@ describe("fleet GitHub PR target identity", () => {
   it("flattens all bounded rule pages and preserves app identity", () => {
     const filler = Array.from(
       { length: FLEET_REQUIRED_RULES_PAGE_SIZE },
-      (_, index) => ({ type: `non_check_rule_${index}` })
+      () => ({
+        type: "required_status_checks",
+        parameters: { required_status_checks: [] },
+      })
     );
     expect(
       parseFleetRequiredCheckRulePages([
@@ -90,6 +93,27 @@ describe("fleet GitHub PR target identity", () => {
     ).toEqual({
       checks: [{ context: "page-two-ci", integrationId: 4242 }],
     });
+  });
+
+  it("fails closed when supported checks are mixed with an unsupported active rule", () => {
+    expect(
+      parseFleetRequiredCheckRulePages([
+        JSON.stringify([
+          {
+            type: "required_status_checks",
+            parameters: {
+              required_status_checks: [{ context: "ci" }],
+            },
+          },
+          {
+            type: "required_workflows",
+            parameters: {
+              workflows: [{ path: ".github/workflows/release.yml" }],
+            },
+          },
+        ]),
+      ])
+    ).toBeNull();
   });
 
   it("fails closed on truncated, over-page, and oversized rule responses", () => {

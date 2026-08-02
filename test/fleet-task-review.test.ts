@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
+import { tmpdir } from "os";
+import { join } from "path";
 import { createSchema } from "@/lib/db/schema";
 import {
   DEFAULT_FLEET_AUTOMATION_POLICY,
@@ -19,6 +21,7 @@ import {
   hashFleetVerificationEvidence,
   parseFleetTaskFixResult,
   parseFleetTaskReviewResult,
+  isOwnedFleetTaskReviewResultPath,
   reconcileFleetTaskReviews,
   type FleetTaskReviewDeps,
 } from "@/lib/fleet/task-review";
@@ -31,6 +34,7 @@ import type {
   FleetVerificationRow,
 } from "@/lib/fleet/types";
 import { insertFleetOwnedSession } from "./fleet-session-fixture";
+import { stoaHomeDir } from "@/lib/platform";
 
 const BASE_SHA = "a".repeat(40);
 const HEAD_SHA = "b".repeat(40);
@@ -43,9 +47,24 @@ const RUN_ID = "run-1";
 const TASK_ID = "task-1";
 const WORKER_ID = "worker-1";
 const VERIFICATION_ID = "verification-1";
-const PROJECT_PATH = "C:\\repo";
-const TASK_WORKTREE = "C:\\repo\\.stoa-worktrees\\task-1";
+const PROJECT_PATH = join(tmpdir(), "stoa-fleet-task-review-repo");
+const TASK_WORKTREE = join(PROJECT_PATH, ".stoa-worktrees", "task-1");
 const TASK_BRANCH = "fleet-task-1";
+
+function taskRuntimeResultPath(
+  kind: "reviews" | "fixes",
+  requestId: string
+): string {
+  return join(
+    stoaHomeDir(),
+    "fleet-task-runtime",
+    RUN_ID,
+    TASK_ID,
+    "1",
+    kind,
+    `${requestId}.json`
+  );
+}
 
 function policy(automaticFixes = false): FleetAutomationPolicy {
   return {
@@ -317,7 +336,7 @@ function runtime(
       persistedPrompt: request.persistedPrompt,
     });
     const sessionId = `${input.idPrefix ?? "runtime"}-review-session-${request.lens}`;
-    const worktreePath = `C:\\review-${request.lens}`;
+    const worktreePath = join(PROJECT_PATH, `.review-${request.lens}`);
     const branchName = generateBranchName(request.branchFeature);
     insertFleetOwnedSession(db, {
       runId: request.contract.candidate.fleet_run_id,
@@ -374,30 +393,32 @@ function runtime(
       randomNonce: () => REVIEW_NONCE,
       installedProviders: () => input.installedProviders ?? ["codex"],
       prepareResultPath: async ({ kind, requestId }) =>
-        `C:\\fleet-task-runtime\\${kind}\\${requestId}.json`,
+        taskRuntimeResultPath(kind, requestId),
       readResult: async (path) => {
-        if (path.includes("\\fixes\\")) {
-          const row = db
-            .prepare(`SELECT * FROM fleet_task_fixes WHERE result_path = ?`)
-            .get(path) as {
-            fleet_run_id: string;
-            task_id: string;
-            attempt: number;
-            round: number;
-            old_head_sha: string;
-            verification_evidence_hash: string;
-            policy_hash: string;
-          };
+        const fix = db
+          .prepare(`SELECT * FROM fleet_task_fixes WHERE result_path = ?`)
+          .get(path) as
+          | {
+              fleet_run_id: string;
+              task_id: string;
+              attempt: number;
+              round: number;
+              old_head_sha: string;
+              verification_evidence_hash: string;
+              policy_hash: string;
+            }
+          | undefined;
+        if (fix) {
           const text = JSON.stringify({
             schemaVersion: 1,
             nonce: REVIEW_NONCE,
-            runId: row.fleet_run_id,
-            taskId: row.task_id,
-            attempt: row.attempt,
-            round: row.round,
-            oldHeadSha: row.old_head_sha,
-            verificationEvidenceHash: row.verification_evidence_hash,
-            policyHash: row.policy_hash,
+            runId: fix.fleet_run_id,
+            taskId: fix.task_id,
+            attempt: fix.attempt,
+            round: fix.round,
+            oldHeadSha: fix.old_head_sha,
+            verificationEvidenceHash: fix.verification_evidence_hash,
+            policyHash: fix.policy_hash,
             newHeadSha: input.newHead ?? NEW_HEAD_SHA,
             summary: "Committed the scoped correction.",
           });
@@ -453,6 +474,60 @@ function runtime(
     },
   };
 }
+
+describe("Fleet task-review result ownership", () => {
+  it.each([
+    {
+      name: "POSIX",
+      stoaHome: "/home/user/.stoa",
+      resultPath:
+        "/home/user/.stoa/fleet-task-runtime/run-1/task-1/1/reviews/request-1.json",
+    },
+    {
+      name: "Windows",
+      stoaHome: "C:\\Users\\user\\.stoa",
+      resultPath:
+        "C:\\Users\\user\\.stoa\\fleet-task-runtime\\run-1\\task-1\\1\\reviews\\request-1.json",
+    },
+  ])(
+    "accepts the exact $name review artifact independent of host OS",
+    (item) => {
+      expect(
+        isOwnedFleetTaskReviewResultPath({
+          resultPath: item.resultPath,
+          runId: RUN_ID,
+          taskId: TASK_ID,
+          attempt: 1,
+          requestId: "request-1",
+          stoaHome: item.stoaHome,
+        })
+      ).toBe(true);
+    }
+  );
+
+  it.each([
+    "/tmp/fleet-task-runtime/run-1/task-1/1/reviews/request-1.json",
+    "C:\\Temp\\fleet-task-runtime\\run-1\\task-1\\1\\reviews\\request-1.json",
+    "/home/user/.stoa/fleet-task-runtime/foreign/task-1/1/reviews/request-1.json",
+    "/home/user/.stoa/fleet-task-runtime/run-1/task-1/1/fixes/request-1.json",
+    "/home/user/.stoa/fleet-task-runtime/run-1/task-1/1/reviews/foreign.json",
+    "/home/user/.stoa/fleet-task-runtime/run-1/task-1/1/reviews/nested/request-1.json",
+  ])("rejects a non-owned review artifact %s", (resultPath) => {
+    const stoaHome = resultPath.startsWith("C:\\")
+      ? "C:\\Users\\user\\.stoa"
+      : "/home/user/.stoa";
+    expect(
+      isOwnedFleetTaskReviewResultPath({
+        resultPath,
+        runId: RUN_ID,
+        taskId: TASK_ID,
+        attempt: 1,
+        requestId: "request-1",
+        stoaHome,
+      })
+    ).toBe(false);
+  });
+});
 
 describe("Fleet exact-SHA task review and automatic fix runtime", () => {
   it.each(["reviewing", "merging"] as const)(
@@ -612,7 +687,16 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
       expect(item.prompt).toContain(REVIEW_NONCE);
       expect(item.persistedPrompt).not.toContain(REVIEW_NONCE);
       expect(item.persistedPrompt).toContain("[redacted ephemeral nonce]");
-      expect(item.prompt).toContain("C:\\fleet-task-runtime\\reviews\\");
+      expect(item.prompt).toContain(
+        join(
+          stoaHomeDir(),
+          "fleet-task-runtime",
+          RUN_ID,
+          TASK_ID,
+          "1",
+          "reviews"
+        )
+      );
     }
 
     await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
@@ -967,7 +1051,7 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
   it("recovers a partial reviewer spawn, times it out, and cleans it safely", async () => {
     const { db, policyHash } = setupDb();
     const evidenceHash = hashFleetVerificationEvidence(verification(db));
-    const resultPath = "C:\\fleet-task-runtime\\reviews\\recovered-review.json";
+    const resultPath = taskRuntimeResultPath("reviews", "recover");
     const branch = generateBranchName(
       `fleet-tr-${RUN_ID.slice(0, 8)}-recover-correctness_security`
     );
@@ -1000,7 +1084,7 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
         index === 0 ? resultPath : "",
         index === 0 ? null : "clean",
         PROJECT_PATH,
-        index === 0 ? null : `C:\\old-review-${index}`,
+        index === 0 ? null : join(PROJECT_PATH, `.old-review-${index}`),
         index === 0 ? branch : `old-branch-${index}`,
         "2025-12-31T00:00:00.000Z",
         "2025-12-31T00:01:00.000Z",
@@ -1017,9 +1101,9 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
       provider: "codex",
       model: null,
       approvalMode: "full-bypass",
-      workingDirectory: "C:\\recovered-review",
+      workingDirectory: join(PROJECT_PATH, ".recovered-review"),
       workerTask: `Persisted prompt ${resultPath}`,
-      worktreePath: "C:\\recovered-review",
+      worktreePath: join(PROJECT_PATH, ".recovered-review"),
       branchName: branch,
       baseBranch: HEAD_SHA,
     });
@@ -1038,7 +1122,7 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
       { maxTasks: 1 }
     );
     expect(removeWorktree).toHaveBeenCalledWith(
-      `C:\\recovered-review`,
+      join(PROJECT_PATH, ".recovered-review"),
       PROJECT_PATH,
       true
     );
@@ -1083,9 +1167,9 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
       provider: "kilo",
       model: null,
       approvalMode: "full-bypass",
-      workingDirectory: "C:\\recovered-kilo-review",
+      workingDirectory: join(PROJECT_PATH, ".recovered-kilo-review"),
       workerTask: `Persisted prompt ${row.result_path}`,
-      worktreePath: "C:\\recovered-kilo-review",
+      worktreePath: join(PROJECT_PATH, ".recovered-kilo-review"),
       branchName: row.reviewer_branch_name,
       baseBranch: HEAD_SHA,
     });
@@ -1101,7 +1185,7 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
       "failed"
     );
     expect(harness.removeWorktree).toHaveBeenCalledWith(
-      "C:\\recovered-kilo-review",
+      join(PROJECT_PATH, ".recovered-kilo-review"),
       PROJECT_PATH,
       true
     );
@@ -1316,7 +1400,7 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
         taskType: "fix",
         provider: "codex",
         model: null,
-        repositoryKey: "path:c:/repo",
+        repositoryKey: PROJECT_PATH,
         now,
         leaseExpiresAt: new Date(now.getTime() + 90_000).toISOString(),
       })
@@ -1428,7 +1512,7 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
       .prepare(`SELECT * FROM fleet_runs WHERE id = ?`)
       .get(RUN_ID) as FleetRunRow;
     const requestId = "recovered-kilo-fix-request";
-    const resultPath = "C:\\fleet-task-runtime\\fixes\\recovered-kilo-fix.json";
+    const resultPath = taskRuntimeResultPath("fixes", requestId);
     const now = new Date("2026-01-01T00:10:00.000Z");
     expect(
       reserveFleetPaidSession(db, {
@@ -1439,7 +1523,7 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
         taskType: "fix",
         provider: "kilo",
         model: null,
-        repositoryKey: "path:c:/repo",
+        repositoryKey: PROJECT_PATH,
         now,
         leaseExpiresAt: new Date(now.getTime() + 90_000).toISOString(),
       })

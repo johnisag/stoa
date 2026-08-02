@@ -242,6 +242,58 @@ function processClosed(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+const VERIFY_CHILD_EXIT_TIMEOUT_MS = 1_500;
+const VERIFY_CHILD_FORCE_EXIT_TIMEOUT_MS = 500;
+
+function waitForChildExit(
+  child: ChildProcess,
+  timeoutMs: number
+): Promise<boolean> {
+  if (processClosed(child)) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | null = null;
+    const finish = (exited: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.removeListener("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+
+    child.once("exit", onExit);
+    // Close the check-to-listener race: Node sets exitCode/signalCode before
+    // emitting `exit`, so a process that ended between those operations is
+    // already safe to reap here.
+    if (processClosed(child)) {
+      finish(true);
+      return;
+    }
+    timer = setTimeout(() => finish(processClosed(child)), timeoutMs);
+    timer.unref?.();
+  });
+}
+
+/**
+ * Wait for the direct verification child to release its OS-owned resources.
+ * `taskkill` completion means Windows accepted/completed the tree operation,
+ * but the ChildProcess exit notification can lag briefly under load. Waiting
+ * for `exit` (not stdio `close`, which an escaped descendant can retain) makes
+ * cwd handles safe to remove without allowing inherited pipes to hang cleanup.
+ */
+async function reapDirectVerifyChild(child: ChildProcess): Promise<void> {
+  if (await waitForChildExit(child, VERIFY_CHILD_EXIT_TIMEOUT_MS)) return;
+
+  try {
+    if (!processClosed(child)) child.kill("SIGKILL");
+  } catch {
+    // The child may have exited between the bounded wait and fallback kill.
+  }
+  await waitForChildExit(child, VERIFY_CHILD_FORCE_EXIT_TIMEOUT_MS);
+}
+
 interface PosixProcess {
   pid: number;
   ppid: number;
@@ -393,6 +445,7 @@ async function killVerifyTree(
   const pid = child.pid;
   if (!pid) {
     child.kill("SIGKILL");
+    await reapDirectVerifyChild(child);
     return;
   }
 
@@ -413,6 +466,7 @@ async function killVerifyTree(
     // Preserve the direct-child fallback for test doubles and unusual hosts
     // where negative-PID process-group signaling is unavailable.
     if (!groupKilled && !processClosed(child)) child.kill("SIGKILL");
+    await reapDirectVerifyChild(child);
     return;
   }
 
@@ -436,6 +490,7 @@ async function killVerifyTree(
       finish(true);
     }
   });
+  await reapDirectVerifyChild(child);
 }
 
 function appendOutputTail(

@@ -3,10 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   retry: vi.fn(async () => ({ reopened: true, observedTargetSha: "a" })),
+  abandon: vi.fn(async () => ({
+    abandoned: true,
+    observedTargetSha: "c",
+  })),
   reconcile: vi.fn(async () => 0),
 }));
 
 vi.mock("@/lib/fleet/merge-runtime", () => ({
+  abandonDivergedFleetLanding: state.abandon,
   retryFailedFleetLanding: state.retry,
   reconcileFleetMerges: state.reconcile,
   getFleetMergeStatus: () => ({ retry: { action: null } }),
@@ -34,6 +39,7 @@ function request(body: unknown, scope = "admin") {
 describe("Fleet failed landing recovery route", () => {
   beforeEach(() => {
     state.retry.mockClear();
+    state.abandon.mockClear();
     state.reconcile.mockClear();
   });
 
@@ -74,5 +80,40 @@ describe("Fleet failed landing recovery route", () => {
       }
     );
     expect(state.reconcile).toHaveBeenCalledWith({}, "run-1");
+  });
+
+  it("requires exact confirmation and terminally abandons without reconciliation", async () => {
+    const unconfirmed = await POST(
+      request({ ...exact, action: "abandon", confirm: true }),
+      { params: Promise.resolve({ id: "run-1" }) }
+    );
+    expect(unconfirmed.status).toBe(400);
+    expect(state.abandon).not.toHaveBeenCalled();
+
+    const response = await POST(
+      request({
+        ...exact,
+        action: "abandon",
+        confirm: true,
+        confirmation: "run-1",
+      }),
+      { params: Promise.resolve({ id: "run-1" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(state.abandon).toHaveBeenCalledWith(
+      "run-1",
+      "local",
+      "fleet-api-admin",
+      {
+        operationId: exact.expectedOperationId,
+        planHash: exact.expectedPlanHash,
+        executionHash: exact.expectedExecutionHash,
+        baseSha: exact.expectedBaseSha,
+        integrationHeadSha: exact.expectedIntegrationHeadSha,
+      }
+    );
+    expect(state.retry).not.toHaveBeenCalled();
+    expect(state.reconcile).not.toHaveBeenCalled();
   });
 });

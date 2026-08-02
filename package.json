@@ -33,7 +33,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --project unit && vitest run --project pty",
     "test:watch": "vitest",
     "setup": "node scripts/setup.js",
     "postinstall": "node scripts/postinstall.js",

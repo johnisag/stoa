@@ -472,8 +472,10 @@ describe("session routes use provider-native orchestration wiring", () => {
     expect(owned.status).toBe(200);
     expect(
       JSON.parse(readFileSync(configPath, "utf-8")).mcpServers.stoa.env
-        .STOA_MCP_CONFIG_OWNER
-    ).toBe("stoa-managed-v1");
+    ).toEqual({
+      STOA_URL: "http://localhost:3011",
+      CONDUCTOR_SESSION_ID: "${STOA_CONDUCTOR_SESSION_ID}",
+    });
   });
 
   it("session creation preserves malformed Claude config and rolls back the session", async () => {

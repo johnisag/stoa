@@ -18,6 +18,7 @@ const descendant = spawn(
 if (!descendant.pid) process.exit(3);
 if (detached) descendant.unref();
 writeFileSync(pidFile, String(descendant.pid));
+writeFileSync(`${pidFile}.root`, String(process.pid));
 
 if (trigger === "output") {
   process.stdout.write("x".repeat(256 * 1024));

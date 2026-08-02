@@ -158,6 +158,42 @@ describe("Fleet provider backoff", () => {
 });
 
 describe("Fleet archive and scoped cleanup", () => {
+  it("archives a terminally failed landing while preserving integration evidence", async () => {
+    addRun("failed");
+    const integration = fleetIntegrationIdentity("run-1");
+    db.prepare(
+      `UPDATE fleet_runs SET integration_state = 'failed',
+       integration_worktree = ?, integration_branch = ?,
+       integration_base_sha = ?, integration_head_sha = ?,
+       integration_error = 'target diverged at a third SHA'
+       WHERE id = 'run-1'`
+    ).run(integration.worktree, integration.branch, HASH, HASH);
+
+    expect(
+      archiveFleetRun(
+        "run-1",
+        { confirm: true, confirmation: "run-1", retentionDays: 30 },
+        lifecycleDeps()
+      )
+    ).toEqual({ archivedAt: NOW.toISOString(), retentionDays: 30 });
+    expect(
+      db
+        .prepare(
+          `SELECT status, archived_at, integration_state,
+                  integration_worktree, integration_branch, integration_error
+           FROM fleet_runs WHERE id = 'run-1'`
+        )
+        .get()
+    ).toEqual({
+      status: "failed",
+      archived_at: NOW.toISOString(),
+      integration_state: "failed",
+      integration_worktree: integration.worktree,
+      integration_branch: integration.branch,
+      integration_error: "target diverged at a third SHA",
+    });
+  });
+
   it("previews exact owner, session, worktree, branch, and artifact impact", async () => {
     addRun("running", { retentionDays: 30 });
     addOwnedWorktree();

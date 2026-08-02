@@ -584,12 +584,46 @@ export function useRetryFleetLanding(runId: string | null) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input),
+          body: JSON.stringify({ action: "retry", ...input }),
         }
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || "Failed to retry Fleet landing");
+      }
+      return data as FleetMergeStatusDto;
+    },
+    onSuccess: (status) => {
+      if (!runId) return;
+      qc.setQueryData([...fleetKeys.run(runId), "merge"], status);
+      qc.invalidateQueries({ queryKey: fleetKeys.run(runId) });
+      qc.invalidateQueries({ queryKey: fleetKeys.runs() });
+    },
+  });
+}
+
+export function useAbandonFleetLanding(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0,
+    mutationFn: async (input: FleetLandingRecoveryInput) => {
+      if (!runId) throw new Error("No fleet run selected");
+      const res = await fetch(
+        `/api/fleet/runs/${encodeURIComponent(runId)}/merge/retry`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "abandon",
+            confirm: true,
+            confirmation: runId,
+            ...input,
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to abandon Fleet landing");
       }
       return data as FleetMergeStatusDto;
     },

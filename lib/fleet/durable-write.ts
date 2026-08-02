@@ -27,6 +27,7 @@ const CONTROL_PLANE_EVENT_TYPES = new Set([
   "integration_reconcile_failed",
   "integration_workspace_cleaned",
   "integration_workspace_ready",
+  "fleet_landing_abandoned",
   "fleet_landing_retry_scheduled",
   "manual_final_verification_retry_requested",
   "manual_merge_landing_authorized",

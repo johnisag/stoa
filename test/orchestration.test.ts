@@ -457,22 +457,31 @@ describe("spawnWorker — conductor FK guard", () => {
     });
 
     const createArg = (backendCreate.mock.calls as unknown[][])[0]?.[0] as
-      { command: string; fleetWritableRoots?: string[] } | undefined;
+      | {
+          args: string[];
+          fleetWritableRoots?: string[];
+        }
+      | undefined;
     expect(createArg?.fleetWritableRoots).toEqual([resolve(resultDirectory)]);
-    const scriptPath = createArg!.command.slice("bash ".length);
-    const script = readFileSync(scriptPath, "utf8");
-    expect(script).toContain("--ro-bind / /");
-    expect(script).not.toContain(
-      `--bind '${reviewerWorktree}' '${reviewerWorktree}'`
-    );
-    expect(script).toContain(`--tmpfs '${stoaHomeDir()}'`);
-    expect(script).not.toContain(
-      `--bind '${stoaHomeDir()}' '${stoaHomeDir()}'`
-    );
-    expect(script).toContain(
-      `--bind '${resultDirectory}' '${resultDirectory}'`
-    );
-    expect(script).toContain("--unsetenv STOA_TOKEN");
+    const args = createArg!.args;
+    const hasPair = (flag: string, value: string) =>
+      args.some((token, index) => token === flag && args[index + 1] === value);
+    const hasTriple = (flag: string, source: string, target: string) =>
+      args.some(
+        (token, index) =>
+          token === flag &&
+          args[index + 1] === source &&
+          args[index + 2] === target
+      );
+
+    expect(hasTriple("--ro-bind", "/", "/")).toBe(true);
+    expect(hasTriple("--bind", reviewerWorktree, reviewerWorktree)).toBe(false);
+    expect(hasPair("--tmpfs", stoaHomeDir())).toBe(true);
+    expect(hasTriple("--bind", stoaHomeDir(), stoaHomeDir())).toBe(false);
+    expect(
+      hasTriple("--bind", resolve(resultDirectory), resolve(resultDirectory))
+    ).toBe(true);
+    expect(hasPair("--unsetenv", "STOA_TOKEN")).toBe(true);
   });
 
   it("rejects broad or foreign Fleet sandbox writable roots", () => {

@@ -33,6 +33,7 @@ const state = vi.hoisted(() => ({
   mergeMutation: vi.fn(async (_input: unknown) => undefined),
   landingMutation: vi.fn(async (_input: unknown) => undefined),
   landingRetryMutation: vi.fn(async (_input: unknown) => undefined),
+  landingAbandonMutation: vi.fn(async (_input: unknown) => undefined),
   reposLoading: false,
   reposError: null as Error | null,
   projectsLoading: false,
@@ -237,6 +238,10 @@ vi.mock("@/data/fleet/queries", () => ({
   useRetryFleetLanding: () => ({
     ...mutation(),
     mutateAsync: state.landingRetryMutation,
+  }),
+  useAbandonFleetLanding: () => ({
+    ...mutation(),
+    mutateAsync: state.landingAbandonMutation,
   }),
   useRetryFleetTask: mutation,
   useReconcileFleetTaskVerification: mutation,
@@ -842,6 +847,7 @@ describe("FleetManagementView status drilldowns", () => {
     state.mergeMutation.mockClear();
     state.landingMutation.mockClear();
     state.landingRetryMutation.mockClear();
+    state.landingAbandonMutation.mockClear();
     state.reposLoading = false;
     state.reposError = null;
     state.projectsLoading = false;
@@ -1725,6 +1731,24 @@ describe("FleetManagementView status drilldowns", () => {
       expect.stringContaining(`Target must equal: ${baseSha}`)
     );
     expect(state.landingMutation).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Abandon diverged landing" })
+    );
+    await waitFor(() =>
+      expect(state.landingAbandonMutation).toHaveBeenCalledWith({
+        target: "local",
+        expectedOperationId: "local-land-1",
+        expectedPlanHash: planHash,
+        expectedExecutionHash: executionHash,
+        expectedBaseSha: baseSha,
+        expectedIntegrationHeadSha: integrationHeadSha,
+      })
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringMatching(/valid third SHA[\s\S]*No Git ref is changed/)
+    );
+    expect(screen.getByText(/worktree are preserved/i)).toBeTruthy();
   });
 
   it("locks interrupt and exact controls after external landing authorization", async () => {

@@ -7,6 +7,7 @@ import { resolve } from "path";
 import { createSchema } from "@/lib/db/schema";
 import {
   __fleetMergeTesting,
+  abandonDivergedFleetLanding,
   authorizeFleetManualLanding,
   fleetIntegrationIdentity,
   getFleetMergeStatus,
@@ -745,6 +746,9 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       if (branches.get("/repo") === branch) {
         heads.set("/repo", value);
       }
+    },
+    setRemoteRefHead(branch: string, value: string) {
+      remoteBranchHeads.set(branch, value);
     },
     refHead(branch: string) {
       return repoBranchHeads.get(branch) ?? null;
@@ -3145,6 +3149,189 @@ describe("Fleet exact-SHA merge runtime", () => {
     ).toEqual({ state: "failed" });
   });
 
+  it("terminally abandons an exact diverged local landing without mutating Git or deleting evidence", async () => {
+    seed(db);
+    const fake = fakeRuntime();
+    await requestFleetMerge(RUN_ID, "local", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
+    const deps = __fleetMergeTesting.runtimeDeps({ db, ...fake.overrides });
+    const operation = __fleetMergeTesting.ensureOperation(deps, {
+      runId: RUN_ID,
+      taskId: null,
+      type: "local_finalize",
+      target: "local",
+      baseSha: INTEGRATED,
+    });
+    db.prepare(
+      `UPDATE fleet_merge_operations SET state = 'failed',
+       error = 'original landing evidence', completed_at = ? WHERE id = ?`
+    ).run(new Date().toISOString(), operation.id);
+    db.prepare(
+      `UPDATE fleet_runs SET integration_state = 'awaiting_operator',
+       integration_error = 'original landing evidence' WHERE id = ?`
+    ).run(RUN_ID);
+    const refused = await abandonDivergedFleetLanding(
+      RUN_ID,
+      "local",
+      "operator",
+      { operationId: operation.id, ...landingPreconditions(db) },
+      { db, ...fake.overrides }
+    );
+    expect(refused).toMatchObject({
+      status: 409,
+      error: expect.stringContaining("requires a valid third SHA"),
+    });
+    expect(
+      db.prepare(`SELECT status FROM fleet_runs WHERE id = ?`).get(RUN_ID)
+    ).toEqual({ status: "merging" });
+
+    fake.setRefHead("main", STALE);
+    const callsBefore = fake.calls.length;
+
+    const abandoned = await abandonDivergedFleetLanding(
+      RUN_ID,
+      "local",
+      "operator",
+      { operationId: operation.id, ...landingPreconditions(db) },
+      { db, ...fake.overrides }
+    );
+
+    expect(abandoned).toEqual({
+      abandoned: true,
+      observedTargetSha: STALE,
+    });
+    expect(fake.refHead("main")).toBe(STALE);
+    expect(fake.integrationRefHead()).toBe(INTEGRATED);
+    const recoveryCalls = fake.calls.slice(callsBefore);
+    expect(recoveryCalls.map((call) => call[1])).toEqual([
+      "for-each-ref",
+      "rev-parse",
+    ]);
+    expect(
+      recoveryCalls.some((call) =>
+        ["update-ref", "push", "merge", "reset", "clean"].includes(call[1])
+      )
+    ).toBe(false);
+    expect(
+      db
+        .prepare(
+          `SELECT status, integration_state, integration_worktree,
+                  integration_branch, integration_head_sha, integration_error,
+                  ended_at
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(RUN_ID)
+    ).toMatchObject({
+      status: "failed",
+      integration_state: "failed",
+      integration_worktree: fake.integration.worktree,
+      integration_branch: fake.integration.branch,
+      integration_head_sha: INTEGRATED,
+      integration_error: expect.stringContaining(STALE),
+      ended_at: "2026-08-01T12:00:00.000Z",
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT state, error, result_head_sha FROM fleet_merge_operations
+           WHERE id = ?`
+        )
+        .get(operation.id)
+    ).toEqual({
+      state: "failed",
+      error: "original landing evidence",
+      result_head_sha: null,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_runtime_leases
+           WHERE owner_type IN ('merge_operation','integration_workspace')
+             AND status = 'reserved'`
+        )
+        .get()
+    ).toEqual({ count: 0 });
+    const event = db
+      .prepare(
+        `SELECT payload FROM fleet_events
+         WHERE fleet_run_id = ? AND event_type = 'fleet_landing_abandoned'`
+      )
+      .get(RUN_ID) as { payload: string };
+    expect(JSON.parse(event.payload)).toMatchObject({
+      operationId: operation.id,
+      target: "local",
+      observedTargetSha: STALE,
+      requiredBaseSha: BASE,
+      integrationHeadSha: INTEGRATED,
+      outcome: "failed",
+      worktreePreserved: true,
+    });
+  });
+
+  it("terminally abandons an exact diverged GitHub landing from the authoritative remote ref", async () => {
+    seed(db);
+    const fake = fakeRuntime({ github: true });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 8; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      if (await authorizeLandingIfReady(db, "github_pr", fake.overrides)) {
+        break;
+      }
+    }
+    const deps = __fleetMergeTesting.runtimeDeps({ db, ...fake.overrides });
+    const operation = __fleetMergeTesting.ensureOperation(deps, {
+      runId: RUN_ID,
+      taskId: null,
+      type: "github_merge",
+      target: "github_pr",
+      baseSha: INTEGRATED,
+    });
+    db.prepare(
+      `UPDATE fleet_merge_operations SET state = 'failed', completed_at = ?
+       WHERE id = ?`
+    ).run(new Date().toISOString(), operation.id);
+    db.prepare(
+      `UPDATE fleet_runs SET integration_state = 'awaiting_operator'
+       WHERE id = ?`
+    ).run(RUN_ID);
+    fake.setRemoteRefHead("main", STALE);
+    const callsBefore = fake.calls.length;
+
+    const abandoned = await abandonDivergedFleetLanding(
+      RUN_ID,
+      "github_pr",
+      "operator",
+      { operationId: operation.id, ...landingPreconditions(db) },
+      { db, ...fake.overrides }
+    );
+
+    expect(abandoned).toEqual({
+      abandoned: true,
+      observedTargetSha: STALE,
+    });
+    expect(fake.remoteRefHead("main")).toBe(STALE);
+    expect(fake.landingPushCalls).toBe(0);
+    expect(fake.calls.slice(callsBefore).map((call) => call[1])).toEqual([
+      "remote",
+      "ls-remote",
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT status, integration_state FROM fleet_runs WHERE id = ?`
+        )
+        .get(RUN_ID)
+    ).toEqual({ status: "failed", integration_state: "failed" });
+  });
+
   it("advances only the target ref when the checkout switches branches during landing", async () => {
     seed(db);
     const fake = fakeRuntime({ localBranchAfterFastForward: "release" });
@@ -3988,8 +4175,9 @@ describe("Fleet exact-SHA merge runtime", () => {
 
   it("honors a required check that appears only on the second rules page", async () => {
     seed(db);
-    const fullFirstPage = Array.from({ length: 100 }, (_, index) => ({
-      type: `non_check_rule_${index}`,
+    const fullFirstPage = Array.from({ length: 100 }, () => ({
+      type: "required_status_checks",
+      parameters: { required_status_checks: [] },
     }));
     const secondPage = [
       {
@@ -4020,6 +4208,94 @@ describe("Fleet exact-SHA merge runtime", () => {
     expect(["completed", "cleanup_complete"]).toContain(
       getFleetMergeStatus(RUN_ID, db)?.integration.state
     );
+  });
+
+  it.each([
+    {
+      label: "has not registered",
+      prChecks: [{ name: "ci", conclusion: "SUCCESS" }],
+    },
+    {
+      label: "is pending",
+      prChecks: [
+        { name: "ci", conclusion: "SUCCESS" },
+        { name: "release", status: "IN_PROGRESS" },
+      ],
+    },
+  ])(
+    "fails closed when an active required workflow $label during readiness",
+    async ({ prChecks }) => {
+      seed(db);
+      const fake = fakeRuntime({
+        github: true,
+        prChecks,
+        requiredCheckRules: [
+          {
+            type: "required_status_checks",
+            parameters: { required_status_checks: [{ context: "ci" }] },
+          },
+          {
+            type: "required_workflows",
+            parameters: {
+              workflows: [{ path: ".github/workflows/release.yml" }],
+            },
+          },
+        ],
+      });
+      await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+        db,
+        ...fake.overrides,
+      });
+      for (let tick = 0; tick < 8; tick++) {
+        await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+        await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+      }
+
+      expect(fake.landingPushCalls).toBe(0);
+      expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+        state: "waiting_ci",
+        error: expect.stringContaining("unsupported or malformed"),
+      });
+    }
+  );
+
+  it("fails closed when a required workflow appears during the final pre-push rule recheck", async () => {
+    seed(db);
+    const ciOnly = [
+      {
+        type: "required_status_checks",
+        parameters: { required_status_checks: [{ context: "ci" }] },
+      },
+    ];
+    const ciAndWorkflow = [
+      ...ciOnly,
+      {
+        type: "required_workflows",
+        parameters: {
+          workflows: [{ path: ".github/workflows/release.yml" }],
+        },
+      },
+    ];
+    const fake = fakeRuntime({ github: true, requiredCheckRules: ciOnly });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 8; tick++) {
+      const status = getFleetMergeStatus(RUN_ID, db)?.integration.state;
+      if (status === "waiting_ci") break;
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+    }
+    fake.setRequiredCheckRuleResponses([ciOnly, ciAndWorkflow]);
+
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+
+    expect(fake.landingPushCalls).toBe(0);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "waiting_ci",
+      error: expect.stringContaining("unsupported or malformed"),
+    });
   });
 
   it("does not land when a new required context appears during final recheck", async () => {
@@ -4083,7 +4359,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     expect(fake.landingPushCalls).toBe(0);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
       state: "waiting_ci",
-      error: expect.stringContaining("trustworthy required-check"),
+      error: expect.stringContaining("unsupported or malformed"),
     });
   });
 

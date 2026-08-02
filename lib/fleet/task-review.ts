@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "crypto";
 import { mkdir, unlink } from "fs/promises";
-import { dirname, join } from "path";
+import { dirname, join, posix, win32 } from "path";
 import type Database from "better-sqlite3";
 import { getDb, queries, type Session } from "@/lib/db";
 import { generateBranchName, runGit } from "@/lib/git";
@@ -14,6 +14,7 @@ import {
 import type { ApprovalMode } from "@/lib/sandbox/types";
 import { getSessionBackend } from "@/lib/session-backend";
 import { deleteWorktree } from "@/lib/worktrees";
+import { validateFleetWritableRootLayouts } from "@/lib/container/mounts";
 import { parseFleetAutomationPolicy } from "./automation-policy";
 import { readBoundedRegularFile } from "./artifacts";
 import { decideFleetAuxiliaryLaunchRetry } from "./auxiliary-retry";
@@ -177,6 +178,52 @@ function safePathComponent(value: string, label: string): string {
     throw new Error(`${label} is not safe for a Fleet-owned result path`);
   }
   return value;
+}
+
+/**
+ * Prove that a result belongs to this exact review request before cleanup may
+ * remove its worktree or branch. Path semantics come from STOA_HOME so Windows
+ * identities remain testable on POSIX (and vice versa); a loose substring such
+ * as `fleet-task-runtime` must never authorize an arbitrary path.
+ */
+export function isOwnedFleetTaskReviewResultPath(input: {
+  resultPath: string;
+  runId: string;
+  taskId: string;
+  attempt: number;
+  requestId: string;
+  stoaHome?: string;
+}): boolean {
+  try {
+    const stoaHome = input.stoaHome ?? stoaHomeDir();
+    const api = posix.isAbsolute(stoaHome) ? posix : win32;
+    if (!Number.isSafeInteger(input.attempt) || input.attempt < 1) return false;
+    const runId = safePathComponent(input.runId, "runId");
+    const taskId = safePathComponent(input.taskId, "taskId");
+    const requestId = safePathComponent(input.requestId, "requestId");
+    const expectedDirectory = api.join(
+      stoaHome,
+      "fleet-task-runtime",
+      runId,
+      taskId,
+      String(input.attempt),
+      "reviews"
+    );
+    const expectedPath = api.join(expectedDirectory, `${requestId}.json`);
+    const candidatePath = api.normalize(input.resultPath);
+    const [validatedDirectory] = validateFleetWritableRootLayouts(
+      [api.dirname(candidatePath)],
+      stoaHome
+    );
+    const comparable = (value: string) =>
+      api === win32 ? api.normalize(value).toLowerCase() : api.normalize(value);
+    return (
+      comparable(validatedDirectory) === comparable(expectedDirectory) &&
+      comparable(candidatePath) === comparable(expectedPath)
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function defaultPrepareResultPath(input: {
@@ -1161,7 +1208,13 @@ function ownedReviewBranch(row: FleetTaskReviewRow): boolean {
     row.reviewer_branch_name &&
     row.reviewer_branch_name.startsWith(`${prefix}-`) &&
     row.result_path &&
-    dirname(row.result_path).includes("fleet-task-runtime")
+    isOwnedFleetTaskReviewResultPath({
+      resultPath: row.result_path,
+      runId: row.fleet_run_id,
+      taskId: row.task_id,
+      attempt: row.attempt,
+      requestId: row.request_id,
+    })
   );
 }
 

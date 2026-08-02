@@ -77,6 +77,7 @@ import {
   type FleetVerificationDeps,
 } from "@/lib/fleet/verification";
 import { isValidProviderId } from "@/lib/providers/registry";
+import { stoaHomeDir } from "@/lib/platform";
 
 const BASE_SHA = "a".repeat(40);
 const TASK_HEAD_SHA = "b".repeat(40);
@@ -311,8 +312,16 @@ function taskReviewRuntime(input: {
       `${input.idPrefix ?? "task-review-runtime"}-${input.taskId}-${++serial}`,
     randomNonce: () => "one-use-e2e-review-nonce",
     installedProviders: () => ["codex"],
-    prepareResultPath: async ({ kind, requestId }) =>
-      path.join(PROJECT_PATH, "fleet-task-runtime", kind, `${requestId}.json`),
+    prepareResultPath: async ({ kind, runId, taskId, attempt, requestId }) =>
+      path.join(
+        stoaHomeDir(),
+        "fleet-task-runtime",
+        runId,
+        taskId,
+        String(attempt),
+        kind,
+        `${requestId}.json`
+      ),
     readResult: async (resultPath) => {
       const fix = db
         .prepare(`SELECT * FROM fleet_task_fixes WHERE result_path = ?`)

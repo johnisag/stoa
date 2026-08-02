@@ -53,8 +53,11 @@ function forceCleanup(pid: number): void {
   }
 }
 
-afterEach(() => {
-  for (const pid of cleanupPids) forceCleanup(pid);
+afterEach(async () => {
+  for (const pid of cleanupPids) {
+    forceCleanup(pid);
+    await waitForProcessExit(pid);
+  }
   cleanupPids.clear();
   for (const dir of cleanupDirs) rmSync(dir, { recursive: true, force: true });
   cleanupDirs.clear();
@@ -63,9 +66,13 @@ afterEach(() => {
 type FixtureMode =
   "timeout" | "output" | "detached-timeout" | "detached-output";
 
-async function runFixture(
-  mode: FixtureMode
-): Promise<{ pid: number; elapsedMs: number; output: string }> {
+async function runFixture(mode: FixtureMode): Promise<{
+  dir: string;
+  rootPid: number;
+  descendantPid: number;
+  elapsedMs: number;
+  output: string;
+}> {
   const dir = mkdtempSync(join(tmpdir(), "stoa-verify-tree-"));
   cleanupDirs.add(dir);
   const pidFile = join(dir, "descendant.pid");
@@ -77,9 +84,30 @@ async function runFixture(
       ? { timeoutMs: 500 }
       : { timeoutMs: 5_000, maxOutputBuffer: 32 * 1024 }
   );
-  const pid = Number(readFileSync(pidFile, "utf-8"));
-  cleanupPids.add(pid);
-  return { pid, elapsedMs: Date.now() - started, output: result.output };
+  const rootPid = Number(readFileSync(`${pidFile}.root`, "utf-8"));
+  const descendantPid = Number(readFileSync(pidFile, "utf-8"));
+  cleanupPids.add(rootPid);
+  cleanupPids.add(descendantPid);
+  return {
+    dir,
+    rootPid,
+    descendantPid,
+    elapsedMs: Date.now() - started,
+    output: result.output,
+  };
+}
+
+async function expectTreeReapedAndDirectoryReleased(
+  result: Awaited<ReturnType<typeof runFixture>>
+): Promise<void> {
+  await waitForProcessExit(result.rootPid);
+  await waitForProcessExit(result.descendantPid);
+  expect(() =>
+    rmSync(result.dir, { recursive: true, force: true })
+  ).not.toThrow();
+  cleanupPids.delete(result.rootPid);
+  cleanupPids.delete(result.descendantPid);
+  cleanupDirs.delete(result.dir);
 }
 
 describe("verification runner process-tree teardown", () => {
@@ -87,14 +115,14 @@ describe("verification runner process-tree teardown", () => {
     const result = await runFixture("timeout");
     expect(result.elapsedMs).toBeLessThan(4_000);
     expect(result.output).toMatch(/timed out/i);
-    await waitForProcessExit(result.pid);
+    await expectTreeReapedAndDirectoryReleased(result);
   });
 
   it("bounds output overflow and reaps the real descendant process", async () => {
     const result = await runFixture("output");
     expect(result.elapsedMs).toBeLessThan(4_000);
     expect(result.output).toMatch(/output exceeded/i);
-    await waitForProcessExit(result.pid);
+    await expectTreeReapedAndDirectoryReleased(result);
   });
 });
 
@@ -110,6 +138,6 @@ describePosix("verification runner detached POSIX descendants", () => {
     expect(result.output).toMatch(
       mode.endsWith("timeout") ? /timed out/i : /output exceeded/i
     );
-    await waitForProcessExit(result.pid);
+    await expectTreeReapedAndDirectoryReleased(result);
   });
 });

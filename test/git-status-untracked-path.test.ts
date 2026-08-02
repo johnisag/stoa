@@ -15,6 +15,7 @@ import {
   getUntrackedFileDiff,
   resolveRepositoryRelativePath,
 } from "@/lib/git-status";
+import { isWindows } from "@/lib/platform";
 
 describe("untracked file diff repository containment", () => {
   let sandbox: string;
@@ -55,7 +56,7 @@ describe("untracked file diff repository containment", () => {
     expect(childProcess.execFileSync).toHaveBeenCalledWith(
       "git",
       ["diff", "--no-index", "--", devNull, join("nested", "safe.txt")],
-      expect.objectContaining({ cwd: repository, windowsHide: true })
+      expect.objectContaining({ cwd: repository, windowsHide: isWindows })
     );
   });
 

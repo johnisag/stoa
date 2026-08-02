@@ -253,6 +253,16 @@ function isUnderRoot(input: string, root: string): boolean {
  * contracts, and every custom STOA_HOME child remain server-owned. */
 function isProtectedStoaAuthorityPath(input: string): boolean {
   const candidate = normalizeForSandbox(input);
+  const candidates = new Set([candidate]);
+  try {
+    // macOS commonly exposes /var through the canonical /private/var tree. The
+    // authority roots are canonicalized below, so the candidate must carry the
+    // same identity or an explicit broad root could authorize the alias.
+    candidates.add(normalizeForSandbox(fs.realpathSync(candidate)));
+  } catch {
+    // Missing paths retain their lexical identity. Write APIs separately
+    // canonicalize the nearest existing parent before authorizing creation.
+  }
   const defaultHome = normalizeForSandbox(path.join(homeDir(), ".stoa"));
   const configuredHome = normalizeForSandbox(stoaHomeDir());
   const authorities = new Map<string, boolean>();
@@ -277,17 +287,24 @@ function isProtectedStoaAuthorityPath(input: string): boolean {
   addAuthority(defaultHome, true);
   addAuthority(configuredHome, configuredHome === defaultHome);
 
-  for (const [authority, allowsHistoricalWorkspaces] of authorities) {
-    if (!isUnderRoot(candidate, authority)) continue;
+  for (const candidateIdentity of candidates) {
+    for (const [authority, allowsHistoricalWorkspaces] of authorities) {
+      if (!isUnderRoot(candidateIdentity, authority)) continue;
 
-    // The installer source checkout and user-session worktrees predate the
-    // dedicated authority store and are intentionally generic workspaces.
-    if (allowsHistoricalWorkspaces) {
-      const relative = path.relative(authority, candidate);
-      const first = relative.split(path.sep).filter(Boolean)[0]?.toLowerCase();
-      if (first === "repo" || first === "worktrees") continue;
+      // The installer source checkout and user-session worktrees predate the
+      // dedicated authority store and are intentionally generic workspaces.
+      // Apply this exception to each identity independently: a lexical
+      // workspace alias must not exempt a canonical target in another authority.
+      if (allowsHistoricalWorkspaces) {
+        const relative = path.relative(authority, candidateIdentity);
+        const first = relative
+          .split(path.sep)
+          .filter(Boolean)[0]
+          ?.toLowerCase();
+        if (first === "repo" || first === "worktrees") continue;
+      }
+      return true;
     }
-    return true;
   }
   return false;
 }

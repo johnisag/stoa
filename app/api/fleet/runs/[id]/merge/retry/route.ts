@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/api-security";
 import { readCappedJsonBody } from "@/lib/fleet/http";
 import {
+  abandonDivergedFleetLanding,
   getFleetMergeStatus,
   reconcileFleetMerges,
   retryFailedFleetLanding,
@@ -31,6 +32,13 @@ export async function POST(
     !Array.isArray(parsed.body)
       ? (parsed.body as Record<string, unknown>)
       : {};
+  const action = body.action ?? "retry";
+  if (action !== "retry" && action !== "abandon") {
+    return NextResponse.json(
+      { error: "action must be retry or abandon" },
+      { status: 400 }
+    );
+  }
   if (body.target !== "local" && body.target !== "github_pr") {
     return NextResponse.json(
       { error: "target must be local or github_pr" },
@@ -57,17 +65,44 @@ export async function POST(
     );
   }
 
+  const preconditions = {
+    operationId: body.expectedOperationId,
+    planHash: body.expectedPlanHash,
+    executionHash: body.expectedExecutionHash,
+    baseSha: body.expectedBaseSha,
+    integrationHeadSha: body.expectedIntegrationHeadSha,
+  };
+
+  if (action === "abandon") {
+    if (body.confirm !== true || body.confirmation !== id) {
+      return NextResponse.json(
+        {
+          error:
+            "terminal abandonment requires confirm=true and confirmation equal to the run id",
+        },
+        { status: 400 }
+      );
+    }
+    const abandoned = await abandonDivergedFleetLanding(
+      id,
+      body.target,
+      "fleet-api-admin",
+      preconditions
+    );
+    if ("error" in abandoned) {
+      return NextResponse.json(
+        { error: abandoned.error },
+        { status: abandoned.status ?? 409 }
+      );
+    }
+    return NextResponse.json(getFleetMergeStatus(id));
+  }
+
   const recovered = await retryFailedFleetLanding(
     id,
     body.target,
     "fleet-api-admin",
-    {
-      operationId: body.expectedOperationId,
-      planHash: body.expectedPlanHash,
-      executionHash: body.expectedExecutionHash,
-      baseSha: body.expectedBaseSha,
-      integrationHeadSha: body.expectedIntegrationHeadSha,
-    }
+    preconditions
   );
   if ("error" in recovered) {
     return NextResponse.json(
