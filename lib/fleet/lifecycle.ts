@@ -814,9 +814,9 @@ async function buildFleetDestructiveActionPreview(
               s.name AS session_name, s.status AS session_status
        FROM fleet_cost_accounts c
        LEFT JOIN sessions s ON s.id = c.session_id
-       WHERE c.fleet_run_id = ?
-         AND c.owner_type IN ('planner', 'plan_review', 'worker',
-                              'task_review', 'fixer')
+        WHERE c.fleet_run_id = ?
+          AND c.owner_type IN ('planner', 'plan_review', 'worker',
+                               'task_review', 'fixer', 'supervisor')
        ORDER BY c.owner_type, c.owner_id
        LIMIT ?`
     )

@@ -3,11 +3,46 @@ import {
   getModelOptions,
   getDefaultModelForAgent,
   isSupportedModelForAgent,
+  resolveExactModelForAgent,
   resolveModelForAgent,
   isFreeTextModelAgent,
   nextModelOnAgentChange,
   isSafeModel,
 } from "@/lib/model-catalog";
+
+describe("resolveExactModelForAgent", () => {
+  it("rejects unsafe and unsupported explicit static models without clamping", () => {
+    expect(resolveExactModelForAgent("codex", "gpt-5.2-codex")).toEqual({
+      ok: false,
+      error: "model is not supported by codex",
+    });
+    expect(resolveExactModelForAgent("claude", "sonnet;whoami")).toEqual({
+      ok: false,
+      error: "model is not a safe claude model id",
+    });
+  });
+
+  it("preserves provider-owned dynamic ids and explicit defaults", () => {
+    expect(
+      resolveExactModelForAgent("hermes", "openrouter/vendor-model")
+    ).toEqual({ ok: true, model: "openrouter/vendor-model" });
+    expect(resolveExactModelForAgent("hermes", null)).toEqual({
+      ok: true,
+      model: "kimi-k3",
+    });
+    expect(resolveExactModelForAgent("kimi", null)).toEqual({
+      ok: true,
+      model: null,
+    });
+  });
+
+  it("rejects a static model owned by another provider on dynamic agents", () => {
+    expect(resolveExactModelForAgent("hermes", "gpt-5.5")).toEqual({
+      ok: false,
+      error: "model belongs to a different provider catalog, not hermes",
+    });
+  });
+});
 
 describe("isSafeModel — shell-safe model-id guard (POSIX tmux `-m` injection defense)", () => {
   it("accepts catalog + provider-qualified model ids", () => {

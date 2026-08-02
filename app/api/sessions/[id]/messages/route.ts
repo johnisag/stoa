@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, queries, type Message } from "@/lib/db";
+import { getDb, queries, type Message, type Session } from "@/lib/db";
 import { parseJsonBody, MESSAGE_CONTENT_MAX_LENGTH } from "@/lib/api-security";
+import { genericSessionRouteFailure } from "@/lib/session-route-access";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -13,9 +14,13 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
 
     // Verify session exists
-    const session = queries.getSession(db).get(id);
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const session = queries.getSession(db).get(id) as Session | undefined;
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
 
     const messages = queries.getSessionMessages(db).all(id) as Message[];
@@ -66,9 +71,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
 
     // Verify session exists
-    const session = queries.getSession(db).get(id);
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const session = queries.getSession(db).get(id) as Session | undefined;
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
 
     const result = queries

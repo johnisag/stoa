@@ -19,7 +19,7 @@ describe("Fleet auxiliary provider allocation", () => {
         preferredProvider: "hermes",
         preferredModel: "kimi-k3",
       })
-    ).toEqual({ provider: "claude", model: null });
+    ).toEqual({ provider: "claude", model: "sonnet" });
   });
 
   it("rejects an empty or shell-only installed set", () => {
@@ -39,7 +39,7 @@ describe("Fleet auxiliary provider allocation", () => {
         preferredProvider: "kilo",
         preferredModel: "kilo/model",
       })
-    ).toEqual({ provider: "codex", model: null });
+    ).toEqual({ provider: "codex", model: "gpt-5.5" });
 
     expect(() =>
       allocateFleetAuxiliaryProvider({

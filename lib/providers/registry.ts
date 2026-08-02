@@ -151,8 +151,10 @@ export const PROVIDERS: ProviderDefinition[] = [
     //    hard-killed session may not be resumable (degrades to a fresh session).
     //  - modelFlag is "-m": Hermes models are dynamic/provider-specific
     //    (`hermes model` live-fetches /v1/models), so Stoa offers a FREE-TEXT
-    //    model field (no static list) rather than a dropdown. An empty model
-    //    leaves Hermes on its own configured default (no -m passed).
+    //    model field (no static list) rather than a dropdown. The low-level
+    //    builder omits `-m` for an empty token, while every Stoa session/Fleet
+    //    entry point resolves missing Hermes input to the explicit `kimi-k3`
+    //    default before it reaches this builder.
     //    restoresModelOnResume is deliberately UNSET: Hermes re-asserts `-m` on
     //    resume (the long-standing behavior) — whether its TUI restores its own
     //    model is unverified, so we don't drop the flag.

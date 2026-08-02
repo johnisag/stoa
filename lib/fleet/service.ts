@@ -3,10 +3,17 @@ import type Database from "better-sqlite3";
 import { getDb, queries } from "@/lib/db";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 import type { Project } from "@/lib/db/types";
-import { getDefaultBranch, isGitRepo } from "@/lib/git-status";
-import { PROVIDER_IDS } from "@/lib/providers/registry";
+import {
+  getDefaultBranch,
+  isGitRepo,
+  resolveGitCommit,
+} from "@/lib/git-status";
+import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/registry";
+import { resolveExactModelForAgent } from "@/lib/model-catalog";
 import {
   composeFleetRunDetail,
+  FLEET_MODEL_MAX,
+  FLEET_PROVIDER_MAX,
   FLEET_RUN_GOAL_MAX,
   FLEET_RUN_NAME_MAX,
   normalizeFleetRunDraft,
@@ -68,6 +75,8 @@ import type {
 interface FleetRunListRow extends FleetRunRow {
   task_count: number;
   worker_count: number;
+  attention_count: number;
+  awaiting_manual_merge: number;
 }
 
 const FLEET_RUN_LIST_LIMIT = 100;
@@ -76,9 +85,13 @@ const FLEET_ACTOR_MAX = 80;
 const FLEET_ARTIFACT_TITLE_MAX = 160;
 const FLEET_ARTIFACT_BODY_MAX = 8000;
 const FLEET_PLAN_ACCEPTANCE_CRITERIA_MAX = 2_000;
+const FLEET_PLAN_RISK_NOTES_MAX = 8;
+const FLEET_PLAN_RISK_TEXT_MAX = 500;
+const FLEET_PLAN_RISK_MITIGATION_MAX = 1_000;
+const FULL_GIT_SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 const FLEET_AUXILIARY_COST_OWNER_TYPES = new Set<
   Exclude<FleetCostOwnerType, "worker">
->(["planner", "plan_review", "task_review", "fixer"]);
+>(["planner", "plan_review", "task_review", "fixer", "supervisor"]);
 
 type FleetAuxiliaryCostOwnerType = Exclude<FleetCostOwnerType, "worker">;
 
@@ -239,6 +252,20 @@ function sanitizeFleetPlanReplacement(
             FLEET_PLAN_ACCEPTANCE_CRITERIA_MAX
           ) || null
         : null,
+      riskNotes: (task.riskNotes ?? [])
+        .slice(0, FLEET_PLAN_RISK_NOTES_MAX)
+        .map((note) => ({
+          severity:
+            note.severity === "low" || note.severity === "high"
+              ? note.severity
+              : ("medium" as const),
+          risk: cappedText(note.risk, FLEET_PLAN_RISK_TEXT_MAX),
+          mitigation: cappedText(
+            note.mitigation,
+            FLEET_PLAN_RISK_MITIGATION_MAX
+          ),
+        }))
+        .filter((note) => note.risk && note.mitigation),
     });
   }
   return {
@@ -246,6 +273,119 @@ function sanitizeFleetPlanReplacement(
     tasks,
     planText: cappedText(replacement.planText, FLEET_PLAN_TEXT_MAX),
   };
+}
+
+function fleetProvider(value: string | null | undefined): ProviderId | null {
+  const provider = value?.trim() ?? "";
+  return PROVIDER_IDS.includes(provider as ProviderId) && provider !== "shell"
+    ? (provider as ProviderId)
+    : null;
+}
+
+function exactPersistedModelError(
+  provider: ProviderId,
+  model: string | null | undefined
+): string | null {
+  const resolved = resolveExactModelForAgent(provider, model);
+  if (!resolved.ok) return resolved.error;
+  const persisted = model?.trim() || null;
+  return resolved.model === persisted
+    ? null
+    : "the provider-owned default was not persisted explicitly";
+}
+
+/** Bind every task to the exact provider/model tuple that it will launch. */
+function bindFleetPlanModels(
+  replacement: FleetPlanReplacement,
+  run: FleetRunRow
+): FleetPlanReplacement | { error: string; status: number } {
+  const runProvider = fleetProvider(run.provider);
+  if (!runProvider) {
+    return { error: "run has an unsupported provider", status: 409 };
+  }
+  const runModelError = exactPersistedModelError(runProvider, run.model);
+  if (runModelError) {
+    return {
+      error: `run model contract is invalid: ${runModelError}`,
+      status: 409,
+    };
+  }
+
+  const tasks: ParsedFleetPlanTask[] = [];
+  for (const [index, task] of replacement.tasks.entries()) {
+    if ((task.agentType?.trim().length ?? 0) > FLEET_PROVIDER_MAX) {
+      return {
+        error: `plan task ${index + 1} provider is too long`,
+        status: 400,
+      };
+    }
+    const provider = fleetProvider(task.agentType ?? runProvider);
+    if (!provider) {
+      return {
+        error: `plan task ${index + 1} has an unsupported provider`,
+        status: 400,
+      };
+    }
+    const explicitModel = task.model?.trim() || null;
+    if (explicitModel && explicitModel.length > FLEET_MODEL_MAX) {
+      return {
+        error: `plan task ${index + 1} model is too long`,
+        status: 400,
+      };
+    }
+    const candidate =
+      explicitModel ?? (provider === runProvider ? run.model : null);
+    const resolved = resolveExactModelForAgent(provider, candidate);
+    if (!resolved.ok) {
+      return {
+        error: `plan task ${index + 1} ${resolved.error}`,
+        status: 400,
+      };
+    }
+    tasks.push({
+      ...task,
+      agentType: provider,
+      model: resolved.model,
+    });
+  }
+  return { ...replacement, tasks };
+}
+
+function validateFleetModelContractsForApproval(
+  run: FleetRunRow,
+  tasks: FleetTaskRow[]
+): { ok: true } | { error: string; status: number } {
+  const runProvider = fleetProvider(run.provider);
+  if (!runProvider) {
+    return {
+      error: "select a supported agent provider before approval",
+      status: 409,
+    };
+  }
+  const runModelError = exactPersistedModelError(runProvider, run.model);
+  if (runModelError) {
+    return {
+      error: `run model contract is invalid: ${runModelError}`,
+      status: 409,
+    };
+  }
+  for (const task of tasks) {
+    const provider = task.agent_type ? fleetProvider(task.agent_type) : null;
+    if (!provider) {
+      return {
+        error: `task ${task.id} is missing an exact supported provider`,
+        status: 409,
+      };
+    }
+    const modelError = exactPersistedModelError(provider, task.model);
+    if (modelError) {
+      return {
+        error: `task ${task.id} model contract is invalid: ${modelError}`,
+        status: 409,
+      };
+    }
+  }
+  return { ok: true };
 }
 
 function actorValue(value: unknown, fallback: string): string {
@@ -322,6 +462,9 @@ export function listFleetRuns(): FleetRunDto[] {
     toFleetRunDto(row, {
       taskCount: row.task_count,
       workerCount: row.worker_count,
+      attentionCount:
+        row.attention_count + (row.awaiting_manual_merge === 1 ? 1 : 0),
+      awaitingManualMerge: row.awaiting_manual_merge === 1,
     })
   );
 }
@@ -532,19 +675,9 @@ function replaceFleetRunPlan(
 ): { run: FleetRunDetailDto } | { error: string; status?: number } {
   const sanitized = sanitizeFleetPlanReplacement(replacement);
   if ("error" in sanitized) return sanitized;
-  const parsed = sanitized;
+  let parsed = sanitized;
   const db = getDb();
   const taskIds = parsed.tasks.map(() => randomUUID());
-  const planHash = hashParsedFleetPlanTasks(
-    parsed.tasks,
-    parsed.dependencies ?? []
-  );
-  const eventPayload = JSON.stringify({
-    taskCount: parsed.tasks.length,
-    planHash,
-    actor,
-    source: parsed.source ?? "operator",
-  });
 
   const updated = immediateTransaction<
     { ok: true } | { error: string; status?: number }
@@ -557,6 +690,19 @@ function replaceFleetRunPlan(
         status: 409,
       };
     }
+    const boundModels = bindFleetPlanModels(parsed, run);
+    if ("error" in boundModels) return boundModels;
+    parsed = boundModels;
+    const planHash = hashParsedFleetPlanTasks(
+      parsed.tasks,
+      parsed.dependencies ?? []
+    );
+    const eventPayload = JSON.stringify({
+      taskCount: parsed.tasks.length,
+      planHash,
+      actor,
+      source: parsed.source ?? "operator",
+    });
     if (!parsed.expectedPlannerRequestId) {
       try {
         const currentSettings = payloadObject(JSON.parse(run.settings_json));
@@ -652,12 +798,14 @@ function replaceFleetRunPlan(
         );
       db.prepare(
         `UPDATE fleet_tasks SET agent_type = ?, model = ?, acceptance_criteria = ?,
-         verify_command = ?, working_directory = ?, base_branch = ?, max_attempts = ?
+         risk_notes_json = ?, verify_command = ?, working_directory = ?,
+         base_branch = ?, max_attempts = ?
          WHERE id = ? AND fleet_run_id = ?`
       ).run(
         task.agentType,
         task.model,
         task.acceptanceCriteria,
+        JSON.stringify(task.riskNotes ?? []),
         task.verifyCommand,
         task.workingDirectory ?? null,
         task.baseBranch ?? null,
@@ -738,6 +886,33 @@ export interface FleetAutomationApprovalGuard {
   executionHash: string;
 }
 
+function fleetRunBaseTarget(
+  db: Database.Database,
+  run: FleetRunRow
+): { workingDirectory: string; baseBranch: string } | null {
+  if (run.repo_id) {
+    const repo = queries.getDispatchRepo(db).get(run.repo_id) as
+      DispatchRepo | undefined;
+    return repo?.repo_path
+      ? {
+          workingDirectory: repo.repo_path,
+          baseBranch: repo.base_branch ?? "main",
+        }
+      : null;
+  }
+  if (run.project_id) {
+    const project = queries.getProject(db).get(run.project_id) as
+      Project | undefined;
+    return project?.working_directory
+      ? {
+          workingDirectory: project.working_directory,
+          baseBranch: getDefaultBranch(project.working_directory),
+        }
+      : null;
+  }
+  return null;
+}
+
 export function approveFleetRunPlan(
   id: string,
   input: unknown,
@@ -755,11 +930,32 @@ export function approveFleetRunPlan(
   >(db, () => {
     const run = queries.getFleetRun(db).get(id) as FleetRunRow | undefined;
     if (!run) return { error: "Fleet run not found", status: 404 };
+    const baseTarget = fleetRunBaseTarget(db, run);
+    if (!baseTarget) {
+      return {
+        error:
+          "an executable fleet plan requires a repository or project working directory",
+        status: 409,
+      };
+    }
+    const currentBaseSha = resolveGitCommit(
+      baseTarget.workingDirectory,
+      baseTarget.baseBranch
+    );
+    if (!currentBaseSha) {
+      return { error: "failed to resolve the Fleet base commit", status: 409 };
+    }
+    if (
+      run.automation_base_sha &&
+      run.automation_base_sha.toLowerCase() !== currentBaseSha
+    ) {
+      return { error: "Fleet run base commit changed", status: 409 };
+    }
     if (automationGuard) {
       if (
         approvedBy !== "fleet-automation" ||
         run.automation_policy_hash !== automationGuard.policyHash ||
-        run.automation_base_sha !== automationGuard.baseSha
+        automationGuard.baseSha.toLowerCase() !== currentBaseSha
       ) {
         return {
           error: "automatic approval authorization changed",
@@ -817,6 +1013,8 @@ export function approveFleetRunPlan(
 
     const tasks = queries.listFleetTasksForRun(db).all(id) as FleetTaskRow[];
     if (tasks.length === 0) return { error: "plan has no tasks", status: 400 };
+    const modelContracts = validateFleetModelContractsForApproval(run, tasks);
+    if ("error" in modelContracts) return modelContracts;
     const dependencies = db
       .prepare(`SELECT * FROM fleet_task_dependencies WHERE fleet_run_id = ?`)
       .all(id) as FleetTaskDependencyRow[];
@@ -846,28 +1044,8 @@ export function approveFleetRunPlan(
       };
     }
 
-    let defaultWorkingDirectory: string | null = null;
-    let defaultBaseBranch = "main";
-    if (run.repo_id) {
-      const repo = queries.getDispatchRepo(db).get(run.repo_id) as
-        DispatchRepo | undefined;
-      defaultWorkingDirectory = repo?.repo_path ?? null;
-      defaultBaseBranch = repo?.base_branch ?? "main";
-    } else if (run.project_id) {
-      const project = queries.getProject(db).get(run.project_id) as
-        Project | undefined;
-      defaultWorkingDirectory = project?.working_directory ?? null;
-      if (defaultWorkingDirectory) {
-        defaultBaseBranch = getDefaultBranch(defaultWorkingDirectory);
-      }
-    }
-    if (!defaultWorkingDirectory) {
-      return {
-        error:
-          "an executable fleet plan requires a repository or project working directory",
-        status: 409,
-      };
-    }
+    const defaultWorkingDirectory = baseTarget.workingDirectory;
+    const defaultBaseBranch = baseTarget.baseBranch;
     if (!isGitRepo(defaultWorkingDirectory)) {
       return {
         error: "working directory must be an accessible Git repository",
@@ -951,7 +1129,16 @@ export function approveFleetRunPlan(
     });
     const approval = queries
       .approveFleetRunPlan(db)
-      .run(approvedBy, approvedAt, settings, approvedAt, id, expectedPlanHash);
+      .run(
+        currentBaseSha,
+        approvedBy,
+        approvedAt,
+        settings,
+        approvedAt,
+        id,
+        expectedPlanHash,
+        currentBaseSha
+      );
     if (approval.changes === 1) {
       queries.approveFleetTasksForRun(db).run(run.plan_hash, approvedAt, id);
       if (automationGuard) {
@@ -1071,13 +1258,17 @@ export function attachFleetPlanCriticArtifact(
 
 export async function resumeFleetRun(
   id: string,
-  input: unknown
+  input: unknown,
+  overrides: {
+    db?: Database.Database;
+    reconcileRun?: typeof reconcileFleetRun;
+  } = {}
 ): Promise<{ run: FleetRunDetailDto } | { error: string; status?: number }> {
   const payload = payloadObject(input);
   const actor = actorValue(payload.actor, "operator");
   const conductorSessionId =
     cappedText(payload.conductorSessionId, 128) || null;
-  const db = getDb();
+  const db = overrides.db ?? getDb();
   const recoveryBlocked = fleetLaunchBlockedResult(db, id);
   if (recoveryBlocked) return recoveryBlocked;
   if (conductorSessionId) {
@@ -1091,6 +1282,12 @@ export async function resumeFleetRun(
     if (!run) return { error: "Fleet run not found", status: 404 };
     if (run.approval_state !== "approved")
       return { error: "approve the plan before resume", status: 409 };
+    if (!FULL_GIT_SHA.test(run.automation_base_sha ?? "")) {
+      return {
+        error: "approved run has no exact base commit",
+        status: 409,
+      };
+    }
     if (
       !["planned", "paused", "running", "reviewing", "merging"].includes(
         run.status
@@ -1183,7 +1380,11 @@ export async function resumeFleetRun(
     return { ok: true };
   });
   if ("error" in changed) return changed;
-  await reconcileFleetRun(id);
+  if (overrides.reconcileRun) {
+    await overrides.reconcileRun(id);
+  } else {
+    await reconcileFleetRun(id, { db });
+  }
   const detail = getFleetRunDetail(id);
   return detail ? { run: detail } : { error: "failed to read resumed run" };
 }
@@ -1912,9 +2113,13 @@ export async function cancelFleetRun(
     }>;
     for (const account of orphanAccounts) {
       if (
-        !["planner", "plan_review", "task_review", "fixer"].includes(
-          account.owner_type
-        )
+        ![
+          "planner",
+          "plan_review",
+          "task_review",
+          "fixer",
+          "supervisor",
+        ].includes(account.owner_type)
       ) {
         continue;
       }

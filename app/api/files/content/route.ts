@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFileContent, writeFileContent } from "@/lib/files";
 import {
   getAllowedPathRoots,
-  resolveSandboxedPath,
+  resolveRealSandboxedPath,
+  resolveRealSandboxedWritePath,
   parseJsonBody,
+  requireAdmin,
 } from "@/lib/api-security";
 
 /**
@@ -11,6 +13,9 @@ import {
  * Read file contents
  */
 export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const path = searchParams.get("path");
@@ -23,7 +28,7 @@ export async function GET(request: NextRequest) {
     }
 
     const roots = getAllowedPathRoots();
-    const { allowed, resolved } = resolveSandboxedPath(path, roots);
+    const { allowed, resolved } = await resolveRealSandboxedPath(path, roots);
     if (!allowed) {
       return NextResponse.json(
         { error: "Path is outside the allowed workspace" },
@@ -67,7 +72,10 @@ export async function POST(request: NextRequest) {
   }
 
   const roots = getAllowedPathRoots();
-  const { allowed, resolved } = resolveSandboxedPath(path, roots);
+  const { allowed, resolved } = await resolveRealSandboxedWritePath(
+    path,
+    roots
+  );
   if (!allowed) {
     return NextResponse.json(
       { error: "Path is outside the allowed workspace" },

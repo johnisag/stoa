@@ -6,7 +6,11 @@ import type {
   FleetTaskDependencyRow,
   FleetTaskRow,
 } from "./types";
-import { canonicalFleetPlanTasks, type ParsedFleetPlanTask } from "./plan";
+import {
+  canonicalFleetPlanTasks,
+  type FleetPlanRiskNote,
+  type ParsedFleetPlanTask,
+} from "./plan";
 
 function parseFileClaims(value: string): string[] {
   try {
@@ -33,6 +37,53 @@ function parseFileClaimsStrict(
     return { claims: parsed };
   } catch {
     return { error: "plan graph has invalid file claims" };
+  }
+}
+
+function isFleetPlanRiskNote(value: unknown): value is FleetPlanRiskNote {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record.severity === "low" ||
+      record.severity === "medium" ||
+      record.severity === "high") &&
+    typeof record.risk === "string" &&
+    record.risk.length > 0 &&
+    record.risk.length <= 500 &&
+    typeof record.mitigation === "string" &&
+    record.mitigation.length > 0 &&
+    record.mitigation.length <= 1_000
+  );
+}
+
+function parseRiskNotes(value: string | null | undefined): FleetPlanRiskNote[] {
+  try {
+    const parsed = JSON.parse(value ?? "[]");
+    return Array.isArray(parsed) &&
+      parsed.length <= 8 &&
+      parsed.every(isFleetPlanRiskNote)
+      ? parsed
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseRiskNotesStrict(
+  value: string | null | undefined
+): { notes: FleetPlanRiskNote[] } | { error: string } {
+  try {
+    const parsed = JSON.parse(value ?? "[]");
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length > 8 ||
+      !parsed.every(isFleetPlanRiskNote)
+    ) {
+      return { error: "plan graph has invalid risk notes" };
+    }
+    return { notes: parsed };
+  } catch {
+    return { error: "plan graph has invalid risk notes" };
   }
 }
 
@@ -74,34 +125,38 @@ export function hashFleetTaskRows(
 ): string {
   const ordered = [...rows].sort((a, b) => a.sort_order - b.sort_order);
   const indexById = new Map(ordered.map((task, index) => [task.id, index]));
-  const canonical = ordered.map((task, index) => ({
-    title: task.title,
-    description: task.description ?? "",
-    taskType: task.task_type,
-    parentIndex:
-      task.parent_task_id == null
-        ? null
-        : (indexById.get(task.parent_task_id) ?? null),
-    sortOrder: index,
-    fileClaims: parseFileClaims(task.file_claims_json).sort(),
-    agentType: task.agent_type ?? null,
-    model: task.model ?? null,
-    acceptanceCriteria: task.acceptance_criteria ?? null,
-    verifyCommand: task.verify_command ?? null,
-    dependencies: dependencies
-      .filter((dependency) => dependency.task_id === task.id)
-      .flatMap((dependency) => {
-        const dependencyIndex = indexById.get(dependency.depends_on_task_id);
-        return dependencyIndex == null
-          ? []
-          : [{ dependencyIndex, dependencyType: dependency.dependency_type }];
-      })
-      .sort(
-        (a, b) =>
-          a.dependencyIndex - b.dependencyIndex ||
-          a.dependencyType.localeCompare(b.dependencyType)
-      ),
-  }));
+  const canonical = ordered.map((task, index) => {
+    const riskNotes = parseRiskNotes(task.risk_notes_json);
+    return {
+      title: task.title,
+      description: task.description ?? "",
+      taskType: task.task_type,
+      parentIndex:
+        task.parent_task_id == null
+          ? null
+          : (indexById.get(task.parent_task_id) ?? null),
+      sortOrder: index,
+      fileClaims: parseFileClaims(task.file_claims_json).sort(),
+      agentType: task.agent_type ?? null,
+      model: task.model ?? null,
+      acceptanceCriteria: task.acceptance_criteria ?? null,
+      ...(riskNotes.length > 0 ? { riskNotes } : {}),
+      verifyCommand: task.verify_command ?? null,
+      dependencies: dependencies
+        .filter((dependency) => dependency.task_id === task.id)
+        .flatMap((dependency) => {
+          const dependencyIndex = indexById.get(dependency.depends_on_task_id);
+          return dependencyIndex == null
+            ? []
+            : [{ dependencyIndex, dependencyType: dependency.dependency_type }];
+        })
+        .sort(
+          (a, b) =>
+            a.dependencyIndex - b.dependencyIndex ||
+            a.dependencyType.localeCompare(b.dependencyType)
+        ),
+    };
+  });
   return stableHash(canonical);
 }
 
@@ -131,26 +186,30 @@ export function hashFleetExecutionContract(input: {
     },
     tasks: [...input.tasks]
       .sort((a, b) => a.sort_order - b.sort_order)
-      .map((task) => ({
-        id: task.id,
-        parentTaskId: task.parent_task_id,
-        title: task.title,
-        description: task.description,
-        taskType: task.task_type,
-        sortOrder: task.sort_order,
-        fileClaimsJson: task.file_claims_json,
-        priority: task.priority ?? 0,
-        agentType: task.agent_type ?? null,
-        model: task.model ?? null,
-        workingDirectory: task.working_directory ?? null,
-        baseBranch: task.base_branch ?? null,
-        // branch_name is assigned only after a worker is spawned. Including
-        // that runtime output would invalidate the exact approval hash on the
-        // scheduler pass immediately following a successful launch.
-        maxAttempts: task.max_attempts ?? 2,
-        acceptanceCriteria: task.acceptance_criteria ?? null,
-        verifyCommand: task.verify_command ?? null,
-      })),
+      .map((task) => {
+        const riskNotes = parseRiskNotes(task.risk_notes_json);
+        return {
+          id: task.id,
+          parentTaskId: task.parent_task_id,
+          title: task.title,
+          description: task.description,
+          taskType: task.task_type,
+          sortOrder: task.sort_order,
+          fileClaimsJson: task.file_claims_json,
+          priority: task.priority ?? 0,
+          agentType: task.agent_type ?? null,
+          model: task.model ?? null,
+          workingDirectory: task.working_directory ?? null,
+          baseBranch: task.base_branch ?? null,
+          // branch_name is assigned only after a worker is spawned. Including
+          // that runtime output would invalidate the exact approval hash on the
+          // scheduler pass immediately following a successful launch.
+          maxAttempts: task.max_attempts ?? 2,
+          acceptanceCriteria: task.acceptance_criteria ?? null,
+          ...(riskNotes.length > 0 ? { riskNotes } : {}),
+          verifyCommand: task.verify_command ?? null,
+        };
+      }),
     claims: [...input.claims]
       .sort((a, b) =>
         `${a.task_id}:${a.path}`.localeCompare(`${b.task_id}:${b.path}`)
@@ -195,6 +254,8 @@ export function validateFleetTaskRowsForApproval(
     }
     const claims = parseFileClaimsStrict(task.file_claims_json);
     if ("error" in claims) return claims;
+    const riskNotes = parseRiskNotesStrict(task.risk_notes_json);
+    if ("error" in riskNotes) return riskNotes;
     const dependencyIndexes: number[] = [];
     for (const dependency of dependencies.filter(
       (entry) => entry.task_id === task.id
@@ -219,6 +280,7 @@ export function validateFleetTaskRowsForApproval(
       agentType: task.agent_type ?? null,
       model: task.model ?? null,
       acceptanceCriteria: task.acceptance_criteria ?? null,
+      ...(riskNotes.notes.length > 0 ? { riskNotes: riskNotes.notes } : {}),
       verifyCommand: task.verify_command ?? null,
       dependencies: [...new Set(dependencyIndexes)]
         .sort((a, b) => a - b)

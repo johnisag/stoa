@@ -682,7 +682,7 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
     await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
     expect(harness.spawnReview).toHaveBeenCalledTimes(4);
     for (const [request] of harness.spawnReview.mock.calls) {
-      expect(request).toMatchObject({ provider: "codex", model: null });
+      expect(request).toMatchObject({ provider: "codex", model: "gpt-5.5" });
     }
     expect(
       db
@@ -691,14 +691,14 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
            FROM fleet_task_reviews GROUP BY provider, model`
         )
         .all()
-    ).toEqual([{ provider: "codex", model: null, count: 4 }]);
+    ).toEqual([{ provider: "codex", model: "gpt-5.5", count: 4 }]);
 
     await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
     await reconcileFleetTaskReviews(harness.deps, { maxTasks: 1 });
     expect(harness.spawnFix).toHaveBeenCalledTimes(1);
     expect(harness.spawnFix.mock.calls[0][0]).toMatchObject({
       provider: "codex",
-      model: null,
+      model: "gpt-5.5",
     });
     expect(
       db
@@ -706,7 +706,7 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
           `SELECT provider, model FROM fleet_task_fixes WHERE task_id = ?`
         )
         .get(TASK_ID)
-    ).toEqual({ provider: "codex", model: null });
+    ).toEqual({ provider: "codex", model: "gpt-5.5" });
     expect(
       db
         .prepare(
@@ -716,11 +716,11 @@ describe("Fleet exact-SHA task review and automatic fix runtime", () => {
         )
         .all()
     ).toEqual([
-      { owner_type: "fixer", provider: "codex", model: null },
+      { owner_type: "fixer", provider: "codex", model: "gpt-5.5" },
       ...Array.from({ length: 4 }, () => ({
         owner_type: "task_review",
         provider: "codex",
-        model: null,
+        model: "gpt-5.5",
       })),
     ]);
   });

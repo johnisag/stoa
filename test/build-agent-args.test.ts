@@ -60,7 +60,8 @@ describe("buildAgentArgs", () => {
     });
     expect(binary).toBe("hermes");
     expect(args).toEqual(["--yolo", "-m", "anthropic/claude-sonnet-4.6"]);
-    // empty model must not append -m (Hermes falls back to its own default)
+    // The low-level builder omits an empty token. Stoa's session/Fleet model
+    // resolver supplies the explicit `kimi-k3` default before this boundary.
     expect(
       buildAgentArgs("hermes", { autoApprove: true, model: "" }).args
     ).toEqual(["--yolo"]);

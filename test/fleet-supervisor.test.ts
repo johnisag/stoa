@@ -333,6 +333,31 @@ describe("Fleet supervisor", () => {
     expect(snapshotFleetTables(db)).toEqual(before);
   });
 
+  it("validates every task in bounded grouping and merge-order advice", () => {
+    const snapshot = getFleetSupervisorSnapshot(RUN_ID, db);
+    if (!snapshot) throw new Error("missing test snapshot");
+    const before = snapshotFleetTables(db);
+    const result = appendFleetSupervisorRecommendation(
+      RUN_ID,
+      {
+        ...recommendationInput(snapshot),
+        actions: [
+          {
+            kind: "grouping",
+            taskIds: ["retry-task", "unknown-task"],
+            rationale: "These tasks appear to share one bounded review scope.",
+          },
+        ],
+      },
+      { db }
+    );
+    expect(result).toEqual({
+      error: "recommendation references an unknown task",
+      status: 400,
+    });
+    expect(snapshotFleetTables(db)).toEqual(before);
+  });
+
   it("appends only an immutable advisory artifact and event", () => {
     const snapshot = getFleetSupervisorSnapshot(RUN_ID, db);
     if (!snapshot) throw new Error("missing test snapshot");

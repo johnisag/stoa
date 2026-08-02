@@ -117,6 +117,79 @@ describe("TmuxBackend command construction (macOS/Linux path)", () => {
     });
   });
 
+  it("create: empty authority overlays are preserved as explicit tmux env clears", async () => {
+    await tb.create({
+      name: "advisory-1",
+      cwd: "/repo",
+      command: "claude",
+      env: {
+        STOA_TOKEN: "",
+        CONDUCTOR_SESSION_ID: "",
+        DB_PATH: "",
+      },
+    });
+
+    expect(execFileCalls[1]?.args).toEqual([
+      "new-session",
+      "-d",
+      "-s",
+      "advisory-1",
+      "-c",
+      "/repo",
+      "-e",
+      "STOA_TOKEN=",
+      "-e",
+      "CONDUCTOR_SESSION_ID=",
+      "-e",
+      "DB_PATH=",
+      "claude",
+    ]);
+  });
+
+  it("create: replacement env keeps values out of the shell command", async () => {
+    const secret = String.raw`sk-ant-$(touch /tmp/nope);"'value`;
+    await tb.create({
+      name: "supervisor-1",
+      cwd: "/repo",
+      command: "ignored legacy command",
+      binary: "/usr/local/bin/node",
+      args: ["/app/broker.js", "arg'quoted"],
+      env: { PATH: "/usr/local/bin:/usr/bin", ANTHROPIC_API_KEY: secret },
+      envMode: "replace",
+    });
+
+    const createArgs = execFileCalls[1]?.args ?? [];
+    expect(createArgs).toContain(`ANTHROPIC_API_KEY=${secret}`);
+    const shellCommand = createArgs.at(-1) ?? "";
+    expect(shellCommand).toBe(
+      `exec 'env' -i PATH="$PATH" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" '/usr/local/bin/node' '/app/broker.js' 'arg'\\''quoted'`
+    );
+    expect(shellCommand).not.toContain(secret);
+    expect(shellCommand).not.toContain("ignored legacy command");
+  });
+
+  it("create: replacement env requires structured argv and safe variable names", async () => {
+    await expect(
+      tb.create({
+        name: "supervisor-no-binary",
+        cwd: "/repo",
+        command: "node broker.js",
+        envMode: "replace",
+      })
+    ).rejects.toThrow("require structured binary/args");
+    await expect(
+      tb.create({
+        name: "supervisor-bad-env",
+        cwd: "/repo",
+        command: "",
+        binary: "node",
+        env: { "BAD-NAME": "value" },
+        envMode: "replace",
+      })
+    ).rejects.toThrow("Invalid environment variable name");
+    expect(execFileCalls).toHaveLength(0);
+  });
+
   it("capture: visible screen vs N scrollback lines", async () => {
     await tb.capture("claude-1");
     expect(last()).toBe('tmux capture-pane -t "claude-1" -p 2>/dev/null');

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { queries, getDb, type Session } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
 import { sessionKey } from "@/lib/providers/registry";
+import { genericSessionRouteFailure } from "@/lib/session-route-access";
 
 // Get terminal preview (last N lines) from tmux session
 export async function GET(
@@ -14,6 +15,13 @@ export async function GET(
 
     // Look up session to get the tmux name
     const session = queries.getSession(db).get(id) as Session | undefined;
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
+    }
     const agentType = session?.agent_type || "claude";
     const sessionName =
       session?.tmux_name ||

@@ -393,6 +393,40 @@ export function isGitRepo(workingDir: string): boolean {
 }
 
 /**
+ * Resolve one branch/ref to the exact commit Stoa will authorize. Returning null
+ * keeps approval callers fail-closed when Git is unavailable or the ref is
+ * malformed/missing. `--end-of-options` prevents an option-shaped ref from being
+ * interpreted as Git argv even though the process itself is spawned without a
+ * shell.
+ */
+export function resolveGitCommit(
+  workingDir: string,
+  ref: string
+): string | null {
+  if (!ref || ref.startsWith("-") || ref.includes("\0") || /[\r\n]/.test(ref)) {
+    return null;
+  }
+  try {
+    const sha = git(
+      [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--end-of-options",
+        `${ref}^{commit}`,
+      ],
+      expandHome(workingDir),
+      { stdio: "pipe" }
+    )
+      .trim()
+      .toLowerCase();
+    return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Get the root of the git repository
  */
 export function getGitRoot(workingDir: string): string {

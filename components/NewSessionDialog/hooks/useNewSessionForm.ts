@@ -49,7 +49,8 @@ export function useNewSessionForm({
   const [projectId, setProjectId] = useState<string | null>(null);
   const [agentType, setAgentType] = useState<AgentType>("claude");
   // Per-session model. Defaults from the selected project / agent; the picker
-  // overrides it. For free-text agents (Hermes) blank = the agent's own default.
+  // overrides it. Blank selects Stoa's provider default when one exists (Hermes
+  // is explicitly `kimi-k3`), otherwise the provider's configured default.
   const [model, setModel] = useState<string>(() =>
     getDefaultModelForAgent("claude")
   );

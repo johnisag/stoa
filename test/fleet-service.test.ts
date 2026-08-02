@@ -6,6 +6,7 @@ import { runMigrations } from "@/lib/db/migrations";
 const state = vi.hoisted(() => ({
   db: null as unknown,
   stopFleetSession: async () => true,
+  baseSha: "a".repeat(40),
 }));
 
 vi.mock("@/lib/db", async (importOriginal) => {
@@ -25,6 +26,7 @@ vi.mock("@/lib/git-status", async (importOriginal) => {
     ...actual,
     getDefaultBranch: () => "develop",
     isGitRepo: () => true,
+    resolveGitCommit: () => state.baseSha,
   };
 });
 
@@ -68,6 +70,7 @@ beforeEach(() => {
     globalThis as typeof globalThis & { __stoaFleetSchedulerReady?: boolean }
   ).__stoaFleetSchedulerReady = false;
   state.stopFleetSession = async () => true;
+  state.baseSha = "a".repeat(40);
   db().exec(`
     DELETE FROM fleet_events;
     DELETE FROM fleet_artifacts;
@@ -160,6 +163,76 @@ describe("Fleet pause and resume interrupt integration", () => {
     return { runId, taskId, sessionId, workerId: `worker-${runId}` };
   }
 
+  it("fails closed when a manual start has no exact approved base", async () => {
+    const created = createDraftFleetRun({
+      name: "Missing base",
+      goal: "Do not start from a moving branch",
+      repoId: "repo-fleet",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    const planned = ingestFleetRunPlan(runId, {
+      planText: "- Pin base [files: lib/base.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    const approved = approveFleetRunPlan(runId, {
+      expectedPlanHash: planned.run.run.planHash!,
+    });
+    if ("error" in approved) throw new Error(approved.error);
+    expect(
+      db()
+        .prepare(`SELECT automation_base_sha FROM fleet_runs WHERE id = ?`)
+        .get(runId)
+    ).toEqual({ automation_base_sha: state.baseSha });
+    db()
+      .prepare(`UPDATE fleet_runs SET automation_base_sha = NULL WHERE id = ?`)
+      .run(runId);
+    (
+      globalThis as typeof globalThis & {
+        __stoaFleetSchedulerReady?: boolean;
+      }
+    ).__stoaFleetSchedulerReady = true;
+
+    await expect(resumeFleetRun(runId, {})).resolves.toEqual({
+      error: "approved run has no exact base commit",
+      status: 409,
+    });
+    expect(
+      db().prepare(`SELECT status FROM fleet_runs WHERE id = ?`).get(runId)
+    ).toEqual({ status: "planned" });
+  });
+
+  it("rejects approval when a previously bound base moved", () => {
+    const created = createDraftFleetRun({
+      name: "Moved base",
+      goal: "Keep reviewed code exact",
+      repoId: "repo-fleet",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    const planned = ingestFleetRunPlan(runId, {
+      planText: "- Keep A [files: lib/exact.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    db()
+      .prepare(`UPDATE fleet_runs SET automation_base_sha = ? WHERE id = ?`)
+      .run("a".repeat(40), runId);
+    state.baseSha = "b".repeat(40);
+
+    expect(
+      approveFleetRunPlan(runId, {
+        expectedPlanHash: planned.run.run.planHash!,
+      })
+    ).toEqual({ error: "Fleet run base commit changed", status: 409 });
+    expect(
+      db()
+        .prepare(`SELECT approval_state FROM fleet_runs WHERE id = ?`)
+        .get(runId)
+    ).toEqual({ approval_state: "needs_approval" });
+  });
+
   it("refuses resume and explicit tick without mutating an unresolved recovery run", async () => {
     const { runId } = addRunningRun();
     db()
@@ -203,7 +276,8 @@ describe("Fleet pause and resume interrupt integration", () => {
 
   function addAuxiliaryAccount(
     runId: string,
-    ownerType: "planner" | "plan_review" | "task_review" | "fixer",
+    ownerType:
+      "planner" | "plan_review" | "task_review" | "fixer" | "supervisor",
     index: number,
     sessionId = `fleet-aux-${index}-${runId}`
   ) {
@@ -326,9 +400,16 @@ describe("Fleet pause and resume interrupt integration", () => {
     db()
       .prepare(`UPDATE fleet_runs SET status = 'reviewing' WHERE id = ?`)
       .run(runId);
-    const owners = (
-      ["planner", "plan_review", "task_review", "fixer"] as const
-    ).map((ownerType, index) => addAuxiliaryAccount(runId, ownerType, index));
+    const ownerTypes = [
+      "planner",
+      "plan_review",
+      "task_review",
+      "fixer",
+      "supervisor",
+    ] as const;
+    const owners = ownerTypes.map((ownerType, index) =>
+      addAuxiliaryAccount(runId, ownerType, index)
+    );
     const reconcileRun = vi.fn(async () => 0);
     const now = new Date("2026-08-01T12:00:00.000Z");
 
@@ -359,9 +440,7 @@ describe("Fleet pause and resume interrupt integration", () => {
     ).toEqual(
       expect.arrayContaining(
         owners.map((_owner, index) => ({
-          owner_type: (
-            ["planner", "plan_review", "task_review", "fixer"] as const
-          )[index],
+          owner_type: ownerTypes[index],
           interrupt_requested_at: now.toISOString(),
           interrupt_deadline_at: "2026-08-01T12:00:15.000Z",
           interrupt_notice_state: "unattempted",
@@ -377,9 +456,9 @@ describe("Fleet pause and resume interrupt integration", () => {
       )
       .get(runId) as { payload: string };
     expect(JSON.parse(pausedEvent.payload)).toMatchObject({
-      interruptCount: 4,
+      interruptCount: 5,
       workerInterruptCount: 0,
-      auxiliaryInterruptCount: 4,
+      auxiliaryInterruptCount: 5,
     });
 
     (
@@ -944,7 +1023,7 @@ describe("Phase 3 worker completion", () => {
     ).toEqual({ n: 1 });
   });
 
-  it("settles paid reviewers and fixers while refunding an unspawned owner", async () => {
+  it("settles paid reviewers, fixers, and supervisors while refunding an unspawned owner", async () => {
     const created = createDraftFleetRun({
       name: "Cancel non-worker owners",
       goal: "Stop every Fleet-paid session",
@@ -962,6 +1041,7 @@ describe("Phase 3 worker completion", () => {
       "review-plan-session",
       "review-task-session",
       "fix-task-session",
+      "supervisor-session",
     ]) {
       db()
         .prepare(
@@ -1051,10 +1131,19 @@ describe("Phase 3 worker completion", () => {
       "fix-owner-paid",
       taskId
     );
+    insertAccount.run(
+      "account-supervisor-paid",
+      runId,
+      "supervisor-session",
+      "supervisor-session",
+      "supervisor",
+      "supervisor-owner-paid",
+      null
+    );
     db()
       .prepare(
-        `UPDATE fleet_runs SET reserved_budget_usd = 0.8,
-         reserved_budget_tokens = 800 WHERE id = ?`
+        `UPDATE fleet_runs SET reserved_budget_usd = 1.0,
+         reserved_budget_tokens = 1000 WHERE id = ?`
       )
       .run(runId);
     const insertLease = db().prepare(
@@ -1067,6 +1156,7 @@ describe("Phase 3 worker completion", () => {
       ["plan_review", "plan-owner-pending"],
       ["task_review", "task-owner-paid"],
       ["fixer", "fix-owner-paid"],
+      ["supervisor", "supervisor-owner-paid"],
     ]) {
       insertLease.run(
         `lease-${ownerId}-pty`,
@@ -1095,8 +1185,8 @@ describe("Phase 3 worker completion", () => {
         )
         .get(runId)
     ).toEqual({
-      spent_budget_usd: 0.6000000000000001,
-      spent_budget_tokens: 600,
+      spent_budget_usd: 0.8,
+      spent_budget_tokens: 800,
       reserved_budget_usd: 0,
       reserved_budget_tokens: 0,
     });
@@ -1112,6 +1202,7 @@ describe("Phase 3 worker completion", () => {
       { owner_id: "fix-owner-paid", terminal: 1, released: 1 },
       { owner_id: "plan-owner-paid", terminal: 1, released: 1 },
       { owner_id: "plan-owner-pending", terminal: 1, released: 1 },
+      { owner_id: "supervisor-owner-paid", terminal: 1, released: 1 },
       { owner_id: "task-owner-paid", terminal: 1, released: 1 },
     ]);
     expect(
@@ -1463,7 +1554,149 @@ describe("generated Fleet plans", () => {
   });
 });
 
+describe("Fleet list attention and readiness presentation", () => {
+  it("keeps reviewed work and a staged exact head in Ready until landing is authorized", () => {
+    const created = createDraftFleetRun({
+      name: "Manual landing",
+      goal: "Keep the operator action visible",
+      repoId: "repo-fleet",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    const planned = ingestFleetRunPlan(runId, {
+      planText: "- Ship exact work [files: lib/ready.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    const approved = approveFleetRunPlan(runId, {
+      expectedPlanHash: planned.run.run.planHash!,
+    });
+    if ("error" in approved) throw new Error(approved.error);
+
+    db()
+      .prepare(
+        `UPDATE fleet_tasks SET status = 'ready_to_merge' WHERE fleet_run_id = ?`
+      )
+      .run(runId);
+    db()
+      .prepare(
+        `UPDATE fleet_runs SET status = 'reviewing', desired_state = 'running'
+         WHERE id = ?`
+      )
+      .run(runId);
+    expect(listFleetRuns().find((run) => run.id === runId)).toMatchObject({
+      awaitingManualMerge: true,
+      attentionCount: 1,
+    });
+    expect(getFleetRunDetail(runId)?.run).toMatchObject({
+      awaitingManualMerge: true,
+      attentionCount: 1,
+    });
+
+    db()
+      .prepare(
+        `UPDATE fleet_tasks SET status = 'merged' WHERE fleet_run_id = ?`
+      )
+      .run(runId);
+    db()
+      .prepare(
+        `UPDATE fleet_runs
+         SET status = 'merging', merge_request_kind = 'manual',
+             merge_target = 'local', integration_state = 'ready_to_finalize',
+             integration_base_sha = automation_base_sha,
+             integration_head_sha = ?
+         WHERE id = ?`
+      )
+      .run("b".repeat(40), runId);
+    expect(listFleetRuns().find((run) => run.id === runId)).toMatchObject({
+      awaitingManualMerge: true,
+      attentionCount: 1,
+    });
+    expect(getFleetRunDetail(runId)?.run).toMatchObject({
+      awaitingManualMerge: true,
+      attentionCount: 1,
+    });
+
+    db()
+      .prepare(
+        `UPDATE fleet_runs SET merge_requested_at = datetime('now') WHERE id = ?`
+      )
+      .run(runId);
+    expect(listFleetRuns().find((run) => run.id === runId)).toMatchObject({
+      awaitingManualMerge: false,
+      attentionCount: 0,
+    });
+  });
+
+  it("summarizes one run plus each task and worker that needs attention", () => {
+    const created = createDraftFleetRun({
+      name: "Attention summary",
+      goal: "Surface every durable layer",
+      repoId: "repo-fleet",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    const taskId = created.run.tasks[0].id;
+    db()
+      .prepare(
+        `UPDATE fleet_runs SET approval_state = 'needs_approval',
+         automation_last_error = 'planner waiting' WHERE id = ?`
+      )
+      .run(runId);
+    db()
+      .prepare(
+        `UPDATE fleet_tasks SET status = 'failed', provider_state = 'failed'
+         WHERE id = ?`
+      )
+      .run(taskId);
+    db()
+      .prepare(
+        `INSERT INTO fleet_workers
+         (id, fleet_run_id, task_id, status, provider, attempt)
+         VALUES ('attention-worker', ?, ?, 'waiting_for_operator', 'codex', 1)`
+      )
+      .run(runId, taskId);
+
+    expect(listFleetRuns().find((run) => run.id === runId)).toMatchObject({
+      attentionCount: 3,
+      awaitingManualMerge: false,
+    });
+    expect(getFleetRunDetail(runId)?.run.attentionCount).toBe(3);
+  });
+});
+
 describe("createDraftFleetRun", () => {
+  it("rejects unsafe or unsupported epic models before writing and persists dynamic defaults", () => {
+    expect(
+      createDraftFleetRun({
+        name: "Unsafe epic",
+        goal: "Do not launch",
+        provider: "hermes",
+        model: "openrouter/x;whoami",
+      })
+    ).toEqual({ error: "model is not a safe hermes model id" });
+    expect(
+      createDraftFleetRun({
+        name: "Unsupported epic",
+        goal: "Do not clamp",
+        provider: "codex",
+        model: "gpt-4-unsupported",
+      })
+    ).toEqual({ error: "model is not supported by codex" });
+    expect(db().prepare("SELECT COUNT(*) AS n FROM fleet_runs").get()).toEqual({
+      n: 0,
+    });
+
+    const hermes = createDraftFleetRun({
+      name: "Hermes epic",
+      goal: "Use the provider default",
+      provider: "hermes",
+    });
+    if ("error" in hermes) throw new Error(hermes.error);
+    expect(hermes.run.run.model).toBe("kimi-k3");
+  });
+
   it("persists one-request automation intent and per-action grants", () => {
     const res = createDraftFleetRun(
       {
@@ -1657,6 +1890,14 @@ describe("Phase 2 plan ingestion and approval", () => {
     ]);
     expect(res.run.tasks[1].parentTaskId).toBe(res.run.tasks[0].id);
     expect(res.run.tasks[0].fileClaims).toEqual(["lib/fleet/plan.ts"]);
+    expect(
+      res.run.tasks.map((task) => ({
+        provider: task.agentType,
+        model: task.model,
+      }))
+    ).toEqual(
+      res.run.tasks.map(() => ({ provider: "codex", model: "gpt-5.5" }))
+    );
     expect(res.run.events[0]).toMatchObject({
       eventType: "plan_ingested",
       actor: "operator",
@@ -1735,6 +1976,53 @@ describe("Phase 2 plan ingestion and approval", () => {
       })
     ).toEqual({
       error: "select a supported agent provider before approval",
+      status: 409,
+    });
+  });
+
+  it("rejects unsafe or unsupported task models at plan write and approval", () => {
+    const writeRunId = createRun();
+    expect(
+      ingestGeneratedFleetRunPlan(writeRunId, {
+        planText: "- Unsafe generated task",
+        tasks: [
+          {
+            title: "Unsafe generated task",
+            description: null,
+            taskType: "implementation",
+            parentIndex: null,
+            sortOrder: 0,
+            fileClaims: ["lib/unsafe.ts"],
+            agentType: "hermes",
+            model: "openrouter/x;whoami",
+            acceptanceCriteria: "Safe launch",
+            verifyCommand: "npm test",
+          },
+        ],
+        source: "operator",
+      })
+    ).toEqual({
+      error: "plan task 1 model is not a safe hermes model id",
+      status: 400,
+    });
+
+    const approvalRunId = createRun();
+    const planned = ingestFleetRunPlan(approvalRunId, {
+      planText: "- Build parser",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    db()
+      .prepare(`UPDATE fleet_tasks SET model = ? WHERE fleet_run_id = ?`)
+      .run("gpt-4-unsupported", approvalRunId);
+    expect(
+      approveFleetRunPlan(approvalRunId, {
+        expectedPlanHash: planned.run.run.planHash,
+      })
+    ).toEqual({
+      error:
+        "task " +
+        planned.run.tasks[0].id +
+        " model contract is invalid: model is not supported by codex",
       status: 409,
     });
   });

@@ -9,6 +9,9 @@ const state = vi.hoisted(() => ({
   pendingRefetch: vi.fn(),
   reposRefetch: vi.fn(),
   fleetRefetch: vi.fn(),
+  elicitationRefetch: vi.fn(),
+  elicitationError: false,
+  elicitationFetching: false,
 }));
 
 function query(data: unknown, refetch: () => void) {
@@ -42,10 +45,23 @@ vi.mock("@/data/fleet/queries", () => ({
           status: "reviewing",
           taskCount: 3,
           workerCount: 2,
+          attentionCount: 3,
+          awaitingManualMerge: false,
         } as FleetRunDto,
       ],
       state.fleetRefetch
     ),
+}));
+
+vi.mock("@/data/mcp-elicitations/queries", () => ({
+  useElicitations: () => ({
+    ...query(
+      state.elicitationError ? undefined : [{ id: "operator-question" }],
+      state.elicitationRefetch
+    ),
+    isError: state.elicitationError,
+    isFetching: state.elicitationFetching,
+  }),
 }));
 
 import { useFleetBoard } from "@/data/fleet-board/useFleetBoard";
@@ -54,6 +70,8 @@ describe("useFleetBoard Fleet Management read model", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    state.elicitationError = false;
+    state.elicitationFetching = false;
   });
 
   it("composes Fleet runs and includes them in bounded manual refresh", () => {
@@ -63,6 +81,8 @@ describe("useFleetBoard Fleet Management read model", () => {
       source: "fleet",
       fleetRun: { id: "run-query-1" },
     });
+    expect(result.current.needsMeCount).toBe(2);
+    expect(result.current.elicitationCount).toBe(1);
 
     result.current.refetch();
     expect(state.fleetRefetch).toHaveBeenCalledOnce();
@@ -70,5 +90,19 @@ describe("useFleetBoard Fleet Management read model", () => {
     expect(state.boardRefetch).toHaveBeenCalledOnce();
     expect(state.pendingRefetch).toHaveBeenCalledOnce();
     expect(state.reposRefetch).toHaveBeenCalledOnce();
+    expect(state.elicitationRefetch).toHaveBeenCalledOnce();
+  });
+
+  it("keeps core lanes usable when the auxiliary elicitation read fails", () => {
+    state.elicitationError = true;
+    const { result } = renderHook(() => useFleetBoard(true));
+
+    expect(result.current.total).toBe(1);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.elicitationError).toBe(true);
+    expect(result.current.elicitationCount).toBe(0);
+
+    result.current.refetchElicitations();
+    expect(state.elicitationRefetch).toHaveBeenCalledOnce();
   });
 });

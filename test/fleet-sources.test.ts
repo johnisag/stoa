@@ -90,7 +90,7 @@ describe("Fleet source adapters", () => {
     expect(executable.planText).toContain("Depends on: inspect-code");
   });
 
-  it("allocates unavailable source providers deterministically and clears their models", () => {
+  it("allocates unavailable providers without leaking models and resolves exact defaults", () => {
     const draft = expectDraft(
       adaptFleetTextSource({
         kind: "text",
@@ -109,16 +109,16 @@ describe("Fleet source adapters", () => {
       preferredModel: "kimi-k3",
     });
 
-    expect(allocated).toMatchObject({ provider: "codex", model: null });
+    expect(allocated).toMatchObject({ provider: "codex", model: "gpt-5.5" });
     expect(
       allocated.plan.tasks.map((task) => ({
         provider: task.agentType,
         model: task.model,
       }))
     ).toEqual([
-      { provider: "codex", model: null },
+      { provider: "codex", model: "gpt-5.5" },
       { provider: "kimi", model: null },
-      { provider: "codex", model: null },
+      { provider: "codex", model: "gpt-5.5" },
     ]);
   });
 

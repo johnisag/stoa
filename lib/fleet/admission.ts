@@ -1,5 +1,6 @@
 export const FLEET_MAX_TOTAL_WORKERS = 40;
 export const FLEET_DEFAULT_PARALLEL_WORKERS = 6;
+export const FLEET_PARALLEL_WORKERS_WARNING_THRESHOLD = 12;
 export const FLEET_WORKER_RESERVATION_USD = 0.25;
 
 export function providerConcurrencyCap(

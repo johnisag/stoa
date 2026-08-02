@@ -119,6 +119,7 @@ import { reconcileFleetVerifications } from "./lib/fleet/verification";
 import { reconcileFleetTaskReviews } from "./lib/fleet/task-review";
 import { reconcileFleetMerges } from "./lib/fleet/merge-runtime";
 import { reconcileFleetLifecycle } from "./lib/fleet/lifecycle";
+import { reconcileManagedFleetSupervisors } from "./lib/fleet/supervisor-runtime";
 import { evictStale as evictStaleWarmPool } from "./lib/dispatch/warm-pool";
 import {
   getBudgetConfig,
@@ -146,6 +147,8 @@ import {
 } from "./lib/status-tick";
 import { homeDir, defaultInteractiveShell } from "./lib/platform";
 import { getDb, queries, type Session } from "./lib/db";
+import { isGenericSessionLaunchAllowed } from "./lib/session-launch";
+import { genericBackendKeyAccessFailure } from "./lib/session-route-access";
 import { REMOTE_ADDR_HEADER, SCOPE_HEADER } from "./lib/api-security";
 import { resolveTokenScope } from "./lib/tokens";
 import { statusDetector, type SessionStatus } from "./lib/status-detector";
@@ -938,7 +941,9 @@ app.prepare().then(() => {
       unref: false,
       onError: (err) => console.error("budget tick failed:", err),
       tick: async () => {
-        const sessions = queries.getAllSessions(getDb()).all() as Session[];
+        const sessions = (
+          queries.getAllSessions(getDb()).all() as Session[]
+        ).filter(isGenericSessionLaunchAllowed);
         const costs = await computeSessionCosts(sessions);
         const lite = Object.entries(costs).map(([id, c]) => ({
           id,
@@ -1012,7 +1017,9 @@ app.prepare().then(() => {
       runAtStartup: true,
       onError: (err) => console.error("session budget tick failed:", err),
       tick: async () => {
-        const sessions = queries.getAllSessions(getDb()).all() as Session[];
+        const sessions = (
+          queries.getAllSessions(getDb()).all() as Session[]
+        ).filter(isGenericSessionLaunchAllowed);
         pruneBudgetState(new Set(sessions.map((s) => s.id)));
         const budgeted = sessions.filter(
           (s) => s.budget_usd != null && s.budget_usd > 0
@@ -1151,7 +1158,9 @@ app.prepare().then(() => {
       // Advance the cadence clock up front so a PERSISTENT failure backs off to the
       // sample interval instead of retrying (and re-reading transcripts) every 60s.
       lastCostSampleMs = now;
-      const sessions = queries.getAllSessions(getDb()).all() as Session[];
+      const sessions = (
+        queries.getAllSessions(getDb()).all() as Session[]
+      ).filter(isGenericSessionLaunchAllowed);
       const costs = await computeSessionCosts(sessions);
       const written = persistCostSamples(getDb(), sessions, costs, now);
       if (written > 0)
@@ -1176,7 +1185,9 @@ app.prepare().then(() => {
     onError: (err) => console.error("auto-compact tick failed:", err),
     tick: async () => {
       const nowMs = Date.now();
-      const sessions = queries.getAllSessions(getDb()).all() as Session[];
+      const sessions = (
+        queries.getAllSessions(getDb()).all() as Session[]
+      ).filter(isGenericSessionLaunchAllowed);
       const backend = getSessionBackend();
       let liveNames: Set<string>;
       try {
@@ -1446,6 +1457,21 @@ app.prepare().then(() => {
         const msg = JSON.parse(message.toString());
         switch (msg.type) {
           case "attach":
+            if (typeof msg.key !== "string") {
+              send({ type: "error", message: "Invalid session key" });
+              break;
+            }
+            {
+              const stored = queries.getAllSessions(getDb()).all() as Session[];
+              const failure = genericBackendKeyAccessFailure(stored, msg.key);
+              if (failure) {
+                send({
+                  type: "error",
+                  message: failure,
+                });
+                break;
+              }
+            }
             void session.attach(msg.key, msg.spawn, msg.observer);
             break;
           case "input":
@@ -1507,6 +1533,11 @@ app.prepare().then(() => {
           console.error("fleet blocked planner poll failed:", err);
         }
         try {
+          await reconcileManagedFleetSupervisors();
+        } catch (err) {
+          console.error("fleet blocked supervisor poll failed:", err);
+        }
+        try {
           await reconcileFleetLifecycle();
         } catch (err) {
           console.error("fleet blocked lifecycle cleanup failed:", err);
@@ -1523,6 +1554,7 @@ app.prepare().then(() => {
           await reconcileFleetVerifications();
           await reconcileFleetTaskReviews();
           await reconcileFleetMerges();
+          await reconcileManagedFleetSupervisors();
           await reconcileFleetLifecycle();
         } catch (err) {
           console.error("> Fleet task runtime startup reconcile failed:", err);
@@ -1537,6 +1569,7 @@ app.prepare().then(() => {
         await reconcileFleetVerifications();
         await reconcileFleetTaskReviews();
         await reconcileFleetMerges();
+        await reconcileManagedFleetSupervisors();
         await reconcileFleetLifecycle();
       },
       onRecoveryError: (err) =>

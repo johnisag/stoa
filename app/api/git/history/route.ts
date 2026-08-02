@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCommitHistory } from "@/lib/git-history";
 import {
   getAllowedPathRoots,
-  resolveSandboxedPath,
+  resolveRealSandboxedPath,
   parseBoundedInt,
 } from "@/lib/api-security";
 
@@ -27,7 +27,10 @@ export async function GET(request: NextRequest) {
     }
 
     const roots = getAllowedPathRoots();
-    const { allowed, resolved } = resolveSandboxedPath(rawPath, roots);
+    const { allowed, resolved } = await resolveRealSandboxedPath(
+      rawPath,
+      roots
+    );
     if (!allowed) {
       return NextResponse.json(
         { error: "Path is outside the allowed workspace" },

@@ -42,6 +42,21 @@ export interface FleetTaskReservation {
   sampleCount: number;
 }
 
+export interface FleetPlanReservationSession {
+  provider: string;
+  model: string | null;
+  taskType: string;
+  count: number;
+}
+
+export interface FleetPlanReservationEstimate {
+  usd: number | null;
+  tokens: number | null;
+  confidence: FleetCostConfidence;
+  sessionCount: number;
+  capped: boolean;
+}
+
 export interface FleetSessionCostSample {
   session_key: string;
   session_id: string;
@@ -93,6 +108,9 @@ export interface FleetBudgetDecision {
 const MAX_HISTORY_SAMPLES = 256;
 const MAX_RESERVATION_USD = 10_000;
 const MAX_RESERVATION_TOKENS = 1_000_000_000;
+const MAX_PLAN_RESERVATION_SESSIONS = 1_024;
+const MAX_PLAN_RESERVATION_USD = 1_000_000_000;
+const MAX_PLAN_RESERVATION_TOKENS = 1_000_000_000_000;
 const HISTORY_PADDING = 1.2;
 
 const TRACKABLE_PROVIDERS = new Set(["claude", "codex"]);
@@ -254,6 +272,75 @@ export function estimateFleetTaskReservation(input: {
     confidence,
     basis,
     sampleCount: samples.length,
+  };
+}
+
+/**
+ * Sum a bounded set of future Fleet sessions using the same conservative
+ * reservation used at launch time. `null`, rather than a precise-looking zero,
+ * represents a plan with no estimable future paid session yet.
+ */
+export function estimateFleetPlanReservation(input: {
+  sessions: readonly FleetPlanReservationSession[];
+  history?: readonly FleetReservationHistorySample[];
+}): FleetPlanReservationEstimate {
+  const confidenceRank: Record<FleetCostConfidence, number> = {
+    unknown: 0,
+    low: 1,
+    medium: 2,
+    high: 3,
+  };
+  let sessionCount = 0;
+  let usd = 0;
+  let tokens = 0;
+  let confidence: FleetCostConfidence = "high";
+  let capped = false;
+  for (const session of input.sessions) {
+    if (
+      !Number.isSafeInteger(session.count) ||
+      session.count <= 0 ||
+      sessionCount >= MAX_PLAN_RESERVATION_SESSIONS
+    ) {
+      if (session.count > 0) capped = true;
+      continue;
+    }
+    const count = Math.min(
+      session.count,
+      MAX_PLAN_RESERVATION_SESSIONS - sessionCount
+    );
+    if (count < session.count) capped = true;
+    const reservation = estimateFleetTaskReservation({
+      provider: session.provider,
+      model: session.model,
+      taskType: session.taskType,
+      history: input.history,
+    });
+    sessionCount += count;
+    usd += reservation.usd * count;
+    tokens += reservation.tokens * count;
+    if (confidenceRank[reservation.confidence] < confidenceRank[confidence]) {
+      confidence = reservation.confidence;
+    }
+  }
+  if (sessionCount === 0) {
+    return {
+      usd: null,
+      tokens: null,
+      confidence: "unknown",
+      sessionCount: 0,
+      capped,
+    };
+  }
+  if (usd > MAX_PLAN_RESERVATION_USD) capped = true;
+  if (tokens > MAX_PLAN_RESERVATION_TOKENS) capped = true;
+  return {
+    usd:
+      Math.ceil(Math.min(usd, MAX_PLAN_RESERVATION_USD) * 1_000_000) /
+      1_000_000,
+    tokens: Math.ceil(Math.min(tokens, MAX_PLAN_RESERVATION_TOKENS)),
+    confidence,
+    sessionCount,
+    capped,
   };
 }
 

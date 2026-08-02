@@ -26,7 +26,11 @@ import {
   pauseFleetRun,
   resumeFleetRun,
 } from "./service";
-import { requestFleetMerge } from "./merge-runtime";
+import {
+  authorizeFleetManualLanding,
+  getFleetMergeStatus,
+  requestFleetMerge,
+} from "./merge-runtime";
 import { getFleetSupervisorSnapshot } from "./supervisor";
 import type { FleetMergeTarget, FleetRunRow } from "./types";
 import { fleetLaunchBlockedResult } from "./recovery-gate";
@@ -47,6 +51,7 @@ export const DIRECT_FLEET_CAPABILITY_ACTIONS = [
   "fleet:cancel",
   "fleet:submit-artifact",
   "fleet:merge",
+  "fleet:land",
 ] as const satisfies readonly FleetCapabilityAction[];
 
 type DirectFleetCapabilityAction =
@@ -120,6 +125,10 @@ interface ExactFleetMergeIntent {
   baseSha: string;
   executionHash: string;
   integrationHeadSha: string | null;
+}
+
+interface ExactFleetLandingIntent extends ExactFleetMergeIntent {
+  integrationHeadSha: string;
 }
 
 function authorizeStoredFleetCapabilityReadOnly(
@@ -335,6 +344,33 @@ function fleetMergeIntentHash(
   return { kind: "head", value: stableHash(intent) };
 }
 
+function exactFleetLandingIntent(
+  db: Database.Database,
+  runId: string,
+  payload: unknown
+): ExactFleetLandingIntent | FleetCapabilityRuntimeError {
+  const intent = exactFleetMergeIntent(db, runId, payload);
+  if ("error" in intent) return intent;
+  const status = getFleetMergeStatus(runId, db);
+  if (
+    !intent.integrationHeadSha ||
+    status?.integration.state !== "ready_to_finalize" ||
+    status.integration.requestKind !== "manual" ||
+    status.integration.requestedAt !== null ||
+    status.integration.target !== intent.target ||
+    status.integration.baseSha !== intent.baseSha ||
+    status.integration.headSha !== intent.integrationHeadSha ||
+    !status.readiness.canFinalize ||
+    !status.readiness.allTasksIntegrated
+  ) {
+    return {
+      error: "manual merge is not staged and final-verified for landing",
+      status: 409,
+    };
+  }
+  return { ...intent, integrationHeadSha: intent.integrationHeadSha };
+}
+
 function withoutUntrustedActor(
   payload: unknown,
   stripTask = false
@@ -392,7 +428,10 @@ function deriveBoundHash(
       ? { kind: "artifact", value: stableHash(artifact) }
       : { error: "payload is required for fleet:submit-artifact", status: 400 };
   }
-  const intent = exactFleetMergeIntent(db, runId, payload);
+  const intent =
+    action === "fleet:land"
+      ? exactFleetLandingIntent(db, runId, payload)
+      : exactFleetMergeIntent(db, runId, payload);
   return "error" in intent ? intent : fleetMergeIntentHash(intent);
 }
 
@@ -705,7 +744,7 @@ export async function executeStoredFleetCapability(
   if ("error" in authorized) return authorized;
   const db = options.db ?? getDb();
   if (
-    ["fleet:start", "fleet:resume", "fleet:merge"].includes(
+    ["fleet:start", "fleet:resume", "fleet:merge", "fleet:land"].includes(
       authorized.scope.action
     )
   ) {
@@ -733,6 +772,25 @@ export async function executeStoredFleetCapability(
       return { error: "capability action intent changed", status: 409 };
     }
     mergeIntent = current;
+  }
+  let landingIntent: ExactFleetLandingIntent | null = null;
+  if (authorized.scope.action === "fleet:land") {
+    const current = exactFleetLandingIntent(
+      db,
+      authorized.scope.runId,
+      request.payload
+    );
+    if ("error" in current) return current;
+    const expected = authorized.scope.boundHash;
+    const currentHash = fleetMergeIntentHash(current);
+    if (
+      !expected ||
+      expected.kind !== currentHash.kind ||
+      expected.value !== currentHash.value
+    ) {
+      return { error: "capability action intent changed", status: 409 };
+    }
+    landingIntent = current;
   }
   const claim = claimStoredFleetCapability(request, options);
   if ("error" in claim) return claim;
@@ -779,10 +837,14 @@ export async function executeStoredFleetCapability(
         actor
       );
     } else if (action === "fleet:start" || action === "fleet:resume") {
-      result = await resumeFleetRun(runId, {
-        actor,
-        conductorSessionId: null,
-      });
+      result = await resumeFleetRun(
+        runId,
+        {
+          actor,
+          conductorSessionId: null,
+        },
+        { db }
+      );
     } else if (action === "fleet:pause") {
       result = await pauseFleetRun(runId, { actor, mode: "pause-new" });
     } else if (action === "fleet:cancel") {
@@ -811,6 +873,21 @@ export async function executeStoredFleetCapability(
             }
           )
         : { error: "merge target is required" };
+    } else if (action === "fleet:land") {
+      result = landingIntent
+        ? await authorizeFleetManualLanding(
+            runId,
+            landingIntent.target,
+            actor,
+            {
+              planHash: landingIntent.planHash,
+              baseSha: landingIntent.baseSha,
+              executionHash: landingIntent.executionHash,
+              integrationHeadSha: landingIntent.integrationHeadSha,
+            },
+            { db }
+          )
+        : { error: "manual merge is not ready for landing" };
     } else {
       return { error: "unsupported Fleet capability action", status: 403 };
     }

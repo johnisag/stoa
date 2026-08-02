@@ -897,7 +897,7 @@ function parseExternalAction(
 ): { action: FleetExternalSupervisorAction } | { error: string } {
   if (
     !isObject(value) ||
-    !hasOnlyKeys(value, ["kind", "taskId", "rationale"])
+    !hasOnlyKeys(value, ["kind", "taskId", "taskIds", "rationale"])
   ) {
     return { error: `actions[${index}] has unsupported fields` };
   }
@@ -906,7 +906,10 @@ function parseExternalAction(
     value.kind !== "retry" &&
     value.kind !== "inspect" &&
     value.kind !== "pause" &&
-    value.kind !== "merge_readiness"
+    value.kind !== "merge_readiness" &&
+    value.kind !== "replan" &&
+    value.kind !== "grouping" &&
+    value.kind !== "merge_order"
   ) {
     return { error: `actions[${index}].kind is unsupported` };
   }
@@ -917,6 +920,30 @@ function parseExternalAction(
   ) {
     return { error: `actions[${index}].taskId is invalid` };
   }
+  let taskIds: string[] | undefined;
+  if (value.taskIds != null) {
+    if (
+      !Array.isArray(value.taskIds) ||
+      value.taskIds.length === 0 ||
+      value.taskIds.length > 16 ||
+      value.taskIds.some(
+        (taskId) =>
+          typeof taskId !== "string" ||
+          taskId.length === 0 ||
+          taskId.length > 128 ||
+          /\0/.test(taskId)
+      )
+    ) {
+      return { error: `actions[${index}].taskIds is invalid` };
+    }
+    taskIds = value.taskIds as string[];
+    if (new Set(taskIds).size !== taskIds.length) {
+      return { error: `actions[${index}].taskIds contains duplicates` };
+    }
+  }
+  if (taskId != null && taskIds != null) {
+    return { error: `actions[${index}] cannot mix taskId and taskIds` };
+  }
   if (value.kind === "retry" && taskId == null) {
     return { error: `actions[${index}].taskId is required for retry` };
   }
@@ -924,9 +951,25 @@ function parseExternalAction(
     (value.kind === "approval" ||
       value.kind === "pause" ||
       value.kind === "merge_readiness") &&
-    taskId != null
+    (taskId != null || taskIds != null)
   ) {
     return { error: `actions[${index}].taskId is not allowed for this kind` };
+  }
+  if (
+    (value.kind === "grouping" || value.kind === "merge_order") &&
+    (!taskIds || taskIds.length < 2)
+  ) {
+    return {
+      error: `actions[${index}].taskIds must contain at least two tasks for ${value.kind}`,
+    };
+  }
+  if (
+    value.kind !== "grouping" &&
+    value.kind !== "merge_order" &&
+    value.kind !== "replan" &&
+    taskIds != null
+  ) {
+    return { error: `actions[${index}].taskIds is not allowed for this kind` };
   }
   const rationale = boundedText(
     value.rationale,
@@ -938,6 +981,7 @@ function parseExternalAction(
     action: {
       kind: value.kind,
       taskId: taskId as string | null,
+      ...(taskIds ? { taskIds } : {}),
       rationale: rationale.value,
     },
   };
@@ -1084,9 +1128,10 @@ export function appendFleetSupervisorRecommendation(
     }
     const actionTaskIds = [
       ...new Set(
-        parsed.input.actions.flatMap((action) =>
-          action.taskId == null ? [] : [action.taskId]
-        )
+        parsed.input.actions.flatMap((action) => [
+          ...(action.taskId == null ? [] : [action.taskId]),
+          ...(action.taskIds ?? []),
+        ])
       ),
     ];
     for (const taskId of actionTaskIds) {

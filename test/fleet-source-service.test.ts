@@ -6,6 +6,7 @@ import { runMigrations } from "@/lib/db/migrations";
 const state = vi.hoisted(() => ({
   db: null as unknown,
   defaultBranch: "main",
+  baseSha: "a".repeat(40),
 }));
 
 vi.mock("@/lib/db", async (importOriginal) => {
@@ -25,6 +26,7 @@ vi.mock("@/lib/git-status", async (importOriginal) => {
     ...actual,
     getDefaultBranch: () => state.defaultBranch,
     isGitRepo: () => true,
+    resolveGitCommit: () => state.baseSha,
   };
 });
 
@@ -61,6 +63,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   state.defaultBranch = "main";
+  state.baseSha = "a".repeat(40);
   db().exec(`
     DELETE FROM fleet_events;
     DELETE FROM fleet_artifacts;
@@ -104,6 +107,40 @@ beforeEach(() => {
 });
 
 describe("createFleetRunFromSource", () => {
+  it("rejects unsafe and unsupported imported models atomically", () => {
+    const unsafe = createFleetRunFromSource({
+      source: {
+        kind: "text",
+        text: "- Implement import [files: lib/import.ts]",
+        claimMode: "write",
+        repoId: "repo-source",
+        provider: "hermes",
+        model: "openrouter/x;whoami",
+      },
+    });
+    expect(unsafe).toMatchObject({ status: 400 });
+    expect("error" in unsafe && unsafe.error).toContain("model");
+
+    const unsupported = createFleetRunFromSource({
+      source: {
+        kind: "text",
+        text: "- Implement import [files: lib/import.ts]",
+        claimMode: "write",
+        repoId: "repo-source",
+        provider: "codex",
+        verifyCommand: "npm test",
+      },
+      options: { provider: "codex", model: "gpt-4-unsupported" },
+    });
+    expect(unsupported).toEqual({
+      error: "codex allocation model is not supported by codex",
+      status: 400,
+    });
+    expect(db().prepare("SELECT COUNT(*) AS n FROM fleet_runs").get()).toEqual({
+      n: 0,
+    });
+  });
+
   it("redacts source lineage prose before durable import", () => {
     const canary = "sk-SOURCECANARY0123456789";
     const result = createFleetRunFromSource(
@@ -285,7 +322,7 @@ describe("createFleetRunFromSource", () => {
 
       expect(result.run.run).toMatchObject({
         provider: "codex",
-        model: null,
+        model: "gpt-5.5",
         approvalState: "needs_approval",
       });
       expect(result.run.tasks).not.toHaveLength(0);
@@ -295,7 +332,10 @@ describe("createFleetRunFromSource", () => {
           model: task.model,
         }))
       ).toEqual(
-        result.run.tasks.map(() => ({ provider: "codex", model: null }))
+        result.run.tasks.map(() => ({
+          provider: "codex",
+          model: "gpt-5.5",
+        }))
       );
     }
   );

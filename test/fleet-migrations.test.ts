@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import { runMigrations } from "@/lib/db/migrations";
 import { createSchema } from "@/lib/db/schema";
 import { queries } from "@/lib/db/queries";
@@ -620,6 +621,51 @@ describe("fleet migrations", () => {
     ).toEqual({ n: 0 });
   });
 
+  it("migration 67 repairs a crash after the scoped table swap but before index creation", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 66);
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE fleet_resource_usage_buckets (
+        fleet_run_id TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        bucket_start_ms INTEGER NOT NULL,
+        units INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (fleet_run_id, resource_type, resource_key, bucket_start_ms)
+      );
+      CREATE TABLE fleet_resource_usage_buckets_unscoped (
+        resource_type TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        bucket_start_ms INTEGER NOT NULL,
+        units INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (resource_type, resource_key, bucket_start_ms)
+      );
+    `);
+
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'index'
+             AND name = 'idx_fleet_resource_usage_bucket_time'`
+        )
+        .get()
+    ).toEqual({ name: "idx_fleet_resource_usage_bucket_time" });
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'table'
+             AND name = 'fleet_resource_usage_buckets_unscoped'`
+        )
+        .get()
+    ).toBeUndefined();
+  });
+
   it("migration 68 adds restart-safe rendered status and interrupt state", () => {
     const db = new Database(":memory:");
     markAppliedThrough(db, 67);
@@ -988,6 +1034,142 @@ describe("fleet migrations", () => {
       { id: "paused", desired_state: "paused" },
     ]);
     expect(() => runMigrations(db)).not.toThrow();
+    db.close();
+  });
+
+  it("migration 75 adds durable planner risk notes with a safe legacy default", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 74);
+    db.exec(`
+      CREATE TABLE fleet_tasks (id TEXT PRIMARY KEY);
+      INSERT INTO fleet_tasks (id) VALUES ('legacy-task');
+    `);
+
+    runMigrations(db);
+
+    expectColumns(db, "fleet_tasks", ["risk_notes_json"]);
+    expect(
+      db
+        .prepare(`SELECT risk_notes_json FROM fleet_tasks WHERE id = ?`)
+        .get("legacy-task")
+    ).toEqual({ risk_notes_json: "[]" });
+    expect(() => runMigrations(db)).not.toThrow();
+    db.close();
+  });
+
+  it("migration 76 atomically rolls back partial profile installation", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 75);
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        session_role TEXT NOT NULL DEFAULT 'interactive'
+      );
+      INSERT INTO sessions (id, name, session_role)
+      VALUES ('partial-internal', 'Partial internal', 'fleet_supervisor');
+    `);
+    const error = console.error;
+    console.error = () => undefined;
+    try {
+      expect(() => runMigrations(db)).toThrow(
+        /invalid persisted session launch profile/
+      );
+    } finally {
+      console.error = error;
+    }
+
+    expect(hasColumn(db, "sessions", "launch_profile_json")).toBe(false);
+    expect(hasColumn(db, "sessions", "launch_profile_hash")).toBe(false);
+    expect(
+      db.prepare(`SELECT 1 FROM _migrations WHERE id = 76`).get()
+    ).toBeUndefined();
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'trigger' AND name LIKE 'trg_sessions_launch_profile_%'`
+        )
+        .all()
+    ).toEqual([]);
+    db.close();
+  });
+
+  it("migration 76 rejects malformed internal inserts and interactive profile smuggling", () => {
+    const db = new Database(":memory:");
+    createSchema(db);
+    const validProfile = JSON.stringify({ role: "fleet_supervisor" });
+    const validHash = createHash("sha256")
+      .update(validProfile, "utf8")
+      .digest("hex");
+    const insert = db.prepare(
+      `INSERT INTO sessions
+       (id, name, session_role, launch_profile_json, launch_profile_hash)
+       VALUES (?, ?, ?, ?, ?)`
+    );
+
+    for (const [id, role, profile, hash] of [
+      ["missing", "fleet_supervisor", null, null],
+      ["invalid-json", "fleet_supervisor", "not-json", validHash],
+      ["wrong-role", "fleet_supervisor", '{"role":"other"}', validHash],
+      ["short-hash", "fleet_supervisor", validProfile, "abc"],
+      ["smuggled", "interactive", validProfile, validHash],
+    ] as const) {
+      expect(() => insert.run(id, id, role, profile, hash), id).toThrow(
+        /invalid session launch profile/
+      );
+    }
+
+    expect(() =>
+      insert.run(
+        "valid-internal",
+        "Valid internal",
+        "fleet_supervisor",
+        validProfile,
+        validHash
+      )
+    ).not.toThrow();
+    expect(() =>
+      insert.run(
+        "valid-interactive",
+        "Valid interactive",
+        "interactive",
+        null,
+        null
+      )
+    ).not.toThrow();
+    db.close();
+  });
+
+  it("migration 76 repairs and replays both profile triggers idempotently", () => {
+    const db = new Database(":memory:");
+    createSchema(db);
+    markAppliedThrough(db, 75);
+
+    runMigrations(db);
+    db.exec(`
+      DELETE FROM _migrations WHERE id = 76;
+      DROP TRIGGER trg_sessions_launch_profile_insert_valid;
+    `);
+    expect(() => runMigrations(db)).not.toThrow();
+
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'trigger' AND name LIKE 'trg_sessions_launch_profile_%'
+           ORDER BY name`
+        )
+        .all()
+    ).toEqual([
+      { name: "trg_sessions_launch_profile_immutable" },
+      { name: "trg_sessions_launch_profile_insert_valid" },
+    ]);
+    expect(
+      db
+        .prepare(`SELECT COUNT(*) AS count FROM _migrations WHERE id = 76`)
+        .get()
+    ).toEqual({ count: 1 });
     db.close();
   });
 });

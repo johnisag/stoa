@@ -6,6 +6,7 @@ import type { FleetWorkerAttemptContract } from "./report-runtime";
 import { parseFleetAutomationPolicy } from "./automation-policy";
 import { fleetAgentApprovalMode } from "./confinement";
 import { isFleetUnattendedProvider } from "./provider-eligibility";
+import { resolveExactModelForAgent } from "@/lib/model-catalog";
 
 export interface FleetSpawnResult {
   sessionId: string;
@@ -38,7 +39,10 @@ export interface FleetSpawnInput {
 export async function spawnFleetWorker(
   input: FleetSpawnInput
 ): Promise<FleetSpawnResult> {
-  const provider = input.task.agent_type ?? input.run.provider;
+  if (!input.task.agent_type) {
+    throw new Error("Fleet task is missing its persisted launch provider");
+  }
+  const provider = input.task.agent_type;
   if (!PROVIDER_IDS.includes(provider as ProviderId) || provider === "shell") {
     throw new Error(`Unsupported fleet provider: ${provider}`);
   }
@@ -46,6 +50,14 @@ export async function spawnFleetWorker(
     throw new Error(
       `Fleet provider cannot run unattended: ${provider}. Use an interactive Stoa session instead.`
     );
+  }
+  const persistedModel = input.task.model?.trim() || null;
+  const exactModel = resolveExactModelForAgent(provider, input.task.model);
+  if (!exactModel.ok) {
+    throw new Error(`Invalid Fleet task model: ${exactModel.error}`);
+  }
+  if (exactModel.model !== persistedModel) {
+    throw new Error("Fleet task is missing its exact persisted launch model");
   }
   const parsedPolicy = parseFleetAutomationPolicy(
     input.run.automation_policy_json
@@ -86,9 +98,13 @@ export async function spawnFleetWorker(
       fleetWritableRoots: input.reportContract
         ? [input.reportContract.attemptDirectory]
         : [],
+      fleetArtifactPaths: input.reportContract
+        ? [input.reportContract.reportPath]
+        : [],
       requireStrongIsolation: true,
       approvalMode,
-      model: input.task.model ?? input.run.model ?? undefined,
+      model: input.task.model ?? undefined,
+      requireExactModel: true,
       agentType: provider as ProviderId,
     });
   } catch (error) {

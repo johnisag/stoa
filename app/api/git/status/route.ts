@@ -7,7 +7,10 @@ import {
   getWorktreeBaseChanges,
   expandPath,
 } from "@/lib/git-status";
-import { getAllowedPathRoots, resolveSandboxedPath } from "@/lib/api-security";
+import {
+  getAllowedPathRoots,
+  resolveRealSandboxedPath,
+} from "@/lib/api-security";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -21,7 +24,7 @@ export async function GET(request: NextRequest) {
 
   const expandedPath = expandPath(rawPath);
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  const { allowed } = await resolveRealSandboxedPath(expandedPath, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "Path is outside the allowed workspace" },

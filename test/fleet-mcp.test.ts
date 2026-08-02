@@ -36,6 +36,9 @@ describe("Fleet MCP tools", () => {
     expect(capabilities.tools.capabilityReads).toContain(
       "fleet_supervisor_snapshot"
     );
+    expect(capabilities.tools.capabilityMutations).toContain(
+      "fleet_authorize_landing"
+    );
   });
 
   it("queues an operator request without calling a Fleet endpoint", async () => {
@@ -201,6 +204,55 @@ describe("Fleet MCP tools", () => {
         attempt: null,
         boundHash: { kind: "plan", value: "a".repeat(64) },
       },
+    });
+    expect(text(result)).not.toContain(token);
+  });
+
+  it("routes external landing through a pre-issued exact-head capability without minting authority", async () => {
+    const fetchMock = vi.fn<FetchMock>(async () =>
+      response({ result: { readiness: { requested: true } } })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const token = `stoa_fleet_v1_${"L".repeat(43)}`;
+    const headBinding = "d".repeat(64);
+
+    const result = await handleToolCall({
+      params: {
+        name: "fleet_authorize_landing",
+        arguments: {
+          capabilityToken: token,
+          runId: "run-1",
+          boundHashKind: "head",
+          boundHashValue: headBinding,
+          target: "github_pr",
+        },
+      },
+    });
+
+    expect(JSON.parse(text(result))).toMatchObject({
+      readiness: { requested: true },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain(
+      "/api/fleet/capabilities/action"
+    );
+    expect(fetchMock.mock.calls[0]?.[0]).not.toMatch(
+      /\/api\/fleet\/capabilities$/
+    );
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))
+    ).toMatchObject({
+      token,
+      scope: {
+        version: 1,
+        action: "fleet:land",
+        runId: "run-1",
+        taskId: null,
+        workerId: null,
+        attempt: null,
+        boundHash: { kind: "head", value: headBinding },
+      },
+      payload: { target: "github_pr" },
     });
     expect(text(result)).not.toContain(token);
   });

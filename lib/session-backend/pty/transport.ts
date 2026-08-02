@@ -29,6 +29,8 @@ export interface AttachSpawn {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  envMode?: "inherit" | "replace";
+  fleetWritableRoots?: string[];
 }
 
 export interface AttachRequest {
@@ -130,6 +132,7 @@ export class LocalTransport implements PtyTransport {
               cols: req.cols,
               rows: req.rows,
               env: req.spawn.env,
+              envMode: req.spawn.envMode,
             })
           : spawnShellSession(req.key, cwd, req.cols, req.rows);
     }
@@ -170,6 +173,8 @@ export class HostTransport implements PtyTransport {
       cols: spec.cols,
       rows: spec.rows,
       env: spec.env,
+      envMode: spec.envMode,
+      fleetWritableRoots: spec.fleetWritableRoots,
     });
   }
   async kill(key: string): Promise<void> {
@@ -210,6 +215,7 @@ export class HostTransport implements PtyTransport {
           cols: req.cols,
           rows: req.rows,
           env: req.spawn.env,
+          envMode: req.spawn.envMode,
         });
       } else {
         await this.client.spawnShell(req.key, cwd, req.cols, req.rows);

@@ -3,6 +3,10 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { getDb, queries, type Session } from "@/lib/db";
 import { requireLocalhost, parseJsonBody } from "@/lib/api-security";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 // Use execFile (no shell) so titles/bodies/branches pass as single argv
 // entries with no quoting/escaping. This is cross-platform safe (notably on
@@ -147,9 +151,14 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
     const session = queries.getSession(db).get(id) as Session | undefined;
 
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     if (!session.worktree_path || !session.branch_name) {
       return NextResponse.json(
@@ -204,9 +213,14 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
     const session = queries.getSession(db).get(id) as Session | undefined;
 
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     if (!session.worktree_path || !session.branch_name) {
       return NextResponse.json(

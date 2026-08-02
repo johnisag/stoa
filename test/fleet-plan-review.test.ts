@@ -467,7 +467,7 @@ describe("Fleet plan review runtime", () => {
     expect(captures.every((capture) => capture.provider === "codex")).toBe(
       true
     );
-    expect(captures.every((capture) => capture.model === null)).toBe(true);
+    expect(captures.every((capture) => capture.model === "gpt-5.5")).toBe(true);
     expect(
       db
         .prepare(
@@ -475,7 +475,7 @@ describe("Fleet plan review runtime", () => {
            FROM fleet_reviews GROUP BY provider, model`
         )
         .all()
-    ).toEqual([{ provider: "codex", model: null, count: 4 }]);
+    ).toEqual([{ provider: "codex", model: "gpt-5.5", count: 4 }]);
     expect(
       db
         .prepare(
@@ -484,7 +484,7 @@ describe("Fleet plan review runtime", () => {
            GROUP BY provider, model`
         )
         .all()
-    ).toEqual([{ provider: "codex", model: null, count: 4 }]);
+    ).toEqual([{ provider: "codex", model: "gpt-5.5", count: 4 }]);
     expect(new Set(captures.map((capture) => capture.sessionId)).size).toBe(4);
   });
 

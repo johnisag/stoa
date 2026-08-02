@@ -2,7 +2,13 @@
  * File system utilities for file explorer (server-only)
  */
 
-import { readdirSync, statSync, readFileSync, writeFileSync } from "fs";
+import {
+  lstatSync,
+  readdirSync,
+  statSync,
+  readFileSync,
+  writeFileSync,
+} from "fs";
 import { join, extname } from "path";
 
 // Re-export client-safe types and utilities
@@ -73,8 +79,13 @@ export function listDirectory(
 
       const fullPath = join(dirPath, entry);
       let stat;
+      let isLink = false;
 
       try {
+        // Never follow a directory symlink/junction during recursive listing.
+        // The route validates the requested root, but a descendant link could
+        // otherwise walk outside it and enumerate server authority.
+        isLink = lstatSync(fullPath).isSymbolicLink();
         stat = statSync(fullPath);
       } catch {
         // Permission denied or other error, skip
@@ -94,7 +105,7 @@ export function listDirectory(
       }
 
       // Recursively load children if requested and not at max depth
-      if (isDir && recursive && currentDepth < maxDepth) {
+      if (isDir && !isLink && recursive && currentDepth < maxDepth) {
         node.children = listDirectory(fullPath, {
           excludePatterns,
           recursive: true,

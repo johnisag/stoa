@@ -7,6 +7,7 @@ import {
   buildFleetApprovalPreview,
   composeFleetRunDetail,
   normalizeFleetRunDraft,
+  toFleetTaskDto,
 } from "@/lib/fleet/engine";
 import type {
   FleetArtifactRow,
@@ -100,8 +101,8 @@ describe("normalizeFleetRunDraft", () => {
     expect(res.draft.budgetWarningThreshold).toBe(0.8);
     expect(res.draft.defaultMaxAttempts).toBe(2);
     expect(res.draft.provider).toBe("claude");
-    expect(res.draft.model).toBeNull();
-    expect(res.draft.maxConcurrency).toBe(1);
+    expect(res.draft.model).toBe("sonnet");
+    expect(res.draft.maxConcurrency).toBe(6);
     expect(res.draft.reviewPolicy).toBe("four_agent");
     expect(res.draft.desiredState).toBe("draft");
     expect(res.draft.automationPolicy).toMatchObject({
@@ -203,20 +204,57 @@ describe("normalizeFleetRunDraft", () => {
     expect(res.draft.reviewPolicy).toBe("four_agent");
   });
 
-  it("caps persisted labels, body fields, and model selectors", () => {
+  it("caps prose fields while rejecting oversized executable selectors", () => {
     const res = normalizeFleetRunDraft({
       name: "n".repeat(FLEET_RUN_NAME_MAX + 50),
       goal: "g".repeat(FLEET_RUN_GOAL_MAX + 50),
-      provider: "p".repeat(FLEET_PROVIDER_MAX + 50),
-      model: "m".repeat(FLEET_MODEL_MAX + 50),
+      provider: "claude",
+      model: "sonnet",
     });
 
     expect(res).toHaveProperty("draft");
     if ("error" in res) return;
     expect(res.draft.name).toHaveLength(FLEET_RUN_NAME_MAX);
     expect(res.draft.goal).toHaveLength(FLEET_RUN_GOAL_MAX);
-    expect(res.draft.provider).toHaveLength(FLEET_PROVIDER_MAX);
-    expect(res.draft.model).toHaveLength(FLEET_MODEL_MAX);
+    expect(res.draft.provider).toBe("claude");
+    expect(res.draft.model).toBe("sonnet");
+    expect(
+      normalizeFleetRunDraft({
+        name: "Run",
+        goal: "Goal",
+        provider: "p".repeat(FLEET_PROVIDER_MAX + 1),
+      })
+    ).toEqual({ error: "provider must be a supported Fleet agent" });
+    expect(
+      normalizeFleetRunDraft({
+        name: "Run",
+        goal: "Goal",
+        provider: "hermes",
+        model: "m".repeat(FLEET_MODEL_MAX + 1),
+      })
+    ).toEqual({ error: `model must be at most ${FLEET_MODEL_MAX} characters` });
+  });
+
+  it("rejects unsafe and unsupported models and preserves dynamic defaults", () => {
+    expect(
+      normalizeFleetRunDraft({
+        name: "Run",
+        goal: "Goal",
+        provider: "codex",
+        model: "gpt-4-unsupported",
+      })
+    ).toEqual({ error: "model is not supported by codex" });
+    expect(
+      normalizeFleetRunDraft({
+        name: "Run",
+        goal: "Goal",
+        provider: "hermes",
+        model: "openrouter/x;whoami",
+      })
+    ).toEqual({ error: "model is not a safe hermes model id" });
+    expect(
+      normalizeFleetRunDraft({ name: "Run", goal: "Goal", provider: "hermes" })
+    ).toMatchObject({ draft: { model: "kimi-k3" } });
   });
 
   it("rejects blank name or goal", () => {
@@ -247,6 +285,66 @@ describe("buildFleetApprovalPreview", () => {
 });
 
 describe("composeFleetRunDetail", () => {
+  it("strictly parses bounded structured task risk notes", () => {
+    const row = {
+      id: "task-risk",
+      fleet_run_id: "run-1",
+      parent_task_id: null,
+      title: "Risky task",
+      description: null,
+      status: "draft",
+      task_type: "implementation",
+      sort_order: 0,
+      file_claims_json: "[]",
+      risk_notes_json: JSON.stringify([
+        {
+          severity: "high",
+          risk: "A migration could lose historical rows",
+          mitigation: "Back up and verify row counts before promotion",
+        },
+      ]),
+      created_at: now,
+      updated_at: now,
+    } satisfies FleetTaskRow;
+
+    expect(toFleetTaskDto(row).riskNotes).toEqual([
+      {
+        severity: "high",
+        risk: "A migration could lose historical rows",
+        mitigation: "Back up and verify row counts before promotion",
+      },
+    ]);
+    for (const malformed of [
+      "not-json",
+      JSON.stringify({ severity: "high" }),
+      JSON.stringify([
+        {
+          severity: "critical",
+          risk: "Bad severity",
+          mitigation: "Reject it",
+        },
+      ]),
+      JSON.stringify([
+        {
+          severity: "low",
+          risk: "r".repeat(501),
+          mitigation: "Bound it",
+        },
+      ]),
+      JSON.stringify(
+        Array.from({ length: 9 }, () => ({
+          severity: "low",
+          risk: "Risk",
+          mitigation: "Mitigation",
+        }))
+      ),
+    ]) {
+      expect(
+        toFleetTaskDto({ ...row, risk_notes_json: malformed }).riskNotes
+      ).toEqual([]);
+    }
+  });
+
   it("converts DB rows into browser DTOs with counts and parsed payloads", () => {
     const tasks: FleetTaskRow[] = [
       {
@@ -259,6 +357,13 @@ describe("composeFleetRunDetail", () => {
         task_type: "scope",
         sort_order: 0,
         file_claims_json: JSON.stringify(["app/page.tsx", 123, "lib/fleet.ts"]),
+        risk_notes_json: JSON.stringify([
+          {
+            severity: "medium",
+            risk: "The plan may affect mobile layout",
+            mitigation: "Verify the compact task card",
+          },
+        ]),
         integration_state: "merged",
         integration_operation_id: "merge-op-1",
         integrated_head_sha: "c".repeat(40),
@@ -350,6 +455,13 @@ describe("composeFleetRunDetail", () => {
       integrationOperationId: "merge-op-1",
       integratedHeadSha: "c".repeat(40),
       integratedAt: now,
+      riskNotes: [
+        {
+          severity: "medium",
+          risk: "The plan may affect mobile layout",
+          mitigation: "Verify the compact task card",
+        },
+      ],
     });
     expect(detail.artifacts[0]).toMatchObject({
       title: "Needs clearer boundary",

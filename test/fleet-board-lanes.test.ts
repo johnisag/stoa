@@ -36,6 +36,8 @@ const run = (o: Partial<FleetRunDto>): FleetRunDto =>
     status: "running",
     taskCount: 2,
     workerCount: 1,
+    attentionCount: 0,
+    awaitingManualMerge: false,
     ...o,
   }) as unknown as FleetRunDto;
 
@@ -78,6 +80,18 @@ describe("cardNeedsMe — board attention reuses the nav badge's needsMe predica
       []
     );
     expect(cards.every((c) => !cardNeedsMe(c))).toBe(true);
+  });
+
+  it("highlights a Fleet card when any durable run/task/worker signal needs attention", () => {
+    const cards = composeFleetCards(
+      [],
+      [],
+      [],
+      [run({ attentionCount: 3 }), run({ id: "quiet", attentionCount: 0 })]
+    );
+    expect(cards.filter(cardNeedsMe).map((card) => card.key)).toEqual([
+      "fleet:run",
+    ]);
   });
 });
 
@@ -133,6 +147,15 @@ describe("laneForFleetRun", () => {
     expect(laneForFleetRun(run({ status: "completed" }))).toBe("merged");
     expect(laneForFleetRun(run({ status: "failed" }))).toBe("failed");
     expect(laneForFleetRun(run({ status: "canceled" }))).toBe("failed");
+  });
+
+  it("keeps reviewed readiness and staged exact-head landing in Ready", () => {
+    expect(
+      laneForFleetRun(run({ status: "reviewing", awaitingManualMerge: true }))
+    ).toBe("verified");
+    expect(
+      laneForFleetRun(run({ status: "merging", awaitingManualMerge: true }))
+    ).toBe("verified");
   });
 });
 

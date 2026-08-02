@@ -76,4 +76,25 @@ describe("Fleet execution contract hashing", () => {
       hashFleetExecutionContract({ ...input, tasks: [task(null, "release")] })
     );
   });
+
+  it("binds planner risk notes into approval evidence", () => {
+    const input = {
+      run: run(),
+      claims: [],
+      dependencies: [],
+    };
+    const withoutRisk = task(null);
+    const withRisk = task(null);
+    withRisk.risk_notes_json = JSON.stringify([
+      {
+        severity: "high",
+        risk: "The migration can strand legacy tasks",
+        mitigation: "Backfill and verify the safe default before approval",
+      },
+    ]);
+
+    expect(
+      hashFleetExecutionContract({ ...input, tasks: [withoutRisk] })
+    ).not.toBe(hashFleetExecutionContract({ ...input, tasks: [withRisk] }));
+  });
 });

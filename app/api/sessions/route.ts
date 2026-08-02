@@ -26,11 +26,12 @@ import {
 import { expandHome, homeDir, isWindows } from "@/lib/platform";
 import { getLessonsBlockForCwd } from "@/lib/dispatch/lessons";
 import { composeLaunchPrompt } from "@/lib/prompt-compose";
+import { isGenericSessionLaunchAllowed } from "@/lib/session-launch";
 import { resolvePlaybookParts } from "@/lib/playbooks-server";
 import {
   parseJsonBody,
-  resolveSandboxedPath,
-  resolveSandboxedPathOrHome,
+  resolveRealSandboxedPath,
+  resolveRealSandboxedPathOrHome,
   getAllowedPathRoots,
   sanitizeGroupPath,
   sanitizeSessionName,
@@ -41,7 +42,9 @@ import {
 export async function GET() {
   try {
     const db = getDb();
-    const sessions = queries.getAllSessions(db).all() as Session[];
+    const sessions = (queries.getAllSessions(db).all() as Session[]).filter(
+      isGenericSessionLaunchAllowed
+    );
     const groups = queries.getAllGroups(db).all() as Group[];
 
     // Convert expanded from 0/1 to boolean
@@ -86,21 +89,21 @@ function generateSessionName(db: ReturnType<typeof getDb>): string {
  * Validate that a session path resolves inside the project's workspace.
  * Returns the resolved absolute path on success, or null if it escapes.
  */
-function resolveProjectPath(
+async function resolveProjectPath(
   input: string,
   project: { working_directory: string } | null | undefined
-): { allowed: boolean; resolved: string } {
+): Promise<{ allowed: boolean; resolved: string }> {
   const resolved = expandHome(input);
   // A project-bound session is confined to that project's workspace. A
   // projectless session may sit in ANY already-registered root (other projects,
   // repos, dispatch repos, live sessions, Stoa-managed dirs) or under the user's
   // home — not home-only, which 403s the common "repo on D:\ / /opt" layout.
   if (project) {
-    return resolveSandboxedPath(resolved, [
+    return resolveRealSandboxedPath(resolved, [
       expandHome(project.working_directory),
     ]);
   }
-  return resolveSandboxedPathOrHome(resolved, getAllowedPathRoots());
+  return resolveRealSandboxedPathOrHome(resolved, getAllowedPathRoots());
 }
 
 type ExistingWorktreeResolution =
@@ -326,6 +329,16 @@ export async function POST(request: NextRequest) {
     if (projectId && !project) {
       return NextResponse.json({ error: "Project not found" }, { status: 400 });
     }
+    if (parentSessionId) {
+      const parent = queries.getSession(db).get(parentSessionId) as
+        Session | undefined;
+      if (parent && !isGenericSessionLaunchAllowed(parent)) {
+        return NextResponse.json(
+          { error: "Internal sessions cannot be forked or resumed" },
+          { status: 409 }
+        );
+      }
+    }
 
     const hasExistingWorktreePath =
       existingWorktreePath !== null && existingWorktreePath !== undefined;
@@ -351,7 +364,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const cwdCheck = resolveProjectPath(cwdInput, scopedProject ?? null);
+    const cwdCheck = await resolveProjectPath(cwdInput, scopedProject ?? null);
     if (!cwdCheck.allowed) {
       return NextResponse.json(
         { error: "workingDirectory is outside the project workspace" },
@@ -422,7 +435,7 @@ export async function POST(request: NextRequest) {
       // agent works across the subfolders (one branch/PR per repo).
       // Validate each picked repo path is inside the project workspace.
       for (const r of workspaceRepos) {
-        const repoCheck = resolveProjectPath(
+        const repoCheck = await resolveProjectPath(
           String(r.path),
           scopedProject ?? null
         );

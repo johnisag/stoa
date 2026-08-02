@@ -1,10 +1,26 @@
-import { mkdtemp, rm, writeFile } from "fs/promises";
-import { join } from "path";
+import { createHash } from "crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
+import { dirname, join } from "path";
 import { tmpDir } from "@/lib/platform";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
+import {
+  containerPathForMountedHostPath,
+  containerPathUnderHome,
+} from "@/lib/container/mounts";
+
+const BASE_A = "a".repeat(40);
+const BASE_B = "b".repeat(40);
 
 const state = vi.hoisted(() => ({
   db: null as unknown,
@@ -18,11 +34,19 @@ const state = vi.hoisted(() => ({
   spawn: vi.fn(),
   stop: vi.fn(async () => true),
   remove: vi.fn(async () => undefined),
-  runGit: vi.fn(async (_cwd?: string, _args?: string[]) => ({
-    stdout: "",
-    stderr: "",
-  })),
+  runGit: vi.fn(),
+  resolvedBaseSha: "a".repeat(40),
+  worktreeHeadSha: "a".repeat(40),
+  artifactRoot: "",
 }));
+
+vi.mock("@/lib/platform", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/platform")>();
+  return {
+    ...actual,
+    stoaHomeDir: () => state.artifactRoot,
+  };
+});
 
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
@@ -41,6 +65,7 @@ vi.mock("@/lib/git-status", async (importOriginal) => {
     ...actual,
     getDefaultBranch: () => "main",
     isGitRepo: () => true,
+    resolveGitCommit: () => state.resolvedBaseSha,
   };
 });
 
@@ -78,6 +103,7 @@ vi.mock("@/lib/worktrees", async (importOriginal) => {
 import { queries } from "@/lib/db";
 import {
   cancelFleetPlanner,
+  fleetPlannerResultPath,
   pollFleetPlanner,
   readBoundedFleetPlannerFile,
   startFleetPlanner,
@@ -90,11 +116,19 @@ function db() {
   return state.db as InstanceType<typeof Database>;
 }
 
-beforeAll(() => {
+beforeAll(async () => {
+  state.artifactRoot = await mkdtemp(
+    join(tmpDir(), "stoa-fleet-planner-home-")
+  );
   const memory = new Database(":memory:");
   createSchema(memory);
   runMigrations(memory);
   state.db = memory;
+});
+
+afterAll(async () => {
+  db().close();
+  await rm(state.artifactRoot, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -108,7 +142,15 @@ beforeEach(() => {
   state.spawn.mockReset();
   state.stop.mockClear();
   state.remove.mockClear();
-  state.runGit.mockClear();
+  state.resolvedBaseSha = BASE_A;
+  state.worktreeHeadSha = BASE_A;
+  state.runGit.mockReset();
+  state.runGit.mockImplementation(
+    async (_cwd?: string, args: string[] = []) => ({
+      stdout: args[0] === "rev-parse" ? `${state.worktreeHeadSha}\n` : "",
+      stderr: "",
+    })
+  );
   db().exec(`
     DELETE FROM fleet_events;
     DELETE FROM fleet_provider_cooldowns;
@@ -116,6 +158,7 @@ beforeEach(() => {
     DELETE FROM fleet_workers;
     DELETE FROM fleet_tasks;
     DELETE FROM fleet_runs;
+    DELETE FROM sessions;
     DELETE FROM dispatch_repos;
     DELETE FROM projects WHERE id <> 'uncategorized';
   `);
@@ -142,11 +185,83 @@ beforeEach(() => {
       null,
       "planner-project"
     );
-  state.spawn.mockResolvedValue({
+  state.spawn.mockImplementation(async (options) => ({
     id: "planner-session",
     worktree_path: "C:\\worktrees\\planner",
-  });
+    branch_name: options.branchName,
+    base_branch: options.baseBranch,
+  }));
 });
+
+function persistedPlanner(runId: string) {
+  const row = db()
+    .prepare(`SELECT settings_json FROM fleet_runs WHERE id = ?`)
+    .get(runId) as { settings_json: string };
+  return JSON.parse(row.settings_json).planner as {
+    state: string;
+    requestId: string;
+    attempt: number;
+    baseSha: string;
+    resultPath: string;
+    nonceHash: string;
+  };
+}
+
+function deliveredPlannerNonce(): string {
+  const deliveryTask = String(state.spawn.mock.calls.at(-1)?.[0].deliveryTask);
+  const match = deliveryTask.match(/"nonce":\s*"([A-Za-z0-9_-]+)"/);
+  if (!match?.[1]) throw new Error("planner nonce was not delivered");
+  return match[1];
+}
+
+async function writePlannerResult(
+  runId: string,
+  tasks: unknown[],
+  overrides: Partial<{
+    nonce: string;
+    requestId: string;
+    attempt: number;
+    baseSha: string;
+  }> = {}
+): Promise<void> {
+  const planner = persistedPlanner(runId);
+  await writeFile(
+    planner.resultPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      nonce: overrides.nonce ?? deliveredPlannerNonce(),
+      runId,
+      requestId: overrides.requestId ?? planner.requestId,
+      attempt: overrides.attempt ?? planner.attempt,
+      baseSha: overrides.baseSha ?? planner.baseSha,
+      tasks,
+    }),
+    "utf8"
+  );
+}
+
+function plannerTask(overrides: Record<string, unknown> = {}) {
+  return {
+    key: "api",
+    title: "API",
+    description: "Build API",
+    taskType: "implementation",
+    fileClaims: ["lib/api"],
+    dependsOn: [],
+    acceptanceCriteria: "The API behavior is covered and passes verification.",
+    riskNotes: [
+      {
+        severity: "medium",
+        risk: "The API contract may affect existing callers.",
+        mitigation: "Run compatibility tests and review changed call sites.",
+      },
+    ],
+    verifyCommand: "npm test",
+    suggestedProvider: "codex",
+    suggestedModel: "gpt-5.5",
+    ...overrides,
+  };
+}
 
 describe("Fleet planner lifecycle", () => {
   it("reads planner output from one bounded regular-file handle", async () => {
@@ -165,13 +280,44 @@ describe("Fleet planner lifecycle", () => {
     }
   });
 
+  it.each([
+    {
+      name: "POSIX",
+      home: "/home/u",
+      stoaHome: "/srv/stoa-custom",
+      expected:
+        "/root/stoa-custom/fleet/run-one/planner/request-one/result.json",
+    },
+    {
+      name: "Windows",
+      home: "C:\\Users\\u",
+      stoaHome: "D:\\stoa-custom",
+      expected:
+        "/root/stoa-custom/fleet/run-one/planner/request-one/result.json",
+    },
+  ])(
+    "maps the $name planner result through a custom STOA_HOME mount",
+    ({ home, stoaHome, expected }) => {
+      const resultPath = fleetPlannerResultPath(
+        { runId: "run-one", requestId: "request-one" },
+        stoaHome
+      );
+      expect(
+        containerPathForMountedHostPath(resultPath, {
+          hostPath: stoaHome,
+          containerPath: containerPathUnderHome(stoaHome, home),
+        })
+      ).toBe(expected);
+    }
+  );
+
   it("claims one launch, uses an isolated worktree, and rejects a duplicate", async () => {
     const created = createDraftFleetRun({
       name: "Automatic plan",
       goal: "Split the work",
       repoId: "planner-repo",
       provider: "codex",
-      model: "gpt-test",
+      model: "gpt-5.5",
     });
     if ("error" in created) throw new Error(created.error);
     const runId = created.run.run.id;
@@ -183,7 +329,7 @@ describe("Fleet planner lifecycle", () => {
     expect(state.spawn).toHaveBeenCalledWith(
       expect.objectContaining({
         agentType: "codex",
-        model: "gpt-test",
+        model: "gpt-5.5",
         useWorktree: true,
         requireWorktree: true,
         requireTaskDelivery: true,
@@ -192,12 +338,122 @@ describe("Fleet planner lifecycle", () => {
       })
     );
     expect(state.spawn.mock.calls[0]?.[0].task).toContain("at most 40");
+    const options = state.spawn.mock.calls[0]?.[0];
+    const nonce = deliveredPlannerNonce();
+    const planner = persistedPlanner(runId);
+    expect(options).toMatchObject({
+      baseBranch: BASE_A,
+      fleetArtifactPaths: [planner.resultPath],
+      fleetWritableRoots: [dirname(planner.resultPath)],
+    });
+    expect(options.task).toContain("[redacted ephemeral nonce]");
+    expect(options.task).not.toContain(nonce);
+    expect(options.deliveryTask).toContain(nonce);
+    expect(planner).toMatchObject({
+      state: "running",
+      attempt: 1,
+      baseSha: BASE_A,
+      nonceHash: createHash("sha256").update(nonce).digest("hex"),
+    });
+    expect(
+      db()
+        .prepare(
+          `SELECT automation_base_sha, settings_json FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toMatchObject({ automation_base_sha: BASE_A });
+    const durableText = JSON.stringify({
+      run: db()
+        .prepare(`SELECT settings_json FROM fleet_runs WHERE id = ?`)
+        .get(runId),
+      events: db()
+        .prepare(`SELECT payload FROM fleet_events WHERE fleet_run_id = ?`)
+        .all(runId),
+      persistedTask: options.task,
+    });
+    expect(durableText).not.toContain(nonce);
 
     await expect(startFleetPlanner(runId)).resolves.toMatchObject({
       error: "a planner is already active or cleaning up",
       status: 409,
     });
     expect(state.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins planner launch to A when the repository branch moves to B", async () => {
+    const created = createDraftFleetRun({
+      name: "Moving planner base",
+      goal: "Plan only the approved repository state",
+      repoId: "planner-repo",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    state.spawn.mockImplementationOnce(async (options) => {
+      state.resolvedBaseSha = BASE_B;
+      return {
+        id: "planner-moving-base",
+        worktree_path: "C:\\worktrees\\planner-moving-base",
+        branch_name: options.branchName,
+        base_branch: options.baseBranch,
+      };
+    });
+
+    const started = await startFleetPlanner(created.run.run.id);
+    if ("error" in started) throw new Error(started.error);
+
+    expect(state.spawn.mock.calls[0]?.[0].baseBranch).toBe(BASE_A);
+    expect(persistedPlanner(created.run.run.id).baseSha).toBe(BASE_A);
+    expect(
+      db()
+        .prepare(`SELECT automation_base_sha FROM fleet_runs WHERE id = ?`)
+        .get(created.run.run.id)
+    ).toEqual({ automation_base_sha: BASE_A });
+  });
+
+  it("fails closed before activation when the spawned worktree base is not bound A", async () => {
+    const created = createDraftFleetRun({
+      name: "Mismatched planner worktree",
+      goal: "Reject an unbound planner checkout",
+      repoId: "planner-repo",
+    });
+    if ("error" in created) throw new Error(created.error);
+    state.spawn.mockResolvedValueOnce({
+      id: "planner-wrong-base",
+      worktree_path: "C:\\worktrees\\planner-wrong-base",
+      branch_name: "feature/planner-wrong-base",
+      base_branch: BASE_B,
+    });
+
+    await expect(startFleetPlanner(created.run.run.id)).resolves.toMatchObject({
+      error: expect.stringContaining("session base contract"),
+      status: 500,
+    });
+    expect(persistedPlanner(created.run.run.id).state).toBe("failed");
+    expect(state.stop).toHaveBeenCalledWith("planner-wrong-base", "failed");
+    expect(state.remove).toHaveBeenCalledWith(
+      "C:\\worktrees\\planner-wrong-base",
+      "C:\\repo",
+      false
+    );
+  });
+
+  it("does not re-claim planning after an already-bound base moves", async () => {
+    const created = createDraftFleetRun({
+      name: "Bound planner base",
+      goal: "Keep the original planning snapshot",
+      repoId: "planner-repo",
+    });
+    if ("error" in created) throw new Error(created.error);
+    db()
+      .prepare(`UPDATE fleet_runs SET automation_base_sha = ? WHERE id = ?`)
+      .run(BASE_A, created.run.run.id);
+    state.resolvedBaseSha = BASE_B;
+
+    await expect(startFleetPlanner(created.run.run.id)).resolves.toEqual({
+      error: "Fleet run base commit changed",
+      status: 409,
+    });
+    expect(state.spawn).not.toHaveBeenCalled();
   });
 
   it("never selects Kilo for an unattended planner", async () => {
@@ -402,6 +658,8 @@ describe("Fleet planner lifecycle", () => {
       return {
         id: "planner-session",
         worktree_path: "C:\\worktrees\\planner",
+        branch_name: state.spawn.mock.calls.at(-1)?.[0].branchName,
+        base_branch: BASE_A,
       };
     });
 
@@ -474,6 +732,7 @@ describe("Fleet planner lifecycle", () => {
       worker_status: string;
       worktree_path: string;
       branch_name: string;
+      base_branch: string;
     }) => void;
     state.spawn.mockImplementationOnce(
       () =>
@@ -506,6 +765,7 @@ describe("Fleet planner lifecycle", () => {
       worker_status: "running",
       worktree_path: "C:\\worktrees\\race",
       branch_name: settings.planner.branchName,
+      base_branch: BASE_A,
     });
 
     const result = await starting;
@@ -542,18 +802,81 @@ describe("Fleet planner lifecycle", () => {
     );
   });
 
-  it("lets only one concurrent poll finalize a generated plan", async () => {
-    const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-planner-"));
+  it("never ingests a preexisting repository PLAN.md", async () => {
+    const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-stale-plan-"));
     try {
       await writeFile(
         join(worktree, "PLAN.md"),
-        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"api","title":"API","description":"Build API","taskType":"implementation","fileClaims":["lib/api"],"dependsOn":[],"verifyCommand":"npm test"}]}\nSTOA_FLEET_PLAN_END`,
+        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"stale","title":"Stale","description":"Do not ingest","taskType":"review","fileClaims":[],"dependsOn":[]}]}\nSTOA_FLEET_PLAN_END`,
         "utf8"
       );
+      state.spawn.mockResolvedValueOnce({
+        id: "planner-stale-plan",
+        worker_status: "running",
+        worktree_path: worktree,
+        base_branch: BASE_A,
+      });
+      const created = createDraftFleetRun({
+        name: "Stale repository plan",
+        goal: "Ignore old planner output",
+        repoId: "planner-repo",
+      });
+      if ("error" in created) throw new Error(created.error);
+      const started = await startFleetPlanner(created.run.run.id);
+      if ("error" in started) throw new Error(started.error);
+
+      const polled = await pollFleetPlanner(created.run.run.id);
+      if ("error" in polled) throw new Error(polled.error);
+      expect(polled.run.run.plannerState).toBe("failed");
+      expect(polled.run.tasks.map((task) => task.title)).toEqual([
+        "Draft scope",
+      ]);
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a result copied from another planner request", async () => {
+    const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-cross-plan-"));
+    try {
+      state.spawn.mockResolvedValueOnce({
+        id: "planner-cross-request",
+        worker_status: "running",
+        worktree_path: worktree,
+        base_branch: BASE_A,
+      });
+      const created = createDraftFleetRun({
+        name: "Cross-request plan",
+        goal: "Authenticate planner output",
+        repoId: "planner-repo",
+      });
+      if ("error" in created) throw new Error(created.error);
+      const started = await startFleetPlanner(created.run.run.id);
+      if ("error" in started) throw new Error(started.error);
+      await writePlannerResult(created.run.run.id, [plannerTask()], {
+        requestId: "another-planner-request",
+      });
+
+      const polled = await pollFleetPlanner(created.run.run.id);
+      if ("error" in polled) throw new Error(polled.error);
+      expect(polled.run.run.plannerState).toBe("failed");
+      expect(polled.run.run.plannerError).toContain("requestId does not match");
+      expect(polled.run.tasks.map((task) => task.title)).toEqual([
+        "Draft scope",
+      ]);
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it("lets only one concurrent poll finalize a generated plan", async () => {
+    const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-planner-"));
+    try {
       state.spawn.mockResolvedValueOnce({
         id: "planner-concurrent",
         worker_status: "running",
         worktree_path: worktree,
+        base_branch: BASE_A,
       });
       const created = createDraftFleetRun({
         name: "Concurrent planner",
@@ -563,6 +886,7 @@ describe("Fleet planner lifecycle", () => {
       if ("error" in created) throw new Error(created.error);
       const started = await startFleetPlanner(created.run.run.id);
       if ("error" in started) throw new Error(started.error);
+      await writePlannerResult(created.run.run.id, [plannerTask()]);
 
       await Promise.all([
         pollFleetPlanner(created.run.run.id),
@@ -574,7 +898,57 @@ describe("Fleet planner lifecycle", () => {
       expect(detail.run.run.plannerState).toBe("ready");
       expect(detail.run.run.plannerError).toBeNull();
       expect(detail.run.tasks).toHaveLength(1);
+      expect(
+        db()
+          .prepare(
+            `SELECT acceptance_criteria, risk_notes_json, agent_type, model
+             FROM fleet_tasks WHERE fleet_run_id = ?`
+          )
+          .get(created.run.run.id)
+      ).toEqual({
+        acceptance_criteria:
+          "The API behavior is covered and passes verification.",
+        risk_notes_json: JSON.stringify(plannerTask().riskNotes),
+        agent_type: "codex",
+        model: "gpt-5.5",
+      });
       expect(state.stop).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it("does not persist a foreign static model on a dynamic provider", async () => {
+    state.binaries.hermes = true;
+    const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-model-owner-"));
+    try {
+      state.spawn.mockResolvedValueOnce({
+        id: "planner-model-owner",
+        worker_status: "running",
+        worktree_path: worktree,
+        base_branch: BASE_A,
+      });
+      const created = createDraftFleetRun({
+        name: "Planner model ownership",
+        goal: "Keep models scoped to their provider",
+        repoId: "planner-repo",
+      });
+      if ("error" in created) throw new Error(created.error);
+      const started = await startFleetPlanner(created.run.run.id);
+      if ("error" in started) throw new Error(started.error);
+      await writePlannerResult(created.run.run.id, [
+        plannerTask({ suggestedProvider: "hermes", suggestedModel: "opus" }),
+      ]);
+
+      const polled = await pollFleetPlanner(created.run.run.id);
+      if ("error" in polled) throw new Error(polled.error);
+      expect(polled.run.run.plannerState).toBe("failed");
+      expect(polled.run.run.plannerError).toContain(
+        "different provider catalog"
+      );
+      expect(polled.run.tasks.map((task) => task.title)).toEqual([
+        "Draft scope",
+      ]);
     } finally {
       await rm(worktree, { recursive: true, force: true });
     }
@@ -583,15 +957,11 @@ describe("Fleet planner lifecycle", () => {
   it("retries an interrupted durable finalization after restart", async () => {
     const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-finalize-"));
     try {
-      await writeFile(
-        join(worktree, "PLAN.md"),
-        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"docs","title":"Docs","description":"Update docs","taskType":"docs","fileClaims":["docs/fleet.md"],"dependsOn":[],"verifyCommand":"npm test"}]}\nSTOA_FLEET_PLAN_END`,
-        "utf8"
-      );
       state.spawn.mockResolvedValueOnce({
         id: "planner-restart",
         worker_status: "running",
         worktree_path: worktree,
+        base_branch: BASE_A,
       });
       const created = createDraftFleetRun({
         name: "Restart finalizer",
@@ -601,6 +971,15 @@ describe("Fleet planner lifecycle", () => {
       if ("error" in created) throw new Error(created.error);
       const started = await startFleetPlanner(created.run.run.id);
       if ("error" in started) throw new Error(started.error);
+      await writePlannerResult(created.run.run.id, [
+        plannerTask({
+          key: "docs",
+          title: "Docs",
+          description: "Update docs",
+          taskType: "docs",
+          fileClaims: ["docs/fleet.md"],
+        }),
+      ]);
       const row = db()
         .prepare(`SELECT settings_json FROM fleet_runs WHERE id = ?`)
         .get(created.run.run.id) as { settings_json: string };
@@ -623,26 +1002,56 @@ describe("Fleet planner lifecycle", () => {
   it("recovers a starting planner identity and ingests its completed plan", async () => {
     const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-starting-"));
     try {
-      await writeFile(
-        join(worktree, "PLAN.md"),
-        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"test","title":"Test","description":"Add tests","taskType":"test","fileClaims":["test/fleet.ts"],"dependsOn":[],"verifyCommand":"npm test"}]}\nSTOA_FLEET_PLAN_END`,
-        "utf8"
-      );
       const created = createDraftFleetRun({
         name: "Recover starting",
         goal: "Resume after process restart",
         repoId: "planner-repo",
       });
       if ("error" in created) throw new Error(created.error);
+      const runId = created.run.run.id;
+      const requestId = "recover-start";
+      const nonce = "restart-only-planner-nonce";
+      const resultPath = fleetPlannerResultPath({ runId, requestId });
+      await mkdir(dirname(resultPath), { recursive: true });
+      await writeFile(
+        resultPath,
+        JSON.stringify({
+          schemaVersion: 1,
+          nonce,
+          runId,
+          requestId,
+          attempt: 1,
+          baseSha: BASE_A,
+          tasks: [
+            plannerTask({
+              key: "test",
+              title: "Test",
+              description: "Add tests",
+              taskType: "test",
+              fileClaims: ["test/fleet.ts"],
+            }),
+          ],
+        }),
+        "utf8"
+      );
       db()
-        .prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`)
+        .prepare(
+          `UPDATE fleet_runs SET settings_json = ?, automation_base_sha = ?
+           WHERE id = ?`
+        )
         .run(
           JSON.stringify({
             phase: "planning",
             canSpawnWorkers: false,
             planner: {
               state: "starting",
-              requestId: "recover-start",
+              requestId,
+              attempt: 1,
+              baseSha: BASE_A,
+              resultPath,
+              nonceHash: createHash("sha256")
+                .update(nonce, "utf8")
+                .digest("hex"),
               projectPath: "C:\\repo",
               branchName: "feature/fleet-plan-recover",
               provider: "claude",
@@ -650,14 +1059,15 @@ describe("Fleet planner lifecycle", () => {
               startedAt: new Date().toISOString(),
             },
           }),
-          created.run.run.id
+          BASE_A,
+          runId
         );
       state.runGit.mockResolvedValueOnce({
         stdout: `worktree ${worktree}\nHEAD abc\nbranch refs/heads/feature/fleet-plan-recover\n\n`,
         stderr: "",
       });
 
-      const recovered = await pollFleetPlanner(created.run.run.id);
+      const recovered = await pollFleetPlanner(runId);
       if ("error" in recovered) throw new Error(recovered.error);
       expect(recovered.run.run.plannerState).toBe("ready");
       expect(recovered.run.tasks[0]?.title).toBe("Test");
@@ -671,14 +1081,42 @@ describe("Fleet planner lifecycle", () => {
     }
   });
 
+  it("fails closed after restart when the recovered worktree HEAD is not the durable base", async () => {
+    const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-restart-base-"));
+    try {
+      state.spawn.mockResolvedValueOnce({
+        id: "planner-restart-base",
+        worker_status: "running",
+        worktree_path: worktree,
+        base_branch: BASE_A,
+      });
+      const created = createDraftFleetRun({
+        name: "Restart base mismatch",
+        goal: "Never recover onto a changed checkout",
+        repoId: "planner-repo",
+      });
+      if ("error" in created) throw new Error(created.error);
+      const started = await startFleetPlanner(created.run.run.id);
+      if ("error" in started) throw new Error(started.error);
+      state.worktreeHeadSha = BASE_B;
+
+      const recovered = await pollFleetPlanner(created.run.run.id);
+      if ("error" in recovered) throw new Error(recovered.error);
+      expect(recovered.run.run.plannerState).toBe("failed");
+      expect(recovered.run.run.plannerError).toContain(
+        "worktree HEAD does not match"
+      );
+      expect(recovered.run.tasks.map((task) => task.title)).toEqual([
+        "Draft scope",
+      ]);
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
   it("rejects and cleans up a recovered Kilo planner without activating it", async () => {
     const worktree = await mkdtemp(join(tmpDir(), "stoa-fleet-kilo-planner-"));
     try {
-      await writeFile(
-        join(worktree, "PLAN.md"),
-        `STOA_FLEET_PLAN_BEGIN\n{"tasks":[{"key":"unsafe","title":"Unsafe","description":"Must not be ingested","taskType":"test","fileClaims":["test/unsafe.ts"],"dependsOn":[],"verifyCommand":"npm test"}]}\nSTOA_FLEET_PLAN_END`,
-        "utf8"
-      );
       const created = createDraftFleetRun({
         name: "Reject recovered Kilo planner",
         goal: "Never adopt an interactive provider after restart",
@@ -690,8 +1128,12 @@ describe("Fleet planner lifecycle", () => {
       const runId = created.run.run.id;
       const requestId = "recover-kilo-planner";
       const branchName = "feature/fleet-plan-recover-kilo";
+      const resultPath = fleetPlannerResultPath({ runId, requestId });
       db()
-        .prepare(`UPDATE fleet_runs SET settings_json = ? WHERE id = ?`)
+        .prepare(
+          `UPDATE fleet_runs SET settings_json = ?, automation_base_sha = ?
+           WHERE id = ?`
+        )
         .run(
           JSON.stringify({
             phase: "planning",
@@ -699,6 +1141,10 @@ describe("Fleet planner lifecycle", () => {
             planner: {
               state: "starting",
               requestId,
+              attempt: 1,
+              baseSha: BASE_A,
+              resultPath,
+              nonceHash: "c".repeat(64),
               projectPath: "C:\\repo",
               branchName,
               provider: "kilo",
@@ -707,18 +1153,19 @@ describe("Fleet planner lifecycle", () => {
               startedAt: new Date().toISOString(),
             },
           }),
+          BASE_A,
           runId
         );
       db()
         .prepare(
           `INSERT INTO sessions (
              id, name, tmux_name, working_directory, group_path, agent_type,
-             worker_task, worker_status, worktree_path, branch_name
+             worker_task, worker_status, worktree_path, branch_name, base_branch
            ) VALUES ('recovered-kilo-planner', 'Recovered Kilo planner',
              'recovered-kilo-planner', ?, 'sessions', 'kilo',
-             'Write PLAN.md', 'running', ?, ?)`
+             'Write planner result', 'running', ?, ?, ?)`
         )
-        .run(worktree, worktree, branchName);
+        .run(worktree, worktree, branchName, BASE_A);
       const run = db()
         .prepare(`SELECT * FROM fleet_runs WHERE id = ?`)
         .get(runId) as FleetRunRow;
@@ -828,6 +1275,7 @@ describe("Fleet planner lifecycle", () => {
       return {
         id: `planner-session-${spawned}`,
         worktree_path: `C:\\worktrees\\planner-${spawned}`,
+        base_branch: BASE_A,
       };
     });
     const create = (name: string, provider: "claude" | "codex") => {

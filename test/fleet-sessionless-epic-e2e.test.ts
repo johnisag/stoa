@@ -23,6 +23,7 @@ vi.mock("@/lib/git-status", async (importOriginal) => {
     ...actual,
     getDefaultBranch: () => "main",
     isGitRepo: () => true,
+    resolveGitCommit: () => "a".repeat(40),
   };
 });
 

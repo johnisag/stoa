@@ -42,6 +42,12 @@ export interface Session {
   // `-c mcp_servers.stoa.*`). NULL for non-conductors and file-configured
   // providers (Claude/Kilo/Kimi). JSON-encoded string[].
   mcp_launch_args: string | null;
+  /** Immutable launch identity for server-owned sessions. Generic user sessions
+   * use `interactive` and have no profile; Fleet supervisors use a versioned,
+   * hashed no-tools broker profile and must never be recreated generically. */
+  session_role?: string | null;
+  launch_profile_json?: string | null;
+  launch_profile_hash?: string | null;
   /** A native fork inherits its parent's transcript; this is the parent's
    * cumulative usage AT FORK TIME (JSON TokenUsage), netted out by the cost path so
    * only the fork's own spend counts. NULL for non-forks. Optional so existing

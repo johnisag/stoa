@@ -4,6 +4,7 @@ import { computeSessionCosts } from "@/lib/session-cost";
 import { persistCostSamples } from "@/lib/cost-history";
 import { getBudgetConfig, evaluateBudget } from "@/lib/budget";
 import { readRateLimitWindow } from "@/lib/rate-limit-window-source";
+import { isInteractiveSessionRole } from "@/lib/session-role";
 
 export type { SessionCost } from "@/lib/session-cost";
 
@@ -15,7 +16,9 @@ export type { SessionCost } from "@/lib/session-cost";
 export async function GET() {
   try {
     const db = getDb();
-    const sessions = queries.getAllSessions(db).all() as Session[];
+    const sessions = (queries.getAllSessions(db).all() as Session[]).filter(
+      isInteractiveSessionRole
+    );
     const costs = await computeSessionCosts(sessions);
 
     // Persist today's samples so analytics has HISTORY (#15) — a side effect of a

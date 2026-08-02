@@ -86,6 +86,8 @@ export interface SpawnSpecMsg {
   cols?: number;
   rows?: number;
   env?: Record<string, string>;
+  envMode?: "inherit" | "replace";
+  fleetWritableRoots?: string[];
 }
 
 // Client -> Host

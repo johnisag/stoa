@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCommitFileDiff } from "@/lib/git-history";
-import { getAllowedPathRoots, resolveSandboxedPath } from "@/lib/api-security";
+import {
+  getAllowedPathRoots,
+  resolveRealSandboxedPath,
+} from "@/lib/api-security";
 
 interface RouteParams {
   params: Promise<{ hash: string }>;
@@ -28,7 +31,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const roots = getAllowedPathRoots();
-    const { allowed, resolved } = resolveSandboxedPath(rawPath, roots);
+    const { allowed, resolved } = await resolveRealSandboxedPath(
+      rawPath,
+      roots
+    );
     if (!allowed) {
       return NextResponse.json(
         { error: "Path is outside the allowed workspace" },

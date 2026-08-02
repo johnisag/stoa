@@ -14,7 +14,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import * as fs from "fs";
 import * as path from "path";
-import { expandHome, homeDir, isWindows } from "./platform";
+import { expandHome, homeDir, isWindows, stoaHomeDir } from "./platform";
 import { getDb, queries } from "./db";
 
 // ── localhost / origin gating ──
@@ -247,10 +247,111 @@ function isUnderRoot(input: string, root: string): boolean {
   );
 }
 
+/** Generic project/file APIs must never turn Stoa's authority store into a
+ * workspace. The source checkout and ordinary worktrees are deliberate safe
+ * namespaces under the historical ~/.stoa layout; tokens, databases, Fleet
+ * contracts, and every custom STOA_HOME child remain server-owned. */
+function isProtectedStoaAuthorityPath(input: string): boolean {
+  const candidate = normalizeForSandbox(input);
+  const defaultHome = normalizeForSandbox(path.join(homeDir(), ".stoa"));
+  const configuredHome = normalizeForSandbox(stoaHomeDir());
+  const authorities = new Map<string, boolean>();
+
+  const addAuthority = (root: string, allowsHistoricalWorkspaces: boolean) => {
+    const normalized = normalizeForSandbox(root);
+    authorities.set(
+      normalized,
+      (authorities.get(normalized) ?? false) || allowsHistoricalWorkspaces
+    );
+    try {
+      const canonical = normalizeForSandbox(fs.realpathSync(root));
+      authorities.set(
+        canonical,
+        (authorities.get(canonical) ?? false) || allowsHistoricalWorkspaces
+      );
+    } catch {
+      // A not-yet-created authority directory still has its lexical boundary.
+    }
+  };
+
+  addAuthority(defaultHome, true);
+  addAuthority(configuredHome, configuredHome === defaultHome);
+
+  for (const [authority, allowsHistoricalWorkspaces] of authorities) {
+    if (!isUnderRoot(candidate, authority)) continue;
+
+    // The installer source checkout and user-session worktrees predate the
+    // dedicated authority store and are intentionally generic workspaces.
+    if (allowsHistoricalWorkspaces) {
+      const relative = path.relative(authority, candidate);
+      const first = relative.split(path.sep).filter(Boolean)[0]?.toLowerCase();
+      if (first === "repo" || first === "worktrees") continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function addGenericPathRoot(roots: Set<string>, value: string | null): void {
+  if (!value) return;
+  const expanded = expandHome(value);
+  if (!isProtectedStoaAuthorityPath(expanded)) roots.add(expanded);
+}
+
+/**
+ * The implicit historical worktree root is trusted only when it is the real
+ * `worktrees` child of a non-broad Stoa state directory. Unlike a root that the
+ * operator explicitly registered, this implicit root must never be allowed to
+ * redirect through a symlink/junction to the home tree or filesystem root.
+ */
+export function isSafeImplicitWorktreesRoot(
+  worktreesRoot: string = path.join(homeDir(), ".stoa", "worktrees"),
+  stateRoot: string = path.join(homeDir(), ".stoa"),
+  userHome: string = homeDir()
+): boolean {
+  if (
+    normalizeForSandbox(worktreesRoot) !==
+    normalizeForSandbox(path.join(stateRoot, "worktrees"))
+  ) {
+    return false;
+  }
+
+  try {
+    const realState = normalizeForSandbox(fs.realpathSync(stateRoot));
+    const realWorktrees = normalizeForSandbox(fs.realpathSync(worktreesRoot));
+    const realHome = normalizeForSandbox(fs.realpathSync(userHome));
+    const filesystemRoot = normalizeForSandbox(path.parse(realState).root);
+
+    if (
+      realState === realHome ||
+      realState === filesystemRoot ||
+      isUnderRoot(realHome, realState)
+    ) {
+      return false;
+    }
+    if (
+      realWorktrees !== normalizeForSandbox(path.join(realState, "worktrees"))
+    ) {
+      return false;
+    }
+    if (
+      realWorktrees === realHome ||
+      realWorktrees === filesystemRoot ||
+      isUnderRoot(realHome, realWorktrees)
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Build the set of filesystem roots that API routes are allowed to touch.
- * Includes registered projects, project repositories, dispatch repos, and
- * Stoa-managed directories (worktrees, temp dirs, clones).
+ * Includes registered projects, project repositories, dispatch repos, and the
+ * ordinary Stoa worktree directory. The Stoa state root itself is deliberately
+ * excluded: it contains the admin token, SQLite authority, and Fleet contracts.
  */
 export function getAllowedPathRoots(): string[] {
   const roots = new Set<string>();
@@ -261,37 +362,45 @@ export function getAllowedPathRoots(): string[] {
       working_directory: string;
     }>;
     for (const p of projects) {
-      if (p.working_directory) roots.add(expandHome(p.working_directory));
+      addGenericPathRoot(roots, p.working_directory);
     }
 
     const repos = queries.getAllProjectRepositories(db).all() as Array<{
       path: string;
     }>;
     for (const r of repos) {
-      if (r.path) roots.add(expandHome(r.path));
+      addGenericPathRoot(roots, r.path);
     }
 
     const dispatchRepos = queries.getAllDispatchRepos(db).all() as Array<{
       repo_path: string;
     }>;
     for (const r of dispatchRepos) {
-      if (r.repo_path) roots.add(expandHome(r.repo_path));
+      addGenericPathRoot(roots, r.repo_path);
     }
 
     const sessions = queries.getAllSessions(db).all() as Array<{
       working_directory: string;
       worktree_path: string | null;
+      session_role?: string | null;
     }>;
     for (const s of sessions) {
-      if (s.working_directory) roots.add(expandHome(s.working_directory));
-      if (s.worktree_path) roots.add(expandHome(s.worktree_path));
+      // A server-owned broker may intentionally run in the system temp dir.
+      // Its cwd is an implementation detail, never a generic API sandbox root.
+      if (s.session_role && s.session_role !== "interactive") continue;
+      addGenericPathRoot(roots, s.working_directory);
+      addGenericPathRoot(roots, s.worktree_path);
     }
   } catch {
     // If the DB isn't ready, fall back to the Stoa-managed dirs only.
   }
 
-  // Always allow Stoa's own managed dirs.
-  roots.add(path.join(homeDir(), ".stoa"));
+  // Ordinary isolated worktrees are a generic editing surface. Never add their
+  // parent (~/.stoa), which also contains server authority and credentials.
+  const implicitWorktreesRoot = path.join(homeDir(), ".stoa", "worktrees");
+  if (isSafeImplicitWorktreesRoot(implicitWorktreesRoot)) {
+    addGenericPathRoot(roots, implicitWorktreesRoot);
+  }
 
   return Array.from(roots);
 }
@@ -311,6 +420,9 @@ export function resolveSandboxedPath(
   roots: string[]
 ): SandboxResult {
   const resolved = path.resolve(expandHome(inputPath));
+  if (isProtectedStoaAuthorityPath(resolved)) {
+    return { allowed: false, resolved };
+  }
   for (const root of roots) {
     if (isUnderRoot(resolved, root)) return { allowed: true, resolved };
   }
@@ -335,12 +447,16 @@ export async function resolveRealSandboxedPath(
   } catch {
     return { allowed: false, resolved: lexical.resolved };
   }
+  if (isProtectedStoaAuthorityPath(realInput)) {
+    return { allowed: false, resolved: realInput };
+  }
 
   for (const root of roots) {
     try {
       const realRoot = await fs.promises.realpath(
         path.resolve(expandHome(root))
       );
+      if (isProtectedStoaAuthorityPath(realRoot)) continue;
       if (isUnderRoot(realInput, realRoot)) {
         // Preserve the verified caller path. Returning the canonical target here
         // would break later lexical project-boundary checks for projects that are
@@ -356,6 +472,81 @@ export async function resolveRealSandboxedPath(
 }
 
 /**
+ * Validate a write destination without requiring the final file to exist.
+ * Existing targets are canonicalized directly (so a file symlink cannot cross
+ * the sandbox); for a new target, the nearest existing parent is canonicalized
+ * before authorizing the lexical destination. This is cross-platform and also
+ * catches Windows junctions through fs.realpath.
+ */
+export async function resolveRealSandboxedWritePath(
+  inputPath: string,
+  roots: string[]
+): Promise<SandboxResult> {
+  const lexical = resolveSandboxedPath(inputPath, roots);
+  if (!lexical.allowed) return lexical;
+
+  try {
+    const realInput = await fs.promises.realpath(lexical.resolved);
+    if (isProtectedStoaAuthorityPath(realInput)) {
+      return { allowed: false, resolved: realInput };
+    }
+    for (const root of roots) {
+      try {
+        const realRoot = await fs.promises.realpath(
+          path.resolve(expandHome(root))
+        );
+        if (
+          !isProtectedStoaAuthorityPath(realRoot) &&
+          isUnderRoot(realInput, realRoot)
+        ) {
+          return { allowed: true, resolved: lexical.resolved };
+        }
+      } catch {
+        // A stale root cannot authorize an existing write target.
+      }
+    }
+    return { allowed: false, resolved: realInput };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      return { allowed: false, resolved: lexical.resolved };
+    }
+  }
+
+  let parent = path.dirname(lexical.resolved);
+  while (true) {
+    try {
+      const realParent = await fs.promises.realpath(parent);
+      if (isProtectedStoaAuthorityPath(realParent)) {
+        return { allowed: false, resolved: realParent };
+      }
+      for (const root of roots) {
+        try {
+          const realRoot = await fs.promises.realpath(
+            path.resolve(expandHome(root))
+          );
+          if (
+            !isProtectedStoaAuthorityPath(realRoot) &&
+            isUnderRoot(realParent, realRoot)
+          ) {
+            return { allowed: true, resolved: lexical.resolved };
+          }
+        } catch {
+          // Missing/stale roots cannot authorize a new target.
+        }
+      }
+      return { allowed: false, resolved: realParent };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return { allowed: false, resolved: parent };
+      }
+      const next = path.dirname(parent);
+      if (next === parent) return { allowed: false, resolved: parent };
+      parent = next;
+    }
+  }
+}
+
+/**
  * Like resolveSandboxedPath, but also allows paths that are under the user's
  * home directory. Used for project-creation/discovery flows where the user has
  * not yet registered a project root.
@@ -365,12 +556,27 @@ export function resolveSandboxedPathOrHome(
   roots: string[]
 ): SandboxResult {
   const resolved = path.resolve(expandHome(inputPath));
+  if (isProtectedStoaAuthorityPath(resolved)) {
+    return { allowed: false, resolved };
+  }
   const h = homeDir();
   if (isUnderRoot(resolved, h)) return { allowed: true, resolved };
   for (const root of roots) {
     if (isUnderRoot(resolved, root)) return { allowed: true, resolved };
   }
   return { allowed: false, resolved };
+}
+
+/**
+ * Realpath-safe form of resolveSandboxedPathOrHome. Missing leaf paths retain
+ * the discovery flow's historical behavior, but their nearest existing parent
+ * is canonicalized so a symlink/junction cannot escape the boundary.
+ */
+export async function resolveRealSandboxedPathOrHome(
+  inputPath: string,
+  roots: string[]
+): Promise<SandboxResult> {
+  return resolveRealSandboxedWritePath(inputPath, [...roots, homeDir()]);
 }
 
 // ── shell-command tokenization ──

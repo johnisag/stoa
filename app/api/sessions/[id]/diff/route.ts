@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionDiff } from "@/lib/session-diff";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 // GET /api/sessions/[id]/diff — the cumulative diff of what the agent changed in
 // this session (committed-since-base + uncommitted + untracked). Read-only.
@@ -11,9 +15,14 @@ export async function GET(
   try {
     const { id } = await params;
     const session = queries.getSession(getDb()).get(id) as Session | undefined;
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     const result = await getSessionDiff({
       cwd: session.working_directory,

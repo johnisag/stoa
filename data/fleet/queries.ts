@@ -27,7 +27,7 @@ import type {
 } from "@/lib/fleet/approval-control-types";
 import { fleetKeys } from "./keys";
 
-async function fetchFleetRuns(): Promise<FleetRunDto[]> {
+export async function fetchFleetRuns(): Promise<FleetRunDto[]> {
   const res = await fetch("/api/fleet/runs");
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Failed to load fleet runs");
@@ -330,6 +330,7 @@ export interface FleetMergeStatusDto {
     taskId: string | null;
     type: string;
     state: string;
+    resultHeadSha?: string | null;
     attemptCount: number;
     error: string | null;
     updatedAt: string;
@@ -526,6 +527,35 @@ export function useRequestFleetMerge(runId: string | null) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || "Failed to request Fleet merge");
+      }
+      return data as FleetMergeStatusDto;
+    },
+    onSuccess: (status) => {
+      if (!runId) return;
+      qc.setQueryData([...fleetKeys.run(runId), "merge"], status);
+      qc.invalidateQueries({ queryKey: fleetKeys.run(runId) });
+      qc.invalidateQueries({ queryKey: fleetKeys.runs() });
+    },
+  });
+}
+
+export function useAuthorizeFleetLanding(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    retry: 0,
+    mutationFn: async (input: FleetLandingAuthorizationInput) => {
+      if (!runId) throw new Error("No fleet run selected");
+      const res = await fetch(
+        `/api/fleet/runs/${encodeURIComponent(runId)}/merge/authorize`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to authorize Fleet landing");
       }
       return data as FleetMergeStatusDto;
     },
@@ -839,6 +869,14 @@ export interface FleetMergeRequestInput {
   expectedExecutionHash?: string;
   expectedBaseSha: string | null;
   expectedIntegrationHeadSha: string | null;
+}
+
+export interface FleetLandingAuthorizationInput {
+  target: "local" | "github_pr";
+  expectedPlanHash: string;
+  expectedExecutionHash: string;
+  expectedBaseSha: string;
+  expectedIntegrationHeadSha: string;
 }
 
 function useFleetTaskOperatorAction<TInput>(

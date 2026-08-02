@@ -47,6 +47,7 @@ export const FLEET_CAPABILITY_ACTIONS = [
   "fleet:cancel",
   "fleet:retry",
   "fleet:merge",
+  "fleet:land",
   "fleet:cleanup",
 ] as const;
 

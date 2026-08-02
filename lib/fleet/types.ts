@@ -1,5 +1,6 @@
 import type { FleetBudgetStopMode, FleetCostConfidence } from "./budgets";
 import type { FleetResourceLimits } from "./resource-admission";
+import type { FleetPlanRiskNote } from "./plan";
 
 export type FleetRunStatus =
   | "draft"
@@ -102,7 +103,7 @@ export type FleetPauseMode = "pause-new" | "pause-and-interrupt";
 export type FleetCancelMode =
   "cancel-preserve-worktrees" | "cancel-and-clean-owned-worktrees";
 export type FleetDestructiveOwnerType =
-  "planner" | "plan_review" | "worker" | "task_review" | "fixer";
+  "planner" | "plan_review" | "worker" | "task_review" | "fixer" | "supervisor";
 export type FleetDestructiveTargetOwnerType =
   FleetDestructiveOwnerType | "integration_workspace";
 export type FleetClaimType = "unknown" | "exclusive";
@@ -313,6 +314,7 @@ export interface FleetTaskRow {
   scheduler_epoch?: number;
   spawn_request_id?: string | null;
   acceptance_criteria?: string | null;
+  risk_notes_json?: string;
   verify_command?: string | null;
   approved_task_hash?: string | null;
   approval_state?: FleetApprovalState;
@@ -626,6 +628,10 @@ export interface FleetRunDto {
   cancelMode: FleetCancelMode | null;
   taskCount: number;
   workerCount: number;
+  /** Operator-attention signals summarized for list/board surfaces. */
+  attentionCount: number;
+  /** Exact reviewed work is waiting for a manual staging or landing action. */
+  awaitingManualMerge: boolean;
   createdAt: string;
   updatedAt: string;
   approvalPreview: FleetApprovalPreview;
@@ -687,6 +693,7 @@ export interface FleetTaskDto {
   maxAttempts: number;
   currentAttempt: number;
   acceptanceCriteria: string | null;
+  riskNotes: FleetPlanRiskNote[];
   verifyCommand: string | null;
   failureCode: string | null;
   createdAt: string;

@@ -8,6 +8,7 @@ import {
 import {
   listWorktrees,
   annotateWorktrees,
+  normalizeWorktreePath,
   type AnnotatedWorktree,
 } from "@/lib/worktrees";
 import { findGitReposUnder } from "@/lib/repo-scan";
@@ -20,6 +21,7 @@ import {
   requireLocalhost,
 } from "@/lib/api-security";
 import { homeDir } from "@/lib/platform";
+import { isInteractiveSessionRole } from "@/lib/session-role";
 
 /**
  * POST /api/git/check
@@ -104,9 +106,22 @@ export async function POST(request: NextRequest) {
     let worktrees: AnnotatedWorktree[] = [];
     try {
       const db = getDb();
-      const sessions = queries.getAllSessions(db).all() as Session[];
+      const allSessions = queries.getAllSessions(db).all() as Session[];
+      const sessions = allSessions.filter(isInteractiveSessionRole);
+      const internalDirs = new Set(
+        allSessions
+          .filter((session) => !isInteractiveSessionRole(session))
+          .flatMap((session) => [
+            session.working_directory,
+            session.worktree_path,
+          ])
+          .filter((dir): dir is string => !!dir)
+          .map(normalizeWorktreePath)
+      );
       worktrees = annotateWorktrees(
-        rawWorktrees,
+        rawWorktrees.filter(
+          (worktree) => !internalDirs.has(normalizeWorktreePath(worktree.path))
+        ),
         sessions.map((s) => s.working_directory)
       ).filter((w) => w.isStoa);
     } catch {

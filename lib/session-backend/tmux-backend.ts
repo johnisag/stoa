@@ -41,19 +41,80 @@ function q(name: string): string {
 
 let pasteCounter = 0;
 
+const SAFE_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * tmux itself inherits the server environment. In replacement mode, expose the
+ * allowlisted values to the new session with argv-safe `-e` options, then run
+ * the trusted binary through `env -i`. The shell command contains only fixed,
+ * validated variable names; secret values remain tmux argv data.
+ */
+export function replacementEnvironmentCommand(
+  binary: string,
+  args: readonly string[],
+  env: Record<string, string>
+): string {
+  const names = Object.keys(env);
+  for (const name of names) {
+    if (!SAFE_ENV_NAME.test(name)) {
+      throw new Error(`Invalid environment variable name: ${name}`);
+    }
+  }
+  const envBinary = resolveBinary("env") || "env";
+  const assignments = names.map((name) => `${name}="$${name}"`);
+  return [
+    "exec",
+    shellQuote(envBinary),
+    "-i",
+    ...assignments,
+    shellQuote(binary),
+    ...args.map(shellQuote),
+  ].join(" ");
+}
+
 export class TmuxBackend implements SessionBackend {
-  async create({ name, cwd, command, env }: CreateOptions): Promise<void> {
+  async create({
+    name,
+    cwd,
+    command,
+    binary,
+    args,
+    env,
+    envMode = "inherit",
+  }: CreateOptions): Promise<void> {
     const resolvedCwd = expandHome(cwd);
     const envArgs = Object.entries(env ?? {}).flatMap(([key, value]) => [
       "-e",
       `${key}=${value}`,
     ]);
+    if (envMode === "replace" && !binary) {
+      throw new Error(
+        "Replacement-environment tmux sessions require structured binary/args"
+      );
+    }
+    const sessionCommand =
+      envMode === "replace"
+        ? replacementEnvironmentCommand(binary!, args ?? [], env ?? {})
+        : command;
     await execFileAsync(tmuxBinary, ["set", "-g", "mouse", "on"], {
       windowsHide: true,
     });
     await execFileAsync(
       tmuxBinary,
-      ["new-session", "-d", "-s", name, "-c", resolvedCwd, ...envArgs, command],
+      [
+        "new-session",
+        "-d",
+        "-s",
+        name,
+        "-c",
+        resolvedCwd,
+        ...envArgs,
+        sessionCommand,
+      ],
       { windowsHide: true }
     );
   }

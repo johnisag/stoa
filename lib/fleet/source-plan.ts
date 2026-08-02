@@ -145,6 +145,7 @@ export function allocateFleetSourcePlan(
   const taskAllocations = allocateFleetAgents({
     tasks: plan.tasks.map((task) => ({
       suggestedProvider: task.agentType,
+      suggestedModel: task.model,
     })),
     availableProviders: available,
     defaultProvider: provider,
@@ -164,10 +165,7 @@ export function allocateFleetSourcePlan(
         return {
           ...task,
           agentType: allocation.provider,
-          model:
-            task.agentType === allocation.provider
-              ? (task.model ?? allocation.model)
-              : allocation.model,
+          model: allocation.model,
         };
       }),
     },

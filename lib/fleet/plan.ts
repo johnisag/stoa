@@ -8,11 +8,18 @@ export interface ParsedFleetPlanTask {
   agentType: string | null;
   model: string | null;
   acceptanceCriteria: string | null;
+  riskNotes?: FleetPlanRiskNote[];
   verifyCommand: string | null;
   /** Canonical registered execution target; never accept an arbitrary path. */
   workingDirectory?: string | null;
   /** Canonical registered execution base for this task. */
   baseBranch?: string | null;
+}
+
+export interface FleetPlanRiskNote {
+  severity: "low" | "medium" | "high";
+  risk: string;
+  mitigation: string;
 }
 
 export const FLEET_PLAN_TEXT_MAX = 24000;
@@ -209,6 +216,7 @@ function toParsedTasks(tasks: DraftTask[]): ParsedFleetPlanTask[] {
     agentType: null,
     model: null,
     acceptanceCriteria: null,
+    riskNotes: [],
     verifyCommand: null,
   }));
 }
@@ -228,16 +236,20 @@ export function parseFleetPlanText(
 }
 
 export function canonicalFleetPlanTasks(tasks: ParsedFleetPlanTask[]) {
-  return tasks.map((task) => ({
-    title: task.title,
-    description: task.description ?? "",
-    taskType: task.taskType,
-    parentIndex: task.parentIndex,
-    sortOrder: task.sortOrder,
-    fileClaims: [...task.fileClaims].sort(),
-    agentType: task.agentType,
-    model: task.model,
-    acceptanceCriteria: task.acceptanceCriteria,
-    verifyCommand: task.verifyCommand,
-  }));
+  return tasks.map((task) => {
+    const riskNotes = task.riskNotes ?? [];
+    return {
+      title: task.title,
+      description: task.description ?? "",
+      taskType: task.taskType,
+      parentIndex: task.parentIndex,
+      sortOrder: task.sortOrder,
+      fileClaims: [...task.fileClaims].sort(),
+      agentType: task.agentType,
+      model: task.model,
+      acceptanceCriteria: task.acceptanceCriteria,
+      ...(riskNotes.length > 0 ? { riskNotes } : {}),
+      verifyCommand: task.verifyCommand,
+    };
+  });
 }

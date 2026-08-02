@@ -28,6 +28,13 @@ import {
   type FleetResourceLimits,
 } from "./resource-admission";
 import type { FleetBudgetStopMode } from "./budgets";
+import type { FleetPlanRiskNote } from "./plan";
+import {
+  FLEET_DEFAULT_PARALLEL_WORKERS,
+  FLEET_MAX_TOTAL_WORKERS,
+} from "./admission";
+import { isValidProviderId, type ProviderId } from "@/lib/providers/registry";
+import { resolveExactModelForAgent } from "@/lib/model-catalog";
 
 export interface NormalizedFleetRunDraft {
   name: string;
@@ -103,10 +110,12 @@ export function normalizeFleetRunDraft(
   if (!name) return { error: "name is required" };
   if (!goal) return { error: "goal is required" };
 
-  const rawConcurrency = Math.trunc(numberValue(payload.maxConcurrency) ?? 1);
+  const rawConcurrency = Math.trunc(
+    numberValue(payload.maxConcurrency) ?? FLEET_DEFAULT_PARALLEL_WORKERS
+  );
   const maxConcurrency = Number.isFinite(rawConcurrency)
-    ? Math.max(1, Math.min(40, rawConcurrency))
-    : 1;
+    ? Math.max(1, Math.min(FLEET_MAX_TOTAL_WORKERS, rawConcurrency))
+    : FLEET_DEFAULT_PARALLEL_WORKERS;
   const rawBudgetUsd = numberValue(payload.budgetUsd);
   const budgetUsd =
     rawBudgetUsd == null || !Number.isFinite(rawBudgetUsd)
@@ -146,6 +155,22 @@ export function normalizeFleetRunDraft(
   );
   if ("error" in automation) return automation;
 
+  const rawProvider = textValue(payload.provider).trim() || "claude";
+  if (
+    rawProvider.length > FLEET_PROVIDER_MAX ||
+    !isValidProviderId(rawProvider) ||
+    rawProvider === "shell"
+  ) {
+    return { error: "provider must be a supported Fleet agent" };
+  }
+  const provider = rawProvider as ProviderId;
+  const rawModel = textValue(payload.model).trim() || null;
+  if (rawModel && rawModel.length > FLEET_MODEL_MAX) {
+    return { error: `model must be at most ${FLEET_MODEL_MAX} characters` };
+  }
+  const resolvedModel = resolveExactModelForAgent(provider, rawModel);
+  if (!resolvedModel.ok) return { error: resolvedModel.error };
+
   return {
     draft: {
       name,
@@ -159,9 +184,8 @@ export function normalizeFleetRunDraft(
       providerCaps: resourceLimits.providerCaps,
       resourceLimits,
       defaultMaxAttempts,
-      provider:
-        cappedTextValue(payload.provider, FLEET_PROVIDER_MAX) || "claude",
-      model: cappedTextValue(payload.model, FLEET_MODEL_MAX) || null,
+      provider,
+      model: resolvedModel.model,
       maxConcurrency,
       reviewPolicy,
       desiredState: fleetDesiredStateForPolicy(automation.policy),
@@ -202,6 +226,34 @@ function parseStringArray(value: string): string[] {
   return Array.isArray(parsed)
     ? parsed.filter((entry): entry is string => typeof entry === "string")
     : [];
+}
+
+function parseFleetRiskNotes(
+  value: string | null | undefined
+): FleetPlanRiskNote[] {
+  const parsed = parseJson(value ?? "[]");
+  if (!Array.isArray(parsed) || parsed.length > 8) return [];
+  const notes: FleetPlanRiskNote[] = [];
+  for (const value of parsed) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const note = value as Record<string, unknown>;
+    const severity = note.severity;
+    const risk = note.risk;
+    const mitigation = note.mitigation;
+    if (
+      (severity !== "low" && severity !== "medium" && severity !== "high") ||
+      typeof risk !== "string" ||
+      !risk.trim() ||
+      risk.length > 500 ||
+      typeof mitigation !== "string" ||
+      !mitigation.trim() ||
+      mitigation.length > 1_000
+    ) {
+      return [];
+    }
+    notes.push({ severity, risk, mitigation });
+  }
+  return notes;
 }
 
 function parseSettingsPlanText(value: string): string | null {
@@ -256,7 +308,12 @@ function parsePlannerSettings(value: string): {
 
 export function toFleetRunDto(
   row: FleetRunRow,
-  counts: { taskCount: number; workerCount: number }
+  counts: {
+    taskCount: number;
+    workerCount: number;
+    attentionCount?: number;
+    awaitingManualMerge?: boolean;
+  }
 ): FleetRunDto {
   const planner = parsePlannerSettings(row.settings_json);
   const automation = parseFleetAutomationPolicy(row.automation_policy_json);
@@ -345,6 +402,8 @@ export function toFleetRunDto(
     cancelMode: row.cancel_mode ?? null,
     taskCount: counts.taskCount,
     workerCount: counts.workerCount,
+    attentionCount: counts.attentionCount ?? 0,
+    awaitingManualMerge: counts.awaitingManualMerge ?? false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     approvalPreview: buildFleetApprovalPreview(
@@ -415,6 +474,7 @@ export function toFleetTaskDto(
     maxAttempts: row.max_attempts ?? 2,
     currentAttempt: row.current_attempt ?? 0,
     acceptanceCriteria: row.acceptance_criteria ?? null,
+    riskNotes: parseFleetRiskNotes(row.risk_notes_json),
     verifyCommand: row.verify_command ?? null,
     failureCode: row.failure_code ?? null,
     createdAt: row.created_at,
@@ -542,10 +602,84 @@ export function composeFleetRunDetail(input: {
   verifications?: FleetVerificationRow[];
   events: FleetEventRow[];
 }): FleetRunDetailDto {
+  const awaitingManualMerge =
+    input.run.merge_requested_at == null &&
+    input.run.approval_state === "approved" &&
+    input.run.plan_hash != null &&
+    input.run.approved_plan_hash === input.run.plan_hash &&
+    (input.run.desired_state ?? "running") === "running" &&
+    input.run.recovery_required === 0 &&
+    ["running", "reviewing", "merging"].includes(input.run.status) &&
+    ((input.run.merge_request_kind === "manual" &&
+      input.run.integration_state === "ready_to_finalize" &&
+      input.run.integration_base_sha === input.run.automation_base_sha &&
+      /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(
+        input.run.integration_head_sha ?? ""
+      )) ||
+      (input.run.merge_request_kind == null &&
+        !parseFleetAutomationPolicy(input.run.automation_policy_json).policy
+          .automaticMerge &&
+        input.tasks.some(
+          (task) =>
+            !["explore", "review", "milestone", "planning"].includes(
+              task.task_type
+            )
+        ) &&
+        input.tasks.every((task) =>
+          ["explore", "review", "milestone", "planning"].includes(
+            task.task_type
+          )
+            ? ["completed", "skipped"].includes(task.status)
+            : task.status === "ready_to_merge"
+        )));
+  const planner = parsePlannerSettings(input.run.settings_json);
+  const runNeedsAttention =
+    input.run.approval_state === "needs_approval" ||
+    input.run.approval_state === "blocked" ||
+    input.run.automation_last_error != null ||
+    planner.state === "failed" ||
+    input.run.pause_reason === "budget_exhausted" ||
+    input.run.budget_hard_limit_at != null ||
+    input.run.budget_warning_emitted_at != null ||
+    input.run.recovery_required === 1 ||
+    input.run.integration_error != null ||
+    input.run.integration_state === "awaiting_operator";
+  const runAttention = runNeedsAttention ? 1 : 0;
+  const taskAttention = input.tasks.filter(
+    (task) =>
+      [
+        "waiting_for_operator",
+        "failed",
+        "blocked",
+        "needs_inspection",
+        "needs_followup",
+      ].includes(task.status) ||
+      task.verification_status === "fail" ||
+      task.verification_status === "error" ||
+      task.review_status === "changes_requested" ||
+      task.provider_state === "backoff" ||
+      task.provider_state === "failed" ||
+      task.retry_not_before != null
+  ).length;
+  const workerAttention = input.workers.filter(
+    (worker) =>
+      ["waiting_for_operator", "failed", "dead", "cleanup_pending"].includes(
+        worker.status
+      ) ||
+      (worker.rendered_status != null &&
+        ["waiting", "error", "dead"].includes(worker.rendered_status)) ||
+      worker.rendered_status_error != null
+  ).length;
   return {
     run: toFleetRunDto(input.run, {
       taskCount: input.tasks.length,
       workerCount: input.workers.length,
+      attentionCount:
+        runAttention +
+        taskAttention +
+        workerAttention +
+        (awaitingManualMerge ? 1 : 0),
+      awaitingManualMerge,
     }),
     tasks: input.tasks.map((task) =>
       toFleetTaskDto(

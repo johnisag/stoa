@@ -5,6 +5,7 @@ import { db, queries, type Session } from "@/lib/db";
 import { backendKeyForSession } from "@/lib/providers/registry";
 import { getSessionBackend } from "@/lib/session-backend";
 import { expandHome, findClaudeProjectDir } from "@/lib/platform";
+import { genericSessionRouteFailure } from "@/lib/session-route-access";
 
 // Fallback: derive the most recent Claude session id from on-disk JSONL files.
 // The pty/host backend can't read a child process env, so getEnv is always null
@@ -53,13 +54,18 @@ export async function GET(
 
   try {
     const session = queries.getSession(db).get(id) as Session | undefined;
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
+    }
 
     // Authoritative backend key (honors a renamed session's tmux_name), same as
     // the send-keys/summarize routes — a bare {provider}-{id} key would address
     // the dead key after a rename and never read the live CLAUDE_SESSION_ID.
-    const tmuxSession = session
-      ? backendKeyForSession(session)
-      : `claude-${id}`;
+    const tmuxSession = backendKeyForSession(session!);
 
     // Check tmux environment for CLAUDE_SESSION_ID
     const backend = getSessionBackend();

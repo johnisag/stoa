@@ -39,6 +39,7 @@ vi.mock("@/lib/abtop-sensor", async () => {
 });
 
 import { GET } from "@/app/api/monitor/route";
+import { computeSessionCosts } from "@/lib/session-cost";
 import type { NextRequest } from "next/server";
 
 function reqWith(qs: string): NextRequest {
@@ -215,5 +216,54 @@ describe("GET /api/monitor (M5 telemetry snapshot)", () => {
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain("cwd");
     expect(serialized).not.toContain("C:/Users/johnis/secret-repo");
+  });
+
+  it("excludes internal sessions and every abtop identifier that could rematerialize them", async () => {
+    state.sessions = [
+      {
+        id: "visible",
+        name: "visible",
+        agent_type: "claude",
+        status: "running",
+        tmux_name: "claude-visible",
+        session_role: "interactive",
+      },
+      {
+        id: "internal",
+        name: "managed supervisor",
+        agent_type: "claude",
+        status: "running",
+        tmux_name: "claude-internal",
+        claude_session_id: "native-internal",
+        session_role: "fleet_supervisor",
+      },
+    ];
+    state.abtopAgents = ["internal", "claude-internal", "native-internal"].map(
+      (sessionId) => ({
+        id: `abtop:claude:${sessionId}`,
+        agentType: "claude" as const,
+        sessionId,
+        name: "must stay hidden",
+        cwd: "C:/tmp/internal",
+        model: "sonnet",
+        status: "running" as const,
+        branch: null,
+        contextPct: 0,
+        contextTokens: 0,
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        childCount: 0,
+        mcpServers: [],
+        ports: [],
+      })
+    );
+
+    const body = await (await GET(reqWith("format=json"))).json();
+
+    expect(body.agents.map((agent: { id: string }) => agent.id)).toEqual([
+      "visible",
+    ]);
+    expect(computeSessionCosts).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "visible" }),
+    ]);
   });
 });

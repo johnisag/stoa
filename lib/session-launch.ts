@@ -39,9 +39,24 @@ import { resolveModelForAgent } from "./model-catalog";
 import { resolveNativeForkParentId } from "./fork";
 import { coerceApprovalMode } from "./sandbox/types";
 import type { Session } from "./db";
+import { isInteractiveSessionRole } from "./session-role";
 
 /** Process-local identity consumed by the orchestration MCP server. */
 export const STOA_CONDUCTOR_SESSION_ENV = "STOA_CONDUCTOR_SESSION_ID";
+
+export function isGenericSessionLaunchAllowed(session: Session): boolean {
+  return isInteractiveSessionRole(session);
+}
+
+/** Server-owned launch profiles are intentionally not reproducible from the
+ * generic Session fields: doing so would silently restore tools/MCP/authority. */
+export function assertGenericSessionLaunchAllowed(session: Session): void {
+  if (!isGenericSessionLaunchAllowed(session)) {
+    throw new Error(
+      `Session ${session.id} has an internal launch profile and cannot be recreated, resumed, or forked generically`
+    );
+  }
+}
 
 /**
  * Environment attached to a persisted session launch.
@@ -88,6 +103,7 @@ export function resolveSessionLaunchOptions(
   session: Session,
   opts?: SessionLaunchOptions
 ): { agentType: AgentType; options: BuildFlagsOptions } | null {
+  assertGenericSessionLaunchAllowed(session);
   const agentType: AgentType = session.agent_type || "claude";
   if (getProvider(agentType).id === "shell") return null;
 

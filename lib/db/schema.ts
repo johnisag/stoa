@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { ensureSessionLaunchProfileSchema } from "./session-launch-profile-schema";
 
 const SAFE_FLEET_AUTOMATION_POLICY_JSON =
   '{"version":1,"automaticPlanning":false,"automaticPlanApproval":false,"automaticStart":false,"automaticFixes":false,"maxAutomaticFixRounds":0,"automaticMerge":false,"mergeTarget":"github_pr","allowSensitivePaths":false,"allowUnconfinedAgents":false,"plannerTaskCap":8,"cleanupPolicy":"preserve","retentionDays":null}';
@@ -247,6 +248,10 @@ function repairPartialFleetManagementSchema(db: Database.Database): void {
       },
       { name: "spawn_request_id", ddl: "spawn_request_id TEXT" },
       { name: "acceptance_criteria", ddl: "acceptance_criteria TEXT" },
+      {
+        name: "risk_notes_json",
+        ddl: "risk_notes_json TEXT NOT NULL DEFAULT '[]'",
+      },
       { name: "verify_command", ddl: "verify_command TEXT" },
       { name: "approved_task_hash", ddl: "approved_task_hash TEXT" },
       {
@@ -745,6 +750,12 @@ export function createSchema(db: Database.Database): void {
       tmux_name TEXT,
       worktree_paths TEXT,
       mcp_launch_args TEXT,
+      -- Internal one-shot sessions (for example the managed Fleet supervisor)
+      -- have an immutable, non-generic launch identity. Ordinary user sessions
+      -- keep the default role and no profile.
+      session_role TEXT NOT NULL DEFAULT 'interactive',
+      launch_profile_json TEXT,
+      launch_profile_hash TEXT,
       -- JSON TokenUsage of the parent's cumulative usage at fork time (#1): a
       -- native Claude fork inherits the parent's transcript, so the cost path nets
       -- this baseline out. NULL for non-forks. (migration 44)
@@ -1311,6 +1322,7 @@ export function createSchema(db: Database.Database): void {
       scheduler_epoch INTEGER NOT NULL DEFAULT 0,
       spawn_request_id TEXT,
       acceptance_criteria TEXT,
+      risk_notes_json TEXT NOT NULL DEFAULT '[]',
       verify_command TEXT,
       approved_task_hash TEXT,
       approval_state TEXT NOT NULL DEFAULT 'draft',
@@ -1975,4 +1987,9 @@ export function createSchema(db: Database.Database): void {
     INSERT OR IGNORE INTO projects (id, name, working_directory, is_uncategorized, sort_order)
     VALUES ('uncategorized', 'Uncategorized', '~', 1, 999999);
   `);
+
+  // createSchema also runs before migrations when opening an existing database.
+  // Keep repair atomic with migration 76 so no process observes half-installed
+  // profile columns or a dropped enforcement trigger.
+  ensureSessionLaunchProfileSchema(db);
 }

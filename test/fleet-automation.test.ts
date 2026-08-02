@@ -22,6 +22,7 @@ vi.mock("@/lib/git-status", async (importOriginal) => {
     ...actual,
     getDefaultBranch: () => "main",
     isGitRepo: () => true,
+    resolveGitCommit: () => "a".repeat(40),
   };
 });
 
@@ -390,6 +391,13 @@ describe("reconcileFleetAutomation", () => {
       schedulerReady: () => true,
       confinementAvailable: () => false,
     });
+    await reconcileFleetAutomation(40, {
+      db: db(),
+      startPlanner,
+      resolveBaseSha: async () => BASE_SHA,
+      schedulerReady: () => true,
+      confinementAvailable: () => false,
+    });
 
     expect(startPlanner).not.toHaveBeenCalled();
     expect(
@@ -399,6 +407,22 @@ describe("reconcileFleetAutomation", () => {
         )
         .get(created.run.run.id)
     ).toEqual({ status: "authorized" });
+    expect(
+      db()
+        .prepare("SELECT automation_last_error FROM fleet_runs WHERE id = ?")
+        .get(created.run.run.id)
+    ).toEqual({
+      automation_last_error:
+        "automatic planning requires confinement or explicit consent",
+    });
+    expect(
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM fleet_events
+           WHERE fleet_run_id = ? AND event_type = 'automation_waiting'`
+        )
+        .get(created.run.run.id)
+    ).toEqual({ n: 1 });
   });
 
   it("does not spin an idle planner before its durable retry deadline", async () => {
@@ -607,6 +631,7 @@ describe("reconcileFleetAutomation", () => {
     await reconcileFleetAutomation(40, common);
     const executionHash = insertExactCleanReviews(runId);
     await reconcileFleetAutomation(40, common);
+    expect(common.reconcilePlanReviews).not.toHaveBeenCalled();
 
     let run = queries.getFleetRun(db()).get(runId) as FleetRunRow;
     expect(run.status).toBe("planned");

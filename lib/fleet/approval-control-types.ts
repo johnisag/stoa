@@ -1,7 +1,31 @@
 import type { FleetApprovalState, FleetTaskStatus } from "./types";
+import type { FleetCostConfidence } from "./budgets";
+
+export interface FleetApprovalCostEstimateDto {
+  kind: "estimated_remaining";
+  estimatedUsd: number | null;
+  estimatedTokens: number | null;
+  confidence: FleetCostConfidence;
+  capped: boolean;
+  sessionCounts: {
+    workerAttempts: number;
+    taskReviews: number;
+    planReviews: number;
+    planner: number;
+    total: number;
+  };
+  projectedTotalUsd: number | null;
+  projectedTotalTokens: number | null;
+  budgetComparison: {
+    usd: "within" | "exceeds" | "unlimited" | "unknown";
+    tokens: "within" | "exceeds" | "unlimited" | "unknown";
+  };
+  exclusions: string[];
+}
 
 export interface FleetApprovalControlPreviewDto {
   runId: string;
+  estimate: FleetApprovalCostEstimateDto;
   bindings: {
     approvedPlanHash: string | null;
     currentPlanHash: string;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   advanceFleetCostWatermark,
+  estimateFleetPlanReservation,
   estimateFleetTaskReservation,
   evaluateFleetBudget,
   reconcileFleetWorkerActualCost,
@@ -27,6 +28,57 @@ function sample(
 }
 
 describe("Fleet budgets", () => {
+  it("builds a bounded plan reservation without presenting no plan as zero cost", () => {
+    expect(estimateFleetPlanReservation({ sessions: [] })).toEqual({
+      usd: null,
+      tokens: null,
+      confidence: "unknown",
+      sessionCount: 0,
+      capped: false,
+    });
+
+    const estimate = estimateFleetPlanReservation({
+      sessions: [
+        {
+          provider: "codex",
+          model: "gpt-5.5",
+          taskType: "implementation",
+          count: 2,
+        },
+        {
+          provider: "codex",
+          model: "gpt-5.5",
+          taskType: "review",
+          count: 4,
+        },
+      ],
+    });
+    expect(estimate).toMatchObject({
+      tokens: 800_000,
+      confidence: "medium",
+      sessionCount: 6,
+      capped: false,
+    });
+    expect(estimate.usd).toBeGreaterThan(0);
+
+    expect(
+      estimateFleetPlanReservation({
+        sessions: [
+          {
+            provider: "hermes",
+            model: "openrouter/x",
+            taskType: "implementation",
+            count: 50_000,
+          },
+        ],
+      })
+    ).toMatchObject({
+      confidence: "unknown",
+      sessionCount: 1_024,
+      capped: true,
+    });
+  });
+
   it("uses exact history conservatively and reports explicit confidence", () => {
     const history: FleetReservationHistorySample[] = Array.from(
       { length: 5 },

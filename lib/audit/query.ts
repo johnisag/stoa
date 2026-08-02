@@ -54,6 +54,9 @@ export const AUDIT_PAYLOAD_CAP = 8192;
 export interface AuditQuery {
   /** Constrain to one backend session key. Omit for a fleet-wide read. */
   sessionKey?: string;
+  /** Exclude keys owned by server-internal session rows. Used by generic fleet
+   * audit/search exports so pagination and counts cannot reveal broker events. */
+  excludeInternalSessions?: boolean;
   /** Filter to these event kinds (already validated). Omit/empty → all kinds. */
   types?: SessionEventType[];
   /** Inclusive epoch-millis lower / upper bound on created_at. */
@@ -82,6 +85,20 @@ export function buildAuditSql(q: AuditQuery): AuditSql {
   if (q.sessionKey !== undefined) {
     where.push("session_key = ?");
     whereParams.push(q.sessionKey);
+  }
+  if (q.excludeInternalSessions) {
+    where.push(
+      `NOT EXISTS (
+        SELECT 1 FROM sessions AS internal_session
+        WHERE internal_session.session_role IS NOT NULL
+          AND internal_session.session_role <> ''
+          AND internal_session.session_role <> 'interactive'
+          AND COALESCE(internal_session.tmux_name,
+            COALESCE(NULLIF(internal_session.agent_type, ''), 'claude')
+              || '-' || internal_session.id)
+            = session_events.session_key
+      )`
+    );
   }
   if (q.types && q.types.length > 0) {
     where.push(`event_type IN (${q.types.map(() => "?").join(", ")})`);

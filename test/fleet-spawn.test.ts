@@ -19,6 +19,33 @@ const AUTHORIZED_AUTOMATION_POLICY = fleetAutomationPolicyJson({
 });
 
 describe("fleet spawn wrapper", () => {
+  it("rejects a persisted unsupported model instead of clamping at spawn", async () => {
+    spawnWorker.mockClear();
+    await expect(
+      spawnFleetWorker({
+        run: {
+          id: "run-invalid-model",
+          provider: "codex",
+          model: "gpt-5.5",
+          automation_policy_json: AUTHORIZED_AUTOMATION_POLICY,
+        } as FleetRunRow,
+        task: {
+          id: "task-invalid-model",
+          title: "Invalid model",
+          task_type: "task",
+          agent_type: "codex",
+          model: "gpt-4-unsupported",
+        } as FleetTaskRow,
+        workingDirectory: "C:\\repo",
+        claims: ["lib"],
+        dependencies: [],
+        attempt: 1,
+        spawnRequestId: "run-invalid-model:task-invalid-model:1",
+      })
+    ).rejects.toThrow("model is not supported by codex");
+    expect(spawnWorker).not.toHaveBeenCalled();
+  });
+
   it("fails closed before launching a stale Kilo Fleet task", async () => {
     spawnWorker.mockClear();
     await expect(
@@ -65,6 +92,8 @@ describe("fleet spawn wrapper", () => {
         id,
         title: id,
         task_type: "task",
+        agent_type: "codex",
+        model: "gpt-5.5",
         base_branch: "develop",
       }) as FleetTaskRow;
     for (const task of [makeTask("task-aaaaaaaa"), makeTask("task-bbbbbbbb")]) {
@@ -87,6 +116,8 @@ describe("fleet spawn wrapper", () => {
     expect(options.every((value) => value.requireTaskDelivery)).toBe(true);
     expect(options.every((value) => value.useWorktree)).toBe(true);
     expect(options.every((value) => value.requireWorktree)).toBe(true);
+    expect(options.every((value) => value.requireExactModel)).toBe(true);
+    expect(options.every((value) => value.model === "gpt-5.5")).toBe(true);
   });
 
   it("isolates review tasks instead of using the source checkout", async () => {
@@ -105,6 +136,8 @@ describe("fleet spawn wrapper", () => {
         id: "review-1",
         title: "Review",
         task_type: "review",
+        agent_type: "codex",
+        model: "gpt-5.5",
       } as FleetTaskRow,
       workingDirectory: "C:\\repo",
       claims: [],
@@ -137,6 +170,8 @@ describe("fleet spawn wrapper", () => {
         id: "task-1",
         title: "Runtime",
         task_type: "task",
+        agent_type: "codex",
+        model: "gpt-5.5",
         base_branch: "a".repeat(40),
       } as FleetTaskRow,
       workingDirectory: "C:\\repo",
@@ -159,6 +194,9 @@ describe("fleet spawn wrapper", () => {
     expect(options.task).toContain("[redacted ephemeral nonce]");
     expect(options.deliveryTask).toContain(nonce);
     expect(options.deliveryTask).toContain("Worker ID: worker-1");
+    expect(options.fleetArtifactPaths).toEqual([
+      "C:\\fleet\\run-1\\task-1\\1\\report.json",
+    ]);
     expect(result.branchName).toBe("feature/runtime");
   });
 });

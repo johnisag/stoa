@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
+import { internalSessionProfile } from "./internal-session-fixture";
 
 const state = vi.hoisted(() => ({ db: null as unknown }));
 vi.mock("@/lib/db", async (importOriginal) => {
@@ -29,6 +30,7 @@ import {
   listThread,
   nextUnreadMessage,
   claimDelivery,
+  sessionsWithPendingDelivery,
   channelPairKey,
   validateChannelBody,
   ChannelValidationError,
@@ -39,8 +41,21 @@ function db() {
   return state.db as InstanceType<typeof Database>;
 }
 
-function addSession(id: string) {
-  db().prepare("INSERT INTO sessions (id, name) VALUES (?, ?)").run(id, id);
+function addSession(id: string, role = "interactive") {
+  const profile = role === "interactive" ? null : internalSessionProfile(role);
+  db()
+    .prepare(
+      `INSERT INTO sessions
+       (id, name, session_role, launch_profile_json, launch_profile_hash)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      id,
+      role,
+      profile?.profileJson ?? null,
+      profile?.profileHash ?? null
+    );
 }
 
 beforeAll(() => {
@@ -112,6 +127,20 @@ describe("sendChannelMessage", () => {
     expect(() =>
       sendChannelMessage({ from: "alice", to: "", body: "x" })
     ).toThrow(/to is required/);
+  });
+
+  it("rejects server-owned or future-role sessions at either endpoint", () => {
+    addSession("internal", "fleet_supervisor");
+    addSession("future", "future_internal_role");
+
+    for (const id of ["internal", "future"]) {
+      expect(() =>
+        sendChannelMessage({ from: id, to: "alice", body: "hidden" })
+      ).toThrow(/no session with id/);
+      expect(() =>
+        sendChannelMessage({ from: "alice", to: id, body: "hidden" })
+      ).toThrow(/no session with id/);
+    }
   });
 });
 
@@ -192,6 +221,32 @@ describe("delivery pick + claimDelivery (the opt-in push path)", () => {
 });
 
 describe("listThread", () => {
+  it("rejects direct inbox/thread reads for a server-owned session", () => {
+    addSession("internal", "fleet_supervisor");
+    expect(() => peekInbox("internal")).toThrow(/no session with id/);
+    expect(() => consumeInbox("internal")).toThrow(/no session with id/);
+    expect(() => nextUnreadMessage("internal")).toThrow(/no session with id/);
+    expect(() => listThread("alice", "internal")).toThrow(/no session with id/);
+  });
+
+  it("hides legacy messages involving an internal endpoint from generic delivery", () => {
+    addSession("internal", "fleet_supervisor");
+    db()
+      .prepare(
+        `INSERT INTO channel_messages
+          (id, pair_key, from_session_id, to_session_id, body)
+         VALUES
+          ('legacy-from', 'alice__internal', 'internal', 'alice', 'secret'),
+          ('legacy-to', 'alice__internal', 'alice', 'internal', 'secret')`
+      )
+      .run();
+
+    expect(peekInbox("alice")).toEqual([]);
+    expect(nextUnreadMessage("alice")).toBeNull();
+    expect(sessionsWithPendingDelivery()).toEqual([]);
+    expect(claimDelivery("legacy-from")).toBe(false);
+  });
+
   it("returns both directions oldest-first, scoped to the pair", () => {
     sendChannelMessage({ from: "alice", to: "bob", body: "a→b 1" });
     sendChannelMessage({ from: "bob", to: "alice", body: "b→a 1" });

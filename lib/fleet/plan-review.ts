@@ -361,6 +361,14 @@ function reviewGraph(contract: FleetPlanReviewContract): unknown {
     provider: task.agent_type ?? contract.run.provider,
     model: task.model ?? contract.run.model,
     acceptanceCriteria: task.acceptance_criteria ?? null,
+    riskNotes: (() => {
+      try {
+        const parsed = JSON.parse(task.risk_notes_json ?? "[]");
+        return Array.isArray(parsed) ? parsed : "<invalid JSON>";
+      } catch {
+        return "<invalid JSON>";
+      }
+    })(),
     verifyCommand: task.verify_command ?? null,
     dependsOn: contract.dependencies
       .filter((dependency) => dependency.task_id === task.id)

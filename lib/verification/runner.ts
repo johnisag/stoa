@@ -5,11 +5,8 @@
  * literal `&&` is Stoa's step delimiter; no command is passed to a shell.
  */
 
-import { execFile } from "child_process";
-import { promisify } from "util";
-import { isWindows, resolveBinary } from "../platform";
-
-const execFileAsync = promisify(execFile);
+import { execFile, spawn, type ChildProcess } from "child_process";
+import { isWindows, killTreeArgs, resolveBinary } from "../platform";
 
 /** Hard ceiling for one verification run before it is killed. */
 export const VERIFY_TIMEOUT_MS = (() => {
@@ -131,19 +128,414 @@ export interface VerifyResult {
   output: string;
 }
 
-function outputTail(value: string): string {
-  return value.length > VERIFY_OUTPUT_TAIL_MAX
-    ? `…(truncated)…\n${value.slice(-VERIFY_OUTPUT_TAIL_MAX)}`
-    : value;
+export interface RunVerifyOptions {
+  /** Test/embedding override; production callers use VERIFY_TIMEOUT_MS. */
+  timeoutMs?: number;
+  /** Test/embedding override; production callers use VERIFY_MAX_OUTPUT_BUFFER. */
+  maxOutputBuffer?: number;
+}
+
+interface VerifyStepResult {
+  code: number | string | null;
+  killed: boolean;
+  output: string;
+  reason: string;
+}
+
+function positiveLimit(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && Number(value) > 0
+    ? Math.floor(Number(value))
+    : fallback;
+}
+
+function processClosed(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+interface PosixProcess {
+  pid: number;
+  ppid: number;
+  state: string;
+}
+
+const POSIX_TREE_SWEEP_LIMIT = 4;
+const POSIX_SNAPSHOT_TIMEOUT_MS = 500;
+const POSIX_SNAPSHOT_MAX_BUFFER = 4 * 1024 * 1024;
+
+function parsePosixProcessSnapshot(stdout: string): PosixProcess[] {
+  const processes: PosixProcess[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)/.exec(line);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    if (!Number.isSafeInteger(pid) || !Number.isSafeInteger(ppid)) continue;
+    processes.push({ pid, ppid, state: match[3] });
+  }
+  return processes;
+}
+
+function collectPosixDescendants(
+  processes: PosixProcess[],
+  rootPid: number
+): PosixProcess[] {
+  const byParent = new Map<number, PosixProcess[]>();
+  for (const processInfo of processes) {
+    if (processInfo.pid === processInfo.ppid) continue;
+    const children = byParent.get(processInfo.ppid);
+    if (children) children.push(processInfo);
+    else byParent.set(processInfo.ppid, [processInfo]);
+  }
+
+  const descendants: PosixProcess[] = [];
+  const seen = new Set<number>([rootPid]);
+  const pending = [rootPid];
+  while (pending.length > 0) {
+    const parentPid = pending.shift()!;
+    for (const child of byParent.get(parentPid) ?? []) {
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
+      descendants.push(child);
+      pending.push(child.pid);
+    }
+  }
+  return descendants;
+}
+
+function snapshotPosixProcesses(
+  psBinary: string
+): Promise<PosixProcess[] | null> {
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        psBinary,
+        ["-A", "-o", "pid=,ppid=,stat="],
+        {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: POSIX_SNAPSHOT_MAX_BUFFER,
+          timeout: POSIX_SNAPSHOT_TIMEOUT_MS,
+          windowsHide: true,
+        },
+        (error, stdout) => {
+          resolve(error ? null : parsePosixProcessSnapshot(stdout));
+        }
+      );
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function safePosixTarget(pid: number): boolean {
+  return (
+    Number.isSafeInteger(pid) &&
+    pid > 1 &&
+    pid !== process.pid &&
+    pid !== process.ppid
+  );
+}
+
+function signalPosixProcess(pid: number, signal: NodeJS.Signals): boolean {
+  if (!safePosixTarget(pid)) return false;
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Freeze and collect descendants before destroying the root process group.
+ * `detached: true`/setsid can leave that group while retaining a PPID link, so
+ * each snapshot closes over PPIDs and freezes escaped descendants individually.
+ * Repeating until stable closes the snapshot-to-SIGSTOP fork race while keeping
+ * cleanup bounded.
+ *
+ * Portable unprivileged POSIX APIs cannot recover a daemon that double-forks
+ * and reparents before the first snapshot. Hostile verification still needs an
+ * external OS containment boundary (for example a cgroup/container); this sweep
+ * covers ordinary Node detached children without assuming Linux-only facilities.
+ */
+async function collectAndFreezePosixTree(rootPid: number): Promise<number[]> {
+  try {
+    process.kill(-rootPid, "SIGSTOP");
+  } catch {
+    // The group may already be gone. A snapshot can still find a surviving
+    // detached child while its PPID relationship remains observable.
+  }
+
+  const psBinary = resolveBinary("ps");
+  if (!psBinary) return [];
+
+  const frozen: number[] = [];
+  const seen = new Set<number>();
+  for (let round = 0; round < POSIX_TREE_SWEEP_LIMIT; round += 1) {
+    const snapshot = await snapshotPosixProcesses(psBinary);
+    if (!snapshot) break;
+    const descendants = collectPosixDescendants(snapshot, rootPid);
+    let newlyFrozen = 0;
+    for (const descendant of descendants) {
+      if (seen.has(descendant.pid) || descendant.state.startsWith("Z")) {
+        continue;
+      }
+      if (!signalPosixProcess(descendant.pid, "SIGSTOP")) continue;
+      seen.add(descendant.pid);
+      frozen.push(descendant.pid);
+      newlyFrozen += 1;
+    }
+    if (newlyFrozen === 0) break;
+  }
+  return frozen;
+}
+
+/**
+ * Kill the exact verification process tree. Windows needs `taskkill /T /F`
+ * because the direct child can be cmd.exe wrapping an npm `.cmd` shim. POSIX
+ * verification children start in their own process group. A bounded PPID sweep
+ * also captures descendants that escape that group with setsid()/detached.
+ */
+async function killVerifyTree(
+  child: ChildProcess,
+  onWindows: boolean
+): Promise<void> {
+  const pid = child.pid;
+  if (!pid) {
+    child.kill("SIGKILL");
+    return;
+  }
+
+  const argv = killTreeArgs(pid, onWindows);
+  if (!argv) {
+    const descendants = await collectAndFreezePosixTree(pid);
+    let groupKilled = false;
+    try {
+      process.kill(-pid, "SIGKILL");
+      groupKilled = true;
+    } catch {
+      // The group may have exited between the snapshot and this call.
+    }
+    // Reverse discovery order is leaf-first for the breadth-first PPID walk.
+    for (let index = descendants.length - 1; index >= 0; index -= 1) {
+      signalPosixProcess(descendants[index], "SIGKILL");
+    }
+    // Preserve the direct-child fallback for test doubles and unusual hosts
+    // where negative-PID process-group signaling is unavailable.
+    if (!groupKilled && !processClosed(child)) child.kill("SIGKILL");
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (fallback: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (fallback && !processClosed(child)) child.kill("SIGKILL");
+      resolve();
+    };
+    try {
+      const killer = spawn(argv[0], argv.slice(1), {
+        stdio: "ignore",
+        windowsHide: true,
+        shell: false,
+      });
+      killer.once("error", () => finish(true));
+      killer.once("close", (code) => finish(code !== 0));
+    } catch {
+      finish(true);
+    }
+  });
+}
+
+function appendOutputTail(
+  current: string,
+  chunk: Buffer
+): { value: string; truncated: boolean } {
+  const combined = current + chunk.toString("utf-8");
+  return combined.length > VERIFY_OUTPUT_TAIL_MAX
+    ? {
+        value: combined.slice(-VERIFY_OUTPUT_TAIL_MAX),
+        truncated: true,
+      }
+    : { value: combined, truncated: false };
+}
+
+function displayOutputTail(value: string, truncated: boolean): string {
+  return truncated ? `…(truncated)…\n${value}` : value;
+}
+
+/**
+ * Execute one already-tokenized step and retain ownership of its process tree.
+ * The returned promise waits for both the direct child and the platform tree
+ * killer before resolving on a timeout/output limit.
+ */
+async function runVerifyStep(
+  file: string,
+  args: string[],
+  cwd: string,
+  options: Required<RunVerifyOptions>,
+  onWindows: boolean
+): Promise<VerifyStepResult> {
+  return new Promise<VerifyStepResult>((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(file, args, {
+        cwd,
+        env: { ...process.env, CI: "1" },
+        detached: !onWindows,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "SPAWN_ERROR";
+      resolve({
+        code,
+        killed: false,
+        output: "",
+        reason: `spawn error: ${code}`,
+      });
+      return;
+    }
+
+    let output = "";
+    let outputTruncated = false;
+    let outputBytes = 0;
+    let spawnCode: string | null = null;
+    let terminationReason: "timeout" | "maxBuffer" | null = null;
+    let settled = false;
+    let timer: NodeJS.Timeout | null = null;
+
+    const finish = (result: VerifyStepResult) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(result);
+    };
+
+    const limitedResult = (
+      reason: "timeout" | "maxBuffer"
+    ): VerifyStepResult => {
+      const body = displayOutputTail(output, outputTruncated);
+      return reason === "timeout"
+        ? {
+            code: null,
+            killed: true,
+            output: body,
+            reason: `timed out after ${Math.round(options.timeoutMs / 1000)}s`,
+          }
+        : {
+            code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+            killed: false,
+            output: body,
+            reason: `output exceeded ${options.maxOutputBuffer / (1024 * 1024)} MB`,
+          };
+    };
+
+    const releaseOwnedHandles = () => {
+      for (const stream of [child.stdout, child.stderr]) {
+        if (!stream) continue;
+        try {
+          stream.destroy();
+        } catch {
+          // The pipe may already have closed while tree teardown was running.
+        }
+        try {
+          (stream as typeof stream & { unref?: () => void }).unref?.();
+        } catch {
+          // `destroy` is the portable release; unref is an optional extra on
+          // stream implementations backed by a ref-counted OS handle.
+        }
+      }
+      try {
+        child.unref();
+      } catch {
+        // A spawned child normally supports unref; tolerate narrow test doubles
+        // and a handle that closed concurrently.
+      }
+    };
+
+    const terminate = (reason: "timeout" | "maxBuffer") => {
+      if (terminationReason) return;
+      terminationReason = reason;
+      void (async () => {
+        try {
+          await killVerifyTree(child, onWindows);
+        } catch {
+          // Tree cleanup is best-effort on a process that may already be gone;
+          // the limit verdict must still settle and release owned handles.
+        } finally {
+          // A reparented descendant can retain copies of these pipe FDs after
+          // the owned process tree is gone, so ChildProcess `close` may never
+          // arrive. Limit handling owns finalization and never waits for EOF.
+          releaseOwnedHandles();
+          finish(limitedResult(reason));
+        }
+      })();
+    };
+    const collect = (chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      outputBytes += buffer.byteLength;
+      const next = appendOutputTail(output, buffer);
+      output = next.value;
+      outputTruncated ||= next.truncated;
+      if (outputBytes > options.maxOutputBuffer) terminate("maxBuffer");
+    };
+
+    child.stdout?.on("data", collect);
+    child.stderr?.on("data", collect);
+    child.once("error", (error) => {
+      spawnCode = (error as NodeJS.ErrnoException).code ?? "SPAWN_ERROR";
+    });
+
+    timer = setTimeout(() => terminate("timeout"), options.timeoutMs);
+    timer.unref?.();
+
+    child.once("close", (code, signal) => {
+      // Once a limit fires, its finalizer owns the verdict even if `close`
+      // races with tree teardown or arrives after forced stream destruction.
+      if (terminationReason) return;
+      const body = displayOutputTail(output, outputTruncated);
+      if (spawnCode) {
+        finish({
+          code: spawnCode,
+          killed: false,
+          output: body,
+          reason: `spawn error: ${spawnCode}`,
+        });
+        return;
+      }
+      const resultCode = code ?? signal ?? null;
+      finish({
+        code: resultCode,
+        killed: false,
+        output: body,
+        reason:
+          typeof resultCode === "string"
+            ? `spawn error: ${resultCode}`
+            : `exit ${resultCode}`,
+      });
+    });
+  });
 }
 
 /** Run a verification command step by step without invoking a shell. */
 export async function runVerify(
   cwd: string,
-  command: string
+  command: string,
+  options: RunVerifyOptions = {}
 ): Promise<VerifyResult> {
   const parsed = parseVerifySteps(command);
   if (!("steps" in parsed)) return { status: "error", output: parsed.error };
+
+  const limits: Required<RunVerifyOptions> = {
+    timeoutMs: positiveLimit(options.timeoutMs, VERIFY_TIMEOUT_MS),
+    maxOutputBuffer: positiveLimit(
+      options.maxOutputBuffer,
+      VERIFY_MAX_OUTPUT_BUFFER
+    ),
+  };
 
   for (const step of parsed.steps) {
     const resolved = resolveBinary(step[0]);
@@ -151,41 +543,18 @@ export async function runVerify(
       return { status: "error", output: `verify binary not found: ${step[0]}` };
     }
     const { file, args } = spawnArgs(resolved, step.slice(1), isWindows);
-    try {
-      await execFileAsync(file, args, {
-        cwd,
-        encoding: "utf-8",
-        timeout: VERIFY_TIMEOUT_MS,
-        killSignal: "SIGKILL",
-        windowsHide: true,
-        maxBuffer: VERIFY_MAX_OUTPUT_BUFFER,
-        env: { ...process.env, CI: "1" },
-      });
-    } catch (error) {
-      const processError = error as {
-        code?: number | string | null;
-        killed?: boolean;
-        stdout?: string;
-        stderr?: string;
-      };
-      const status = summarizeVerifyExit({
-        ok: false,
-        code: processError.code ?? null,
-        killed: !!processError.killed,
-      });
-      const reason = processError.killed
-        ? `timed out after ${Math.round(VERIFY_TIMEOUT_MS / 1000)}s`
-        : processError.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
-          ? `output exceeded ${VERIFY_MAX_OUTPUT_BUFFER / (1024 * 1024)} MB`
-          : typeof processError.code === "string"
-            ? `spawn error: ${processError.code}`
-            : `exit ${processError.code}`;
-      const body = (processError.stdout ?? "") + (processError.stderr ?? "");
-      return {
-        status,
-        output: `$ ${step.join(" ")}\n[${reason}]\n${outputTail(body)}`.trim(),
-      };
-    }
+    const result = await runVerifyStep(file, args, cwd, limits, isWindows);
+    if (result.code === 0 && !result.killed) continue;
+    const status = summarizeVerifyExit({
+      ok: false,
+      code: result.code,
+      killed: result.killed,
+    });
+    return {
+      status,
+      output:
+        `$ ${step.join(" ")}\n[${result.reason}]\n${result.output}`.trim(),
+    };
   }
 
   return { status: "pass", output: "" };

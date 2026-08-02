@@ -39,7 +39,8 @@ export const FLEET_MCP_CAPABILITIES = Object.freeze({
     issuance: "admin-http-only",
     tokenStorage: "sha256-only",
     exactScope: ["action", "run", "task", "worker", "attempt", "hash"],
-    approvalAndMerge: "separate-human-issued-capability-required",
+    approvalAndMerge:
+      "separate-human-issued-stage-and-landing-capabilities-required",
     operatorRequests: "informational-only",
   },
   tools: {
@@ -59,6 +60,7 @@ export const FLEET_MCP_CAPABILITIES = Object.freeze({
       "fleet_cancel_run",
       "fleet_submit_artifact",
       "fleet_merge_run",
+      "fleet_authorize_landing",
     ],
     intentionallyUnadvertised: [
       "scheduler_tick",

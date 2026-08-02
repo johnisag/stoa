@@ -11,6 +11,12 @@ import {
 import { approvedExecutionHash } from "./merge-readiness";
 import { fleetLaunchBlockedResult } from "./recovery-gate";
 import { parseFleetAutomationPolicy } from "./automation-policy";
+import {
+  estimateFleetPlanReservation,
+  type FleetPlanReservationSession,
+  type FleetReservationHistorySample,
+} from "./budgets";
+import type { FleetApprovalCostEstimateDto } from "./approval-control-types";
 import type {
   FleetApprovalState,
   FleetRunRow,
@@ -60,6 +66,7 @@ export type FleetApprovalControlResult =
 
 export interface FleetApprovalControlPreview {
   runId: string;
+  estimate: FleetApprovalCostEstimateDto;
   bindings: {
     approvedPlanHash: string | null;
     currentPlanHash: string;
@@ -1671,6 +1678,265 @@ export function approveFleetTaskClaimExpansion(
   });
 }
 
+const FOUR_REVIEW_LANES = [
+  "correctness_security",
+  "conventions_cross_platform",
+  "simplicity_ux",
+  "adversarial_red_team",
+] as const;
+const REVIEW_EXEMPT_TASK_TYPES = new Set([
+  "explore",
+  "review",
+  "milestone",
+  "planning",
+]);
+const TERMINAL_ESTIMATE_TASK_STATES = new Set([
+  "completed",
+  "merged",
+  "skipped",
+  "ready_to_merge",
+]);
+
+function fleetReservationHistory(
+  db: Database.Database
+): FleetReservationHistorySample[] {
+  return db
+    .prepare(
+      `SELECT c.provider, c.model,
+              CASE c.owner_type
+                WHEN 'planner' THEN 'planning'
+                WHEN 'plan_review' THEN 'review'
+                WHEN 'task_review' THEN 'review'
+                WHEN 'fixer' THEN 'fix'
+                ELSE COALESCE(t.task_type, 'implementation')
+              END AS task_type,
+              c.observed_cost_usd AS actual_usd,
+              CASE WHEN c.peak_input_tokens + c.peak_output_tokens +
+                             c.peak_cache_read_tokens + c.peak_cache_write_tokens > 0
+                   THEN c.peak_input_tokens + c.peak_output_tokens +
+                        c.peak_cache_read_tokens + c.peak_cache_write_tokens
+                   ELSE NULL END AS actual_tokens
+       FROM fleet_cost_accounts c
+       LEFT JOIN fleet_tasks t ON t.id = c.task_id
+       WHERE c.terminal_at IS NOT NULL
+       ORDER BY c.updated_at DESC
+       LIMIT 256`
+    )
+    .all()
+    .map((row) => {
+      const sample = row as {
+        provider: string;
+        model: string | null;
+        task_type: string;
+        actual_usd: number | null;
+        actual_tokens: number | null;
+      };
+      return {
+        provider: sample.provider,
+        model: sample.model,
+        taskType: sample.task_type,
+        actualUsd: sample.actual_usd,
+        actualTokens: sample.actual_tokens,
+      };
+    });
+}
+
+function budgetComparison(
+  budget: number | null,
+  projected: number | null
+): "within" | "exceeds" | "unlimited" | "unknown" {
+  if (budget == null) return "unlimited";
+  if (projected == null) return "unknown";
+  return projected > budget ? "exceeds" : "within";
+}
+
+function fleetApprovalCostEstimate(input: {
+  db: Database.Database;
+  run: FleetRunRow;
+  tasks: FleetTaskRow[];
+  planHash: string;
+  executionHash: string;
+  policyHash: string | null;
+}): FleetApprovalCostEstimateDto {
+  const { db, run, tasks } = input;
+  const parsedPolicy = parseFleetAutomationPolicy(run.automation_policy_json);
+  const sessions: FleetPlanReservationSession[] = [];
+  const exclusions = [
+    "Additional attempts created by future plan changes are not estimable.",
+  ];
+  let workerAttempts = 0;
+  let taskReviews = 0;
+  let planReviews = 0;
+  let planner = 0;
+
+  const taskReviewRows = db
+    .prepare(
+      `SELECT task_id, attempt, head_sha, policy_hash, lens, state
+       FROM fleet_task_reviews WHERE fleet_run_id = ?`
+    )
+    .all(run.id) as Array<{
+    task_id: string;
+    attempt: number;
+    head_sha: string;
+    policy_hash: string;
+    lens: string;
+    state: string;
+  }>;
+
+  for (const task of tasks) {
+    if (TERMINAL_ESTIMATE_TASK_STATES.has(task.status)) continue;
+    const attempts = Math.max(
+      0,
+      (task.max_attempts ?? run.default_max_attempts ?? 2) -
+        (task.current_attempt ?? 0)
+    );
+    if (attempts > 0) {
+      workerAttempts += attempts;
+      sessions.push({
+        provider: task.agent_type ?? run.provider,
+        model:
+          task.model ??
+          (task.agent_type == null || task.agent_type === run.provider
+            ? run.model
+            : null),
+        taskType: task.task_type || "implementation",
+        count: attempts,
+      });
+    }
+
+    if (REVIEW_EXEMPT_TASK_TYPES.has(task.task_type)) continue;
+    const currentRows = taskReviewRows.filter(
+      (row) =>
+        row.task_id === task.id &&
+        row.attempt === (task.current_attempt ?? 0) &&
+        row.head_sha === (task.head_sha ?? "") &&
+        row.policy_hash === (run.automation_policy_hash ?? "")
+    );
+    const remainingLanes = FOUR_REVIEW_LANES.filter((lens) => {
+      const row = currentRows.find((candidate) => candidate.lens === lens);
+      return !row || row.state === "pending";
+    }).length;
+    if (remainingLanes > 0) {
+      taskReviews += remainingLanes;
+      sessions.push({
+        provider: run.provider,
+        model: run.model,
+        taskType: "review",
+        count: remainingLanes,
+      });
+    }
+  }
+
+  const settings = parseJsonObject(run.settings_json) ?? {};
+  const plannerSettings =
+    settings.planner &&
+    typeof settings.planner === "object" &&
+    !Array.isArray(settings.planner)
+      ? (settings.planner as Record<string, unknown>)
+      : {};
+  if (
+    parsedPolicy.valid &&
+    parsedPolicy.policy.automaticPlanning &&
+    tasks.length === 0 &&
+    !run.plan_hash &&
+    String(plannerSettings.state ?? "idle") === "idle"
+  ) {
+    planner = 1;
+    sessions.push({
+      provider: run.provider,
+      model: run.model,
+      taskType: "planning",
+      count: 1,
+    });
+  }
+
+  if (
+    parsedPolicy.valid &&
+    parsedPolicy.policy.automaticPlanApproval &&
+    run.review_policy !== "manual" &&
+    run.approval_state !== "approved"
+  ) {
+    const reviewRows =
+      input.policyHash && run.automation_base_sha
+        ? (db
+            .prepare(
+              `SELECT lens, state FROM fleet_reviews
+               WHERE fleet_run_id = ? AND subject_type = 'plan'
+                 AND subject_hash = ? AND policy_hash = ?
+                 AND execution_hash = ? AND base_sha = ?`
+            )
+            .all(
+              run.id,
+              input.planHash,
+              input.policyHash,
+              input.executionHash,
+              run.automation_base_sha
+            ) as Array<{ lens: string; state: string }>)
+        : [];
+    planReviews = FOUR_REVIEW_LANES.filter((lens) => {
+      const row = reviewRows.find((candidate) => candidate.lens === lens);
+      return !row || row.state === "pending";
+    }).length;
+    if (planReviews > 0) {
+      sessions.push({
+        provider: run.provider,
+        model: run.model,
+        taskType: "review",
+        count: planReviews,
+      });
+    }
+  }
+
+  if (parsedPolicy.valid && parsedPolicy.policy.automaticFixes) {
+    exclusions.push(
+      "Automatic fixer sessions and repeated post-fix review cycles are excluded from this baseline estimate."
+    );
+  }
+  if (!parsedPolicy.valid) {
+    exclusions.push(
+      "The automation policy is invalid, so auxiliary-session demand is unknown."
+    );
+  }
+
+  const estimate = estimateFleetPlanReservation({
+    sessions,
+    history: fleetReservationHistory(db),
+  });
+  const projectedTotalUsd =
+    estimate.usd == null
+      ? null
+      : (run.spent_budget_usd ?? 0) +
+        (run.reserved_budget_usd ?? 0) +
+        estimate.usd;
+  const projectedTotalTokens =
+    estimate.tokens == null
+      ? null
+      : (run.spent_budget_tokens ?? 0) +
+        (run.reserved_budget_tokens ?? 0) +
+        estimate.tokens;
+  return {
+    kind: "estimated_remaining",
+    estimatedUsd: estimate.usd,
+    estimatedTokens: estimate.tokens,
+    confidence: estimate.confidence,
+    capped: estimate.capped,
+    sessionCounts: {
+      workerAttempts,
+      taskReviews,
+      planReviews,
+      planner,
+      total: estimate.sessionCount,
+    },
+    projectedTotalUsd,
+    projectedTotalTokens,
+    budgetComparison: {
+      usd: budgetComparison(run.budget_usd, projectedTotalUsd),
+      tokens: budgetComparison(run.budget_tokens ?? null, projectedTotalTokens),
+    },
+    exclusions,
+  };
+}
+
 export function getFleetApprovalControlPreview(
   runId: string,
   db: Database.Database = getDb()
@@ -1723,6 +1989,14 @@ export function getFleetApprovalControlPreview(
   );
   return {
     runId,
+    estimate: fleetApprovalCostEstimate({
+      db,
+      run,
+      tasks,
+      planHash: currentPlanHash,
+      executionHash: currentExecutionHash,
+      policyHash: currentPolicyHash,
+    }),
     bindings: {
       approvedPlanHash: run.approved_plan_hash,
       currentPlanHash,

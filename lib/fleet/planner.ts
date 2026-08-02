@@ -1,14 +1,19 @@
-import { randomUUID } from "crypto";
+import { createHash, randomBytes, randomUUID } from "crypto";
 import { constants } from "fs";
-import { lstat, open } from "fs/promises";
-import { join } from "path";
+import { lstat, mkdir, open, rmdir, unlink } from "fs/promises";
+import { dirname, join, posix, resolve, win32 } from "path";
 import type Database from "better-sqlite3";
 import { getDb, queries, type Session } from "@/lib/db";
 import type { Project } from "@/lib/db/types";
 import type { DispatchRepo } from "@/lib/dispatch/types";
-import { getDefaultBranch, isGitRepo } from "@/lib/git-status";
+import {
+  getDefaultBranch,
+  isGitRepo,
+  resolveGitCommit,
+} from "@/lib/git-status";
 import { generateBranchName, runGit } from "@/lib/git";
 import { spawnWorker, WorkerSpawnError } from "@/lib/orchestration";
+import { isWindows, stoaHomeDir } from "@/lib/platform";
 import {
   backendKeyForSession,
   type ProviderId,
@@ -38,7 +43,7 @@ import {
   buildFleetPlannerPrompt,
   fleetPlannerPlanText,
   normalizeFleetPlannerTaskCap,
-  parseFleetPlannerOutput,
+  parseFleetPlannerResult,
 } from "./planner-plan";
 import { redactAndCapFleetText } from "./redaction";
 import { fleetProviderRetryIsDue } from "./backoff";
@@ -53,9 +58,13 @@ import {
 
 const FLEET_PLAN_FILE_MAX_BYTES = 128 * 1024;
 const FLEET_PLANNER_TIMEOUT_MS = 15 * 60 * 1000;
+const FLEET_PLANNER_NONCE_BYTES = 32;
 const FLEET_MAX_CONCURRENT_PLANNERS = 4;
 const FLEET_MAX_CONCURRENT_PLANNERS_PER_PROVIDER = 2;
 const ACTIVE_PLANNER_STATES = ["starting", "running", "finalizing"] as const;
+const FULL_GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const SAFE_PATH_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function isActivePlannerState(value: string | undefined): boolean {
   return ACTIVE_PLANNER_STATES.some((state) => state === value);
@@ -68,6 +77,10 @@ function consumesPlannerCapacity(value: string | undefined): boolean {
 interface PlannerSettings {
   state?: string;
   requestId?: string;
+  attempt?: number;
+  baseSha?: string;
+  resultPath?: string;
+  nonceHash?: string;
   sessionId?: string;
   worktreePath?: string;
   projectPath?: string;
@@ -127,6 +140,184 @@ function sanitizedPlannerSettings(planner: PlannerSettings): PlannerSettings {
   return { ...planner, error: plannerError(planner.error) };
 }
 
+interface PlannerResultContract {
+  attemptDirectory: string;
+  resultPath: string;
+  nonce: string;
+  nonceHash: string;
+}
+
+function safePlannerPathComponent(value: string, label: string): string {
+  if (!SAFE_PATH_COMPONENT.test(value) || value === "." || value === "..") {
+    throw new Error(`${label} is not safe for a Fleet planner result path`);
+  }
+  return value;
+}
+
+/** The sole external result path Fleet owns for one exact planner request. */
+export function fleetPlannerResultPath(
+  input: {
+    runId: string;
+    requestId: string;
+  },
+  stoaHome = stoaHomeDir()
+): string {
+  const runId = safePlannerPathComponent(input.runId, "runId");
+  const requestId = safePlannerPathComponent(input.requestId, "requestId");
+  const pathApi = win32.isAbsolute(stoaHome)
+    ? win32
+    : posix.isAbsolute(stoaHome)
+      ? posix
+      : { join };
+  return pathApi.join(
+    stoaHome,
+    "fleet",
+    runId,
+    "planner",
+    requestId,
+    "result.json"
+  );
+}
+
+function isFleetOwnedPlannerResultPath(input: {
+  runId: string;
+  requestId: string;
+  resultPath: string;
+}): boolean {
+  let expected: string;
+  try {
+    expected = fleetPlannerResultPath(input);
+  } catch {
+    return false;
+  }
+  const actualPath = resolve(input.resultPath);
+  const expectedPath = resolve(expected);
+  return isWindows
+    ? actualPath.toLowerCase() === expectedPath.toLowerCase()
+    : actualPath === expectedPath;
+}
+
+async function preparePlannerResultContract(input: {
+  runId: string;
+  requestId: string;
+}): Promise<PlannerResultContract> {
+  const resultPath = fleetPlannerResultPath(input);
+  const attemptDirectory = dirname(resultPath);
+  await mkdir(attemptDirectory, { recursive: true });
+  try {
+    await lstat(resultPath);
+    throw new Error("Fleet planner result destination already exists");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const nonce = randomBytes(FLEET_PLANNER_NONCE_BYTES).toString("base64url");
+  return {
+    attemptDirectory,
+    resultPath,
+    nonce,
+    nonceHash: createHash("sha256").update(nonce, "utf8").digest("hex"),
+  };
+}
+
+async function discardUnclaimedPlannerResultDirectory(
+  contract: PlannerResultContract
+): Promise<void> {
+  await rmdir(contract.attemptDirectory).catch(() => undefined);
+}
+
+async function deletePlannerResult(
+  runId: string,
+  planner: PlannerSettings
+): Promise<boolean> {
+  // Pre-provenance planners never had an external artifact. Their worktree is
+  // still safe to stop and reclaim; active recovery rejects the missing
+  // contract before it can ingest any result.
+  if (!planner.resultPath) return true;
+  if (
+    !planner.requestId ||
+    !isFleetOwnedPlannerResultPath({
+      runId,
+      requestId: planner.requestId,
+      resultPath: planner.resultPath,
+    })
+  ) {
+    return false;
+  }
+  try {
+    await unlink(planner.resultPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+  }
+  await rmdir(dirname(planner.resultPath)).catch(() => undefined);
+  return true;
+}
+
+function exactGitSha(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return FULL_GIT_SHA.test(normalized) ? normalized : null;
+}
+
+function durablePlannerContractError(
+  run: FleetRunRow,
+  planner: PlannerSettings
+): string | null {
+  const runBaseSha = exactGitSha(run.automation_base_sha);
+  const plannerBaseSha = exactGitSha(planner.baseSha);
+  if (!runBaseSha || !plannerBaseSha || runBaseSha !== plannerBaseSha) {
+    return "planner exact base contract does not match the Fleet run";
+  }
+  if (
+    !planner.requestId ||
+    !Number.isSafeInteger(planner.attempt) ||
+    (planner.attempt ?? 0) < 1 ||
+    !planner.resultPath ||
+    !isFleetOwnedPlannerResultPath({
+      runId: run.id,
+      requestId: planner.requestId,
+      resultPath: planner.resultPath,
+    }) ||
+    !SHA256_HEX.test(planner.nonceHash ?? "")
+  ) {
+    return "planner durable result contract is invalid";
+  }
+  return null;
+}
+
+async function plannerWorkspaceContractError(
+  db: Database.Database,
+  run: FleetRunRow,
+  planner: PlannerSettings,
+  spawnedSession?: Session
+): Promise<string | null> {
+  const durableError = durablePlannerContractError(run, planner);
+  if (durableError) return durableError;
+  const expectedBaseSha = exactGitSha(planner.baseSha) as string;
+  const session =
+    spawnedSession ??
+    (planner.sessionId
+      ? (queries.getSession(db).get(planner.sessionId) as Session | undefined)
+      : undefined);
+  if (session && exactGitSha(session.base_branch) !== expectedBaseSha) {
+    return "planner session base contract does not match the Fleet run";
+  }
+  if (!planner.worktreePath) return null;
+  try {
+    const { stdout } = await runGit(
+      planner.worktreePath,
+      ["rev-parse", "--verify", "HEAD"],
+      10_000,
+      4 * 1024
+    );
+    if (exactGitSha(stdout) !== expectedBaseSha) {
+      return "planner worktree HEAD does not match the Fleet run base";
+    }
+  } catch {
+    return "planner worktree base could not be verified";
+  }
+  return null;
+}
+
 export async function readBoundedFleetPlannerFile(
   path: string
 ): Promise<{ text: string } | { error: string; missing?: boolean }> {
@@ -138,7 +329,7 @@ export async function readBoundedFleetPlannerFile(
   try {
     const pathInfo = await lstat(path);
     if (!pathInfo.isFile() || pathInfo.isSymbolicLink()) {
-      return { error: "planner PLAN.md is not a regular file" };
+      return { error: "planner result is not a regular file" };
     }
     handle = await open(path, constants.O_RDONLY | noFollow | nonBlock);
     const info = await handle.stat();
@@ -148,20 +339,20 @@ export async function readBoundedFleetPlannerFile(
         info.ino !== 0 &&
         (pathInfo.dev !== info.dev || pathInfo.ino !== info.ino))
     ) {
-      return { error: "planner PLAN.md changed before it could be read" };
+      return { error: "planner result changed before it could be read" };
     }
     const buffer = Buffer.alloc(FLEET_PLAN_FILE_MAX_BYTES + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     if (bytesRead > FLEET_PLAN_FILE_MAX_BYTES) {
-      return { error: "planner PLAN.md exceeds the 128 KiB safety limit" };
+      return { error: "planner result exceeds the 128 KiB safety limit" };
     }
     return { text: buffer.subarray(0, bytesRead).toString("utf8") };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
-      return { error: "planner has not written PLAN.md", missing: true };
+      return { error: "planner has not written its result", missing: true };
     }
-    return { error: "planner PLAN.md could not be read safely" };
+    return { error: "planner result could not be read safely" };
   } finally {
     await handle?.close().catch(() => undefined);
   }
@@ -458,6 +649,16 @@ export async function startFleetPlanner(
       status: 409,
     };
   }
+  const resolvedBaseSha = exactGitSha(
+    resolveGitCommit(target.workingDirectory, target.baseBranch)
+  );
+  if (!resolvedBaseSha) {
+    return { error: "failed to resolve the planner base commit", status: 409 };
+  }
+  const boundBaseSha = exactGitSha(run.automation_base_sha);
+  if (run.automation_base_sha != null && boundBaseSha !== resolvedBaseSha) {
+    return { error: "Fleet run base commit changed", status: 409 };
+  }
   const installed = availableProviders();
   if (installed.length === 0) {
     return { error: "no installed agent provider is available", status: 409 };
@@ -471,10 +672,28 @@ export async function startFleetPlanner(
       : installed[0];
   const taskCap = normalizeFleetPlannerTaskCap(input.taskCap);
   const requestId = randomUUID();
+  const attempt = Math.max(0, Math.trunc(currentPlanner.attempt ?? 0)) + 1;
   const startedAt = now.toISOString();
   const branchName = generateBranchName(
     `fleet-plan-${run.id.slice(0, 8)}-${requestId.slice(0, 8)}`
   );
+  let resultContract: PlannerResultContract;
+  try {
+    resultContract = await preparePlannerResultContract({
+      runId: run.id,
+      requestId,
+    });
+  } catch (error) {
+    return {
+      error:
+        plannerError(
+          error instanceof Error
+            ? error.message
+            : "Fleet planner result destination is unavailable"
+        ) ?? "Fleet planner result destination is unavailable",
+      status: 409,
+    };
+  }
 
   const settings = parseSettings(run.settings_json);
   settings.phase = "planning";
@@ -482,6 +701,10 @@ export async function startFleetPlanner(
   settings.planner = {
     state: "starting",
     requestId,
+    attempt,
+    baseSha: resolvedBaseSha,
+    resultPath: resultContract.resultPath,
+    nonceHash: resultContract.nonceHash,
     taskCap,
     provider,
     startedAt,
@@ -521,13 +744,21 @@ export async function startFleetPlanner(
       claimed =
         db
           .prepare(
-            `UPDATE fleet_runs SET settings_json = ?, updated_at = datetime('now')
+            `UPDATE fleet_runs SET settings_json = ?,
+               automation_base_sha = COALESCE(automation_base_sha, ?),
+               updated_at = datetime('now')
              WHERE id = ? AND status = 'draft'
                AND approval_state IN ('draft', 'needs_approval')
-               AND settings_json = ?`
+               AND settings_json = ?
+               AND (automation_base_sha IS NULL OR LOWER(automation_base_sha) = ?)`
           )
-          .run(JSON.stringify(settings), runId, run.settings_json).changes ===
-        1;
+          .run(
+            JSON.stringify(settings),
+            resolvedBaseSha,
+            runId,
+            run.settings_json,
+            resolvedBaseSha
+          ).changes === 1;
       if (claimed) {
         queries.createFleetEvent(db).run(
           runId,
@@ -535,6 +766,8 @@ export async function startFleetPlanner(
           actor,
           JSON.stringify({
             requestId,
+            attempt,
+            baseSha: resolvedBaseSha,
             provider,
             taskCap,
           })
@@ -577,14 +810,17 @@ export async function startFleetPlanner(
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
+    await discardUnclaimedPlannerResultDirectory(resultContract);
     throw error;
   }
   if (!capacityAvailable) {
+    await discardUnclaimedPlannerResultDirectory(resultContract);
     return admissionFailure === "budget"
       ? { error: "planner budget admission was blocked", status: 409 }
       : { error: "planner capacity is currently full", status: 429 };
   }
   if (!claimed) {
+    await discardUnclaimedPlannerResultDirectory(resultContract);
     finishFleetPaidSession(db, {
       runId,
       ownerType: "planner",
@@ -597,26 +833,46 @@ export async function startFleetPlanner(
   let launchedSession: Session | undefined;
   let spawnReturned = false;
   let costActivated = false;
+  let launchContractRejected = false;
   try {
+    const promptInput = {
+      goal: run.goal,
+      baseBranch: target.baseBranch,
+      taskCap,
+      availableProviders: installed,
+      resultPath: resultContract.resultPath,
+      runId: run.id,
+      requestId,
+      attempt,
+      baseSha: resolvedBaseSha,
+    };
     const prompt = redactAndCapFleetText(
       buildFleetPlannerPrompt({
-        goal: run.goal,
-        baseBranch: target.baseBranch,
-        taskCap,
-        availableProviders: installed,
+        ...promptInput,
+        nonce: "[redacted ephemeral nonce]",
+      }),
+      FLEET_PLAN_FILE_MAX_BYTES
+    ).text;
+    const deliveryPrompt = redactAndCapFleetText(
+      buildFleetPlannerPrompt({
+        ...promptInput,
+        nonce: resultContract.nonce,
       }),
       FLEET_PLAN_FILE_MAX_BYTES
     ).text;
     const session = await spawnWorker({
       conductorSessionId: run.conductor_session_id ?? null,
       task: prompt,
+      deliveryTask: deliveryPrompt,
       workingDirectory: target.workingDirectory,
-      branchName: `fleet-plan-${run.id.slice(0, 8)}-${requestId.slice(0, 8)}`,
-      baseBranch: target.baseBranch,
+      branchName,
+      baseBranch: resolvedBaseSha,
       useWorktree: true,
       requireWorktree: true,
       requireTaskDelivery: true,
       skipSetup: true,
+      fleetWritableRoots: [resultContract.attemptDirectory],
+      fleetArtifactPaths: [resultContract.resultPath],
       requireStrongIsolation: true,
       approvalMode,
       agentType: provider,
@@ -624,6 +880,28 @@ export async function startFleetPlanner(
     });
     spawnReturned = true;
     launchedSession = session;
+    if (!session.worktree_path) {
+      throw new Error("planner started without an isolated worktree");
+    }
+    const claimedRun = queries.getFleetRun(db).get(runId) as
+      FleetRunRow | undefined;
+    const claimedPlanner = claimedRun ? plannerSettings(claimedRun) : {};
+    const contractError = claimedRun
+      ? await plannerWorkspaceContractError(
+          db,
+          claimedRun,
+          {
+            ...claimedPlanner,
+            sessionId: session.id,
+            worktreePath: session.worktree_path,
+          },
+          session
+        )
+      : "planner Fleet run disappeared before activation";
+    if (contractError) {
+      launchContractRejected = true;
+      throw new Error(contractError);
+    }
     costActivated = activateFleetPaidSession(db, {
       runId,
       ownerType: "planner",
@@ -638,15 +916,16 @@ export async function startFleetPlanner(
         "planner session is already owned by another Fleet cost account"
       );
     }
-    if (!session.worktree_path) {
-      throw new Error("planner started without an isolated worktree");
-    }
     const persisted = writePlannerState(
       runId,
       requestId,
       {
         state: "running",
         requestId,
+        attempt,
+        baseSha: resolvedBaseSha,
+        resultPath: resultContract.resultPath,
+        nonceHash: resultContract.nonceHash,
         sessionId: session.id,
         worktreePath: session.worktree_path,
         projectPath: target.workingDirectory,
@@ -666,7 +945,9 @@ export async function startFleetPlanner(
         latestPlanner.requestId === requestId &&
         latestPlanner.state === "running" &&
         latestPlanner.sessionId === session.id &&
-        latestPlanner.worktreePath === session.worktree_path
+        latestPlanner.worktreePath === session.worktree_path &&
+        exactGitSha(latestPlanner.baseSha) === resolvedBaseSha &&
+        latestPlanner.resultPath === resultContract.resultPath
       ) {
         // The reconciler recovered this exact launch while spawnWorker was
         // still finishing backend initialization and task delivery.
@@ -680,6 +961,10 @@ export async function startFleetPlanner(
           worktreePath: session.worktree_path,
           projectPath: target.workingDirectory,
           branchName: session.branch_name ?? branchName,
+          attempt,
+          baseSha: resolvedBaseSha,
+          resultPath: resultContract.resultPath,
+          nonceHash: resultContract.nonceHash,
         };
         if (
           writePlannerState(runId, requestId, hydrated, undefined, [
@@ -691,7 +976,13 @@ export async function startFleetPlanner(
         return { error: "planner launch was superseded", status: 409 };
       } else {
         await cleanupPlanner(
+          runId,
           {
+            requestId,
+            attempt,
+            baseSha: resolvedBaseSha,
+            resultPath: resultContract.resultPath,
+            nonceHash: resultContract.nonceHash,
             sessionId: session.id,
             worktreePath: session.worktree_path,
             projectPath: target.workingDirectory,
@@ -725,7 +1016,8 @@ export async function startFleetPlanner(
           ? (error.worktreePath ?? undefined)
           : undefined),
     } satisfies PlannerSettings;
-    let ambiguousOwnership = spawnReturned && !costActivated;
+    let ambiguousOwnership =
+      spawnReturned && !costActivated && !launchContractRejected;
     if (
       !launchedSession &&
       error instanceof WorkerSpawnError &&
@@ -823,6 +1115,7 @@ export async function startFleetPlanner(
 }
 
 async function cleanupPlanner(
+  runId: string,
   planner: PlannerSettings,
   finalStatus: "completed" | "failed" = "completed"
 ): Promise<boolean> {
@@ -864,7 +1157,7 @@ async function cleanupPlanner(
       }
     }
   }
-  return true;
+  return deletePlannerResult(runId, planner);
 }
 
 async function finalizePlannerCleanup(
@@ -885,6 +1178,7 @@ async function finalizePlannerCleanup(
   }
   const finalState = planner.finalState ?? "failed";
   const cleaned = await cleanupPlanner(
+    runId,
     planner,
     finalState === "ready" ? "completed" : "failed"
   );
@@ -921,6 +1215,8 @@ async function finalizePlannerCleanup(
     {
       state: finalState,
       requestId: planner.requestId,
+      attempt: planner.attempt,
+      baseSha: planner.baseSha,
       provider: planner.provider,
       error: planner.error,
       failureCount: planner.failureCount,
@@ -991,6 +1287,30 @@ async function rejectIneligiblePlannerSession(
   return true;
 }
 
+async function rejectInvalidPlannerContract(
+  run: FleetRunRow,
+  planner: PlannerSettings
+): Promise<boolean> {
+  let error = await plannerWorkspaceContractError(getDb(), run, planner);
+  if (!error && planner.state !== "starting" && !planner.worktreePath) {
+    error = "planner runtime identity is incomplete";
+  }
+  if (!error) return false;
+  const rejected = {
+    ...planner,
+    error,
+    launchSettled: true,
+  } satisfies PlannerSettings;
+  if (queuePlannerTerminal(run.id, rejected, "failed", error)) {
+    await finalizePlannerCleanup(run.id, {
+      ...rejected,
+      state: "cleanup_pending",
+      finalState: "failed",
+    });
+  }
+  return true;
+}
+
 export async function cancelFleetPlanner(
   runId: string,
   actor = "operator"
@@ -1007,6 +1327,13 @@ export async function cancelFleetPlanner(
     const recovered = await recoverPlannerIdentity(planner);
     const providerError = plannerProviderBinding(db, run, recovered).error;
     if (recovered.worktreePath && !providerError) {
+      // Only validate when adopting a recovered launch. A legacy starting
+      // record with no runtime identity still needs to remain cancelable; it
+      // cannot produce an ingestible result, and cleanup has nothing to adopt.
+      if (await rejectInvalidPlannerContract(run, recovered)) {
+        const detail = getFleetRunDetail(runId);
+        return detail ? { run: detail } : { error: "failed to read fleet run" };
+      }
       const running = {
         ...recovered,
         state: "running",
@@ -1082,6 +1409,10 @@ export async function pollFleetPlanner(
   if (planner.state === "starting") {
     const recovered = await recoverPlannerIdentity(planner);
     planner = recovered;
+    if (await rejectInvalidPlannerContract(run, planner)) {
+      const detail = getFleetRunDetail(runId);
+      return detail ? { run: detail } : { error: "failed to read fleet run" };
+    }
     if (await rejectIneligiblePlannerSession(run, planner)) {
       const detail = getFleetRunDetail(runId);
       return detail ? { run: detail } : { error: "failed to read fleet run" };
@@ -1109,6 +1440,10 @@ export async function pollFleetPlanner(
       planner = running;
       if (running.provider) clearFleetProviderCooldown(db, running.provider);
     }
+  }
+  if (await rejectInvalidPlannerContract(run, planner)) {
+    const detail = getFleetRunDetail(runId);
+    return detail ? { run: detail } : { error: "failed to read fleet run" };
   }
   if (await rejectIneligiblePlannerSession(run, planner)) {
     const detail = getFleetRunDetail(runId);
@@ -1144,18 +1479,8 @@ export async function pollFleetPlanner(
     const detail = getFleetRunDetail(runId);
     return detail ? { run: detail } : { error: "failed to read fleet run" };
   }
-  const file = await readBoundedFleetPlannerFile(
-    join(planner.worktreePath, "PLAN.md")
-  );
-  const parsed =
-    "text" in file
-      ? parseFleetPlannerOutput(
-          redactAndCapFleetText(file.text, FLEET_PLAN_FILE_MAX_BYTES).text,
-          planner.taskCap ?? 8
-        )
-      : ({ ok: false, error: file.error } as const);
-
-  if (!parsed.ok) {
+  const file = await readBoundedFleetPlannerFile(planner.resultPath as string);
+  if (!("text" in file) && file.missing) {
     let alive = true;
     if (planner.sessionId) {
       const session = queries.getSession(db).get(planner.sessionId) as
@@ -1167,14 +1492,41 @@ export async function pollFleetPlanner(
         : false;
     }
     if (!alive) {
-      if (queuePlannerTerminal(runId, planner, "failed", parsed.error)) {
+      const error = "planner exited before producing its authenticated result";
+      if (queuePlannerTerminal(runId, planner, "failed", error)) {
         await finalizePlannerCleanup(runId, {
           ...planner,
           state: "cleanup_pending",
           finalState: "failed",
-          error: parsed.error,
+          error,
         });
       }
+    }
+    const detail = getFleetRunDetail(runId);
+    return detail ? { run: detail } : { error: "failed to read fleet run" };
+  }
+  const parsed =
+    "text" in file
+      ? parseFleetPlannerResult(
+          file.text,
+          {
+            runId,
+            requestId: plannerRequestId,
+            attempt: planner.attempt as number,
+            baseSha: planner.baseSha as string,
+            nonceHash: planner.nonceHash as string,
+          },
+          planner.taskCap ?? 8
+        )
+      : ({ ok: false, error: file.error } as const);
+  if (!parsed.ok) {
+    if (queuePlannerTerminal(runId, planner, "failed", parsed.error)) {
+      await finalizePlannerCleanup(runId, {
+        ...planner,
+        state: "cleanup_pending",
+        finalState: "failed",
+        error: parsed.error,
+      });
     }
     const detail = getFleetRunDetail(runId);
     return detail ? { run: detail } : { error: "failed to read fleet run" };
@@ -1202,12 +1554,30 @@ export async function pollFleetPlanner(
     }
     return { error: "no installed agent provider is available", status: 409 };
   }
-  const allocations = allocateFleetAgents({
-    tasks: parsed.tasks,
-    availableProviders: installed,
-    defaultProvider,
-    defaultModel: defaultProvider === run.provider ? run.model : null,
-  });
+  let allocations: ReturnType<typeof allocateFleetAgents>;
+  try {
+    allocations = allocateFleetAgents({
+      tasks: parsed.tasks,
+      availableProviders: installed,
+      defaultProvider,
+      defaultModel: defaultProvider === run.provider ? run.model : null,
+    });
+  } catch (error) {
+    const message =
+      plannerError(
+        error instanceof Error ? error.message : "planner allocation is invalid"
+      ) ?? "planner allocation is invalid";
+    if (queuePlannerTerminal(runId, planner, "failed", message)) {
+      await finalizePlannerCleanup(runId, {
+        ...planner,
+        state: "cleanup_pending",
+        finalState: "failed",
+        error: message,
+      });
+    }
+    const detail = getFleetRunDetail(runId);
+    return detail ? { run: detail } : { error: "failed to read fleet run" };
+  }
   const indexByKey = new Map(
     parsed.tasks.map((task, index) => [task.key, index])
   );
@@ -1246,6 +1616,7 @@ export async function pollFleetPlanner(
         agentType: allocations[index].provider,
         model: allocations[index].model,
         acceptanceCriteria: task.acceptanceCriteria,
+        riskNotes: task.riskNotes,
         verifyCommand: task.verifyCommand,
       };
     }),

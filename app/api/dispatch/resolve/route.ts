@@ -4,7 +4,7 @@ import { isGitRepo, getRepoSlug, getDefaultBranch } from "@/lib/git";
 import { expandHome } from "@/lib/platform";
 import {
   getAllowedPathRoots,
-  resolveSandboxedPathOrHome,
+  resolveRealSandboxedPathOrHome,
 } from "@/lib/api-security";
 
 /**
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
 
   // Restrict to the home tree or registered project/repo roots.
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPathOrHome(expanded, roots);
+  const { allowed } = await resolveRealSandboxedPathOrHome(expanded, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "path is outside the allowed workspace" },

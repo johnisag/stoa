@@ -507,6 +507,40 @@ function recordAutomationFailure(
   }
 }
 
+/** Persist a policy wait once so API-created/recovered runs never stall silently. */
+function recordAutomationWait(
+  db: Database.Database,
+  run: FleetRunRow,
+  action: FleetAutomationAction,
+  reason: string,
+  now: string
+): void {
+  const ownsTransaction = !db.inTransaction;
+  if (ownsTransaction) db.exec("BEGIN IMMEDIATE");
+  try {
+    const changed = db
+      .prepare(
+        `UPDATE fleet_runs SET automation_last_error = ?, updated_at = ?
+         WHERE id = ? AND COALESCE(automation_last_error, '') <> ?`
+      )
+      .run(reason, now, run.id, reason);
+    if (changed.changes === 1) {
+      queries
+        .createFleetEvent(db)
+        .run(
+          run.id,
+          "automation_waiting",
+          "fleet-automation",
+          JSON.stringify({ action, reason })
+        );
+    }
+    if (ownsTransaction) db.exec("COMMIT");
+  } catch (error) {
+    if (ownsTransaction && db.inTransaction) db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function clearAutomationFailure(
   db: Database.Database,
   runId: string,
@@ -756,6 +790,20 @@ async function reconcileOneFleetAutomation(
       retryNotBefore: plannerRetryNotBefore(run),
       now: deps.now(),
     });
+    if (
+      planning.action === "wait" &&
+      planning.reason ===
+        "automatic planning requires confinement or explicit consent"
+    ) {
+      recordAutomationWait(
+        deps.db,
+        run,
+        "planning",
+        planning.reason,
+        deps.now().toISOString()
+      );
+      return;
+    }
     if (planning.action === "planning") {
       const result = await deps.startPlanner(
         run.id,
@@ -824,7 +872,7 @@ async function reconcileOneFleetAutomation(
               !task.verify_command?.trim()
           ).length ?? 0,
         claimPaths: preview?.claimPaths ?? ["*"],
-        reviews: [],
+        reviews,
       });
       const activeReviews =
         preview && run.plan_hash
@@ -846,6 +894,24 @@ async function reconcileOneFleetAutomation(
           : { n: 0 };
       const auxiliaryLaunchAllowed =
         parsed.policy.allowUnconfinedAgents || deps.confinementAvailable();
+      if (
+        preview &&
+        run.plan_hash &&
+        !auxiliaryLaunchAllowed &&
+        reviews.length < FLEET_PLAN_REVIEW_LENSES.length &&
+        reviewEligibility.action === "wait" &&
+        reviewEligibility.reason ===
+          "four independent clean plan critics are required"
+      ) {
+        recordAutomationWait(
+          deps.db,
+          run,
+          "plan_approval",
+          "automatic plan review requires confinement or explicit consent",
+          deps.now().toISOString()
+        );
+        return;
+      }
       if (
         preview &&
         run.plan_hash &&
@@ -958,6 +1024,20 @@ async function reconcileOneFleetAutomation(
         schedulerReady: deps.schedulerReady(),
         confinementAvailable: deps.confinementAvailable(),
       });
+      if (
+        start.action === "wait" &&
+        start.reason ===
+          "automatic start requires confinement or explicit consent"
+      ) {
+        recordAutomationWait(
+          deps.db,
+          run,
+          "start",
+          start.reason,
+          deps.now().toISOString()
+        );
+        return;
+      }
       if (
         start.action === "start" &&
         compareAndSetAutomaticStart(

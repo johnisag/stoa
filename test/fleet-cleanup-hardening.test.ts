@@ -107,6 +107,43 @@ beforeEach(() => {
 });
 
 describe("Fleet cleanup pagination and owner recovery", () => {
+  it("includes a managed supervisor session in destructive impact previews", async () => {
+    addRun("run-1", "running");
+    db.prepare(
+      `INSERT INTO sessions
+       (id, name, tmux_name, status, worker_status, working_directory,
+        group_path, agent_type)
+       VALUES ('supervisor-session', 'Managed supervisor', 'codex-supervisor',
+        'running', 'working', 'C:\\repo', 'sessions', 'codex')`
+    ).run();
+    db.prepare(
+      `INSERT INTO fleet_cost_accounts
+       (id, fleet_run_id, session_id, session_key, owner_type, owner_id,
+        provider)
+       VALUES ('supervisor-cost', 'run-1', 'supervisor-session',
+        'agent:codex:supervisor-session', 'supervisor',
+        'supervisor-request', 'codex')`
+    ).run();
+
+    const preview = await previewFleetDestructiveAction(
+      "run-1",
+      deps(),
+      "cancel"
+    );
+    if ("error" in preview) throw new Error(preview.error);
+    expect(preview.owners).toContainEqual(
+      expect.objectContaining({
+        ownerType: "supervisor",
+        ownerId: "supervisor-request",
+        sessionId: "supervisor-session",
+        active: true,
+      })
+    );
+    expect(preview.sessions).toContainEqual(
+      expect.objectContaining({ id: "supervisor-session" })
+    );
+  });
+
   it("bounds destructive previews and marks unseen objects fail-closed", async () => {
     addRun();
     db.transaction(() => {

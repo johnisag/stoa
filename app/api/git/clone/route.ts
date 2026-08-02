@@ -7,7 +7,7 @@ import { expandHome, isWindows } from "@/lib/platform";
 import {
   parseJsonBody,
   getAllowedPathRoots,
-  resolveSandboxedPathOrHome,
+  resolveRealSandboxedPathOrHome,
 } from "@/lib/api-security";
 
 const execFileAsync = promisify(execFile);
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
 
   // Restrict cloning to the user's home tree or an already-registered root.
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPathOrHome(resolvedDir, roots);
+  const { allowed } = await resolveRealSandboxedPathOrHome(resolvedDir, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "Target directory is outside the allowed workspace" },

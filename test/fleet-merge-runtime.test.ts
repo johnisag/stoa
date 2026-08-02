@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import {
   __fleetMergeTesting,
+  authorizeFleetManualLanding,
   fleetIntegrationIdentity,
   getFleetMergeStatus,
   inspectFleetMergeReadiness,
@@ -35,6 +36,53 @@ const STALE = "e".repeat(40);
 const RUN_ID = "merge-run";
 const TASK_ID = "task-one";
 const POLICY_HASH = hashFleetAutomationPolicy(DEFAULT_FLEET_AUTOMATION_POLICY);
+
+function landingPreconditions(db: Database.Database) {
+  const run = db
+    .prepare(
+      `SELECT plan_hash, settings_json, automation_base_sha, integration_head_sha
+       FROM fleet_runs WHERE id = ?`
+    )
+    .get(RUN_ID) as {
+    plan_hash: string;
+    settings_json: string;
+    automation_base_sha: string;
+    integration_head_sha: string;
+  };
+  return {
+    planHash: run.plan_hash,
+    executionHash: (
+      JSON.parse(run.settings_json) as {
+        approvedExecutionHash: string;
+      }
+    ).approvedExecutionHash,
+    baseSha: run.automation_base_sha,
+    integrationHeadSha: run.integration_head_sha,
+  };
+}
+
+async function authorizeLandingIfReady(
+  db: Database.Database,
+  target: "local" | "github_pr",
+  overrides: Parameters<typeof reconcileFleetMerges>[0]
+): Promise<boolean> {
+  const status = getFleetMergeStatus(RUN_ID, db);
+  if (
+    status?.integration.state !== "ready_to_finalize" ||
+    status.integration.requestedAt !== null
+  ) {
+    return false;
+  }
+  const authorized = await authorizeFleetManualLanding(
+    RUN_ID,
+    target,
+    "operator",
+    landingPreconditions(db),
+    { db, ...overrides }
+  );
+  expect(authorized).toMatchObject({ readiness: { requested: true } });
+  return true;
+}
 
 function authorizeIntegrationCleanup(
   db: Database.Database,
@@ -763,7 +811,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     ).toEqual({ status: "merged" });
   });
 
-  it("consumes pending manual landing intent only for exact current verification evidence", async () => {
+  it("requires a second exact operator action before a staged manual intent can land", async () => {
     seed(db);
     const fake = fakeRuntime();
     await requestFleetMerge(RUN_ID, "local", "admin", {
@@ -772,22 +820,45 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
-    const deps = __fleetMergeTesting.runtimeDeps({ db, ...fake.overrides });
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    expect(
+      db
+        .prepare(`SELECT merge_requested_at FROM fleet_runs WHERE id = ?`)
+        .get(RUN_ID)
+    ).toEqual({ merge_requested_at: null });
+    const expected = landingPreconditions(db);
+    await expect(
+      authorizeFleetManualLanding(
+        RUN_ID,
+        "local",
+        "operator",
+        { ...expected, executionHash: "f".repeat(64) },
+        { db, ...fake.overrides }
+      )
+    ).resolves.toMatchObject({
+      error: "Fleet landing authorization preconditions changed",
+    });
 
     db.prepare(
       `UPDATE fleet_runs SET status = 'paused', desired_state = 'paused'
        WHERE id = ?`
     ).run(RUN_ID);
-    expect(__fleetMergeTesting.consumeManualMergeIntent(deps, RUN_ID)).toBe(
-      false
-    );
+    await expect(
+      authorizeFleetManualLanding(RUN_ID, "local", "operator", expected, {
+        db,
+        ...fake.overrides,
+      })
+    ).resolves.toMatchObject({ error: expect.any(String) });
     db.prepare(
       `UPDATE fleet_runs SET status = 'merging', desired_state = 'running',
        recovery_required = 1 WHERE id = ?`
     ).run(RUN_ID);
-    expect(__fleetMergeTesting.consumeManualMergeIntent(deps, RUN_ID)).toBe(
-      false
-    );
+    await expect(
+      authorizeFleetManualLanding(RUN_ID, "local", "operator", expected, {
+        db,
+        ...fake.overrides,
+      })
+    ).resolves.toMatchObject({ error: expect.any(String) });
     db.prepare(`UPDATE fleet_runs SET recovery_required = 0 WHERE id = ?`).run(
       RUN_ID
     );
@@ -805,9 +876,12 @@ describe("Fleet exact-SHA merge runtime", () => {
       "f".repeat(64),
       evidence.output_artifact_id
     );
-    expect(__fleetMergeTesting.consumeManualMergeIntent(deps, RUN_ID)).toBe(
-      false
-    );
+    await expect(
+      authorizeFleetManualLanding(RUN_ID, "local", "operator", expected, {
+        db,
+        ...fake.overrides,
+      })
+    ).resolves.toMatchObject({ error: expect.any(String) });
     db.prepare(`UPDATE fleet_artifacts SET content_hash = ? WHERE id = ?`).run(
       evidence.verification_output_hash,
       evidence.output_artifact_id
@@ -819,9 +893,12 @@ describe("Fleet exact-SHA merge runtime", () => {
        ON CONFLICT(fleet_run_id, resource_type, resource_key, bucket_start_ms)
        DO UPDATE SET units = excluded.units`
     ).run(RUN_ID, 256 * 1024 ** 2);
-    expect(__fleetMergeTesting.consumeManualMergeIntent(deps, RUN_ID)).toBe(
-      true
-    );
+    await expect(
+      authorizeFleetManualLanding(RUN_ID, "local", "operator", expected, {
+        db,
+        ...fake.overrides,
+      })
+    ).resolves.toMatchObject({ readiness: { requested: true } });
     expect(
       db
         .prepare(
@@ -849,12 +926,15 @@ describe("Fleet exact-SHA merge runtime", () => {
       db.prepare(
         `UPDATE fleet_runs SET status = ?, desired_state = ? WHERE id = ?`
       ).run(status, status === "canceled" ? "canceled" : "running", RUN_ID);
-      expect(
-        __fleetMergeTesting.consumeManualMergeIntent(
-          __fleetMergeTesting.runtimeDeps({ db, ...fake.overrides }),
-          RUN_ID
+      await expect(
+        authorizeFleetManualLanding(
+          RUN_ID,
+          "local",
+          "operator",
+          landingPreconditions(db),
+          { db, ...fake.overrides }
         )
-      ).toBe(false);
+      ).resolves.toMatchObject({ error: expect.any(String) });
       expect(
         db
           .prepare(`SELECT merge_requested_at FROM fleet_runs WHERE id = ?`)
@@ -942,7 +1022,7 @@ describe("Fleet exact-SHA merge runtime", () => {
       leaseOwner: "restarted-final-verifier",
     };
     await reconcileFleetMerges(restarted, RUN_ID);
-    await reconcileFleetMerges(restarted, RUN_ID);
+    await authorizeLandingIfReady(db, "local", restarted);
     await reconcileFleetMerges(restarted, RUN_ID);
 
     expect(
@@ -1048,7 +1128,7 @@ describe("Fleet exact-SHA merge runtime", () => {
         )
         .get()
     ).toEqual({ state: "completed", attempt_count: 2 });
-    await reconcileFleetMerges(remediatedRuntime, RUN_ID);
+    await authorizeLandingIfReady(db, "local", remediatedRuntime);
     await reconcileFleetMerges(remediatedRuntime, RUN_ID);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
       "completed"
@@ -1253,7 +1333,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     expect(
       fake.verified.filter((command) => command === "npm test")
     ).toHaveLength(2); // upstream apply + one deduplicated final command
-    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     expect(fake.heads.get("/repo")).toBe(INTEGRATED);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
@@ -1727,6 +1807,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     expect(fake.heads.get("/repo")).toBe(BASE);
@@ -1744,7 +1825,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
-    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
     const deps = __fleetMergeTesting.runtimeDeps({ db, ...fake.overrides });
     const operation = __fleetMergeTesting.ensureOperation(deps, {
       runId: RUN_ID,
@@ -1779,7 +1860,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
-    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
     const deps = __fleetMergeTesting.runtimeDeps({ db, ...fake.overrides });
     const operation = __fleetMergeTesting.ensureOperation(deps, {
       runId: RUN_ID,
@@ -1823,7 +1904,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
-    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
     db.exec(`
       CREATE TRIGGER reject_local_merge_audit
       BEFORE INSERT ON fleet_events
@@ -1870,7 +1951,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
-    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
       "completed"
@@ -2027,6 +2108,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     for (let tick = 0; tick < 6; tick++) {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
     const push = fake.calls.find((call) => call[1] === "push");
     expect(push).toEqual([
@@ -2054,6 +2136,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     for (let tick = 0; tick < 7; tick++) {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
 
     expect(fake.mergeCalls).toBe(1);
@@ -2080,6 +2163,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     for (let tick = 0; tick < 5; tick++) {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
     expect(fake.mergeCalls).toBe(0);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
@@ -2099,6 +2183,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     for (let tick = 0; tick < 7; tick++) {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
 
     expect(fake.mergeCalls).toBe(0);
@@ -2117,6 +2202,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     for (let tick = 0; tick < 7; tick++) {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
 
     expect(fake.mergeCalls).toBe(0);
@@ -2135,6 +2221,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     for (let tick = 0; tick < 7; tick++) {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
       const current = db
         .prepare(`SELECT integration_pr_number FROM fleet_runs WHERE id = ?`)
         .get(RUN_ID) as { integration_pr_number: number | null };
@@ -2166,6 +2253,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     });
     for (let tick = 0; tick < 8; tick++) {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
 
     expect(fake.mergeCalls).toBe(1);

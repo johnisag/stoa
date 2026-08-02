@@ -8,11 +8,15 @@
 import { randomUUID } from "crypto";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { existsSync, realpathSync } from "fs";
 import { rm } from "fs/promises";
 import { db, queries, resolveDbPath, type Session } from "./db";
 import { createWorktree, deleteWorktree } from "./worktrees";
 import { setupWorktree } from "./env-setup";
-import { resolveModelForAgent } from "./model-catalog";
+import {
+  resolveExactModelForAgent,
+  resolveModelForAgent,
+} from "./model-catalog";
 import {
   type AgentType,
   getProvider,
@@ -23,8 +27,8 @@ import { sessionKey } from "./providers/registry";
 import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
-import { getSessionBackend } from "./session-backend";
-import { expandHome, isWindows, stoaHomeDir } from "./platform";
+import { getSessionBackend, useContainer } from "./session-backend";
+import { expandHome, homeDir, isWindows, stoaHomeDir } from "./platform";
 import { emitGenAiEvent } from "./telemetry/otel";
 import { detectSandboxTool } from "./sandbox/detect";
 import { wrapSpawnForSandbox } from "./sandbox/wrap";
@@ -32,6 +36,13 @@ import { computeRwRoots } from "./sandbox/policy";
 import { decideWorkerSandbox, effectiveSandboxActive } from "./sandbox/worker";
 import type { ApprovalMode } from "./sandbox/types";
 import { isAbsolute, relative, resolve, sep } from "path";
+import {
+  assertFleetWritableRootIdentityPreserved,
+  fleetWritableRootMounts,
+  mapMountedHostPathsInText,
+  validateFleetWritableRootLayouts,
+} from "./container/mounts";
+import { isInteractiveSessionRole } from "./session-role";
 
 const execFileAsync = promisify(execFile);
 
@@ -63,11 +74,19 @@ export interface SpawnWorkerOptions {
    * passing STOA_HOME (or an arbitrary parent) is rejected.
    */
   fleetWritableRoots?: string[];
+  /**
+   * Exact host artifact files named in deliveryTask. Container launches rewrite
+   * only these values through the matching exact attempt-directory bind;
+   * durable state and host-side collectors continue using the original paths.
+   */
+  fleetArtifactPaths?: string[];
   /** Fleet requires stronger isolation than the legacy generic worker sandbox. */
   requireStrongIsolation?: boolean;
   /** Override the default worker approval policy (planners use prompt mode). */
   approvalMode?: ApprovalMode;
   model?: string;
+  /** Fail instead of silently clamping an executable durable model contract. */
+  requireExactModel?: boolean;
   agentType?: AgentType;
 }
 
@@ -80,6 +99,36 @@ export class WorkerSpawnError extends Error {
     super(message);
     this.name = "WorkerSpawnError";
   }
+}
+
+/** Direct orchestration helpers are generic interactive-session surfaces. An
+ * internal row must be operated only by its owning subsystem, even when a
+ * caller bypasses the HTTP route and invokes a helper directly. */
+export class WorkerSessionAccessError extends Error {
+  readonly status = 409;
+
+  constructor() {
+    super("Internal sessions are managed only by their owning subsystem");
+    this.name = "WorkerSessionAccessError";
+  }
+}
+
+function assertInteractiveWorkerSession(session: Session): void {
+  if (!isInteractiveSessionRole(session)) {
+    throw new WorkerSessionAccessError();
+  }
+}
+
+function findInteractiveWorkerSession(workerId: string): Session | undefined {
+  const session = queries.getSession(db).get(workerId) as Session | undefined;
+  if (session) assertInteractiveWorkerSession(session);
+  return session;
+}
+
+function requireInteractiveWorkerSession(workerId: string): Session {
+  const session = findInteractiveWorkerSession(workerId);
+  if (!session) throw new Error(`Worker ${workerId} not found`);
+  return session;
 }
 
 let worktreeOperationTail: Promise<void> = Promise.resolve();
@@ -203,27 +252,32 @@ export function validateFleetSandboxWritableRoots(
   stoaHome = stoaHomeDir()
 ): string[] {
   const authorityRoot = resolve(stoaHome);
-  const layouts = [
-    { root: resolve(authorityRoot, "fleet"), minimumDepth: 3 },
-    { root: resolve(authorityRoot, "fleet-task-runtime"), minimumDepth: 4 },
-  ];
-  const seen = new Set<string>();
-  const validated: string[] = [];
-  for (const value of roots) {
-    const candidate = resolve(expandHome(value));
-    const layout = layouts.find(({ root }) => isPathWithin(root, candidate));
-    const depth = layout
-      ? relative(layout.root, candidate).split(sep).filter(Boolean).length
-      : 0;
-    if (!layout || depth < layout.minimumDepth) {
-      throw new Error(
-        "Fleet sandbox writable roots must identify one exact server-owned attempt directory"
-      );
-    }
-    const key = isWindows ? candidate.toLowerCase() : candidate;
-    if (!seen.has(key)) {
-      seen.add(key);
-      validated.push(candidate);
+  const validated = validateFleetWritableRootLayouts(
+    roots.map((value) => expandHome(value)),
+    authorityRoot
+  );
+  for (const candidate of validated) {
+    // A lexical child can still escape through an existing symlink/junction in
+    // any ancestor. Runtime attempt directories exist before spawn, so resolve
+    // both sides and require the actual target to remain under the actual Stoa
+    // authority root. Keep the lexical fallback for pure command-construction
+    // callers/tests whose paths deliberately do not exist yet.
+    if (existsSync(authorityRoot) && existsSync(candidate)) {
+      const realAuthority = realpathSync.native(authorityRoot);
+      const realCandidate = realpathSync.native(candidate);
+      if (!isPathWithin(realAuthority, realCandidate)) {
+        throw new Error(
+          "Fleet sandbox writable root escapes Stoa authority through a symbolic link or junction"
+        );
+      }
+      // Containment alone is insufficient: a valid-looking attempt path could
+      // be a link to another sensitive child or another valid Fleet attempt.
+      assertFleetWritableRootIdentityPreserved({
+        lexicalRoots: [candidate],
+        lexicalStoaHome: authorityRoot,
+        realRoots: [realCandidate],
+        realStoaHome: realAuthority,
+      });
     }
   }
   return validated;
@@ -241,6 +295,20 @@ function sandboxAuthorityPolicy(fleetWritableRoots: string[]) {
     unsetEnv: [...FLEET_SANDBOX_AUTHORITY_ENV],
     fleetWritableRoots,
   };
+}
+
+export function fleetDeliveryTaskForContainer(
+  deliveryTask: string,
+  artifactPaths: readonly string[],
+  fleetWritableRoots: readonly string[],
+  stoaHome = resolve(stoaHomeDir()),
+  hostHome = homeDir()
+): string {
+  return mapMountedHostPathsInText(
+    deliveryTask,
+    artifactPaths,
+    fleetWritableRootMounts(fleetWritableRoots, stoaHome, hostHome)
+  );
 }
 
 /**
@@ -263,13 +331,30 @@ export async function spawnWorker(
     skipSetup = false,
     agentType = "claude",
   } = options;
-  const model = resolveModelForAgent(agentType, options.model);
+  const exactModel = options.requireExactModel
+    ? resolveExactModelForAgent(agentType, options.model)
+    : null;
+  if (exactModel && !exactModel.ok) {
+    throw new Error(exactModel.error);
+  }
+  const model = exactModel?.ok
+    ? (exactModel.model ?? "")
+    : resolveModelForAgent(agentType, options.model);
 
   // Expand ~ to home directory
   const workingDirectory = expandHome(rawWorkingDir);
   const fleetWritableRoots = validateFleetSandboxWritableRoots(
     options.fleetWritableRoots ?? []
   );
+  const containerActive = useContainer?.() === true;
+  const runtimeDeliveryTask =
+    options.fleetArtifactPaths?.length && containerActive
+      ? fleetDeliveryTaskForContainer(
+          deliveryTask,
+          options.fleetArtifactPaths,
+          fleetWritableRoots
+        )
+      : deliveryTask;
 
   const sessionId = randomUUID();
   const sessionName = taskToSessionName(task);
@@ -284,6 +369,11 @@ export async function spawnWorker(
     if (!conductor) {
       throw new Error(
         `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing Stoa session.`
+      );
+    }
+    if (!isInteractiveSessionRole(conductor)) {
+      throw new Error(
+        `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing interactive Stoa session.`
       );
     }
   }
@@ -473,6 +563,7 @@ export async function spawnWorker(
         command: newSessionCmd,
         binary: spawnBinary,
         args: spawnArgs,
+        fleetWritableRoots,
       });
 
       // Wait for the agent's prompt before sending the task, auto-accepting any
@@ -531,7 +622,7 @@ export async function spawnWorker(
       // Send the task as input, then press Enter
       console.log(`[orchestration] Sending task to ${tmuxSessionName}`);
       try {
-        await backend.sendKeysLiteral(tmuxSessionName, deliveryTask);
+        await backend.sendKeysLiteral(tmuxSessionName, runtimeDeliveryTask);
         await backend.sendEnter(tmuxSessionName);
         console.log(
           `[orchestration] Task sent successfully to ${tmuxSessionName}`
@@ -616,9 +707,17 @@ export async function spawnWorker(
 export async function getWorkers(
   conductorSessionId: string
 ): Promise<WorkerInfo[]> {
+  const conductor = queries.getSession(db).get(conductorSessionId) as
+    Session | undefined;
+  if (conductor) assertInteractiveWorkerSession(conductor);
+
   const workers = queries
     .getWorkersByConductor(db)
     .all(conductorSessionId) as Session[];
+
+  // Validate the whole result set before touching any backend so a corrupt or
+  // future internal child cannot cause partial observation of adjacent rows.
+  for (const worker of workers) assertInteractiveWorkerSession(worker);
 
   // Get live status for each worker
   const workerInfos: WorkerInfo[] = [];
@@ -672,10 +771,7 @@ export async function getWorkerOutput(
   workerId: string,
   lines: number = 50
 ): Promise<string> {
-  const session = queries.getSession(db).get(workerId) as Session | undefined;
-  if (!session) {
-    throw new Error(`Worker ${workerId} not found`);
-  }
+  const session = requireInteractiveWorkerSession(workerId);
 
   const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
@@ -698,10 +794,7 @@ export async function sendToWorker(
   workerId: string,
   message: string
 ): Promise<boolean> {
-  const session = queries.getSession(db).get(workerId) as Session | undefined;
-  if (!session) {
-    throw new Error(`Worker ${workerId} not found`);
-  }
+  const session = requireInteractiveWorkerSession(workerId);
 
   const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
@@ -723,6 +816,7 @@ export async function sendToWorker(
  * Mark a worker as completed
  */
 export function completeWorker(workerId: string): void {
+  if (!findInteractiveWorkerSession(workerId)) return;
   queries.updateWorkerStatus(db).run("completed", workerId);
 }
 
@@ -730,6 +824,7 @@ export function completeWorker(workerId: string): void {
  * Mark a worker as failed
  */
 export function failWorker(workerId: string): void {
+  if (!findInteractiveWorkerSession(workerId)) return;
   queries.updateWorkerStatus(db).run("failed", workerId);
 }
 
@@ -741,7 +836,7 @@ export async function killWorker(
   cleanupWorktree: boolean = false,
   finalStatus: "completed" | "failed" = "failed"
 ): Promise<void> {
-  const session = queries.getSession(db).get(workerId) as Session | undefined;
+  const session = findInteractiveWorkerSession(workerId);
   if (!session) {
     return;
   }

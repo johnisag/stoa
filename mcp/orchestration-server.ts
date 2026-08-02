@@ -254,7 +254,21 @@ const DIRECT_FLEET_MCP_TOOLS: Tool[] = [
   {
     name: "fleet_merge_run",
     description:
-      "Request the exact target/head-bound merge authorized by a separately human-issued fleet:merge capability.",
+      "Stage the exact target-bound manual merge authorized by a separately human-issued fleet:merge capability. This integrates and verifies the combined head but cannot authorize external landing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...fleetCapabilityProperties,
+        target: { type: "string", enum: ["local", "github_pr"] },
+      },
+      required: [...fleetCapabilityRequired, "target"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fleet_authorize_landing",
+    description:
+      "Authorize external landing of an already staged, final-verified exact head using a separately human-issued fleet:land capability. MCP cannot issue this capability.",
     inputSchema: {
       type: "object",
       properties: {
@@ -327,7 +341,7 @@ export function createOrchestrationServer(): Server {
             model: {
               type: "string",
               description:
-                "Optional model for the worker — agent-specific (e.g. a Claude model, or a 'provider/model' string for hermes). Omit for the agent's own default.",
+                "Optional agent-specific model for the worker. Omit to use Stoa's default for the selected agent (Hermes defaults to kimi-k3).",
             },
           },
           required: ["task", "workingDirectory"],

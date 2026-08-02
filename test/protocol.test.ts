@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   encode,
   createDecoder,
+  type ClientMessage,
   type HostMessage,
 } from "@/lib/session-backend/pty/protocol";
 
@@ -16,6 +17,24 @@ describe("pty-host IPC protocol framing (length-prefixed binary)", () => {
     const { got, decode } = collect();
     decode(encode({ t: "res", id: 1, ok: true }));
     expect(got).toEqual([{ t: "res", id: 1, ok: true }]);
+  });
+
+  it("round-trips exact Fleet container roots on a spawn message", () => {
+    const got: ClientMessage[] = [];
+    const decode = createDecoder<ClientMessage>((message) => got.push(message));
+    const message: ClientMessage = {
+      t: "spawn",
+      id: 2,
+      key: "fleet-worker",
+      spec: {
+        binary: "codex",
+        args: [],
+        cwd: "C:\\repo",
+        fleetWritableRoots: ["C:\\Users\\u\\.stoa\\fleet\\run\\task\\1"],
+      },
+    };
+    decode(encode(message));
+    expect(got).toEqual([message]);
   });
 
   it("reassembles a frame split across two chunks", () => {

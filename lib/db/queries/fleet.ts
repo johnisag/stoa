@@ -93,7 +93,62 @@ export const fleetQueries = {
         r.created_at,
         r.updated_at,
         (SELECT COUNT(*) FROM fleet_tasks t WHERE t.fleet_run_id = r.id) AS task_count,
-        (SELECT COUNT(*) FROM fleet_workers w WHERE w.fleet_run_id = r.id) AS worker_count
+        (SELECT COUNT(*) FROM fleet_workers w WHERE w.fleet_run_id = r.id) AS worker_count,
+        (
+          CASE WHEN
+            r.approval_state IN ('needs_approval', 'blocked') OR
+            r.automation_last_error IS NOT NULL OR
+            json_extract(r.settings_json, '$.planner.state') = 'failed' OR
+            r.pause_reason = 'budget_exhausted' OR
+            r.budget_hard_limit_at IS NOT NULL OR
+            r.budget_warning_emitted_at IS NOT NULL OR
+            r.recovery_required = 1 OR
+            r.integration_error IS NOT NULL OR
+            r.integration_state = 'awaiting_operator'
+          THEN 1 ELSE 0 END +
+          (SELECT COUNT(*) FROM fleet_tasks t
+           WHERE t.fleet_run_id = r.id AND (
+             t.status IN ('waiting_for_operator', 'failed', 'blocked',
+                          'needs_inspection', 'needs_followup') OR
+             t.verification_status IN ('fail', 'error') OR
+             t.review_status = 'changes_requested' OR
+             t.provider_state IN ('backoff', 'failed') OR
+             t.retry_not_before IS NOT NULL
+           )) +
+          (SELECT COUNT(*) FROM fleet_workers w
+           WHERE w.fleet_run_id = r.id AND (
+             w.status IN ('waiting_for_operator', 'failed', 'dead', 'cleanup_pending') OR
+             w.rendered_status IN ('waiting', 'error', 'dead') OR
+             w.rendered_status_error IS NOT NULL
+           ))
+        ) AS attention_count,
+        CASE WHEN
+          r.merge_requested_at IS NULL AND
+          r.approval_state = 'approved' AND
+          r.plan_hash IS NOT NULL AND r.approved_plan_hash = r.plan_hash AND
+          r.desired_state = 'running' AND r.recovery_required = 0 AND
+          r.status IN ('running', 'reviewing', 'merging') AND (
+            (r.merge_request_kind = 'manual' AND
+             r.integration_state = 'ready_to_finalize' AND
+             r.integration_base_sha = r.automation_base_sha AND
+             LENGTH(r.integration_head_sha) IN (40, 64) AND
+             r.integration_head_sha NOT GLOB '*[^0-9a-f]*') OR
+            (r.merge_request_kind IS NULL AND
+             COALESCE(json_extract(r.automation_policy_json, '$.automaticMerge'), 0) = 0 AND
+             EXISTS (
+               SELECT 1 FROM fleet_tasks t
+               WHERE t.fleet_run_id = r.id
+                 AND t.task_type NOT IN ('explore', 'review', 'milestone', 'planning')
+             ) AND NOT EXISTS (
+               SELECT 1 FROM fleet_tasks t
+               WHERE t.fleet_run_id = r.id AND (
+                 (t.task_type IN ('explore', 'review', 'milestone', 'planning') AND
+                   t.status NOT IN ('completed', 'skipped')) OR
+                 (t.task_type NOT IN ('explore', 'review', 'milestone', 'planning') AND
+                   t.status <> 'ready_to_merge')
+               )
+             ))
+          ) THEN 1 ELSE 0 END AS awaiting_manual_merge
        FROM fleet_runs r
        ORDER BY r.updated_at DESC, r.created_at DESC, r.id DESC
        LIMIT ?`
@@ -323,12 +378,14 @@ export const fleetQueries = {
        SET status = 'planned',
            approval_state = 'approved',
            approved_plan_hash = plan_hash,
+           automation_base_sha = COALESCE(automation_base_sha, ?),
            approved_by = ?,
            approved_at = ?,
            settings_json = ?,
            updated_at = ?
        WHERE id = ?
          AND plan_hash = ?
+         AND (automation_base_sha IS NULL OR LOWER(automation_base_sha) = ?)
          AND status = 'draft'
          AND approval_state = 'needs_approval'
          AND NOT EXISTS (

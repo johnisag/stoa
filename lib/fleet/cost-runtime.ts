@@ -16,7 +16,7 @@ import {
 import type { FleetRunRow, FleetWorkerRow } from "./types";
 
 export type FleetCostOwnerType =
-  "planner" | "plan_review" | "worker" | "task_review" | "fixer";
+  "planner" | "plan_review" | "worker" | "task_review" | "fixer" | "supervisor";
 
 interface FleetCostAccountRow {
   id: string;

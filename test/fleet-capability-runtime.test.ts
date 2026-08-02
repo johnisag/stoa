@@ -24,6 +24,8 @@ import type {
 
 const NOW = 5_000_000;
 const MERGE_BASE_SHA = "a".repeat(40);
+const MERGE_INTEGRATION_SHA = "b".repeat(40);
+const MERGE_VERIFICATION_HASH = "c".repeat(64);
 const MERGE_RUN_ID = "merge-run";
 const databases: Database.Database[] = [];
 
@@ -137,6 +139,53 @@ function issueMergeCapability(db: Database.Database) {
   });
 }
 
+function prepareFinalVerifiedLanding(db: Database.Database): void {
+  const run = db
+    .prepare(`SELECT plan_hash FROM fleet_runs WHERE id = ?`)
+    .get(MERGE_RUN_ID) as { plan_hash: string };
+  db.prepare(
+    `UPDATE fleet_tasks
+     SET status = 'merged', integration_state = 'merged',
+         integrated_head_sha = ?, integrated_at = datetime('now')
+     WHERE fleet_run_id = ?`
+  ).run(MERGE_INTEGRATION_SHA, MERGE_RUN_ID);
+  db.prepare(
+    `UPDATE fleet_runs
+     SET status = 'merging', integration_state = 'ready_to_finalize',
+         integration_base_sha = automation_base_sha,
+         integration_head_sha = ?
+     WHERE id = ?`
+  ).run(MERGE_INTEGRATION_SHA, MERGE_RUN_ID);
+  db.prepare(
+    `INSERT INTO fleet_artifacts
+     (id, fleet_run_id, plan_hash, base_sha, head_sha, content_hash,
+      artifact_type, title, body, severity, actor)
+     VALUES ('final-verify-artifact', ?, ?, ?, ?, ?,
+             'fleet_final_verification', 'Final verification', '{}', 'info',
+             'fleet-merge')`
+  ).run(
+    MERGE_RUN_ID,
+    run.plan_hash,
+    MERGE_BASE_SHA,
+    MERGE_INTEGRATION_SHA,
+    MERGE_VERIFICATION_HASH
+  );
+  db.prepare(
+    `INSERT INTO fleet_merge_operations
+     (id, operation_key, fleet_run_id, operation_type, state,
+      expected_base_sha, result_head_sha, verification_output_hash,
+      output_artifact_id, completed_at)
+     VALUES ('final-verify-operation', 'final-verify-operation', ?,
+             'final_verify', 'completed', ?, ?, ?, 'final-verify-artifact',
+             datetime('now'))`
+  ).run(
+    MERGE_RUN_ID,
+    MERGE_INTEGRATION_SHA,
+    MERGE_INTEGRATION_SHA,
+    MERGE_VERIFICATION_HASH
+  );
+}
+
 function capabilityUseState(db: Database.Database, id: string) {
   return db
     .prepare(
@@ -151,6 +200,37 @@ afterEach(() => {
 });
 
 describe("durable Fleet capabilities", () => {
+  it("fails closed when a capability starts an approved run without an exact base", async () => {
+    const db = database();
+    seedExactMergeRun(db);
+    db.prepare(
+      `UPDATE fleet_runs SET status = 'planned', automation_base_sha = NULL
+       WHERE id = ?`
+    ).run(MERGE_RUN_ID);
+    const result = issued(db, {
+      action: "fleet:start",
+      runId: MERGE_RUN_ID,
+      payload: {},
+    });
+
+    await expect(
+      executeStoredFleetCapability(
+        {
+          token: result.token,
+          scope: result.capability.scope,
+          payload: {},
+        },
+        { db, nowMs: NOW + 1 }
+      )
+    ).resolves.toEqual({
+      error: "approved run has no exact base commit",
+      status: 409,
+    });
+    expect(
+      db.prepare(`SELECT status FROM fleet_runs WHERE id = ?`).get(MERGE_RUN_ID)
+    ).toEqual({ status: "planned" });
+  });
+
   it("does not consume a launch capability while run recovery is unresolved", async () => {
     const db = database();
     seedExactMergeRun(db, true);
@@ -261,6 +341,91 @@ describe("durable Fleet capabilities", () => {
       merge_request_kind: "manual",
       merge_target: "local",
       merge_requested_by: `fleet-capability:${result.capability.id}`,
+    });
+  });
+
+  it("uses separate pre-issued capabilities to stage and authorize exact-head landing", async () => {
+    const db = database();
+    seedExactMergeRun(db);
+    const staging = issueMergeCapability(db);
+
+    await expect(
+      executeStoredFleetCapability(
+        {
+          token: staging.token,
+          scope: staging.capability.scope,
+          payload: { target: "local" },
+        },
+        { db, nowMs: NOW + 1 }
+      )
+    ).resolves.toMatchObject({ result: { readiness: { requested: false } } });
+    prepareFinalVerifiedLanding(db);
+
+    const landing = issued(db, {
+      action: "fleet:land",
+      runId: MERGE_RUN_ID,
+      payload: { target: "local" },
+    });
+    expect(landing.capability.scope).toMatchObject({
+      action: "fleet:land",
+      boundHash: {
+        kind: "head",
+        value: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    });
+
+    db.prepare(
+      `UPDATE fleet_runs SET integration_head_sha = ? WHERE id = ?`
+    ).run("d".repeat(40), MERGE_RUN_ID);
+    await expect(
+      executeStoredFleetCapability(
+        {
+          token: landing.token,
+          scope: landing.capability.scope,
+          payload: { target: "local" },
+        },
+        { db, nowMs: NOW + 2 }
+      )
+    ).resolves.toEqual({
+      error: "capability action intent changed",
+      status: 409,
+    });
+    expect(capabilityUseState(db, landing.capability.id)).toMatchObject({
+      consumed_at_ms: null,
+      use_count: 0,
+    });
+    db.prepare(
+      `UPDATE fleet_runs SET integration_head_sha = ? WHERE id = ?`
+    ).run(MERGE_INTEGRATION_SHA, MERGE_RUN_ID);
+
+    await expect(
+      executeStoredFleetCapability(
+        {
+          token: landing.token,
+          scope: landing.capability.scope,
+          payload: { target: "local" },
+        },
+        { db, nowMs: NOW + 2 }
+      )
+    ).resolves.toMatchObject({ result: { readiness: { requested: true } } });
+    expect(
+      db
+        .prepare(
+          `SELECT merge_requested_at, merge_requested_by
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(MERGE_RUN_ID)
+    ).toMatchObject({
+      merge_requested_at: expect.any(String),
+      merge_requested_by: `fleet-capability:${landing.capability.id}`,
+    });
+    expect(capabilityUseState(db, staging.capability.id)).toMatchObject({
+      consumed_at_ms: NOW + 1,
+      use_count: 1,
+    });
+    expect(capabilityUseState(db, landing.capability.id)).toMatchObject({
+      consumed_at_ms: NOW + 2,
+      use_count: 1,
     });
   });
 

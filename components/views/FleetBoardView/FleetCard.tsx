@@ -43,8 +43,17 @@ function FleetRunCard({
       <p className="text-muted-foreground line-clamp-2 text-xs">{run.goal}</p>
       <div className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
         <span className="bg-foreground/10 rounded px-1.5 py-0.5 text-[10px] uppercase">
-          {run.status.replaceAll("_", " ")}
+          {run.awaitingManualMerge
+            ? "ready to merge"
+            : run.status.replaceAll("_", " ")}
         </span>
+        {run.attentionCount > 0 && (
+          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+            {run.attentionCount === 1
+              ? "Needs you"
+              : `${run.attentionCount} signals`}
+          </span>
+        )}
         <span>{run.taskCount} tasks</span>
         <span>{run.workerCount} workers</span>
       </div>

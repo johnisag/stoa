@@ -40,6 +40,7 @@ export interface FleetCard {
 
 /** Map Fleet Management's durable run state onto the shared delivery board. */
 export function laneForFleetRun(run: FleetRunDto): LaneId {
+  if (run.awaitingManualMerge) return "verified";
   switch (run.status) {
     case "draft":
     case "planned":
@@ -157,14 +158,14 @@ export function composeFleetCards(
 }
 
 /**
- * Does this card need the human NOW? Reuses the Verdict Inbox's `needsMe` predicate
- * — the SAME source of truth the nav "needs me" badge counts — so the board's
- * attention count can't drift from the badge. A card only "needs me" via its inbox
- * item (dispatch-only cards carry no verdict); since composeFleetCards maps each
- * inbox item to exactly one card, the board's needs-me total equals the badge's
- * `countNeedsMe(inbox)` by construction. Pure → unit-tested.
+ * Does this card need the human NOW? Verdict rows use their canonical predicate;
+ * durable Fleet runs carry the server-computed run/task/worker attention summary.
+ * Dispatch-only cards carry no verdict and therefore cannot request attention.
  */
 export function cardNeedsMe(c: FleetCard): boolean {
+  if (c.source === "fleet") {
+    return (c.fleetRun?.attentionCount ?? 0) > 0;
+  }
   return c.source === "inbox" && !!c.inbox && needsMe(c.inbox);
 }
 

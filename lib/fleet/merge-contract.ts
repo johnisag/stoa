@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
-import { join } from "path";
-import { homeDir } from "@/lib/platform";
+import { resolve } from "path";
+import { stoaHomeDir } from "@/lib/platform";
 
 export interface FleetPrStatus {
   number: number;
@@ -23,7 +23,7 @@ export function fleetIntegrationIdentity(runId: string): {
     .slice(0, 20);
   return {
     branch: `stoa/fleet/integration-${digest}`,
-    worktree: join(homeDir(), ".stoa", "fleet", "integrations", digest),
+    worktree: resolve(stoaHomeDir(), "fleet", "integrations", digest),
   };
 }
 

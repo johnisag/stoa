@@ -8,6 +8,7 @@
 import { getDb, queries } from "@/lib/db";
 import type { Session } from "@/lib/db";
 import type { ListSessionsParams, SessionSummary } from "./actions";
+import { isInteractiveSessionRole } from "../session-role";
 
 export type { SessionSummary };
 
@@ -24,7 +25,9 @@ export function executeListSessions(
   params: ListSessionsParams
 ): ListSessionsResult {
   const db = getDb();
-  const all = queries.getAllSessions(db).all() as Session[];
+  const all = (queries.getAllSessions(db).all() as Session[]).filter(
+    isInteractiveSessionRole
+  );
   const filtered = params.status
     ? all.filter((s) => s.status === params.status)
     : all;

@@ -5,6 +5,8 @@ import { homeDir } from "@/lib/platform";
 const security = vi.hoisted(() => ({
   local: vi.fn(),
   realResolve: vi.fn(),
+  sessions: [] as Array<Record<string, unknown>>,
+  rawWorktrees: [] as Array<{ path: string; branch: string; head: string }>,
 }));
 
 vi.mock("@/lib/api-security", async (importOriginal) => {
@@ -25,16 +27,19 @@ vi.mock("@/lib/git", () => ({
 }));
 
 vi.mock("@/lib/worktrees", () => ({
-  listWorktrees: vi.fn().mockResolvedValue([]),
-  annotateWorktrees: vi.fn().mockReturnValue([
-    {
-      path: "/registered/worktree",
-      branch: "feature/mobile-fix",
-      head: "abc123",
-      isStoa: true,
-      attached: false,
-    },
-  ]),
+  listWorktrees: vi.fn(async () => security.rawWorktrees),
+  normalizeWorktreePath: (path: string) => path.toLowerCase(),
+  annotateWorktrees: vi.fn(
+    (
+      worktrees: Array<{ path: string; branch: string; head: string }>,
+      sessionDirs: string[]
+    ) =>
+      worktrees.map((worktree) => ({
+        ...worktree,
+        isStoa: true,
+        attached: sessionDirs.includes(worktree.path),
+      }))
+  ),
 }));
 
 vi.mock("@/lib/repo-scan", () => ({
@@ -43,10 +48,11 @@ vi.mock("@/lib/repo-scan", () => ({
 
 vi.mock("@/lib/db", () => ({
   getDb: () => ({}),
-  queries: { getAllSessions: () => ({ all: () => [] }) },
+  queries: { getAllSessions: () => ({ all: () => security.sessions }) },
 }));
 
 import { POST } from "@/app/api/git/check/route";
+import { annotateWorktrees } from "@/lib/worktrees";
 
 function request(body: unknown, scope?: "admin" | "observer"): NextRequest {
   const headers: Record<string, string> = {
@@ -63,6 +69,15 @@ function request(body: unknown, scope?: "admin" | "observer"): NextRequest {
 beforeEach(() => {
   security.local.mockReset();
   security.realResolve.mockReset();
+  security.sessions = [];
+  security.rawWorktrees = [
+    {
+      path: "/registered/worktree",
+      branch: "feature/mobile-fix",
+      head: "abc123",
+    },
+  ];
+  vi.mocked(annotateWorktrees).mockClear();
 });
 
 describe("POST /api/git/check path policy", () => {
@@ -130,6 +145,41 @@ describe("POST /api/git/check path policy", () => {
     expect(security.realResolve).toHaveBeenCalledWith(
       "/home/user/new-project",
       expect.arrayContaining(["/registered", homeDir()])
+    );
+  });
+
+  it("hides worktrees and attachment identities owned by internal roles", async () => {
+    security.local.mockReturnValue({ ok: true });
+    security.realResolve.mockResolvedValue({
+      allowed: true,
+      resolved: "/registered/repo",
+    });
+    security.sessions = [
+      {
+        working_directory: "/registered/worktree",
+        session_role: "interactive",
+      },
+      {
+        working_directory: "/tmp/internal-runtime",
+        worktree_path: "/registered/internal",
+        session_role: "future_internal_role",
+      },
+    ];
+    security.rawWorktrees.push({
+      path: "/registered/internal",
+      branch: "internal",
+      head: "secret",
+    });
+
+    const response = await POST(request({ path: "/registered/repo" }));
+    const body = await response.json();
+
+    expect(
+      body.worktrees.map((worktree: { path: string }) => worktree.path)
+    ).toEqual(["/registered/worktree"]);
+    expect(annotateWorktrees).toHaveBeenCalledWith(
+      [expect.objectContaining({ path: "/registered/worktree" })],
+      ["/registered/worktree"]
     );
   });
 

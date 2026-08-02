@@ -7,9 +7,13 @@ import {
   usePendingQuery,
   useDispatchReposQuery,
 } from "@/data/dispatch/queries";
-import { composeFleetCards, bucketByLane } from "@/lib/fleet-board/lanes";
-import { countNeedsMe } from "@/lib/verdict-inbox-selectors";
+import {
+  composeFleetCards,
+  bucketByLane,
+  cardNeedsMe,
+} from "@/lib/fleet-board/lanes";
 import { useFleetRunsQuery } from "@/data/fleet/queries";
+import { useElicitations } from "@/data/mcp-elicitations/queries";
 
 /**
  * The fleet board's data: composes the existing verdict inbox, dispatch board,
@@ -24,6 +28,7 @@ export function useFleetBoard(open: boolean) {
   const pending = usePendingQuery(open);
   const repos = useDispatchReposQuery(open);
   const fleetRuns = useFleetRunsQuery(open);
+  const elicitations = useElicitations(open);
 
   const lanes = useMemo(
     () =>
@@ -48,19 +53,29 @@ export function useFleetBoard(open: boolean) {
     [lanes]
   );
 
-  // The board's "needs me" count, derived from the SAME inbox + `needsMe` selector
-  // the nav badge uses — so the ambient badge and the board's header pill always
-  // agree (the badge can't say "3" while the board it opens reads "1").
-  const needsMeCount = useMemo(
-    () => countNeedsMe(inbox.data ?? []),
-    [inbox.data]
+  // Count composed attention cards, not underlying signals. One Fleet run
+  // contributes one card even when several of its tasks/workers need help; its
+  // card exposes that per-run signal count. Pending elicitations are separate
+  // operator-attention items surfaced above the lanes, matching the nav badge.
+  const boardNeedsMeCount = useMemo(
+    () =>
+      Object.values(lanes).reduce(
+        (count, cards) => count + cards.filter(cardNeedsMe).length,
+        0
+      ),
+    [lanes]
   );
+  const elicitationCount = elicitations.data?.length ?? 0;
+  const needsMeCount = boardNeedsMeCount + elicitationCount;
 
   return {
     lanes,
     repoById,
     total,
     needsMeCount,
+    elicitationCount,
+    elicitationError: elicitations.isError,
+    elicitationFetching: elicitations.isFetching,
     isLoading:
       inbox.isLoading ||
       board.isLoading ||
@@ -79,6 +94,9 @@ export function useFleetBoard(open: boolean) {
       pending.isFetching ||
       repos.isFetching ||
       fleetRuns.isFetching,
+    refetchElicitations: useCallback(() => {
+      void elicitations.refetch();
+    }, [elicitations.refetch]),
     // Re-fetch every read model behind the board on a manual Retry.
     refetch: useCallback(() => {
       void inbox.refetch();
@@ -86,12 +104,14 @@ export function useFleetBoard(open: boolean) {
       void pending.refetch();
       void repos.refetch();
       void fleetRuns.refetch();
+      void elicitations.refetch();
     }, [
       inbox.refetch,
       board.refetch,
       pending.refetch,
       repos.refetch,
       fleetRuns.refetch,
+      elicitations.refetch,
     ]),
   };
 }

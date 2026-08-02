@@ -11,6 +11,10 @@ import {
   getProviderDefinition,
   isValidProviderId,
 } from "@/lib/providers/registry";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 // POST /api/sessions/[id]/mcp-config - Ensure provider-native orchestration
 // wiring exists for this session.
@@ -22,9 +26,14 @@ export async function POST(
     const { id } = await params;
     const session = queries.getSession(db).get(id) as Session | undefined;
 
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     const agentType = session.agent_type;
     if (

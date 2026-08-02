@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session, type Message } from "@/lib/db";
 import { buildExport, type ExportFormat } from "@/lib/export";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -14,9 +18,14 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
 
     const session = queries.getSession(db).get(id) as Session | undefined;
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     const formatParam = new URL(request.url).searchParams.get("format");
     const format: ExportFormat = formatParam === "json" ? "json" : "md";

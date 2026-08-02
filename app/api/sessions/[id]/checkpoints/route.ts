@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { parseJsonBody } from "@/lib/api-security";
 import { createCheckpoint, listCheckpoints } from "@/lib/checkpoints";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 // GET /api/sessions/[id]/checkpoints — durable, labeled checkpoints for a
 // session, newest-first, each flagged `expired` when its snapshot was pruned.
@@ -12,9 +16,14 @@ export async function GET(
   try {
     const { id } = await params;
     const session = queries.getSession(getDb()).get(id) as Session | undefined;
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
     const checkpoints = await listCheckpoints(session);
     return NextResponse.json({ checkpoints });
   } catch (error) {
@@ -33,9 +42,14 @@ export async function POST(
   try {
     const { id } = await params;
     const session = queries.getSession(getDb()).get(id) as Session | undefined;
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     let label: string | undefined;
     const parsed = await parseJsonBody<{ label?: string }>(request);

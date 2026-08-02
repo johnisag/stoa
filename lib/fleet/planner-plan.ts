@@ -1,9 +1,18 @@
+import { createHash, timingSafeEqual } from "crypto";
+import { isSafeModel } from "@/lib/model-catalog";
 import { normalizeFleetClaims } from "./conflicts";
 import { FLEET_PLAN_FILE_CLAIM_MAX, FLEET_PLAN_FILE_CLAIMS_MAX } from "./plan";
 import { parseVerifySteps } from "../verification/runner";
 
 const PLAN_BEGIN = "STOA_FLEET_PLAN_BEGIN";
 const PLAN_END = "STOA_FLEET_PLAN_END";
+const PLANNER_RESULT_SCHEMA_VERSION = 1;
+const FULL_GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const PLANNER_ACCEPTANCE_CRITERIA_MAX = 2_000;
+const PLANNER_RISK_NOTES_MAX = 8;
+const PLANNER_RISK_TEXT_MAX = 500;
+const PLANNER_RISK_MITIGATION_MAX = 1_000;
+const PLANNER_SUGGESTED_MODEL_MAX = 160;
 
 export const FLEET_PLANNER_TASK_CAP_DEFAULT = 8;
 export const FLEET_PLANNER_TASK_CAP_MAX = 40;
@@ -16,12 +25,28 @@ export interface FleetPlannerTask {
   fileClaims: string[];
   dependsOn: string[];
   acceptanceCriteria: string | null;
+  riskNotes: FleetPlannerRiskNote[];
   verifyCommand: string | null;
   suggestedProvider: string | null;
+  suggestedModel: string | null;
+}
+
+export interface FleetPlannerRiskNote {
+  severity: "low" | "medium" | "high";
+  risk: string;
+  mitigation: string;
 }
 
 export type FleetPlannerParseResult =
   { ok: true; tasks: FleetPlannerTask[] } | { ok: false; error: string };
+
+export interface FleetPlannerResultIdentity {
+  runId: string;
+  requestId: string;
+  attempt: number;
+  baseSha: string;
+  nonceHash: string;
+}
 
 function trimmed(value: unknown, max: number): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -38,12 +63,19 @@ export function buildFleetPlannerPrompt(input: {
   baseBranch: string;
   taskCap: number;
   availableProviders: string[];
+  resultPath: string;
+  nonce: string;
+  runId: string;
+  requestId: string;
+  attempt: number;
+  baseSha: string;
 }): string {
   return [
     `[Stoa Fleet] You are the planning agent. Inspect the repository at branch`,
-    `"${input.baseBranch}" and decompose the goal into at most ${input.taskCap} safe,`,
+    `"${input.baseBranch}". This checkout is pinned to exact commit ${input.baseSha}.`,
+    `Decompose the goal into at most ${input.taskCap} safe,`,
     `reviewable tasks. Plan only: do not modify project files, commit, push, or`,
-    `open a pull request. Your only write is PLAN.md in this worktree.`,
+    `open a pull request. Do not read or trust a preexisting PLAN.md.`,
     "",
     "GOAL:",
     input.goal,
@@ -58,33 +90,63 @@ export function buildFleetPlannerPrompt(input: {
     `direct argv steps: use && only to separate steps and never use shell pipes,`,
     `redirects, substitutions, single quotes, or environment assignments.`,
     "",
-    `Write exactly one JSON object between these marker lines in PLAN.md:`,
-    PLAN_BEGIN,
-    `{"tasks":[{"key":"api","title":"Implement API","description":"...","taskType":"implementation","fileClaims":["app/api/"],"dependsOn":[],"acceptanceCriteria":"...","verifyCommand":"npm test","suggestedProvider":"codex"}]}`,
-    PLAN_END,
+    `Write exactly one UTF-8 JSON object to the external Fleet-owned path ${input.resultPath}.`,
+    `That external result is your only allowed write. Do not write markdown or prose outside it.`,
+    `Copy schemaVersion, nonce, runId, requestId, attempt, and baseSha exactly.`,
+    JSON.stringify(
+      {
+        schemaVersion: PLANNER_RESULT_SCHEMA_VERSION,
+        nonce: input.nonce,
+        runId: input.runId,
+        requestId: input.requestId,
+        attempt: input.attempt,
+        baseSha: input.baseSha,
+        tasks: [
+          {
+            key: "api",
+            title: "Implement API",
+            description: "...",
+            taskType: "implementation",
+            fileClaims: ["app/api/"],
+            dependsOn: [],
+            acceptanceCriteria: "...",
+            riskNotes: [
+              {
+                severity: "medium",
+                risk: "Describe a concrete implementation or rollout risk",
+                mitigation:
+                  "Describe how the worker or reviewer should contain it",
+              },
+            ],
+            verifyCommand: "npm test",
+            suggestedProvider: "codex",
+            suggestedModel: null,
+          },
+        ],
+      },
+      null,
+      2
+    ),
   ].join("\n");
 }
 
-export function parseFleetPlannerOutput(
-  fileText: string,
+function hashesEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  );
+}
+
+function plannerNonceHash(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function parseFleetPlannerTasks(
+  rawTasks: unknown,
   taskCap: number
 ): FleetPlannerParseResult {
-  const begin = fileText.lastIndexOf(PLAN_BEGIN);
-  if (begin < 0) return { ok: false, error: `missing ${PLAN_BEGIN} marker` };
-  const start = begin + PLAN_BEGIN.length;
-  const end = fileText.indexOf(PLAN_END, start);
-  if (end < 0) return { ok: false, error: `missing ${PLAN_END} marker` };
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fileText.slice(start, end).trim());
-  } catch {
-    return { ok: false, error: "planner output is not valid JSON" };
-  }
-  const rawTasks =
-    parsed && typeof parsed === "object"
-      ? (parsed as { tasks?: unknown }).tasks
-      : null;
   if (!Array.isArray(rawTasks) || rawTasks.length === 0) {
     return { ok: false, error: "planner output has no tasks" };
   }
@@ -150,6 +212,61 @@ export function parseFleetPlannerOutput(
     if (!readOnly && fileClaims.length === 0) {
       return { ok: false, error: `write task ${key} has no valid file claims` };
     }
+    const rawAcceptanceCriteria =
+      typeof record.acceptanceCriteria === "string"
+        ? record.acceptanceCriteria.trim()
+        : "";
+    if (
+      !readOnly &&
+      (!rawAcceptanceCriteria ||
+        rawAcceptanceCriteria.length > PLANNER_ACCEPTANCE_CRITERIA_MAX)
+    ) {
+      return {
+        ok: false,
+        error: `write task ${key} needs bounded acceptance criteria`,
+      };
+    }
+    const rawRiskNotes = record.riskNotes;
+    if (
+      !Array.isArray(rawRiskNotes) ||
+      rawRiskNotes.length > PLANNER_RISK_NOTES_MAX ||
+      (!readOnly && rawRiskNotes.length === 0)
+    ) {
+      return {
+        ok: false,
+        error: `planner task ${key} needs bounded structured risk notes`,
+      };
+    }
+    const riskNotes: FleetPlannerRiskNote[] = [];
+    for (const rawRisk of rawRiskNotes) {
+      if (!rawRisk || typeof rawRisk !== "object" || Array.isArray(rawRisk)) {
+        return {
+          ok: false,
+          error: `planner task ${key} has a malformed risk note`,
+        };
+      }
+      const riskRecord = rawRisk as Record<string, unknown>;
+      const severity = riskRecord.severity;
+      const risk =
+        typeof riskRecord.risk === "string" ? riskRecord.risk.trim() : "";
+      const mitigation =
+        typeof riskRecord.mitigation === "string"
+          ? riskRecord.mitigation.trim()
+          : "";
+      if (
+        (severity !== "low" && severity !== "medium" && severity !== "high") ||
+        !risk ||
+        risk.length > PLANNER_RISK_TEXT_MAX ||
+        !mitigation ||
+        mitigation.length > PLANNER_RISK_MITIGATION_MAX
+      ) {
+        return {
+          ok: false,
+          error: `planner task ${key} has a malformed risk note`,
+        };
+      }
+      riskNotes.push({ severity, risk, mitigation });
+    }
     const verifyCommand = trimmed(record.verifyCommand, 500) || null;
     if (!readOnly && !verifyCommand) {
       return {
@@ -163,6 +280,22 @@ export function parseFleetPlannerOutput(
         error: `planner task ${key} has an unsafe verification command`,
       };
     }
+    const suggestedProvider = trimmed(record.suggestedProvider, 40) || null;
+    const rawSuggestedModel =
+      typeof record.suggestedModel === "string"
+        ? record.suggestedModel.trim()
+        : "";
+    if (
+      rawSuggestedModel &&
+      (!suggestedProvider ||
+        rawSuggestedModel.length > PLANNER_SUGGESTED_MODEL_MAX ||
+        !isSafeModel(rawSuggestedModel))
+    ) {
+      return {
+        ok: false,
+        error: `planner task ${key} has an unsafe model suggestion`,
+      };
+    }
     knownKeys.add(key);
     tasks.push({
       key,
@@ -171,12 +304,83 @@ export function parseFleetPlannerOutput(
       taskType,
       fileClaims,
       dependsOn,
-      acceptanceCriteria: trimmed(record.acceptanceCriteria, 2000) || null,
+      acceptanceCriteria: rawAcceptanceCriteria || null,
+      riskNotes,
       verifyCommand,
-      suggestedProvider: trimmed(record.suggestedProvider, 40) || null,
+      suggestedProvider,
+      suggestedModel: rawSuggestedModel || null,
     });
   }
   return { ok: true, tasks };
+}
+
+/** Parse and authenticate one Fleet-owned planner result attempt. */
+export function parseFleetPlannerResult(
+  text: string,
+  expected: FleetPlannerResultIdentity,
+  taskCap: number
+): FleetPlannerParseResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "planner result is not valid JSON" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: "planner result must be an object" };
+  }
+  const record = parsed as Record<string, unknown>;
+  if (record.schemaVersion !== PLANNER_RESULT_SCHEMA_VERSION) {
+    return { ok: false, error: "unsupported planner result schema" };
+  }
+  const nonce =
+    typeof record.nonce === "string" && record.nonce.length <= 128
+      ? record.nonce
+      : "";
+  if (
+    !nonce ||
+    !/^[0-9a-f]{64}$/.test(expected.nonceHash) ||
+    !hashesEqual(plannerNonceHash(nonce), expected.nonceHash)
+  ) {
+    return { ok: false, error: "planner result nonce does not match" };
+  }
+  for (const [field, expectedValue] of [
+    ["runId", expected.runId],
+    ["requestId", expected.requestId],
+    ["attempt", expected.attempt],
+    ["baseSha", expected.baseSha],
+  ] as const) {
+    if (record[field] !== expectedValue) {
+      return { ok: false, error: `planner result ${field} does not match` };
+    }
+  }
+  if (!FULL_GIT_SHA.test(expected.baseSha)) {
+    return { ok: false, error: "planner result base contract is invalid" };
+  }
+  return parseFleetPlannerTasks(record.tasks, taskCap);
+}
+
+export function parseFleetPlannerOutput(
+  fileText: string,
+  taskCap: number
+): FleetPlannerParseResult {
+  const begin = fileText.lastIndexOf(PLAN_BEGIN);
+  if (begin < 0) return { ok: false, error: `missing ${PLAN_BEGIN} marker` };
+  const start = begin + PLAN_BEGIN.length;
+  const end = fileText.indexOf(PLAN_END, start);
+  if (end < 0) return { ok: false, error: `missing ${PLAN_END} marker` };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fileText.slice(start, end).trim());
+  } catch {
+    return { ok: false, error: "planner output is not valid JSON" };
+  }
+  const rawTasks =
+    parsed && typeof parsed === "object"
+      ? (parsed as { tasks?: unknown }).tasks
+      : null;
+  return parseFleetPlannerTasks(rawTasks, taskCap);
 }
 
 export function fleetPlannerPlanText(tasks: FleetPlannerTask[]): string {
@@ -191,13 +395,19 @@ export function fleetPlannerPlanText(tasks: FleetPlannerTask[]): string {
       const acceptance = task.acceptanceCriteria
         ? `\n  Acceptance: ${task.acceptanceCriteria}`
         : "";
+      const risks = task.riskNotes.length
+        ? `\n  Risks: ${JSON.stringify(task.riskNotes)}`
+        : "";
       const provider = task.suggestedProvider
         ? `\n  Suggested provider: ${task.suggestedProvider}`
+        : "";
+      const model = task.suggestedModel
+        ? `\n  Suggested model: ${task.suggestedModel}`
         : "";
       const verify = task.verifyCommand
         ? `\n  Verify: ${task.verifyCommand}`
         : "";
-      return `${index + 1}. ${task.title} -- ${task.description}${claims}${dependencies}${acceptance}${verify}${provider}`;
+      return `${index + 1}. ${task.title} -- ${task.description}${claims}${dependencies}${acceptance}${risks}${verify}${provider}${model}`;
     })
     .join("\n");
 }

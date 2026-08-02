@@ -11,6 +11,10 @@ import {
 import { getSessionBackend } from "@/lib/session-backend";
 import { enqueuePrompt } from "@/lib/prompt-queue";
 import { readClaudeSessionUsage } from "@/lib/session-cost";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -37,12 +41,17 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     // Get parent session
     const parent = queries.getSession(db).get(parentId) as Session | undefined;
-    if (!parent) {
+    const denied = genericSessionRouteFailure(parent);
+    if (denied) {
       return NextResponse.json(
-        { error: "Parent session not found" },
-        { status: 404 }
+        {
+          error:
+            denied.status === 404 ? "Parent session not found" : denied.error,
+        },
+        { status: denied.status }
       );
     }
+    assertGenericSessionRouteAccess(parent);
 
     // Create new session
     const newId = randomUUID();

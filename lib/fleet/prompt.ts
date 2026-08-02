@@ -1,5 +1,14 @@
 import type { FleetRunRow, FleetTaskRow } from "./types";
 
+function fleetTaskRiskNotes(task: FleetTaskRow): unknown[] {
+  try {
+    const parsed = JSON.parse(task.risk_notes_json ?? "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export interface FleetWorkerReportPromptContract {
   reportPath: string;
   nonce: string;
@@ -33,6 +42,7 @@ Description: ${task.description ?? "No additional description."}
 Attempt: ${attempt}
 Spawn request: ${spawnRequestId}
 Acceptance criteria: ${task.acceptance_criteria ?? "Complete the task as described and keep the change surgical."}
+Planned risk notes: ${JSON.stringify(fleetTaskRiskNotes(task))}
 Allowed file claims: ${claims.length ? claims.join(", ") : "none (read-only task)"}
 Forbidden paths: ${claims.length ? "every path outside the allowed file claims" : "all repository writes"}
 Dependencies: ${dependencies.length ? dependencies.join("; ") : "none"}

@@ -280,4 +280,83 @@ describe("Fleet paid-session admission", () => {
       { resource_type: "repo_worktree", units: 40 },
     ]);
   });
+
+  it("accounts for an advisory supervisor without reserving Git, worktree, or disk capacity", () => {
+    const { db, run, session } = fixture();
+    const ownerId = "supervisor-request-1";
+    expect(
+      reserveFleetPaidSession(db, {
+        run,
+        ownerType: "supervisor",
+        ownerId,
+        taskType: "supervision",
+        provider: "codex",
+        model: "gpt-5.4",
+        repositoryKey: "fleet-supervisor:run-1",
+        now: new Date("2026-08-01T12:00:00.000Z"),
+        leaseExpiresAt: "2026-08-01T12:02:00.000Z",
+      })
+    ).toMatchObject({ admitted: true });
+    expect(
+      db
+        .prepare(
+          `SELECT resource_type FROM fleet_runtime_leases
+           WHERE owner_type = 'supervisor' AND owner_id = ?
+           ORDER BY resource_type`
+        )
+        .all(ownerId)
+    ).toEqual([
+      { resource_type: "provider" },
+      { resource_type: "pty" },
+      { resource_type: "transport_host" },
+    ]);
+    expect(
+      activateFleetPaidSession(db, {
+        runId: run.id,
+        ownerType: "supervisor",
+        ownerId,
+        session,
+        provider: "codex",
+        model: "gpt-5.4",
+        now: new Date("2026-08-01T12:01:00.000Z"),
+      })
+    ).toBe(true);
+    expect(
+      activateFleetPaidSession(db, {
+        runId: run.id,
+        ownerType: "supervisor",
+        ownerId,
+        session,
+        provider: "codex",
+        model: "gpt-5.4",
+        now: new Date("2026-08-01T12:01:30.000Z"),
+      })
+    ).toBe(true);
+    finishFleetPaidSession(db, {
+      runId: run.id,
+      ownerType: "supervisor",
+      ownerId,
+      sessionCreated: true,
+      now: new Date("2026-08-01T12:02:00.000Z"),
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT reservation_released_at IS NOT NULL AS released,
+                  terminal_at IS NOT NULL AS terminal
+           FROM fleet_cost_accounts
+           WHERE owner_type = 'supervisor' AND owner_id = ?`
+        )
+        .get(ownerId)
+    ).toEqual({ released: 1, terminal: 1 });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_runtime_leases
+           WHERE owner_type = 'supervisor' AND owner_id = ?
+             AND status <> 'released'`
+        )
+        .get(ownerId)
+    ).toEqual({ count: 0 });
+  });
 });

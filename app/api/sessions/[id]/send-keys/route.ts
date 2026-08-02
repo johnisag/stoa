@@ -6,6 +6,10 @@ import { backendKeyForSession } from "@/lib/providers/registry";
 import { getSessionBackend } from "@/lib/session-backend";
 import { appendFileSync } from "fs";
 import { parseJsonBody, SEND_KEYS_MAX_LENGTH } from "@/lib/api-security";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 // Log to file for debugging
 const LOG_FILE = path.join(os.tmpdir(), "stoa-send-keys.log");
@@ -71,10 +75,15 @@ export async function POST(
     const db = getDb();
     const session = queries.getSession(db).get(id) as Session | undefined;
 
-    if (!session) {
-      log(`ERROR: Session ${id} not found in DB`);
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      log(`ERROR: Session ${id} is unavailable: ${denied.error}`);
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     // Authoritative backend key (honors a renamed session's tmux_name), same as
     // the DELETE/respond routes — sessionKey() alone would 400 after a rename.

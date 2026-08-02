@@ -24,6 +24,12 @@ const PAID_SESSION_CORE_LEASE_TYPES = new Set([
   "git_operation",
 ]);
 
+const PAID_SESSION_ADVISORY_LEASE_TYPES = new Set([
+  "pty",
+  "transport_host",
+  "provider",
+]);
+
 const PAID_SESSION_NEW_WORKTREE_LEASE_TYPES = new Set([
   ...PAID_SESSION_CORE_LEASE_TYPES,
   "repo_worktree",
@@ -103,11 +109,15 @@ export function reserveFleetPaidSession(
     const requestedResources = fleetWorkerResourceRequest({
       provider: input.provider,
       repositoryKey: input.repositoryKey,
-    }).filter(
-      (resource) =>
+    }).filter((resource) => {
+      if (input.ownerType === "supervisor") {
+        return PAID_SESSION_ADVISORY_LEASE_TYPES.has(resource.kind);
+      }
+      return (
         input.ownerType !== "fixer" ||
         PAID_SESSION_CORE_LEASE_TYPES.has(resource.kind)
-    );
+      );
+    });
     const resources = acquireFleetRuntimeResources(db, {
       runId: input.run.id,
       ownerType: input.ownerType,
@@ -200,9 +210,11 @@ export function activateFleetPaidSession(
           input.ownerId
         ) as PaidSessionLeaseRow[];
       const expectedLeaseTypes =
-        input.ownerType === "fixer"
-          ? PAID_SESSION_CORE_LEASE_TYPES
-          : PAID_SESSION_NEW_WORKTREE_LEASE_TYPES;
+        input.ownerType === "supervisor"
+          ? PAID_SESSION_ADVISORY_LEASE_TYPES
+          : input.ownerType === "fixer"
+            ? PAID_SESSION_CORE_LEASE_TYPES
+            : PAID_SESSION_NEW_WORKTREE_LEASE_TYPES;
       // Accept the old six-row fixer shape during a rolling upgrade so a
       // crash-recovered pre-upgrade fixer can still activate and settle. New
       // fixer reservations always use the four-row reuse profile above.

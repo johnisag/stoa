@@ -32,6 +32,8 @@ export class PtyBackend implements SessionBackend {
     binary,
     args,
     env,
+    envMode,
+    fleetWritableRoots,
   }: CreateOptions): Promise<void> {
     // Preferred: spawn the agent binary directly with argv (no bash banner).
     if (binary && binary.length > 0) {
@@ -40,6 +42,8 @@ export class PtyBackend implements SessionBackend {
         args: args ?? [],
         cwd,
         env,
+        envMode,
+        fleetWritableRoots,
       });
       return;
     }
@@ -56,12 +60,16 @@ export class PtyBackend implements SessionBackend {
               args: ["-NoLogo", "-Command", command],
               cwd,
               env,
+              envMode,
+              fleetWritableRoots,
             }
           : {
               binary: process.env.ComSpec || "cmd.exe",
               args: ["/c", command],
               cwd,
               env,
+              envMode,
+              fleetWritableRoots,
             }
       );
     } else {
@@ -70,6 +78,8 @@ export class PtyBackend implements SessionBackend {
         args: ["-c", command],
         cwd,
         env,
+        envMode,
+        fleetWritableRoots,
       });
     }
   }

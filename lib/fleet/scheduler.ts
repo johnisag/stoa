@@ -92,10 +92,12 @@ const AUXILIARY_COST_OWNER_TYPES = new Set<FleetCostOwnerType>([
   "plan_review",
   "task_review",
   "fixer",
+  "supervisor",
 ]);
 const LEASE_MS = 2 * 60 * 1000;
 const FLEET_COST_SAMPLE_INTERVAL_MS = 30_000;
 const FLEET_COST_SAMPLE_MAX_PER_TICK = 8;
+const FULL_GIT_SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 const runLocks = new Set<string>();
 const launchingWorkers = new Set<string>();
 const fleetCostSampleAt = new WeakMap<object, number>();
@@ -628,6 +630,7 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
       .all(runId) as FleetTaskDependencyRow[];
     const executionHash = approvedExecutionHash(run);
     if (
+      !FULL_GIT_SHA.test(run.automation_base_sha ?? "") ||
       !run.approved_plan_hash ||
       hashFleetTaskRows(approvedTasks, approvedDependencies) !==
         run.approved_plan_hash ||
@@ -919,16 +922,34 @@ async function launchLease(
     let attemptContract: FleetWorkerAttemptContract;
     let result: FleetSpawnResult;
     try {
+      const expectedBaseSha = lease.dependencies.length
+        ? lease.task.base_sha
+        : lease.run.automation_base_sha;
+      if (!FULL_GIT_SHA.test(expectedBaseSha ?? "")) {
+        throw new Error(
+          lease.dependencies.length
+            ? "Fleet dependency task has no exact integrated base commit"
+            : "Fleet run has no exact approved base commit"
+        );
+      }
       attemptContract = await deps.prepareAttempt({
         runId: lease.run.id,
         taskId: lease.task.id,
         attempt: lease.attempt,
         workingDirectory: lease.workingDirectory,
-        // A dependency integration pins the exact combined head in base_sha.
-        // Prefer it over the moving human-readable integration branch so a later
-        // independent merge cannot silently change this task's execution base.
-        baseRef: lease.task.base_sha ?? lease.task.base_branch ?? "main",
+        // Root tasks always start at the exact run commit approved by the
+        // operator/critics. Only a dependency integration may replace that with
+        // the exact combined head persisted on the dependent task.
+        baseRef: expectedBaseSha!,
       });
+      if (
+        !FULL_GIT_SHA.test(attemptContract.baseSha) ||
+        attemptContract.baseSha.toLowerCase() !== expectedBaseSha!.toLowerCase()
+      ) {
+        throw new Error(
+          "Fleet attempt base changed before the worker could be spawned"
+        );
+      }
       const prepared = transaction(deps.db, () => {
         const nowIso = deps.now().toISOString();
         const workerUpdate = deps.db

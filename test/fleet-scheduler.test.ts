@@ -25,6 +25,7 @@ import { FleetSpawnError } from "@/lib/fleet/spawn";
 
 let db: InstanceType<typeof Database>;
 let serial = 0;
+const RUN_BASE_SHA = "a".repeat(40);
 
 function addRun(
   overrides: {
@@ -41,8 +42,9 @@ function addRun(
   db.prepare(
     `INSERT INTO fleet_runs
     (id, name, goal, status, desired_state, approval_state, provider,
-     max_concurrency, recovery_required, budget_usd, settings_json)
-    VALUES (?, 'Fleet', 'Ship safely', ?, ?, 'approved', ?, ?, ?, ?, '{}')`
+     max_concurrency, recovery_required, budget_usd, automation_base_sha,
+     settings_json)
+    VALUES (?, 'Fleet', 'Ship safely', ?, ?, 'approved', ?, ?, ?, ?, ?, '{}')`
   ).run(
     id,
     status,
@@ -55,7 +57,8 @@ function addRun(
     overrides.provider ?? "codex",
     overrides.concurrency ?? 6,
     overrides.recovery ?? 0,
-    overrides.budget ?? null
+    overrides.budget ?? null,
+    RUN_BASE_SHA
   );
   return id;
 }
@@ -88,7 +91,8 @@ function fakeSpawnResult(taskId: string) {
 function addAuxiliaryCostAccount(
   runId: string,
   input: {
-    ownerType?: "planner" | "plan_review" | "task_review" | "fixer";
+    ownerType?:
+      "planner" | "plan_review" | "task_review" | "fixer" | "supervisor";
     ownerId?: string;
     reservationUsd?: number;
     reservationTokens?: number;
@@ -176,12 +180,12 @@ function schedulerDeps(
     db,
     now: () => new Date("2026-08-01T12:00:00.000Z"),
     spawn,
-    prepareAttempt: vi.fn(async ({ runId, taskId, attempt }) => ({
+    prepareAttempt: vi.fn(async ({ runId, taskId, attempt, baseRef }) => ({
       attemptDirectory: `C:\\fleet\\${runId}\\${taskId}\\${attempt}`,
       reportPath: `C:\\fleet\\${runId}\\${taskId}\\${attempt}\\report.json`,
       nonce: "n".repeat(43),
       nonceHash: "a".repeat(64),
-      baseSha: "b".repeat(40),
+      baseSha: baseRef,
     })),
     sessionExists: async () => false,
     stopSession: async () => {},
@@ -569,6 +573,7 @@ describe("fleet scheduler", () => {
         ["plan_review", "draft", "draft"],
         ["task_review", "reviewing", "running"],
         ["fixer", "reviewing", "running"],
+        ["supervisor", "reviewing", "running"],
       ] as const
     ).map(([ownerType, status, desiredState]) => {
       const runId = addRun({
@@ -622,7 +627,7 @@ describe("fleet scheduler", () => {
     });
 
     expect(sampleCosts).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledTimes(4);
+    expect(sendMessage).toHaveBeenCalledTimes(5);
     for (const owner of owners) {
       expect(
         db
@@ -893,6 +898,128 @@ describe("fleet scheduler", () => {
       )
       .all(conflictRun) as { status: string }[];
     expect(statuses.map((row) => row.status)).toEqual(["running", "ready"]);
+  });
+
+  it("pins a root task to the approved run SHA after its branch moves", async () => {
+    const movedBranchSha = "b".repeat(40);
+    const runId = addRun();
+    addTask(runId, "lib/exact-base.ts", 1);
+    db.prepare(
+      `UPDATE fleet_tasks SET base_branch = 'main' WHERE fleet_run_id = ?`
+    ).run(runId);
+    const prepareAttempt = vi.fn(
+      async ({ runId: rid, taskId, attempt, baseRef }) => ({
+        attemptDirectory: `C:\\fleet\\${rid}\\${taskId}\\${attempt}`,
+        reportPath: `C:\\fleet\\${rid}\\${taskId}\\${attempt}\\report.json`,
+        nonce: "n".repeat(43),
+        nonceHash: "a".repeat(64),
+        // This models the old behavior: resolving the branch after approval
+        // would produce B. Passing the approved SHA remains pinned to A.
+        baseSha: baseRef === "main" ? movedBranchSha : baseRef,
+      })
+    );
+    const spawn = vi.fn(async ({ task }) => fakeSpawnResult(task.id));
+
+    expect(
+      await reconcileFleetRun(runId, {
+        ...schedulerDeps(spawn),
+        prepareAttempt,
+      })
+    ).toBe(1);
+
+    expect(prepareAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ baseRef: RUN_BASE_SHA })
+    );
+    expect(spawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.objectContaining({
+          base_branch: RUN_BASE_SHA,
+          base_sha: RUN_BASE_SHA,
+        }),
+      })
+    );
+  });
+
+  it("rejects a prepared A-to-B base drift before spawning or persisting it", async () => {
+    const runId = addRun();
+    addTask(runId, "lib/import-gap.ts", 1);
+    const prepareAttempt = vi.fn(async ({ runId: rid, taskId, attempt }) => ({
+      attemptDirectory: `C:\\fleet\\${rid}\\${taskId}\\${attempt}`,
+      reportPath: `C:\\fleet\\${rid}\\${taskId}\\${attempt}\\report.json`,
+      nonce: "n".repeat(43),
+      nonceHash: "a".repeat(64),
+      baseSha: "b".repeat(40),
+    }));
+    const spawn = vi.fn(async ({ task }) => fakeSpawnResult(task.id));
+
+    expect(
+      await reconcileFleetRun(runId, {
+        ...schedulerDeps(spawn),
+        prepareAttempt,
+      })
+    ).toBe(1);
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(
+      db
+        .prepare(`SELECT base_sha FROM fleet_tasks WHERE fleet_run_id = ?`)
+        .get(runId)
+    ).toEqual({ base_sha: null });
+  });
+
+  it("uses the exact integrated task SHA for a dependency task", async () => {
+    const runId = addRun();
+    const upstreamId = addTask(runId, "lib/upstream.ts", 1);
+    const dependentId = addTask(runId, "lib/dependent.ts", 2);
+    const integratedSha = "c".repeat(40);
+    db.prepare(`UPDATE fleet_tasks SET status = 'completed' WHERE id = ?`).run(
+      upstreamId
+    );
+    db.prepare(`UPDATE fleet_tasks SET base_sha = ? WHERE id = ?`).run(
+      integratedSha,
+      dependentId
+    );
+    db.prepare(
+      `INSERT INTO fleet_task_dependencies
+       (id, fleet_run_id, task_id, depends_on_task_id, dependency_type)
+       VALUES ('exact-base-dependency', ?, ?, ?, 'blocks')`
+    ).run(runId, dependentId, upstreamId);
+    const prepareAttempt = vi.fn(
+      async ({ runId: rid, taskId, attempt, baseRef }) => ({
+        attemptDirectory: `C:\\fleet\\${rid}\\${taskId}\\${attempt}`,
+        reportPath: `C:\\fleet\\${rid}\\${taskId}\\${attempt}\\report.json`,
+        nonce: "n".repeat(43),
+        nonceHash: "a".repeat(64),
+        baseSha: baseRef,
+      })
+    );
+
+    expect(
+      await reconcileFleetRun(runId, {
+        ...schedulerDeps(),
+        prepareAttempt,
+      })
+    ).toBe(1);
+    expect(prepareAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: dependentId, baseRef: integratedSha })
+    );
+  });
+
+  it("blocks an approved run whose exact base binding is absent", async () => {
+    const runId = addRun();
+    addTask(runId, "lib/missing-base.ts", 1);
+    db.prepare(
+      `UPDATE fleet_runs SET automation_base_sha = NULL WHERE id = ?`
+    ).run(runId);
+    const deps = schedulerDeps();
+
+    expect(await reconcileFleetRun(runId, deps)).toBe(0);
+    expect(deps.prepareAttempt).not.toHaveBeenCalled();
+    expect(
+      db
+        .prepare(`SELECT status, approval_state FROM fleet_runs WHERE id = ?`)
+        .get(runId)
+    ).toEqual({ status: "paused", approval_state: "blocked" });
   });
 
   it("continues scheduler admission in reviewing and merging phases while honoring desired state", async () => {

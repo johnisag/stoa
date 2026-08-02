@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import {
   getAllowedPathRoots,
-  resolveSandboxedPathOrHome,
+  resolveRealSandboxedPathOrHome,
   requireLocalhost,
 } from "@/lib/api-security";
 import { classifySecretFiles } from "@/lib/secret-scan";
@@ -39,7 +39,10 @@ export async function GET(request: NextRequest) {
     }
 
     const roots = getAllowedPathRoots();
-    const { allowed, resolved } = resolveSandboxedPathOrHome(inputPath, roots);
+    const { allowed, resolved } = await resolveRealSandboxedPathOrHome(
+      inputPath,
+      roots
+    );
     if (!allowed) {
       return NextResponse.json(
         { error: "Path is outside the allowed workspace" },

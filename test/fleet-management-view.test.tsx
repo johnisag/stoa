@@ -29,6 +29,7 @@ const state = vi.hoisted(() => ({
   cancelMutation: vi.fn(async (_input: unknown) => undefined),
   cleanupMutation: vi.fn(async (_input: unknown) => undefined),
   mergeMutation: vi.fn(async (_input: unknown) => undefined),
+  landingMutation: vi.fn(async (_input: unknown) => undefined),
   mergeStatus: null as FleetMergeStatusDto | null,
   cancellationPreview: null as FleetDestructiveActionPreview | null,
   cleanupPreview: null as {
@@ -199,6 +200,10 @@ vi.mock("@/data/fleet/queries", () => ({
     ...mutation(),
     mutateAsync: state.mergeMutation,
   }),
+  useAuthorizeFleetLanding: () => ({
+    ...mutation(),
+    mutateAsync: state.landingMutation,
+  }),
   useRetryFleetTask: mutation,
   useReconcileFleetTaskVerification: mutation,
   useReconcileFleetTaskReview: mutation,
@@ -264,6 +269,7 @@ function task(
     maxAttempts: 3,
     currentAttempt: 1,
     acceptanceCriteria: "All tests pass",
+    riskNotes: [],
     verifyCommand: "npm test",
     failureCode: null,
     createdAt: "2026-08-01T08:00:00.000Z",
@@ -549,6 +555,8 @@ function detailFixture(): FleetRunDetailDto {
       cancelMode: null,
       taskCount: tasks.length,
       workerCount: workers.length,
+      attentionCount: 0,
+      awaitingManualMerge: false,
       createdAt: "2026-08-01T08:00:00.000Z",
       updatedAt: "2026-08-01T10:00:00.000Z",
       approvalPreview: {
@@ -671,6 +679,26 @@ function destructivePreviewFixture(
 function approvalPreviewFixture(): FleetApprovalControlPreviewDto {
   return {
     runId: "run-1",
+    estimate: {
+      kind: "estimated_remaining",
+      estimatedUsd: 2.5,
+      estimatedTokens: 400_000,
+      confidence: "medium",
+      capped: false,
+      sessionCounts: {
+        workerAttempts: 2,
+        taskReviews: 4,
+        planReviews: 0,
+        planner: 0,
+        total: 6,
+      },
+      projectedTotalUsd: 4.25,
+      projectedTotalTokens: 412_000,
+      budgetComparison: { usd: "within", tokens: "exceeds" },
+      exclusions: [
+        "Additional attempts created by future plan changes are not estimable.",
+      ],
+    },
     bindings: {
       approvedPlanHash: "1".repeat(64),
       currentPlanHash: "1".repeat(64),
@@ -776,12 +804,64 @@ describe("FleetManagementView status drilldowns", () => {
     state.cancelMutation.mockClear();
     state.cleanupMutation.mockClear();
     state.mergeMutation.mockClear();
+    state.landingMutation.mockClear();
     state.createMutation.mockClear();
   });
 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it("defaults to six parallel workers and warns above twelve", async () => {
+    render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+    const input = screen.getByLabelText(
+      "Max parallel workers"
+    ) as HTMLInputElement;
+    expect(input.value).toBe("6");
+    fireEvent.change(input, { target: { value: "13" } });
+    expect(
+      screen.getByText(/More than 12 parallel workers can exhaust/)
+    ).toBeTruthy();
+    fireEvent.change(input, { target: { value: "12" } });
+    expect(
+      screen.queryByText(/More than 12 parallel workers can exhaust/)
+    ).toBeNull();
+  });
+
+  it("shows the conservative pre-approval estimate and budget comparison", async () => {
+    render(<FleetManagementView />);
+    const estimate = await screen.findByTestId("fleet-approval-cost-estimate");
+    expect(estimate.textContent).toContain("Estimated remaining Fleet spend");
+    expect(estimate.textContent).toContain("$2.50");
+    expect(estimate.textContent).toContain("400,000 tokens");
+    expect(estimate.textContent).toContain("tokens exceeds");
+    expect(estimate.textContent).not.toContain("zero-cost estimate");
+  });
+
+  it("renders structured task risk severity and mitigation beside acceptance", async () => {
+    state.detail!.tasks[0]!.riskNotes = [
+      {
+        severity: "high",
+        risk: "The migration can leave a partial index",
+        mitigation: "Run it transactionally and verify the index",
+      },
+    ];
+    render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+    const risks = screen.getByTestId("fleet-task-risks-task-routine");
+    expect(risks.textContent).toContain("Known risks");
+    expect(risks.textContent).toContain(
+      "Risk: The migration can leave a partial index"
+    );
+    expect(risks.textContent).toContain(
+      "Mitigation: Run it transactionally and verify the index"
+    );
+    expect(screen.getByLabelText("high severity").textContent).toBe("high");
+    expect(
+      screen.getAllByText("Acceptance: All tests pass").length
+    ).toBeGreaterThan(0);
   });
 
   it("renders epic-to-merge automation controls and the explicit manual policy", async () => {
@@ -1161,6 +1241,103 @@ describe("FleetManagementView status drilldowns", () => {
     ).toBe(false);
   });
 
+  it("requires a second exact confirmation before a staged head can land", async () => {
+    const planHash = "1".repeat(64);
+    const executionHash = "2".repeat(64);
+    const baseSha = "a".repeat(40);
+    const integrationHeadSha = "c".repeat(40);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    state.detail = {
+      ...state.detail!,
+      run: {
+        ...state.detail!.run,
+        status: "merging",
+        planHash,
+        approvedPlanHash: planHash,
+        integrationState: "ready_to_finalize",
+        integrationBaseSha: baseSha,
+        integrationHeadSha,
+        mergeRequestedAt: null,
+        mergeRequestedBy: "operator",
+        mergeRequestKind: "manual",
+        mergeTarget: "github_pr",
+      },
+    };
+    state.mergeStatus = {
+      readiness: {
+        runId: "run-1",
+        requested: false,
+        target: "github_pr",
+        integrationState: "ready_to_finalize",
+        readyTaskIds: [],
+        waitingTaskIds: [],
+        mergedTaskIds: ["task-active", "task-blocked"],
+        blockers: [],
+        allTasksIntegrated: true,
+        canFinalize: true,
+      },
+      integration: {
+        state: "ready_to_finalize",
+        target: "github_pr",
+        requestedAt: null,
+        requestedBy: "operator",
+        requestKind: "manual",
+        branch: "stoa/fleet/integration-run-1",
+        worktree: "C:\\repo\\.stoa-worktrees\\integration-run-1",
+        baseSha,
+        headSha: integrationHeadSha,
+        prNumber: null,
+        prUrl: null,
+        prHeadSha: null,
+        mergeSha: null,
+        error: null,
+      },
+      operations: [
+        {
+          id: "final-verify-1",
+          taskId: null,
+          type: "final_verify",
+          state: "completed",
+          resultHeadSha: integrationHeadSha,
+          attemptCount: 1,
+          error: null,
+          updatedAt: "2026-08-01T10:01:00.000Z",
+        },
+      ],
+      retry: {
+        action: null,
+        state: "not_applicable",
+        available: false,
+        reason: null,
+        operationId: null,
+        attemptCount: 0,
+        maxAttempts: 3,
+        preconditions: null,
+      },
+    };
+
+    render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+    expect(state.landingMutation).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Authorize GitHub landing" })
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining(`Integration head: ${integrationHeadSha}`)
+    );
+    await waitFor(() =>
+      expect(state.landingMutation).toHaveBeenCalledWith({
+        target: "github_pr",
+        expectedPlanHash: planHash,
+        expectedExecutionHash: executionHash,
+        expectedBaseSha: baseSha,
+        expectedIntegrationHeadSha: integrationHeadSha,
+      })
+    );
+    expect(state.mergeMutation).not.toHaveBeenCalled();
+  });
+
   it("offers one exact same-target retry when final verification is safely retryable", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     const planHash = "1".repeat(64);
@@ -1490,6 +1667,16 @@ describe("FleetManagementView status drilldowns", () => {
       ).checked
     ).toBe(false);
     expect((consent as HTMLInputElement).checked).toBe(false);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Create and plan",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    expect(
+      screen.getByText(/Grant unattended-agent consent above/)
+    ).toBeTruthy();
 
     fireEvent.click(consent);
     fireEvent.click(screen.getByLabelText("Approve plans automatically"));
@@ -1506,6 +1693,13 @@ describe("FleetManagementView status drilldowns", () => {
     });
     fireEvent.click(screen.getByLabelText("Repository"));
     fireEvent.click(await screen.findByText("acme/stoa"));
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Create and plan",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Create and plan" }));
 
     await waitFor(() => expect(state.createMutation).toHaveBeenCalled());

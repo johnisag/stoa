@@ -14,7 +14,7 @@ import { generatePRContent } from "@/lib/pr-generation";
 import {
   parseJsonBody,
   getAllowedPathRoots,
-  resolveSandboxedPath,
+  resolveRealSandboxedPath,
 } from "@/lib/api-security";
 
 // GET /api/git/pr - Get PR status (fast - no AI generation)
@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
 
   const expandedPath = expandPath(rawPath);
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  const { allowed } = await resolveRealSandboxedPath(expandedPath, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "Path is outside the allowed workspace" },
@@ -130,7 +130,7 @@ export async function POST(request: NextRequest) {
 
   const expandedPath = expandPath(rawPath);
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  const { allowed } = await resolveRealSandboxedPath(expandedPath, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "Path is outside the allowed workspace" },

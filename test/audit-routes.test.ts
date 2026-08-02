@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
 import { COMMAND_AUDIT_KEY } from "@/lib/command/audit";
+import { internalSessionProfile } from "./internal-session-fixture";
 
 // Drive the real route handlers against a real in-memory DB — only getDb() is
 // swapped for the test database; queries/readers/backend-key logic stay real.
@@ -58,11 +59,25 @@ beforeEach(() => {
       0,
       "proj1"
     );
+  const internalProfile = internalSessionProfile("fleet_supervisor");
+  db()
+    .prepare(
+      `INSERT INTO sessions (
+        id, name, tmux_name, working_directory, group_path, agent_type,
+        session_role, launch_profile_json, launch_profile_hash
+      ) VALUES (
+        'internal-supervisor', 'Managed supervisor', 'claude-internal',
+        '~/tmp/internal', '__fleet_internal__', 'claude', 'fleet_supervisor',
+        ?, ?
+      )`
+    )
+    .run(internalProfile.profileJson, internalProfile.profileHash);
   addEvent("claude-a", "session_create", 100);
   addEvent("claude-a", "input_text", 300, '{"length":5}');
   addEvent("claude-a", "input_enter", 400);
   addEvent("claude-ghost", "session_kill", 500); // no session row (deleted)
   addEvent(COMMAND_AUDIT_KEY, "command_executed", 600);
+  addEvent("claude-internal", "input_text", 700, '{"secret":true}');
 });
 
 describe("GET /api/sessions/[id]/events", () => {
@@ -148,6 +163,23 @@ describe("GET /api/audit (fleet)", () => {
   it("?session=<missing> → 404", async () => {
     const res = await fleetAudit(reqOf("http://x/api/audit?session=ghost"));
     expect(res.status).toBe(404);
+  });
+
+  it("hides internal events fleet-wide and rejects direct internal scoping", async () => {
+    const fleet = await fleetAudit(reqOf("http://x/api/audit"));
+    const body = await fleet.json();
+    expect(body.total).toBe(5);
+    expect(
+      body.events.some(
+        (event: { session_key: string }) =>
+          event.session_key === "claude-internal"
+      )
+    ).toBe(false);
+
+    const scoped = await fleetAudit(
+      reqOf("http://x/api/audit?session=internal-supervisor")
+    );
+    expect(scoped.status).toBe(409);
   });
 
   it("format=csv streams a fleet download", async () => {

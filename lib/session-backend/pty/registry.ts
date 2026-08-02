@@ -37,6 +37,10 @@ export interface SpawnSpec {
   rows?: number;
   /** Extra environment overlaid on the inherited env. */
   env?: Record<string, string>;
+  /** Replace the inherited environment instead of overlaying it. */
+  envMode?: "inherit" | "replace";
+  /** Exact server-validated Fleet attempt directories for container binds. */
+  fleetWritableRoots?: string[];
 }
 
 const DEFAULT_COLS = 80;
@@ -124,7 +128,7 @@ function unsupportedCmdShim(shimPath: string): never {
   throw new Error(`Unable to safely launch Windows command shim: ${shimPath}`);
 }
 
-function resolveSpawn(
+export function resolveSpawnCommand(
   binary: string,
   args: string[],
   deps: ResolveSpawnDeps = {}
@@ -144,11 +148,15 @@ export function _resolveSpawnForTests(
   args: string[],
   deps?: ResolveSpawnDeps
 ): { file: string; args: string[] } {
-  return resolveSpawn(binary, args, deps);
+  return resolveSpawnCommand(binary, args, deps);
 }
 
-/** Build the child environment (inherit parent, normalize HOME/USER, overlay extras). */
-function buildEnv(extra?: Record<string, string>): Record<string, string> {
+/** Build the child environment, preserving the historical overlay by default. */
+function buildEnv(
+  extra?: Record<string, string>,
+  mode: "inherit" | "replace" = "inherit"
+): Record<string, string> {
+  if (mode === "replace") return { ...(extra ?? {}) };
   const base: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v != null) base[k] = v;
@@ -204,14 +212,14 @@ export function spawnSession(key: string, spec: SpawnSpec): PtySession {
   const cols = spec.cols ?? DEFAULT_COLS;
   const rows = spec.rows ?? DEFAULT_ROWS;
   const cwd = resolveSpawnCwd(spec.cwd);
-  const { file, args } = resolveSpawn(spec.binary, spec.args);
+  const { file, args } = resolveSpawnCommand(spec.binary, spec.args);
 
   const proc = pty.spawn(file, args, {
     name: "xterm-256color",
     cols,
     rows,
     cwd,
-    env: buildEnv(spec.env),
+    env: buildEnv(spec.env, spec.envMode),
     ...windowsConptyOptions(),
   });
 

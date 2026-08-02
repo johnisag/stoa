@@ -17,7 +17,7 @@ describe("allocateFleetAgents", () => {
       })
     ).toEqual([
       { provider: "claude", model: "sonnet" },
-      { provider: "codex", model: null },
+      { provider: "codex", model: "gpt-5.5" },
       { provider: "kimi", model: null },
       { provider: "claude", model: "sonnet" },
     ]);
@@ -31,7 +31,7 @@ describe("allocateFleetAgents", () => {
         defaultProvider: "claude",
         defaultModel: "sonnet",
       })
-    ).toEqual([{ provider: "hermes", model: null }]);
+    ).toEqual([{ provider: "hermes", model: "kimi-k3" }]);
     expect(() =>
       allocateFleetAgents({
         tasks: [{}],
@@ -51,8 +51,8 @@ describe("allocateFleetAgents", () => {
         defaultModel: "kilo/model",
       })
     ).toEqual([
-      { provider: "codex", model: null },
-      { provider: "codex", model: null },
+      { provider: "codex", model: "gpt-5.5" },
+      { provider: "codex", model: "gpt-5.5" },
     ]);
 
     expect(() =>

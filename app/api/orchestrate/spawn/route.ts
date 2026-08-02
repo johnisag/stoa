@@ -5,7 +5,7 @@ import { spawnWorker } from "@/lib/orchestration";
 import {
   parseJsonBody,
   getAllowedPathRoots,
-  resolveSandboxedPath,
+  resolveRealSandboxedPath,
 } from "@/lib/api-security";
 
 export async function POST(request: Request) {
@@ -59,7 +59,10 @@ export async function POST(request: Request) {
 
   // workingDirectory must resolve inside a registered project/repo root.
   const roots = getAllowedPathRoots();
-  const { allowed, resolved } = resolveSandboxedPath(workingDirectory, roots);
+  const { allowed, resolved } = await resolveRealSandboxedPath(
+    workingDirectory,
+    roots
+  );
   if (!allowed) {
     return NextResponse.json(
       { error: "workingDirectory is outside the allowed workspace" },

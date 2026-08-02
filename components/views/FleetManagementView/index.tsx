@@ -64,6 +64,7 @@ import {
   useRequestFleetCleanup,
   useFleetMergeStatus,
   useRequestFleetMerge,
+  useAuthorizeFleetLanding,
   useFleetSupervisorSnapshot,
   useRetryFleetTask,
   useReconcileFleetTaskVerification,
@@ -93,6 +94,11 @@ import {
   FLEET_DEFAULT_RESOURCE_LIMITS,
   type FleetResourceLimits,
 } from "@/lib/fleet/resource-admission";
+import {
+  FLEET_DEFAULT_PARALLEL_WORKERS,
+  FLEET_MAX_TOTAL_WORKERS,
+  FLEET_PARALLEL_WORKERS_WARNING_THRESHOLD,
+} from "@/lib/fleet/admission";
 import {
   FLEET_MODEL_MAX,
   FLEET_PROVIDER_MAX,
@@ -892,8 +898,17 @@ function RunRow({
   );
 }
 
-function ApprovalPreview({ detail }: { detail: FleetRunDetailDto }) {
+function ApprovalPreview({
+  detail,
+  estimate,
+}: {
+  detail: FleetRunDetailDto;
+  estimate: FleetApprovalControlPreviewDto["estimate"] | null;
+}) {
   const preview = detail.run.approvalPreview;
+  const budgetExceeded =
+    estimate?.budgetComparison.usd === "exceeds" ||
+    estimate?.budgetComparison.tokens === "exceeds";
   return (
     <section className="rounded-md border p-3">
       <div className="mb-2 flex items-center gap-2">
@@ -931,6 +946,63 @@ function ApprovalPreview({ detail }: { detail: FleetRunDetailDto }) {
             ))}
           </div>
         </div>
+      </div>
+      <div
+        className={cn(
+          "mt-3 rounded border p-2 text-xs",
+          budgetExceeded &&
+            "border-destructive/40 bg-destructive/5 text-destructive"
+        )}
+        data-testid="fleet-approval-cost-estimate"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="font-medium">Estimated remaining Fleet spend</span>
+          <span className="text-[10px] uppercase">
+            {estimate?.confidence ?? "unknown"} confidence
+          </span>
+        </div>
+        {estimate?.estimatedUsd == null || estimate.estimatedTokens == null ? (
+          <p className="text-muted-foreground mt-1">
+            No future paid session can be estimated until a runnable plan or
+            pending planner exists. This is not a zero-cost estimate.
+          </p>
+        ) : (
+          <>
+            <p className="mt-1">
+              Conservative remaining reservation:{" "}
+              {formatUsd(estimate.estimatedUsd)} and{" "}
+              {formatTokens(estimate.estimatedTokens)} tokens across{" "}
+              {estimate.sessionCounts.total} sessions (
+              {estimate.sessionCounts.workerAttempts} worker attempts,{" "}
+              {estimate.sessionCounts.taskReviews} task reviews,{" "}
+              {estimate.sessionCounts.planReviews} plan reviews,{" "}
+              {estimate.sessionCounts.planner} planner).
+            </p>
+            <p className="text-muted-foreground mt-1">
+              Projected total including current spent and reserved:{" "}
+              {estimate.projectedTotalUsd == null
+                ? "unknown USD"
+                : formatUsd(estimate.projectedTotalUsd)}{" "}
+              and{" "}
+              {estimate.projectedTotalTokens == null
+                ? "unknown tokens"
+                : formatTokens(estimate.projectedTotalTokens)}{" "}
+              tokens. Budget: USD {estimate.budgetComparison.usd}, tokens{" "}
+              {estimate.budgetComparison.tokens}.
+            </p>
+          </>
+        )}
+        {estimate?.capped && (
+          <p className="mt-1 font-medium">
+            Estimate reached a safety bound; actual remaining spend may be
+            higher.
+          </p>
+        )}
+        {estimate?.exclusions.map((exclusion) => (
+          <p key={exclusion} className="text-muted-foreground mt-1 text-[10px]">
+            {exclusion}
+          </p>
+        ))}
       </div>
     </section>
   );
@@ -1876,6 +1948,7 @@ function RunDetail({
     detail.tasks.length > 0 && detail.run.approvalState === "approved"
   );
   const requestMerge = useRequestFleetMerge(detail.run.id);
+  const authorizeLanding = useAuthorizeFleetLanding(detail.run.id);
   const supervisor = useFleetSupervisorSnapshot(
     detail.run.id,
     detail.tasks.length > 0
@@ -2055,6 +2128,51 @@ function RunDetail({
     detail.run.mergeRequestKind === "manual" &&
     detail.run.mergeTarget != null &&
     !externalLandingActive;
+  const manualLandingPreconditions = useMemo(() => {
+    const target = detail.run.mergeTarget;
+    const planHash = detail.run.planHash;
+    const executionHash =
+      attentionApprovalPreview.data?.bindings.currentExecutionHash;
+    const baseSha = detail.run.automationBaseSha;
+    const integrationHeadSha = detail.run.integrationHeadSha;
+    const finalVerificationCurrent = mergeStatus.data?.operations.some(
+      (operation) =>
+        operation.type === "final_verify" &&
+        operation.state === "completed" &&
+        operation.resultHeadSha === integrationHeadSha
+    );
+    if (
+      !manualMergeIntentActive ||
+      mergeStatus.data?.integration.state !== "ready_to_finalize" ||
+      !mergeStatus.data.readiness.canFinalize ||
+      !finalVerificationCurrent ||
+      (target !== "local" && target !== "github_pr") ||
+      !planHash ||
+      !executionHash ||
+      !baseSha ||
+      !integrationHeadSha ||
+      attentionApprovalPreview.data?.approvedVsCurrent.planChanged ||
+      attentionApprovalPreview.data?.approvedVsCurrent.executionChanged ||
+      attentionApprovalPreview.data?.approvedVsCurrent.policyChanged
+    ) {
+      return null;
+    }
+    return {
+      target,
+      expectedPlanHash: planHash,
+      expectedExecutionHash: executionHash,
+      expectedBaseSha: baseSha,
+      expectedIntegrationHeadSha: integrationHeadSha,
+    };
+  }, [
+    attentionApprovalPreview.data,
+    detail.run.automationBaseSha,
+    detail.run.integrationHeadSha,
+    detail.run.mergeTarget,
+    detail.run.planHash,
+    manualMergeIntentActive,
+    mergeStatus.data,
+  ]);
   const finalVerificationRetry = manualMergeIntentActive
     ? mergeStatus.data?.retry
     : null;
@@ -2105,7 +2223,8 @@ function RunDetail({
     cleanupRun.error?.message ??
     cleanupPreview.error?.message ??
     mergeStatus.error?.message ??
-    requestMerge.error?.message;
+    requestMerge.error?.message ??
+    authorizeLanding.error?.message;
   const resetLifecycleErrors = () => {
     resumeRun.reset();
     pauseRun.reset();
@@ -2114,6 +2233,7 @@ function RunDetail({
     archiveRun.reset();
     cleanupRun.reset();
     requestMerge.reset();
+    authorizeLanding.reset();
   };
   const attention = useMemo(
     () => buildFleetAttention(detail, attentionApprovalPreview.data),
@@ -2559,7 +2679,10 @@ function RunDetail({
       />
 
       <div className={mobileSection === "plan" ? "block" : "hidden lg:block"}>
-        <ApprovalPreview detail={detail} />
+        <ApprovalPreview
+          detail={detail}
+          estimate={attentionApprovalPreview.data?.estimate ?? null}
+        />
       </div>
       {detail.run.approvalState === "approved" && (
         <div className={mobileSection === "plan" ? "block" : "hidden lg:block"}>
@@ -2777,6 +2900,46 @@ function RunDetail({
                     {task.acceptanceCriteria && (
                       <div className="text-muted-foreground mt-1 text-[11px] break-words">
                         Acceptance: {task.acceptanceCriteria}
+                      </div>
+                    )}
+                    {task.riskNotes.length > 0 && (
+                      <div
+                        className="mt-2 grid gap-1.5"
+                        data-testid={`fleet-task-risks-${task.id}`}
+                      >
+                        <div className="text-muted-foreground text-[10px] font-medium uppercase">
+                          Known risks
+                        </div>
+                        {task.riskNotes.map((note, index) => (
+                          <div
+                            key={`${note.severity}-${index}`}
+                            className="grid gap-1 rounded border px-2 py-1.5 text-[11px] break-words"
+                          >
+                            <div className="flex items-start gap-2">
+                              <span
+                                aria-label={`${note.severity} severity`}
+                                className={cn(
+                                  "shrink-0 rounded px-1 py-0.5 text-[9px] font-medium uppercase",
+                                  note.severity === "high"
+                                    ? "bg-destructive/10 text-destructive"
+                                    : note.severity === "medium"
+                                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                                      : "bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                                )}
+                              >
+                                {note.severity}
+                              </span>
+                              <span>
+                                <span className="font-medium">Risk:</span>{" "}
+                                {note.risk}
+                              </span>
+                            </div>
+                            <div className="text-muted-foreground">
+                              <span className="font-medium">Mitigation:</span>{" "}
+                              {note.mitigation}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                     {task.verifyCommand && (
@@ -3140,6 +3303,44 @@ function RunDetail({
                           Retry final verification
                         </Button>
                       )}
+                  </div>
+                )}
+                {manualLandingPreconditions && (
+                  <div className="mt-2 grid gap-2 border-t border-blue-500/20 pt-2">
+                    <p className="text-foreground">
+                      Final verification passed for the exact integration head.
+                      External landing still requires your explicit
+                      authorization.
+                    </p>
+                    <Button
+                      className="w-fit"
+                      size="sm"
+                      disabled={authorizeLanding.isPending}
+                      onClick={() => {
+                        resetLifecycleErrors();
+                        const action =
+                          manualLandingPreconditions.target === "github_pr"
+                            ? "push the integration branch, open or reuse its GitHub PR, wait for required checks, and merge it"
+                            : "fast-forward the local base checkout";
+                        if (
+                          !window.confirm(
+                            `Authorize Fleet to ${action}?\n\nBase: ${manualLandingPreconditions.expectedBaseSha}\nIntegration head: ${manualLandingPreconditions.expectedIntegrationHeadSha}\n\nThis is the external landing authorization and locks pause, cancel, and exact approval controls.`
+                          )
+                        ) {
+                          return;
+                        }
+                        void authorizeLanding
+                          .mutateAsync(manualLandingPreconditions)
+                          .catch(() => undefined);
+                      }}
+                    >
+                      {authorizeLanding.isPending && (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      )}
+                      {manualLandingPreconditions.target === "github_pr"
+                        ? "Authorize GitHub landing"
+                        : "Authorize local fast-forward"}
+                    </Button>
                   </div>
                 )}
               </div>
@@ -3650,7 +3851,9 @@ export function FleetManagementView({
   );
   const [provider, setProvider] = useState("claude");
   const [model, setModel] = useState("");
-  const [maxConcurrency, setMaxConcurrency] = useState(4);
+  const [maxConcurrency, setMaxConcurrency] = useState(
+    FLEET_DEFAULT_PARALLEL_WORKERS
+  );
   const [autoPlan, setAutoPlan] = useState(true);
   const [autoApprove, setAutoApprove] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
@@ -3773,6 +3976,8 @@ export function FleetManagementView({
     autoPlan && repoId === NONE && projectId === NONE;
   const unattendedAgentLaunchEnabled =
     (autoPlan && inputMode === "epic") || autoApprove || autoStart;
+  const unattendedConsentMissing =
+    unattendedAgentLaunchEnabled && !allowUnconfinedAgents;
   const createPending = createRun.isPending || importRun.isPending;
   const createError = createRun.error?.message ?? importRun.error?.message;
   const providerCaps = useMemo(
@@ -3796,6 +4001,9 @@ export function FleetManagementView({
     providerCaps.ok &&
     resourceLimitsValid &&
     budgetsValid &&
+    Number.isSafeInteger(maxConcurrency) &&
+    maxConcurrency >= 1 &&
+    maxConcurrency <= FLEET_MAX_TOTAL_WORKERS &&
     Number.isSafeInteger(maxRetriesPerTask) &&
     maxRetriesPerTask >= 0 &&
     maxRetriesPerTask <= 9 &&
@@ -3982,10 +4190,10 @@ export function FleetManagementView({
                   onChange={(event) => setBudgetTokens(event.target.value)}
                 />
                 <Input
-                  aria-label="Max concurrency"
+                  aria-label="Max parallel workers"
                   type="number"
                   min={1}
-                  max={40}
+                  max={FLEET_MAX_TOTAL_WORKERS}
                   value={maxConcurrency}
                   onChange={(event) =>
                     setMaxConcurrency(Number(event.target.value))
@@ -4002,6 +4210,16 @@ export function FleetManagementView({
                   }
                 />
               </div>
+              {maxConcurrency > FLEET_PARALLEL_WORKERS_WARNING_THRESHOLD && (
+                <div
+                  className="text-xs text-amber-700 dark:text-amber-300"
+                  role="alert"
+                >
+                  More than {FLEET_PARALLEL_WORKERS_WARNING_THRESHOLD} parallel
+                  workers can exhaust local terminals, worktrees, provider
+                  capacity, and disk. Confirm this host has enough resources.
+                </div>
+              )}
               <details className="rounded-md border px-3 py-2 text-xs">
                 <summary className="cursor-pointer font-medium">
                   Budget policy and resource limits
@@ -4400,6 +4618,7 @@ export function FleetManagementView({
                   !name.trim() ||
                   !goal.trim() ||
                   automaticPlanNeedsTarget ||
+                  unattendedConsentMissing ||
                   !draftSettingsValid ||
                   createPending
                 }
@@ -4418,6 +4637,13 @@ export function FleetManagementView({
                       ? "Create and plan"
                       : "Create draft"}
               </Button>
+              {unattendedConsentMissing && (
+                <div className="text-xs text-amber-700 dark:text-amber-300">
+                  Grant unattended-agent consent above before creating an
+                  automatic run. Turn automatic planning off to create a manual
+                  draft instead.
+                </div>
+              )}
               {!budgetsValid && (
                 <div className="text-destructive text-xs">
                   Budgets must be non-negative finite values; token budgets must
@@ -4429,6 +4655,14 @@ export function FleetManagementView({
                 maxRetriesPerTask > 9) && (
                 <div className="text-destructive text-xs">
                   Retries per task must be an integer from 0 to 9.
+                </div>
+              )}
+              {(!Number.isSafeInteger(maxConcurrency) ||
+                maxConcurrency < 1 ||
+                maxConcurrency > FLEET_MAX_TOTAL_WORKERS) && (
+                <div className="text-destructive text-xs">
+                  Parallel workers must be an integer from 1 to{" "}
+                  {FLEET_MAX_TOTAL_WORKERS}.
                 </div>
               )}
               {createError && (

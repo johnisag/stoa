@@ -10,6 +10,7 @@ import {
   getWorktreesDir,
   normalizeWorktreePath,
 } from "@/lib/worktrees";
+import { isInteractiveSessionRole } from "@/lib/session-role";
 
 /** A Stoa-managed worktree, enriched for the reclaim panel. */
 interface WorktreeRow {
@@ -39,7 +40,18 @@ export async function GET() {
     if (!existsSync(dir)) return NextResponse.json({ worktrees: [] });
 
     const db = getDb();
-    const sessions = queries.getAllSessions(db).all() as Session[];
+    const allSessions = queries.getAllSessions(db).all() as Session[];
+    const sessions = allSessions.filter(isInteractiveSessionRole);
+    const internalDirs = new Set(
+      allSessions
+        .filter((session) => !isInteractiveSessionRole(session))
+        .flatMap((session) => [
+          session.working_directory,
+          session.worktree_path,
+        ])
+        .filter((dir): dir is string => !!dir)
+        .map(normalizeWorktreePath)
+    );
     const sessionByDir = new Map<string, Session>();
     for (const s of sessions) {
       sessionByDir.set(normalizeWorktreePath(s.working_directory), s);
@@ -52,6 +64,9 @@ export async function GET() {
     const rows: WorktreeRow[] = [];
     for (const entry of entries) {
       const wtPath = path.join(dir, entry.name);
+      // Server-owned workspaces belong exclusively to their subsystem. Do not
+      // show them as generic attached worktrees or as reclaimable orphans.
+      if (internalDirs.has(normalizeWorktreePath(wtPath))) continue;
 
       // Branch (falls back to the dir name for a broken/detached worktree so it
       // still shows up as reclaimable junk).
@@ -130,6 +145,20 @@ export async function DELETE(request: NextRequest) {
     const db = getDb();
     const sessions = queries.getAllSessions(db).all() as Session[];
     const target = normalizeWorktreePath(worktreePath);
+    if (
+      sessions.some(
+        (session) =>
+          !isInteractiveSessionRole(session) &&
+          [session.working_directory, session.worktree_path]
+            .filter((dir): dir is string => !!dir)
+            .some((dir) => normalizeWorktreePath(dir) === target)
+      )
+    ) {
+      return NextResponse.json(
+        { error: "Worktree is managed by an internal subsystem" },
+        { status: 409 }
+      );
+    }
     if (
       sessions.some(
         (s) => normalizeWorktreePath(s.working_directory) === target

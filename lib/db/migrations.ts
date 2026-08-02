@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { ensureSessionLaunchProfileSchema } from "./session-launch-profile-schema";
 
 const SAFE_FLEET_AUTOMATION_POLICY_JSON =
   '{"version":1,"automaticPlanning":false,"automaticPlanApproval":false,"automaticStart":false,"automaticFixes":false,"maxAutomaticFixRounds":0,"automaticMerge":false,"mergeTarget":"github_pr","allowSensitivePaths":false,"allowUnconfinedAgents":false,"plannerTaskCap":8,"cleanupPolicy":"preserve","retentionDays":null}';
@@ -128,6 +129,10 @@ function ensureFleetSchedulerSchema(db: Database.Database): void {
       },
       { name: "spawn_request_id", ddl: "spawn_request_id TEXT" },
       { name: "acceptance_criteria", ddl: "acceptance_criteria TEXT" },
+      {
+        name: "risk_notes_json",
+        ddl: "risk_notes_json TEXT NOT NULL DEFAULT '[]'",
+      },
       { name: "verify_command", ddl: "verify_command TEXT" },
       { name: "approved_task_hash", ddl: "approved_task_hash TEXT" },
       {
@@ -1352,35 +1357,52 @@ function ensureFleetCostResourceSchema(db: Database.Database): void {
 }
 
 function ensureFleetResourceUsageScopeSchema(db: Database.Database): void {
-  if (!hasTable(db, "fleet_resource_usage_buckets")) {
-    ensureFleetCostResourceSchema(db);
-  }
-  if (!hasTable(db, "fleet_resource_usage_buckets")) return;
-  if (hasColumn(db, "fleet_resource_usage_buckets", "fleet_run_id")) return;
+  db.transaction(() => {
+    if (!hasTable(db, "fleet_resource_usage_buckets")) {
+      ensureFleetCostResourceSchema(db);
+    }
+    if (!hasTable(db, "fleet_resource_usage_buckets")) return;
 
-  // Minute buckets are transient admission counters. An unscoped legacy bucket
-  // cannot be attributed safely to a run, so replace it instead of guessing and
-  // accidentally making one run consume another run's allowance.
-  db.exec(`
-    DROP INDEX IF EXISTS idx_fleet_resource_usage_bucket_time;
-    ALTER TABLE fleet_resource_usage_buckets
-      RENAME TO fleet_resource_usage_buckets_unscoped;
-    CREATE TABLE fleet_resource_usage_buckets (
-      fleet_run_id TEXT NOT NULL,
-      resource_type TEXT NOT NULL,
-      resource_key TEXT NOT NULL,
-      bucket_start_ms INTEGER NOT NULL,
-      units INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      PRIMARY KEY (fleet_run_id, resource_type, resource_key, bucket_start_ms),
-      FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE
-    );
-    DROP TABLE fleet_resource_usage_buckets_unscoped;
-    CREATE INDEX idx_fleet_resource_usage_bucket_time
-      ON fleet_resource_usage_buckets(
-        bucket_start_ms, fleet_run_id, resource_type, resource_key
+    if (hasColumn(db, "fleet_resource_usage_buckets", "fleet_run_id")) {
+      // Recover a pre-fix migration that crashed after replacing the table but
+      // before recreating its index (and discard any abandoned legacy table).
+      db.exec(`
+        DROP TABLE IF EXISTS fleet_resource_usage_buckets_unscoped;
+        CREATE INDEX IF NOT EXISTS idx_fleet_resource_usage_bucket_time
+          ON fleet_resource_usage_buckets(
+            bucket_start_ms, fleet_run_id, resource_type, resource_key
+          );
+      `);
+      return;
+    }
+
+    // Minute buckets are transient admission counters. An unscoped legacy
+    // bucket cannot be attributed safely to a run, so replace it instead of
+    // guessing and accidentally charging one run for another run's allowance.
+    // The transaction makes the table swap atomic for new installations; the
+    // guards above repair every intermediate state left by the old migration.
+    db.exec(`
+      DROP INDEX IF EXISTS idx_fleet_resource_usage_bucket_time;
+      DROP TABLE IF EXISTS fleet_resource_usage_buckets_unscoped;
+      ALTER TABLE fleet_resource_usage_buckets
+        RENAME TO fleet_resource_usage_buckets_unscoped;
+      CREATE TABLE fleet_resource_usage_buckets (
+        fleet_run_id TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        bucket_start_ms INTEGER NOT NULL,
+        units INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (fleet_run_id, resource_type, resource_key, bucket_start_ms),
+        FOREIGN KEY (fleet_run_id) REFERENCES fleet_runs(id) ON DELETE CASCADE
       );
-  `);
+      DROP TABLE fleet_resource_usage_buckets_unscoped;
+      CREATE INDEX IF NOT EXISTS idx_fleet_resource_usage_bucket_time
+        ON fleet_resource_usage_buckets(
+          bucket_start_ms, fleet_run_id, resource_type, resource_key
+        );
+    `);
+  })();
 }
 
 function ensureFleetStatusAndInterruptSchema(db: Database.Database): void {
@@ -1724,6 +1746,14 @@ function ensureFleetCostInterruptSchema(db: Database.Database): void {
         AND desired_state IN ('draft', 'planned')
     `);
   }
+}
+
+function ensureFleetPlannerRiskSchema(db: Database.Database): void {
+  if (!hasTable(db, "fleet_tasks")) return;
+  addColumnIfMissing(db, "fleet_tasks", {
+    name: "risk_notes_json",
+    ddl: "risk_notes_json TEXT NOT NULL DEFAULT '[]'",
+  });
 }
 
 // All migrations in order. Migrations are idempotent (guarded by PRAGMA table_info
@@ -3256,6 +3286,16 @@ const migrations: Migration[] = [
     id: 74,
     name: "add_fleet_cost_interrupt_state",
     up: ensureFleetCostInterruptSchema,
+  },
+  {
+    id: 75,
+    name: "add_fleet_planner_risk_notes",
+    up: ensureFleetPlannerRiskSchema,
+  },
+  {
+    id: 76,
+    name: "add_immutable_session_launch_profiles",
+    up: ensureSessionLaunchProfileSchema,
   },
 ];
 

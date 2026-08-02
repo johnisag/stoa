@@ -57,7 +57,8 @@ type DirectFleetAction =
   | "fleet:resume"
   | "fleet:cancel"
   | "fleet:submit-artifact"
-  | "fleet:merge";
+  | "fleet:merge"
+  | "fleet:land";
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -339,6 +340,12 @@ async function executeToolCall(
       case "fleet_merge_run":
         return fleetToolResult(
           await callFleetCapability(args, "fleet:merge", {
+            target: args?.target,
+          })
+        );
+      case "fleet_authorize_landing":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:land", {
             target: args?.target,
           })
         );

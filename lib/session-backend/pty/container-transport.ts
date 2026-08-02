@@ -16,17 +16,22 @@
  * class only resolves the dynamic bits (git-common dir, config dirs) and delegates.
  */
 
-import { join, isAbsolute } from "path";
+import { isAbsolute, resolve } from "path";
 import { execFile } from "child_process";
+import { realpath } from "fs/promises";
 import { promisify } from "util";
-import { expandHome, homeDir } from "../../platform";
+import { expandHome, homeDir, stoaHomeDir } from "../../platform";
 import { getAllProviderDefinitions } from "../../providers/registry";
 import type { SessionActivity } from "../types";
 import type { SpawnSpec } from "./registry";
 import type { PtyTransport, AttachRequest, AttachHandle } from "./transport";
 import {
+  assertFleetWritableRootIdentityPreserved,
+  assertSafeContainerStoaHome,
   computeContainerMounts,
   CONTAINER_WORKDIR,
+  fleetWritableRootMounts,
+  isStrictContainerManagedWorktree,
 } from "../../container/mounts";
 import {
   buildDockerRunArgs,
@@ -59,10 +64,19 @@ export class ContainerTransport implements PtyTransport {
         cols: req.cols,
         rows: req.rows,
         env: req.spawn.env,
+        envMode: req.spawn.envMode,
+        fleetWritableRoots: req.spawn.fleetWritableRoots,
       });
       return this.delegate.attachStream({
         ...req,
-        spawn: { binary: r.binary, args: r.args, cwd: r.cwd, env: r.env },
+        spawn: {
+          binary: r.binary,
+          args: r.args,
+          cwd: r.cwd,
+          env: r.env,
+          envMode: r.envMode,
+          fleetWritableRoots: r.fleetWritableRoots,
+        },
       });
     }
     return this.delegate.attachStream(req);
@@ -109,12 +123,73 @@ export class ContainerTransport implements PtyTransport {
     const home = homeDir();
     const worktree = expanded && isAbsolute(expanded) ? expanded : home;
     const gitCommonDir = await resolveGitCommonDir(worktree);
+    const agentConfigDirs = knownAgentConfigDirs();
+    const stoaHome = resolve(stoaHomeDir());
+    const fleetWritableRoots = (spec.fleetWritableRoots ?? []).map((root) =>
+      resolve(expandHome(root))
+    );
+
+    // Validate both the lexical paths and their real targets (when present).
+    // This rejects a harmless-looking STOA_HOME symlink/junction that actually
+    // resolves to the user home, workspace, or another broad authority root.
+    assertSafeContainerStoaHome({
+      stoaHome,
+      homeDir: home,
+      worktree,
+      authorityPaths: [
+        ...agentConfigDirs,
+        ...(gitCommonDir ? [gitCommonDir] : []),
+      ],
+    });
+    const rootsMustExist = fleetWritableRoots.length > 0;
+    const [realStoaHome, realHome, realWorktree] = await Promise.all([
+      resolveRealHostPath(stoaHome, rootsMustExist),
+      resolveRealHostPath(home, true),
+      resolveRealHostPath(worktree, false),
+    ]);
+    const realAuthorityPaths = await Promise.all(
+      [...agentConfigDirs, ...(gitCommonDir ? [gitCommonDir] : [])].map(
+        (value) => resolveRealHostPath(value, false)
+      )
+    );
+    if (
+      isStrictContainerManagedWorktree(stoaHome, worktree) &&
+      !isStrictContainerManagedWorktree(realStoaHome, realWorktree)
+    ) {
+      throw new Error(
+        "Unsafe STOA_HOME: managed worktree escapes through a symbolic link or junction"
+      );
+    }
+    assertSafeContainerStoaHome({
+      stoaHome: realStoaHome,
+      homeDir: realHome,
+      worktree: realWorktree,
+      authorityPaths: realAuthorityPaths,
+    });
+    if (rootsMustExist) {
+      const realRoots = await Promise.all(
+        fleetWritableRoots.map((root) => resolveRealHostPath(root, true))
+      );
+      // Defense in depth at the final mount boundary: even metadata from a new
+      // caller cannot escape the real STOA_HOME through a symlink/junction or
+      // redirect one valid attempt path into another run/task/request.
+      assertFleetWritableRootIdentityPreserved({
+        lexicalRoots: fleetWritableRoots,
+        lexicalStoaHome: stoaHome,
+        realRoots,
+        realStoaHome,
+      });
+      fleetWritableRootMounts(realRoots, realStoaHome, realHome);
+    }
     const mounts = computeContainerMounts({
       worktree,
       gitCommonDir,
-      agentConfigDirs: knownAgentConfigDirs(),
-      stoaHome: join(home, ".stoa"),
+      agentConfigDirs,
+      // Used only to calculate container destinations for exact Fleet roots.
+      // The state root itself (DB, tokens, reports from other runs) is hidden.
+      stoaHome,
       homeDir: home,
+      fleetWritableRoots,
     });
     const args = buildDockerRunArgs({
       image: this.image,
@@ -138,7 +213,26 @@ export class ContainerTransport implements PtyTransport {
       cols: spec.cols,
       rows: spec.rows,
       env: spec.env,
+      envMode: spec.envMode,
+      fleetWritableRoots: spec.fleetWritableRoots,
     };
+  }
+}
+
+async function resolveRealHostPath(
+  value: string,
+  required: boolean
+): Promise<string> {
+  try {
+    return await realpath(value);
+  } catch (error) {
+    if (!required && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return resolve(value);
+    }
+    throw new Error(
+      `Container bind authority path cannot be resolved: ${value}`,
+      { cause: error }
+    );
   }
 }
 

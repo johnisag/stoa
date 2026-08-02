@@ -36,6 +36,18 @@ describe("buildAuditSql", () => {
     expect(countParams).toEqual(["claude-abc"]);
   });
 
+  it("can exclude server-owned session keys without adding user-controlled SQL", () => {
+    const { sql, params, countSql, countParams } = buildAuditSql({
+      ...base,
+      excludeInternalSessions: true,
+    });
+    expect(sql).toContain("NOT EXISTS");
+    expect(sql).toContain("internal_session.session_role <> 'interactive'");
+    expect(countSql).toContain("NOT EXISTS");
+    expect(params).toEqual([100, 0]);
+    expect(countParams).toEqual([]);
+  });
+
   it("types → an IN list with one placeholder each (never interpolated)", () => {
     const { sql, params, countParams } = buildAuditSql({
       ...base,

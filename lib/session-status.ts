@@ -3,9 +3,12 @@ import { statusDetector, type SessionStatus } from "./status-detector";
 import type { RateLimitState } from "./rate-limit";
 import type { PromptState, PromptKind } from "./auto-steer";
 import {
+  backendKeyForSession,
   getManagedSessionPattern,
   getSessionIdFromName,
 } from "./providers/registry";
+import { getDb, queries, type Session } from "./db";
+import { isInteractiveSessionRole } from "./session-role";
 
 export interface ManagedStatus {
   /** Session id, parsed from the `{provider}-{id}` managed name. */
@@ -30,10 +33,26 @@ const MANAGED = getManagedSessionPattern();
  * at run time (not module load) so it reflects the finalized Tier-1/2 decision.
  */
 export async function computeManagedStatuses(): Promise<ManagedStatus[]> {
+  let protectedBackendKeys: Set<string>;
+  try {
+    protectedBackendKeys = new Set(
+      (queries.getAllSessions(getDb()).all() as Session[])
+        .filter((session) => !isInteractiveSessionRole(session))
+        .map(backendKeyForSession)
+    );
+  } catch {
+    // Status capture is an observation boundary. If ownership cannot be
+    // established, fail closed instead of risking broker output in events,
+    // notifications, or Ask context.
+    return [];
+  }
+
   const backend = getSessionBackend();
   let names: string[];
   try {
-    names = (await backend.list()).filter((n) => MANAGED.test(n));
+    names = (await backend.list()).filter(
+      (name) => MANAGED.test(name) && !protectedBackendKeys.has(name)
+    );
   } catch {
     return [];
   }

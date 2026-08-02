@@ -3,9 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { FleetRunDto, FleetTaskDto } from "@/lib/fleet/types";
 import { bucketByLane, composeFleetCards } from "@/lib/fleet-board/lanes";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const state = vi.hoisted(() => ({
   detailHook: vi.fn(),
+  total: 1,
+  needsMeCount: 2,
+  elicitationCount: 1,
+  elicitationError: false,
+  elicitationFetching: false,
+  refetchElicitations: vi.fn(),
 }));
 
 const run = {
@@ -15,6 +22,8 @@ const run = {
   status: "running",
   taskCount: 1,
   workerCount: 1,
+  attentionCount: 2,
+  awaitingManualMerge: false,
 } as FleetRunDto;
 
 const task = {
@@ -31,12 +40,16 @@ vi.mock("@/data/fleet-board/useFleetBoard", () => ({
   useFleetBoard: () => ({
     lanes: bucketByLane(composeFleetCards([], [], [], [run])),
     repoById: new Map(),
-    total: 1,
-    needsMeCount: 0,
+    total: state.total,
+    needsMeCount: state.needsMeCount,
+    elicitationCount: state.elicitationCount,
+    elicitationError: state.elicitationError,
+    elicitationFetching: state.elicitationFetching,
     isLoading: false,
     isError: false,
     isFetching: false,
     refetch: vi.fn(),
+    refetchElicitations: state.refetchElicitations,
   }),
 }));
 
@@ -56,7 +69,12 @@ import { FleetBoardView } from "@/components/views/FleetBoardView";
 describe("FleetBoardView durable Fleet run handoff", () => {
   afterEach(() => {
     cleanup();
-    state.detailHook.mockClear();
+    vi.clearAllMocks();
+    state.total = 1;
+    state.needsMeCount = 2;
+    state.elicitationCount = 1;
+    state.elicitationError = false;
+    state.elicitationFetching = false;
   });
 
   it("lazily reads one run's tasks and opens the exact run/task", () => {
@@ -64,6 +82,7 @@ describe("FleetBoardView durable Fleet run handoff", () => {
     render(<FleetBoardView onOpenFleetRun={onOpenFleetRun} />);
 
     expect(screen.getByText("Ship autonomous Fleet")).toBeTruthy();
+    expect(screen.getByText("2 signals")).toBeTruthy();
     expect(screen.queryByText("Wire exact task handoff")).toBeNull();
     expect(state.detailHook).toHaveBeenLastCalledWith("fleet-run-1", false);
 
@@ -80,5 +99,52 @@ describe("FleetBoardView durable Fleet run handoff", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open run" }));
     expect(onOpenFleetRun).toHaveBeenCalledWith("fleet-run-1");
+  });
+
+  it("accounts for pending operator questions and links their visible handoff", () => {
+    const onOpenVerdictInbox = vi.fn();
+    render(
+      <TooltipProvider>
+        <FleetBoardView onOpenVerdictInbox={onOpenVerdictInbox} />
+      </TooltipProvider>
+    );
+
+    expect(screen.getByText("2 need you")).toBeTruthy();
+    expect(
+      screen.getByText("1 operator question needs an answer in Verdict Inbox.")
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Verdict Inbox" }));
+    expect(onOpenVerdictInbox).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Fleet cards usable and offers an isolated elicitation retry", () => {
+    state.elicitationCount = 0;
+    state.elicitationError = true;
+    state.needsMeCount = 1;
+    render(<FleetBoardView />);
+
+    expect(screen.getByText("Ship autonomous Fleet")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Operator questions could not be loaded. Fleet lanes remain available."
+    );
+    expect(screen.queryByText("Failed to load the board")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Retry operator questions" })
+    );
+    expect(state.refetchElicitations).toHaveBeenCalledOnce();
+  });
+
+  it("uses neutral delivery copy when only operator questions remain", () => {
+    state.total = 0;
+    state.needsMeCount = 1;
+    state.elicitationCount = 1;
+    render(<FleetBoardView />);
+
+    expect(screen.getByText("No delivery work is on the board.")).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Fleet idle — dispatch a task, or flip a session to auto mode."
+      )
+    ).toBeNull();
   });
 });

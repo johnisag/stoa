@@ -21,11 +21,16 @@ import { deleteSchedulesForSession } from "@/lib/scheduler";
 import { expandHome } from "@/lib/platform";
 import {
   parseJsonBody,
-  resolveSandboxedPath,
+  resolveRealSandboxedPath,
   sanitizeSessionName,
   sanitizeGroupPath,
   SYSTEM_PROMPT_MAX_LENGTH,
 } from "@/lib/api-security";
+import {
+  assertGenericSessionRouteAccess,
+  backendKeyOwners,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 // Sanitize a name for use as tmux session name
 function sanitizeTmuxName(name: string): string {
@@ -56,9 +61,14 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
     const session = queries.getSession(db).get(id) as Session | undefined;
 
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     return NextResponse.json({ session });
   } catch (error) {
@@ -88,9 +98,14 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
 
     const existing = queries.getSession(db).get(id) as Session | undefined;
-    if (!existing) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(existing);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(existing);
 
     // Resolve the session's project root for path validation.
     const project = existing.project_id
@@ -103,6 +118,11 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     // Build update query dynamically based on provided fields
     const updates: string[] = [];
     const values: unknown[] = [];
+    let completedBackendRename: {
+      oldKey: string;
+      newKey: string;
+      backend: ReturnType<typeof getSessionBackend>;
+    } | null = null;
 
     // Handle name change - also rename tmux session and git branch (for worktrees)
     if (body.name !== undefined && body.name !== existing.name) {
@@ -114,20 +134,43 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         );
       }
       const newTmuxName = sanitizeTmuxName(sanitized);
-      const oldTmuxName = existing.tmux_name;
+      const oldTmuxName = backendKeyForSession(existing);
 
-      // Try to rename the tmux session
-      if (oldTmuxName && newTmuxName) {
+      // Rename only a live backend and persist the new key only after that
+      // rename succeeds. A requested key owned by any other row (especially an
+      // internal session) or orphan live process is globally reserved.
+      if (newTmuxName && newTmuxName !== oldTmuxName) {
+        const allSessions = queries.getAllSessions(db).all() as Session[];
+        if (
+          backendKeyOwners(allSessions, newTmuxName, existing.id).length > 0
+        ) {
+          return NextResponse.json(
+            { error: "The requested session name is already reserved" },
+            { status: 409 }
+          );
+        }
         try {
           const backend = getSessionBackend();
-          await backend.rename(oldTmuxName, newTmuxName);
-          updates.push("tmux_name = ?");
-          values.push(newTmuxName);
-        } catch {
-          // tmux session might not exist or rename failed - that's ok, just update the name
-          // Still update tmux_name in DB so future attachments use the new name
-          updates.push("tmux_name = ?");
-          values.push(newTmuxName);
+          if (await backend.exists(oldTmuxName)) {
+            if (await backend.exists(newTmuxName)) {
+              return NextResponse.json(
+                { error: "The requested session name is already reserved" },
+                { status: 409 }
+              );
+            }
+            await backend.rename(oldTmuxName, newTmuxName);
+            updates.push("tmux_name = ?");
+            values.push(newTmuxName);
+            completedBackendRename = {
+              oldKey: oldTmuxName,
+              newKey: newTmuxName,
+              backend,
+            };
+          }
+        } catch (error) {
+          console.error("Failed to rename session backend:", error);
+          // The display name may still change, but the durable backend key must
+          // remain untouched after a failed or unverifiable process rename.
         }
       }
 
@@ -168,7 +211,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       values.push(body.status);
     }
     if (body.workingDirectory !== undefined) {
-      const { allowed, resolved } = resolveSandboxedPath(
+      const { allowed, resolved } = await resolveRealSandboxedPath(
         body.workingDirectory,
         [projectRoot]
       );
@@ -224,10 +267,10 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       const targetRoot = expandHome(targetProject.working_directory);
       const roots = [targetRoot];
       const wdCheck = existing.working_directory
-        ? resolveSandboxedPath(existing.working_directory, roots)
+        ? await resolveRealSandboxedPath(existing.working_directory, roots)
         : { allowed: true };
       const wtCheck = existing.worktree_path
-        ? resolveSandboxedPath(existing.worktree_path, roots)
+        ? await resolveRealSandboxedPath(existing.worktree_path, roots)
         : { allowed: true };
       if (!wdCheck.allowed || !wtCheck.allowed) {
         return NextResponse.json(
@@ -243,9 +286,29 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       updates.push("updated_at = datetime('now')");
       values.push(id);
 
-      db.prepare(`UPDATE sessions SET ${updates.join(", ")} WHERE id = ?`).run(
-        ...values
-      );
+      try {
+        if (completedBackendRename) {
+          const current = queries.getAllSessions(db).all() as Session[];
+          if (
+            backendKeyOwners(
+              current,
+              completedBackendRename.newKey,
+              existing.id
+            ).length > 0
+          ) {
+            throw new Error("Session key was reserved during rename");
+          }
+        }
+        db.prepare(
+          `UPDATE sessions SET ${updates.join(", ")} WHERE id = ?`
+        ).run(...values);
+      } catch (error) {
+        if (completedBackendRename) {
+          const { backend, oldKey, newKey } = completedBackendRename;
+          await backend.rename(newKey, oldKey).catch(() => undefined);
+        }
+        throw error;
+      }
     }
 
     const session = queries.getSession(db).get(id) as Session;
@@ -266,9 +329,14 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
 
     const existing = queries.getSession(db).get(id) as Session | undefined;
-    if (!existing) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(existing);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(existing);
 
     // If this is a conductor, delete all its workers first
     const workers = queries.getWorkersByConductor(db).all(id) as Session[];

@@ -12,6 +12,10 @@ import {
   expandHome,
   homeDir,
 } from "@/lib/platform";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 const backend = getSessionBackend();
 
@@ -104,9 +108,14 @@ export async function GET(
     const db = getDb();
     const session = queries.getSession(db).get(id) as Session | undefined;
 
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     // The transcript JSONL only exists for Claude sessions; other agents have no
     // structured reply to copy. Be explicit so the UI can toast a clear reason.

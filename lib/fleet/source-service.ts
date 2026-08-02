@@ -448,7 +448,10 @@ export function createFleetRunFromSource(
       ) {
         throw new FleetSourceCreateError(error.message, 409);
       }
-      throw error;
+      throw new FleetSourceCreateError(
+        error instanceof Error ? error.message : "source model is invalid",
+        400
+      );
     }
     const boundExecutable = {
       ...allocated.plan,

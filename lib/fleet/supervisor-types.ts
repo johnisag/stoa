@@ -20,7 +20,14 @@ export const FLEET_SUPERVISOR_SNAPSHOT_VERSION = 1 as const;
 export const FLEET_SUPERVISOR_RULES_VERSION = 1 as const;
 
 export type FleetSupervisorRecommendationKind =
-  "approval" | "retry" | "inspect" | "pause" | "merge_readiness";
+  | "approval"
+  | "retry"
+  | "inspect"
+  | "pause"
+  | "merge_readiness"
+  | "replan"
+  | "grouping"
+  | "merge_order";
 
 export type FleetSupervisorAttentionSeverity = "critical" | "warning" | "info";
 
@@ -179,6 +186,8 @@ export type FleetExternalSupervisorSource = "external_ai" | "conductor";
 export interface FleetExternalSupervisorAction {
   kind: FleetSupervisorRecommendationKind;
   taskId: string | null;
+  /** Ordered, bounded task scope for grouping/re-plan/merge-order advice. */
+  taskIds?: string[];
   rationale: string;
 }
 

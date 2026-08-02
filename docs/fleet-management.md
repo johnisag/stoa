@@ -1,6 +1,6 @@
 # Fleet Management Plan
 
-Last updated: 2026-08-01
+Last updated: 2026-08-02
 
 ## Executive summary
 
@@ -9,18 +9,20 @@ by this plan: a high-level epic, project specification, imported plan, pipeline,
 Builder workflow, or Dispatch source can become a bounded task graph; installed
 unattended-capable providers are allocated automatically; worktree-isolated
 workers report results; Stoa verifies and independently reviews each exact head;
-bounded fix rounds can run;
-and a fully green integration can land through a local fast-forward or a
-GitHub PR with exact-head CI checks. Automatic plan approval, automatic start,
-automatic fixes, and automatic merge are explicit opt-in policy choices. A user
-does **not** have to create an initial interactive session: Fleet creates its
-planner, critic, worker, reviewer, and fixer sessions as the durable state
-machine needs them. The current shared Git/provider-home layout is deliberately
-not advertised as strong OS confinement: unattended Fleet launches require the
-operator's explicit `allowUnconfinedAgents` consent until per-attempt Git metadata
-and provider state are isolated. This remains release-candidate work until the repository
-gate, independent reviews, PR-head OS matrix, and merge recorded in the phase
-ledger are all complete.
+and bounded fix rounds can run. For a manual merge, Fleet first stages and
+final-verifies the combined head, then requires a separate authorization bound to
+that exact head before a local fast-forward or GitHub PR landing. Automatic plan
+approval, automatic start, automatic fixes, and automatic merge are explicit
+opt-in policy choices. A user does **not** have to create an initial interactive
+session: Fleet creates its planner, critic, worker, reviewer, and fixer sessions
+as the durable state machine needs them; an operator may separately start the
+optional managed supervisor turn. The current shared Git/provider-home layout
+is deliberately not advertised as strong OS confinement: unattended Fleet
+launches require the operator's explicit
+`allowUnconfinedAgents` consent until per-attempt Git metadata and provider state
+are isolated. This remains release-candidate work until the repository gate,
+independent reviews, PR-head OS matrix, and merge recorded in the phase ledger
+are all complete.
 
 The implementation also migrates Stoa's orchestration server to the MCP
 TypeScript SDK v2 and current date-versioned protocol negotiation. Direct Fleet
@@ -317,7 +319,7 @@ Stoa already has:
 
 These pieces should become the fleet manager's substrate.
 
-### Current implementation snapshot (2026-08-01)
+### Current implementation snapshot (2026-08-02)
 
 Implemented on `feat/fleet-autonomous-delivery`:
 
@@ -333,22 +335,26 @@ Implemented on `feat/fleet-autonomous-delivery`:
   are balanced across eligible providers. Kilo remains available for ordinary
   interactive Stoa sessions and provider-native MCP, but its bare TUI has no
   verified auto-approve mode, so Fleet never assigns it to a planner, critic,
-  worker, reviewer, or fixer. The current unattended Fleet set is Claude, Codex,
-  Hermes, and Kimi, derived from each registry entry's verified nonempty
-  auto-approve flag. Automatic planning and source imports fall back from Kilo
-  to an installed eligible provider. A manually persisted Kilo assignment is
-  not silently rewritten and fails at the final spawn boundary. Pre-upgrade
-  spawning or running planner, critic, reviewer, and fixer rows are rejected
-  before activation or polling during restart recovery, and their owned
-  sessions/worktrees are stopped and cleaned. With no eligible provider,
-  planning leaves the draft intact and creates no planner/task graph;
-  imports fail atomically with `409` before run/task persistence. A model is
-  inherited only when it belongs to the same provider, preventing foreign-model
-  leakage. Hermes remains a free-text model provider, but at session/worker
-  launch an empty, missing, or foreign static Claude/Codex model resolves to
-  Stoa's explicit Hermes default, `kimi-k3`; a genuine Hermes free-text model is
-  preserved. Imported Markdown, Pipeline, Builder, and Dispatch graphs use the
-  same eligible-provider allocation, and project imports resolve their actual
+  worker, reviewer, fixer, or managed supervisor. The current unattended Fleet
+  set is Claude, Codex, Hermes, and Kimi, derived from each registry entry's
+  verified nonempty auto-approve flag. Automatic planning and source imports
+  fall back from Kilo to an installed eligible provider. A manually persisted
+  Kilo assignment is not silently rewritten and fails at the final spawn
+  boundary. Pre-upgrade spawning or running planner, critic, reviewer, and fixer
+  rows are rejected before activation or polling during restart recovery, and
+  their owned sessions/worktrees are stopped and cleaned. With no eligible
+  provider,
+  planning leaves the draft intact and creates no planner/task graph; imports
+  fail atomically with `409` before run/task persistence. Fleet resolves and
+  persists the exact provider/model tuple for the run and every task before
+  computing plan/execution hashes. Launch rejects a missing or changed tuple
+  instead of silently clamping it. A model is inherited only by the same
+  provider. Hermes remains a free-text provider: a missing model resolves and
+  persists Stoa's explicit Hermes default, `kimi-k3`; a safe, non-foreign Hermes
+  free-text model id is preserved without claiming live model discovery, while
+  a foreign static Claude/Codex model is rejected. Imported Markdown, Pipeline,
+  Builder, and Dispatch graphs use the same eligible-provider allocation, and
+  project imports resolve their actual
   configured/default base branch rather than assuming `main`.
 - An opt-in automation policy for exact four-lane plan approval, automatic
   start, sensitive-path consent, unconfined-agent consent, bounded fix rounds,
@@ -360,18 +366,43 @@ Implemented on `feat/fleet-autonomous-delivery`:
 - A restart-aware server scheduler with startup reconciliation, transactional
   leases, idempotent spawn, dependency/file-claim admission, provider/run/local
   concurrency caps, deterministic backoff, conservative budget reservation,
-  pause/cancel behavior, and a framework-neutral remote-executor seam. A failed
+  pause/cancel behavior, and a framework-neutral remote-executor seam. Before
+  approval, the preview exposes a conservative estimate of remaining paid
+  sessions, USD/tokens, confidence, projected spent-plus-reserved total, budget
+  comparison, safety caps, and explicit exclusions. A failed
   startup recovery is retried without overlap; every launch-capable loop remains
   closed until it succeeds. While blocked, only persisted planner polling and
   lifecycle/cancellation cleanup continue; verification, review/fix, merge,
   automation admission, and worker scheduling remain closed.
+- Each planner request owns one external
+  `$STOA_HOME/fleet/<run>/planner/<request>/result.json`. The bounded regular
+  JSON file is authenticated by an ephemeral nonce and exact run, request,
+  attempt, and base SHA. That external JSON is the active planner result
+  contract and the only allowed planner write. Write tasks require bounded
+  acceptance criteria, structured risk/mitigation notes, file claims, and
+  direct-argv verification; each task may include a provider hint and a model
+  hint scoped to that provider as optional inputs to exact allocation.
 - Fleet-owned nonce/attempt-bound reports and Git-derived base/head/diff/claim
   evidence. Worker prose is retained as testimony; server-observed Git state is
   authoritative.
 - Direct-argv verification with bounded output/time, cross-platform executable
   resolution, clean-worktree enforcement, exact-head records, and recovery.
   Shell metacharacters are rejected; `&&` is parsed only as a sequence of direct
-  commands.
+  commands. A timeout or output overflow uses Windows tree termination or the
+  bounded POSIX freeze/group/descendant sweep before the result settles. A fully
+  reparented POSIX escape still requires future cgroup, container, or native job
+  containment for a hard prevention guarantee.
+- Containerized Fleet delivery honors a custom `STOA_HOME` without mounting the
+  state root itself. Generic containers receive no Stoa-state mount; Fleet may
+  mount only `fleet/<run>/planner/<request>`,
+  `fleet/<run>/<task>/<positive-attempt>`, or
+  `fleet-task-runtime/<run>/<task>/<positive-attempt>/(reviews|fixes)` using
+  bounded safe identifiers. Reserved internal namespaces, shallow paths, and
+  descendants of those exact directories fail closed. Validation requires the
+  lexical and realpath-resolved `STOA_HOME`-relative identity to match (with
+  Windows case folding), so a symlink or junction cannot redirect one valid
+  attempt into another run. Prompt artifact paths are rewritten only through
+  those exact mounts, and host-side collectors retain the original paths.
 - Four independent exact-head result-review lanes. Blocking findings may enter
   policy-authorized bounded fix rounds; each descendant head is re-verified and
   receives four fresh reviews before it can become merge-ready. Planner,
@@ -383,18 +414,36 @@ Implemented on `feat/fleet-autonomous-delivery`:
   boundaries. Internal integration and final verification run under the exact
   approved execution without consuming external merge authority. Only the
   exact final verified integration head may atomically consume the one-shot
-  landing authorization, after which Fleet supports either an exact clean local
-  fast-forward or a no-force GitHub push, PR, required-check wait, exact-head
-  check, and merge.
+  landing authorization. Manual staging uses the merge route or a `fleet:merge`
+  capability; external landing uses `/merge/authorize` or the
+  `fleet_authorize_landing` MCP tool with a separately issued `fleet:land`
+  capability. Fleet then supports either an exact clean local fast-forward or a
+  no-force GitHub push, PR, required-check wait, exact-head check, and merge.
 - Explicit archival and exact-ownership cleanup, bounded artifact pruning,
   retention metadata, outcome/cost analytics, and operator task/worker controls.
   Lifecycle safety events bypass exhausted data-plane event quotas, so archive
   and external cleanup completion cannot be rolled back after a filesystem side
   effect. Cost sampling and hard-stop interrupts cover planner, plan-review,
-  worker, task-review, and fixer sessions in every nonterminal run phase.
-- An optional, advisory AI supervisor over deterministic hash-bound snapshots.
-  Recommendations are immutable evidence only; the SQLite state machine remains
-  authoritative and a recommendation cannot execute work or mint approval.
+  worker, task-review, fixer, and managed-supervisor sessions in every
+  nonterminal run phase.
+- An optional, explicitly operator-started managed AI supervisor over a bounded,
+  deterministic hash-bound snapshot. The current managed provider is Claude;
+  its one-shot lifecycle is durable,
+  cost-reserved, restart-recovered, cancelable, and cleaned through
+  `starting`, `running`, and `cleanup_pending` states. It can recommend only
+  `approval`, `retry`, `inspect`, `pause`, `merge_readiness`, `replan`,
+  `grouping`, or `merge_order`. The launch receives no conductor or repository
+  worktree, blanks inherited Stoa/MCP authority variables, exposes no Fleet
+  lifecycle capability, and runs the verified bare no-tools broker contract.
+  Recommendations are immutable evidence only; SQLite remains authoritative and
+  advice cannot execute work or mint approval.
+- Managed supervisor terminals use an internal session role and are reachable
+  only through the owning Fleet supervisor lifecycle. Generic session lists,
+  worktree selectors, terminal WebSocket attachment, session actions, worker
+  orchestration, monitor/search/cost/audit/analytics surfaces, and kill-all omit
+  or reject internal sessions. Explicit unknown future roles fail closed rather
+  than becoming interactive by accident; legacy null/empty and `interactive`
+  rows remain compatible.
 - MCP SDK v2 with current/legacy date-version negotiation and direct scoped
   Fleet tools. Admin HTTP routes issue/revoke hash-only stored capabilities;
   reusable `fleet:read` tokens are run-scoped (with `*` reserved for listing),
@@ -722,9 +771,9 @@ No initial interactive session is required. In Fleet Management:
    opt into automatic local or GitHub merge; merge authority does not imply fix
    authority, and a non-clean run simply waits.
 6. Create the run. Stoa creates every planner/critic/worker/reviewer/fixer
-   session itself, allocates installed unattended-capable providers, and advances
-   the durable state
-   machine until completion or a fail-closed attention condition.
+   session itself, allocates installed unattended-capable providers, and
+   advances the durable state machine until completion or a fail-closed
+   attention condition.
 
 An imported Markdown/PipelineSpec/Builder/Dispatch plan skips planner-session
 creation but uses the same exact approval, execution, verification, review, and
@@ -848,6 +897,7 @@ Task fields:
 - `attempt`
 - `verify_command`
 - `acceptance_criteria`
+- `risk_notes_json`: bounded structured `{severity, risk, mitigation}` entries.
 - `operator_notes`
 - `created_at`
 - `updated_at`
@@ -996,7 +1046,11 @@ Fleet Management v1 uses these adapter boundaries:
   live Dispatch or Pipeline runtime rows.
 - `fleet_workers.session_id` links to the existing `sessions` table.
 - Verification uses the extracted shared direct-argv runner in
-  `lib/verification/runner.ts` through Fleet's durable verification runtime.
+  `lib/verification/runner.ts` through Fleet's durable verification runtime. It
+  uses Windows tree termination or a bounded POSIX
+  freeze/process-group/descendant sweep on timeout or output overflow. Observed
+  descendants are reaped before settlement; a fully reparented POSIX escape
+  remains outside this unprivileged guarantee.
 - Merge uses Fleet's durable `merge-runtime.ts`, reusing Dispatch's exact PR
   merge/SHA invariants rather than Dispatch auto-merge/merge-train state.
 - Fleet Board is integrated as the cross-run lifecycle overview and links into
@@ -1019,7 +1073,7 @@ CREATE TABLE fleet_runs (
   working_directory TEXT NOT NULL,
   base_branch TEXT,
   status TEXT NOT NULL,
-  max_parallel_workers INTEGER NOT NULL DEFAULT 4,
+  max_parallel_workers INTEGER NOT NULL DEFAULT 6,
   max_total_workers INTEGER NOT NULL DEFAULT 40,
   max_provider_parallel_json TEXT,
   budget_usd REAL,
@@ -1060,6 +1114,7 @@ CREATE TABLE fleet_tasks (
   worktree_path TEXT,
   verify_spec_json TEXT,
   acceptance_criteria TEXT,
+  risk_notes_json TEXT NOT NULL DEFAULT '[]',
   max_attempts INTEGER NOT NULL DEFAULT 2,
   current_attempt INTEGER NOT NULL DEFAULT 0,
   lease_owner TEXT,
@@ -1282,9 +1337,11 @@ Separate total plan size from active concurrency.
 
 Recommended defaults:
 
-- `max_total_workers`: 40.
-- `max_parallel_workers`: 6 locally.
-- `max_parallel_workers` warning threshold: 12.
+- `max_total_workers`: hard cap 40.
+- `max_parallel_workers`: defaults to 6 locally and is validated in the range
+  1-40.
+- The create UI warns only when `max_parallel_workers > 12`; 12 itself remains
+  below the warning boundary.
 - Default lifetime capacity: 48 worktrees per repository and 32 GiB of
   Fleet-owned worktree disk, with a retained-worker ceiling of 40 and reserved
   headroom for reviewers and integration. The configurable worktree ceiling is
@@ -1422,28 +1479,39 @@ Planner output is a structured plan, not free-form only:
 - Tasks.
 - Dependencies.
 - File claims.
-- Acceptance criteria.
-- Suggested providers/models.
-- Per-task verification commands.
-- Risk notes.
+- Bounded acceptance criteria, required for every write task.
+- An optional provider hint, with an optional model hint scoped to that provider.
+- Per-task direct-argv verification commands, required for every write task.
+- Structured risk notes with severity, risk, and mitigation; every write task
+  requires at least one.
 
 Dispatch plan/issues, PipelineSpec, and Builder/saved-workflow inputs now adapt
 into the same Fleet source contract. Dispatch keeps its own defaults; Fleet uses
 an operator-configured planner cap with a hard ceiling of 40 tasks.
 
 Current implementation: Fleet Management launches a dedicated planner session
-in a Git-isolated worktree after the automation policy grants the applicable
-agent-launch authority. The default cap is 8 and the hard ceiling is 40. The
-planner writes a marker-delimited JSON contract to `PLAN.md`; Stoa opens one
-non-blocking/no-follow handle, requires a regular file, and reads at most 128
-KiB. It validates unique task keys, backward-only dependencies, bounded
-non-glob claims, criteria, verification hints, and installed unattended-provider
-suggestions, then stores a readable plan plus the durable graph. A concurrent
+in a Git-isolated worktree pinned to the exact resolved run base SHA, either from
+an explicit admin request or after the automation policy grants the applicable
+agent-launch authority. The default cap is 8 and the hard ceiling is 40. Each
+request owns exactly one external
+`$STOA_HOME/fleet/<run-id>/planner/<request-id>/result.json`; it is the
+planner's only allowed write. Stoa opens the path with non-blocking/no-follow
+semantics, requires one regular file, and reads at most 128 KiB. The JSON must
+copy its schema version, ephemeral nonce, run id, request id, attempt, and exact
+base SHA. Stoa persists only the nonce hash and rejects stale or mismatched
+results.
+
+The parser validates unique task keys, backward-only dependencies, bounded
+non-glob claims, write-task acceptance criteria, structured risks, safe
+verification commands, a provider hint, and any model hint scoped to that
+provider. Allocation then resolves and persists every exact provider/model tuple
+before hashing the plan; worker launch rechecks that durable tuple. A concurrent
 manual plan cannot overwrite an active planner; the operator must cancel it
-first. A bounded server reconciler advances headless planners. Durable
-`finalizing` and `cleanup_pending` states retain exact session, worktree,
-project, and created-branch identity until cleanup succeeds after a valid
-result, cancellation, failure, or the 15-minute runtime limit.
+first. A bounded server reconciler
+advances headless planners. Durable `finalizing` and `cleanup_pending` states
+retain exact session, worktree, project, result, and created-branch identity
+until cleanup succeeds after a valid result, cancellation, failure, or the
+15-minute runtime limit.
 
 ### Step 3: Adversarial plan review
 
@@ -1467,7 +1535,8 @@ Show:
 - Dependency lanes.
 - Estimated worker count.
 - Estimated max concurrency.
-- Budget estimate.
+- Conservative estimated remaining USD/tokens, confidence, session mix,
+  projected spent-plus-reserved total, budget comparison, caps, and exclusions.
 - Review/merge policy.
 - Known risks.
 
@@ -1477,6 +1546,13 @@ require/release manual task launch, convert an eligible task to read-only, or
 approve an exact observed claim expansion. Arbitrary in-place task-graph editing
 is not exposed as a post-approval control; a material plan change requires a new
 plan/hash and review.
+
+The pre-approval estimate uses the same conservative per-provider/model/task
+reservation logic used at launch, preferring bounded cost history and otherwise
+using priced-model or provider defaults. A run with no estimable future paid
+session reports `null`/unknown rather than a false zero. The baseline counts
+remaining worker attempts, task reviews, plan reviews, and a pending planner;
+automatic fixers and repeated post-fix review cycles are called out as excluded.
 
 In opt-in automatic mode, approval occurs only after all four independent plan
 lanes are current and clean. Fleet compares the exact plan, execution, policy,
@@ -1555,6 +1631,16 @@ worktree ownership/cleanup. Merge leases and progress survive restart.
   before consuming external landing authority. Once that authority is consumed,
   exact approval controls and pause/cancel fail closed because an OS Git or
   GitHub landing cannot be canceled atomically after it starts.
+- The manual control plane is deliberately two-step:
+  1. `POST /api/fleet/runs/[id]/merge`, or MCP `fleet_merge_run` with a
+     human-issued `fleet:merge` capability, records the exact target-bound
+     staging intent, integrates tasks, and runs final verification. It cannot
+     authorize an external Git operation.
+  2. Only after the integration is `ready_to_finalize`,
+     `POST /api/fleet/runs/[id]/merge/authorize`, or MCP
+     `fleet_authorize_landing` with a separately human-issued `fleet:land`
+     capability, may consume landing authority. The action must match the exact
+     plan hash, execution hash, base SHA, and final-verified integration head.
 - Produce one ordered integration result for the run. Per-task, batch, and
   milestone PR strategies remain future options rather than implemented modes.
 - For GitHub, push without force, open/reuse the exact integration PR, wait for
@@ -1575,16 +1661,21 @@ tools use explicit, server-issued capabilities:
 - `fleet:read`: reusable, exact-run read access; the reserved run id `*` permits
   only run listing.
 - `fleet:create`, `fleet:plan`, `fleet:approve`, `fleet:start`, `fleet:pause`,
-  `fleet:resume`, `fleet:cancel`, `fleet:submit-artifact`, and `fleet:merge`:
-  one-use actions bound to the exact action intent and relevant hash.
+  `fleet:resume`, `fleet:cancel`, and `fleet:submit-artifact`: one-use actions
+  bound to the exact action intent and relevant hash.
+- `fleet:merge`: a one-use, target-bound authority to begin internal staging and
+  final verification; it does not grant external landing.
+- `fleet:land`: a separate one-use authority bound to the already staged exact
+  plan, execution, base, target, and final-verified integration head.
 - Capability issuance and revocation are admin-only HTTP operations. Only a
   token digest and immutable audit evidence are stored; plaintext is returned
   once and never logged or persisted.
 
 Rules:
 
-- A human/admin must issue delegated `approve`, `resume`, `cancel`, and `merge`
-  capabilities. Worker kill and destructive cleanup are not MCP tools.
+- A human/admin must issue delegated `approve`, `resume`, `cancel`, `merge`, and
+  `land` capabilities. A staging capability cannot mint or substitute for
+  landing authority. Worker kill and destructive cleanup are not MCP tools.
 - MCP tools may request approvals and present recommendations, but cannot grant
   themselves approval authority.
 - Every capability issue, revoke, claim, success, and failure writes immutable
@@ -1643,7 +1734,9 @@ Implemented routes:
 - `POST /api/fleet/runs/[id]/workers/[workerId]/complete`
 - `GET /api/fleet/runs/[id]/workers/[workerId]/output` (bounded lazy read)
 - `GET/POST /api/fleet/runs/[id]/merge`
+- `POST /api/fleet/runs/[id]/merge/authorize` (separate exact-head landing)
 - `GET/POST /api/fleet/runs/[id]/supervisor`
+- `GET/POST/DELETE /api/fleet/runs/[id]/supervisor/session`
 - `POST /api/fleet/runs/[id]/archive`
 - `GET/POST /api/fleet/runs/[id]/cleanup` (no-store exact cleanup preview /
   digest-bound queue)
@@ -1669,15 +1762,54 @@ Implemented scoped MCP tools:
 - `fleet_cancel_run`
 - `fleet_submit_artifact`
 - `fleet_merge_run`
+- `fleet_authorize_landing`
 
 `fleet_get_capabilities` is side-effect-free public metadata. Each other direct
 Fleet tool presents the opaque token and its exact public scope to the isolated
-capability action boundary. `fleet_request_action` remains informational-only:
+capability action boundary. `fleet_merge_run` stages and final-verifies;
+`fleet_authorize_landing` requires a distinct exact-head `fleet:land` token.
+`fleet_request_action` remains informational-only:
 it creates operator attention but never executes the requested action. The
 general `request_operator_input` tool can ask a question, but its answer is not
 authorization. Scheduler tick, worker message/kill, retry, forced verification,
 forced review, archival, and destructive cleanup are deliberately not
 advertised as direct MCP tools.
+
+### Managed advisory supervisor
+
+`GET /api/fleet/runs/[id]/supervisor` returns the pure deterministic snapshot
+and built-in advice. Separately, an admin may explicitly start one optional
+one-shot AI turn with `POST /api/fleet/runs/[id]/supervisor/session`, inspect its
+status with `GET`, or cancel it with `DELETE`. Starting validates a complete
+bounded execution contract and the installed Claude provider/model, then
+reserves a normal paid `supervisor` cost account before spawning. The
+reservation is activated only for the exact owned session and is settled and
+released during cleanup.
+
+The managed request persists `starting`, `running`, and `cleanup_pending` state
+plus its snapshot/plan/policy/execution/base bindings. Startup and steady-state
+reconciliation recover only an already requested exact session after validating
+its immutable launch profile and backend ownership. The runtime persists
+`launchAttempted` immediately before process creation and conservatively settles
+the reservation after any post-boundary failure; a starting session whose
+capture keeps failing beyond the spawn grace period enters owned cleanup. The
+PTY broker emits a `READY` marker before Stoa sends the length-framed prompt on
+terminal input and a `STARTED` marker after accepting it. Stoa then reads one
+bounded, nonce-bound framed result from the rendered terminal capture; it does
+not poll a result file. Exact artifact replay is idempotent across reconcilers,
+cleanup final-state and ownership-ambiguity evidence is monotonic, and
+cancellation dominates a concurrently observed completion. Cleanup finishes
+`completed`, `failed`, or `canceled`, and reconciliation never starts a
+supervisor by itself. The eight accepted advice kinds are `approval`, `retry`,
+`inspect`, `pause`, `merge_readiness`, `replan`, `grouping`, and `merge_order`.
+
+This is an advisory boundary, not delegated control. The session has no
+conductor, repository worktree, lifecycle capability, or Stoa/MCP authority
+variables, provider tools, or writable Fleet result artifact. Its prompt crosses
+the broker PTY input boundary and its sole response returns in the framed stdout
+capture. Valid output becomes immutable hash-bound evidence. The contract
+exposes no Fleet action, approval/landing grant, or capability-minting tool, and
+valid advice cannot change the SQLite state machine.
 
 This is an MCP tool-policy boundary, not an OS sandbox against arbitrary local
 processes. A fully trusted, unconfined local agent can still reach resources
@@ -1815,12 +1947,15 @@ Scheduler behavior:
 
 - Before spawning, reserve budget from a conservative estimate based on task
   type/model/provider and prior run history.
+- Before approval, display the conservative remaining estimate and its
+  confidence, paid-session mix, projected spent-plus-reserved total, budget
+  comparison, caps, and exclusions; unknown demand is not rendered as zero.
 - Decrement available budget by reservations before launch; release unused
   reservation on completion.
 - If cost telemetry is missing or low-confidence and the run is in hard-budget
   mode, do not launch more workers.
 - In every nonterminal run phase, sample and enforce cost for planner,
-  plan-review, worker, task-review, and fixer accounts.
+  plan-review, worker, task-review, fixer, and managed-supervisor accounts.
 - If a run exceeds warning threshold, emit event and show UI warning.
 - If it reaches hard budget, pause and stop launching new tasks.
 - In `pause-new` mode, leave already active paid sessions running. In
@@ -1846,12 +1981,14 @@ Operators must choose explicit modes:
   before external landing authority is consumed; draft planning uses the
   planner-cancel control instead.
 - `pause-and-interrupt`: stop launching and ask every active Fleet-owned paid
-  session (planner, plan reviewer, worker, task reviewer, or fixer) to reach a
-  safe stopping point with a report, then durably stop sessions that outlive the
-  grace period. Exact session ownership and interrupt intent are persisted
+  session (planner, plan reviewer, worker, task reviewer, fixer, or managed
+  supervisor) to reach a safe stopping point, retaining any valid report/result;
+  then durably stop sessions that outlive the grace period. Exact session
+  ownership and interrupt intent are persisted
   before delivery; an earlier budget interrupt cause/deadline is preserved.
 - `cancel-preserve-worktrees`: stop and settle active workers, plan reviewers,
-  task reviewers, and fixers while preserving branches, worktrees, artifacts,
+  task reviewers, fixers, and the managed supervisor while preserving branches,
+  worktrees, artifacts,
   and events for inspection. An active planner must first be canceled through
   `DELETE /api/fleet/runs/[id]/generate` and finish its exact cleanup; the run
   cancellation endpoint never performs that separate destructive planner
@@ -1946,8 +2083,29 @@ Fleet runs multiply risk. Add guardrails:
 - Store fleet artifacts in `$STOA_HOME` or DB-backed rows by default; validate
   any optional exported artifact path as explicitly operator-approved and outside
   merge candidates unless the export itself is the requested change.
+- Container transport never mounts the resolved `STOA_HOME` authority root.
+  Generic sessions receive no Stoa-state mount. Fleet mounts only exact
+  server-owned planner, worker-attempt, review, or fix directories in the
+  approved `fleet` and `fleet-task-runtime` layouts. The lexical and realpath
+  targets must retain the same relative run/task/request/attempt identity;
+  reserved integration/supervisor namespaces, cross-run links, shallow paths,
+  and extra descendants are rejected. Prompt rewriting covers only those exact
+  mounts, and host-side durable paths remain unchanged.
+- Generic file, Git, search, dispatch, dev-server, and session path roots exclude
+  Stoa's token/database/Fleet authority store, including the canonical target of
+  a custom `STOA_HOME` alias. The historical source checkout and exact managed
+  worktrees remain usable, but the implicit worktree root is rejected if a
+  symlink or junction redirects it toward the home tree or filesystem root.
+  Content reads, searches, and writes use realpath-safe checks (including the
+  nearest existing parent of a new file); file-content and code-search reads are
+  admin-only. Folder-picker browse mode remains shallow metadata-only and does
+  not grant content access.
 - Deny shell-string execution in fleet code.
-- Use `execFile`/argv helpers for git and verification commands where practical.
+- Use direct `execFile`/`spawn` argv helpers for git and verification commands.
+- On verifier timeout or output overflow, use `taskkill /T /F` on Windows and a
+  bounded freeze/process-group/descendant sweep on macOS/Linux before returning.
+  Fully reparented POSIX escapes remain a stated containment limitation rather
+  than a claimed hard guarantee.
 - Never expose secrets in prompts, artifacts, or event logs.
 - Redact terminal output before storing long artifacts if it matches secret
   patterns.
@@ -1961,6 +2119,9 @@ All implementation must follow Stoa's repo rules:
 - Use `lib/platform.ts` server-side helpers.
 - Do not use POSIX-only utilities.
 - Do not assume `/tmp`, `/bin`, `HOME`, slash-separated paths, or shell pipes.
+- Treat host and container paths separately: map paths only through exact
+  validated bind mounts using platform path helpers, never string-split a host
+  path as POSIX.
 - Client code must not import server-only modules.
 - Keep terminal operations behind `SessionBackend` and `PtyTransport`.
 - Ensure daemon tests isolate sockets with `STOA_PTY_HOST_NAME`.
@@ -2060,7 +2221,7 @@ itself need another bookkeeping PR.
 | Phase 5: Verify and review gates                    | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Focused direct-argv verification and exact-head four-lane review/fix/control suites green, including restart between fixer launch and result collection; repository-wide final gate still pending.                                                                                                         | Pending PR CI and merge.                                                                                                              | Complete final integrated gate and review. | Clean-worktree verification, four independent lanes, immutable findings, bounded descendant-head fixes, stale-evidence invalidation, and exact budget/concurrency/task/claim controls are implemented.                                                                                                                                                                                   |
 | Phase 6: Merge integration                          | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Focused merge/readiness/control, multi-task sessionless E2E, and blocker-to-fixed-head-to-merge E2E suites green; repository-wide final gate still pending.                                                                                                                                                | Pending PR CI and merge.                                                                                                              | Complete final integrated gate and review. | Dependency-ordered internal staging and final verification remain controllable until an exact transaction consumes external landing authority; local fast-forward and GitHub no-force PR/check/head/merge flows then fail closed on drift.                                                                                                                                               |
 | Phase 7: Lifecycle hardening                        | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Focused startup/lifecycle/cost/retry/source/analytics/executor/migration suites green; repository-wide final gate still pending.                                                                                                                                                                           | Pending PR CI and merge.                                                                                                              | Complete final integrated gate and review. | Fail-closed startup retry, three-attempt transient auxiliary retry, installed-only source allocation/default-branch resolution, all-owner cost/pause/cancel, quota-safe cleanup, archival/retention/analytics, and a remote-executor seam are implemented. Strong confinement still requires future per-attempt Git/provider isolation, so unattended launches require explicit consent. |
-| Phase 8: AI supervisor and scoped MCP control       | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Focused capability/MCP/supervisor suites green; repository-wide final gate still pending.                                                                                                                                                                                                                  | Pending PR CI and merge.                                                                                                              | Complete final integrated gate and review. | Hash-bound advisory supervisor snapshots/recommendations and scoped direct MCP read/lifecycle tools are implemented without making either authoritative.                                                                                                                                                                                                                                 |
+| Phase 8: AI supervisor and scoped MCP control       | Implemented; release gate pending | `feat/fleet-autonomous-delivery` | Focused capability/MCP/supervisor suites green; repository-wide final gate still pending.                                                                                                                                                                                                                  | Pending PR CI and merge.                                                                                                              | Complete final integrated gate and review. | Hash-bound advisory snapshots, the explicitly started Claude bare/no-tools framed-PTY supervisor lifecycle, internal-session isolation, and scoped direct MCP read/lifecycle tools are implemented without making agent advice authoritative.                                                                                                                                            |
 
 ### UI, create, and orchestration emphasis
 
@@ -2175,11 +2336,11 @@ Definition of done:
   clear terminal cause; the task transitions to `needs_inspection` when the
   report/diff is missing, stale, malformed, or claim-drifting.
 
-Status: implemented. The prompt carries a nonce/attempt report contract; the
-collector binds it to exact Git base/head/timestamps, derives changed files and
-sensitive paths independently, bounds reads/polls/artifacts, and quarantines
-invalid or missing evidence. Restart reconciliation resumes collection without
-inventing success.
+Status: Implemented; release gate pending. The prompt carries a nonce/attempt
+report contract; the collector binds it to exact Git base/head/timestamps,
+derives changed files and sensitive paths independently, bounds
+reads/polls/artifacts, and quarantines invalid or missing evidence. Restart
+reconciliation resumes collection without inventing success.
 
 ### Phase 5: Verify and review gates
 
@@ -2199,10 +2360,13 @@ Definition of done:
 - A task cannot become `ready_to_merge` without four clean independent reviews
   when it changes implementation/docs/config.
 
-Status: implemented. Verification is shell-free/direct-argv and bound to an
-unchanged clean head. Four distinct reviewer sessions/lenses must submit current
-head evidence. Policy-authorized fix rounds preserve old blockers, require a new
-descendant commit, invalidate stale evidence, and repeat verification/review.
+Status: Implemented; release gate pending. Verification is shell-free/direct-argv
+and bound to an unchanged clean head. Timeout and output bounds use Windows tree
+termination or the bounded POSIX freeze/group/descendant sweep; preventing a
+fully reparented POSIX escape remains future containment work. Four distinct
+reviewer sessions/lenses must submit current-head evidence. Policy-authorized fix
+rounds preserve old blockers, require a new descendant commit, invalidate stale
+evidence, and repeat verification/review.
 
 ### Phase 6: Merge integration
 
@@ -2221,15 +2385,16 @@ Definition of done:
 - Conflict tasks stop and request operator input.
 - Verified/reviewed SHA pinning prevents stale merges.
 
-Status: implemented. Fleet owns a durable integration lease/worktree and applies
-tasks in dependency order, with per-task and final verification. Internal
-staging does not freeze approval controls or consume external merge authority.
-One atomic transaction revalidates the active run, desired state, approved
-execution, graph, claims, policy, pinned base, final verification, and exact
-integration head before it records the landing request and consumes its one-shot
-authorization. Local landing requires an exact clean fast-forward. GitHub
-landing never force-pushes and rechecks required CI, an explicit pass-conclusion
-allowlist, PR head identity, and the pinned base SHA immediately before merge.
+Status: Implemented; release gate pending. Fleet owns a durable integration
+lease/worktree and applies tasks in dependency order, with per-task and final
+verification. Internal staging does not freeze approval controls or consume
+external merge authority. For manual operation, `/merge` or `fleet:merge` stages
+only; `/merge/authorize`, or `fleet_authorize_landing` with a separate
+`fleet:land` capability, revalidates the plan/execution/base/final integration
+head and consumes the one-shot landing authorization. Local landing requires an
+exact clean fast-forward. GitHub landing never force-pushes and rechecks
+required CI, an explicit pass-conclusion allowlist, PR head identity, and the
+pinned base SHA immediately before merge.
 Base drift stops for a fresh approval cycle; already-reviewed work is never
 silently rebased. Canceled/failed runs cannot continue integration, and exact
 terminal cleanup releases runtime capacity without deleting preserved evidence.
@@ -2250,16 +2415,19 @@ Definition of done:
 - Archived runs keep audit trails without unbounded artifact growth.
 - Cleanup is explicit, scoped, and restart-safe.
 
-Status: implemented. Provider and auxiliary launches retry only
-transient/rate-limit failures after exact ownership-safe cleanup, stopping after
-three failures; restart-safe deterministic exponential backoff starts at 5
-seconds and caps at 5 minutes. Registry-deterministic installed unattended-provider
-fallback clears foreign models before retry. Archive/retention preserve audit metadata while pruning
-bounded artifact bodies; lifecycle safety events remain writable at data-plane
-quota exhaustion; cleanup previews bind a complete canonical target digest and
-delete only those exact Fleet-owned worktrees with compare-and-set recovery;
-phase-independent cost enforcement interrupts
-primary and auxiliary sessions durably; analytics summarize outcomes and budget
+Status: Implemented; release gate pending. Provider and auxiliary launches retry
+only transient/rate-limit failures after exact ownership-safe cleanup, stopping
+after three failures; restart-safe deterministic exponential backoff starts at
+5 seconds and caps at 5 minutes. Registry-deterministic installed
+unattended-provider fallback clears foreign models before retry. Pre-approval
+cost previews use the conservative launch estimator with explicit confidence
+and exclusions. Container delivery honors custom `STOA_HOME` and exact
+host/container artifact mapping. Archive/retention preserve audit metadata while
+pruning bounded artifact bodies; lifecycle safety events remain writable at
+data-plane quota exhaustion; cleanup previews bind a complete canonical target
+digest and delete only those exact Fleet-owned worktrees with compare-and-set
+recovery; phase-independent cost enforcement interrupts primary and auxiliary
+sessions durably; analytics summarize outcomes and budget
 estimates; and the executor interface can host a future remote/cloud
 implementation without adding a second scheduler.
 
@@ -2267,9 +2435,10 @@ implementation without adding a second scheduler.
 
 Deliver:
 
-- Optional conductor/supervisor task that reads durable summaries.
-- Supervisor recommendations for re-planning, retries, grouping, and merge
-  ordering.
+- Optional, explicitly started managed supervisor turn over a bounded durable
+  snapshot, with restart recovery, cancel, cost settlement, and exact cleanup.
+- Supervisor recommendations limited to `approval`, `retry`, `inspect`, `pause`,
+  `merge_readiness`, `replan`, `grouping`, and `merge_order`.
 - MCP tools for fleet run control.
 
 Definition of done:
@@ -2277,9 +2446,13 @@ Definition of done:
 - Supervisor can help manage the run, but killing/closing it does not lose run
   truth.
 
-Status: implemented. The deterministic supervisor snapshot is bound to current
-plan/execution/policy/base/task-head evidence. Built-in recommendations are pure
-advice, and optional AI/conductor recommendations are append-only artifacts and
+Status: Implemented; release gate pending. The deterministic supervisor snapshot
+is bound to current plan/execution/policy/base/task-head evidence. Built-in
+recommendations are pure advice. An optional Claude managed one-shot session
+persists and recovers its exact request, nonce-bound framed PTY result, owned paid
+session, and cleanup state; it receives no conductor, repository worktree,
+inherited Stoa/MCP authority variables, provider tools, writable result artifact,
+or capability. AI/conductor recommendations are append-only artifacts and
 events. Neither path executes actions or grants approval. Scoped MCP control is
 implemented separately from supervisor authority.
 
@@ -2320,11 +2493,11 @@ Can Claude or Codex MCP conductor pattern manage 40 agents working on a plan?
 
 It can help coordinate them, but it is not the source of truth. Stoa accepts a
 goal/high-level specification, creates a bounded isolated planner when needed,
-persists and displays the task DAG and installed unattended-provider allocation, gates the
-exact plan, and launches approved work in admission-controlled waves. With the
-explicit automatic-approval and automatic-start policy enabled, this happens
-without a user-created initial session. The scheduler, leases, recovery state,
-and Fleet UI survive every agent/conductor context and process lifetime.
+persists and displays the task DAG and installed unattended-provider allocation,
+gates the exact plan, and launches approved work in admission-controlled waves.
+With the explicit automatic-approval and automatic-start policy enabled, this
+happens without a user-created initial session. The scheduler, leases, recovery
+state, and Fleet UI survive every agent/conductor context and process lifetime.
 
 The reliable design is:
 

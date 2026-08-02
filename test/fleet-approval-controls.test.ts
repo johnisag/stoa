@@ -727,6 +727,50 @@ describe("Fleet quarantined claim approval", () => {
 });
 
 describe("Fleet approval preview", () => {
+  it("estimates remaining worker and mandatory review spend before any worker exists", () => {
+    seedApprovedRun({ budgetUsd: 0.1, budgetTokens: 100_000 });
+    const state = preview();
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM fleet_workers`).get()).toEqual(
+      { n: 0 }
+    );
+    expect(state.estimate).toMatchObject({
+      kind: "estimated_remaining",
+      estimatedTokens: 800_000,
+      capped: false,
+      sessionCounts: {
+        workerAttempts: 2,
+        taskReviews: 4,
+        planReviews: 0,
+        planner: 0,
+        total: 6,
+      },
+      budgetComparison: { usd: "exceeds", tokens: "exceeds" },
+    });
+    expect(state.estimate.estimatedUsd).toBeGreaterThan(0);
+    expect(state.estimate.projectedTotalUsd).toBeGreaterThan(0.1);
+  });
+
+  it("does not reserve more workers or reviews for an already merged task", () => {
+    seedApprovedRun({ taskStatus: "merged", currentAttempt: 1 });
+    db.prepare(
+      `INSERT INTO fleet_tasks
+       (id, fleet_run_id, title, description, status, task_type, sort_order,
+        file_claims_json, current_attempt, approval_state, acceptance_criteria,
+        verify_command, updated_at)
+       VALUES ('task-still-ready', ?, 'Remaining task', 'Still needs work',
+        'ready', 'implement', 1, '["tests"]', 0, 'approved', 'tests pass',
+        'npm test', ?)`
+    ).run(RUN_ID, INITIAL_TASK_UPDATED_AT);
+
+    expect(preview().estimate.sessionCounts).toEqual({
+      workerAttempts: 2,
+      taskReviews: 4,
+      planReviews: 0,
+      planner: 0,
+      total: 6,
+    });
+  });
+
   it("detects unapproved plan/execution drift without mutating it", () => {
     seedApprovedRun();
     db.prepare(

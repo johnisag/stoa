@@ -2770,19 +2770,40 @@ function consumeAutomaticMergeAuthorization(
   });
 }
 
+interface FleetMergeRequestPreconditions {
+  planHash: string;
+  executionHash?: string;
+  baseSha: string | null;
+  integrationHeadSha: string | null;
+}
+
+interface FleetManualLandingPreconditions {
+  planHash: string;
+  executionHash: string;
+  baseSha: string;
+  integrationHeadSha: string;
+}
+
 function consumeManualMergeIntent(
   deps: FleetMergeRuntimeDeps,
-  runId: string
-): boolean {
+  runId: string,
+  target: FleetMergeTarget,
+  actor: string,
+  expected: FleetManualLandingPreconditions
+): { authorized: true } | { error: string; status?: number } {
   return transaction(deps.db, () => {
     const exact = exactApprovedFleetExecution(deps.db, runId);
-    if (!exact) return false;
+    if (!exact) {
+      return {
+        error: "The approved plan or execution contract changed",
+        status: 409,
+      };
+    }
     const current = exact.run;
     if (
       current.merge_requested_at !== null ||
       current.merge_request_kind !== "manual" ||
-      (current.merge_target !== "local" &&
-        current.merge_target !== "github_pr") ||
+      current.merge_target !== target ||
       !current.merge_requested_by ||
       (current.desired_state ?? "running") !== "running" ||
       !["running", "reviewing", "merging"].includes(current.status) ||
@@ -2792,7 +2813,26 @@ function consumeManualMergeIntent(
       current.integration_base_sha !== current.automation_base_sha ||
       !validSha(current.integration_head_sha)
     ) {
-      return false;
+      return {
+        error: "Manual landing is not ready for explicit authorization",
+        status: 409,
+      };
+    }
+    if (
+      current.plan_hash !== expected.planHash ||
+      exact.executionHash !== expected.executionHash ||
+      current.automation_base_sha !== expected.baseSha ||
+      current.integration_base_sha !== expected.baseSha ||
+      current.integration_head_sha !== expected.integrationHeadSha
+    ) {
+      return {
+        error: "Fleet landing authorization preconditions changed",
+        status: 409,
+      };
+    }
+    const readiness = inspectFleetMergeReadiness(deps.db, runId);
+    if (!readiness?.canFinalize || !readiness.allTasksIntegrated) {
+      return { error: "Exact-head merge readiness changed", status: 409 };
     }
     const verified = deps.db
       .prepare(
@@ -2816,15 +2856,21 @@ function consumeManualMergeIntent(
         current.integration_head_sha,
         current.integration_head_sha
       );
-    if (!verified) return false;
+    if (!verified) {
+      return {
+        error: "Exact current final-verification evidence is required",
+        status: 409,
+      };
+    }
     const now = deps.now().toISOString();
+    const safeActor = actor.trim().slice(0, 80) || "operator";
     const changed = deps.db
       .prepare(
         `UPDATE fleet_runs SET merge_requested_at = ?,
-         integration_error = NULL, integration_updated_at = ?, updated_at = ?
+         merge_requested_by = ?, integration_error = NULL,
+         integration_updated_at = ?, updated_at = ?
          WHERE id = ? AND merge_requested_at IS NULL
            AND merge_request_kind = 'manual' AND merge_target = ?
-           AND merge_requested_by = ?
            AND status IN ('running','reviewing','merging')
            AND desired_state = 'running' AND recovery_required = 0
            AND approval_state = 'approved'
@@ -2835,25 +2881,30 @@ function consumeManualMergeIntent(
       )
       .run(
         now,
+        safeActor,
         now,
         now,
         current.id,
         current.merge_target,
-        current.merge_requested_by,
         current.plan_hash,
         current.plan_hash,
         current.automation_base_sha,
         current.automation_base_sha,
         current.integration_head_sha
       );
-    if (changed.changes !== 1) return false;
+    if (changed.changes !== 1) {
+      return {
+        error: "Fleet landing authorization preconditions changed",
+        status: 409,
+      };
+    }
     createEvent(
       deps.db,
       current.id,
       "manual_merge_landing_authorized",
       {
         target: current.merge_target,
-        actor: current.merge_requested_by,
+        actor: safeActor,
         planHash: current.plan_hash,
         executionHash: exact.executionHash,
         baseSha: current.automation_base_sha,
@@ -2861,15 +2912,8 @@ function consumeManualMergeIntent(
       },
       { controlPlane: true }
     );
-    return true;
+    return { authorized: true };
   });
-}
-
-interface FleetMergeRequestPreconditions {
-  planHash: string;
-  executionHash?: string;
-  baseSha: string | null;
-  integrationHeadSha: string | null;
 }
 
 function mergeRequestPreconditionsMatch(
@@ -3168,6 +3212,72 @@ export async function requestFleetMerge(
   }
   const readiness = inspectFleetMergeReadiness(deps.db, runId);
   return readiness ? { readiness } : { error: "Fleet run not found" };
+}
+
+/**
+ * Consume a previously staged manual merge intent only after a second,
+ * operator-authenticated action bound to the exact verified integration head.
+ * Internal staging never calls this function.
+ */
+export async function authorizeFleetManualLanding(
+  runId: string,
+  target: FleetMergeTarget,
+  actor: string,
+  expected: FleetManualLandingPreconditions,
+  overrides: Partial<FleetMergeRuntimeDeps> = {}
+): Promise<
+  { readiness: FleetMergeReadiness } | { error: string; status?: number }
+> {
+  const deps = runtimeDeps(overrides);
+  const recoveryBlocked = fleetLaunchBlockedResult(deps.db, runId);
+  if (recoveryBlocked) return recoveryBlocked;
+  if (target !== "local" && target !== "github_pr") {
+    return { error: "landing target must be local or github_pr", status: 400 };
+  }
+  if (
+    !validSha(expected.baseSha) ||
+    !validSha(expected.integrationHeadSha) ||
+    !/^[0-9a-f]{64}$/i.test(expected.planHash) ||
+    !/^[0-9a-f]{64}$/i.test(expected.executionHash)
+  ) {
+    return {
+      error: "Exact landing authorization preconditions are required",
+      status: 400,
+    };
+  }
+
+  const current = queries.getFleetRun(deps.db).get(runId) as
+    FleetMergeRunRow | undefined;
+  if (!current) return { error: "Fleet run not found", status: 404 };
+  if (current.merge_requested_at !== null) {
+    if (
+      current.merge_request_kind !== "manual" ||
+      current.merge_target !== target ||
+      !mergeRequestPreconditionsMatch(deps.db, current, expected)
+    ) {
+      return {
+        error: "Fleet landing authorization preconditions changed",
+        status: 409,
+      };
+    }
+    const readiness = inspectFleetMergeReadiness(deps.db, runId);
+    return readiness
+      ? { readiness }
+      : { error: "Fleet run not found", status: 404 };
+  }
+
+  const authorized = consumeManualMergeIntent(
+    deps,
+    runId,
+    target,
+    actor,
+    expected
+  );
+  if ("error" in authorized) return authorized;
+  const readiness = inspectFleetMergeReadiness(deps.db, runId);
+  return readiness
+    ? { readiness }
+    : { error: "Fleet run not found", status: 404 };
 }
 
 function normalizedIntegrationPath(value: string): string {
@@ -3554,9 +3664,7 @@ async function reconcileOneMerge(
     }
     run = queries.getFleetRun(deps.db).get(run.id) as FleetMergeRunRow;
     if (!run.merge_requested_at) {
-      if (run.merge_request_kind === "manual") {
-        consumeManualMergeIntent(deps, run.id);
-      } else {
+      if (run.merge_request_kind !== "manual") {
         const eligible = autoMergeEligible(deps.db, run.id);
         if (eligible) {
           consumeAutomaticMergeAuthorization(
@@ -3691,7 +3799,6 @@ export const __fleetMergeTesting = {
   integrateTask,
   runFinalVerification,
   consumeAutomaticMergeAuthorization,
-  consumeManualMergeIntent,
   finalizeLocal,
   ensureGitHubPush,
   ensureGitHubPr,
