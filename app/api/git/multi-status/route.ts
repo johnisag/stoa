@@ -6,6 +6,7 @@ import {
   parseWorktreePaths,
   worktreePathsToRepositories,
 } from "@/lib/workspace-session";
+import { requireAdmin } from "@/lib/api-security";
 
 // GET /api/git/multi-status - aggregated git status across repositories. The repo
 // set comes from an explicit `paths` list (a multi-repo workspace session's
@@ -16,6 +17,11 @@ export async function GET(request: NextRequest) {
     const projectId = searchParams.get("projectId");
     const fallbackPath = searchParams.get("fallbackPath");
     const pathsParam = searchParams.get("paths");
+
+    if (searchParams.has("fallbackPath") || searchParams.has("paths")) {
+      const adminError = requireAdmin(request);
+      if (adminError) return adminError;
+    }
 
     if (!projectId && !fallbackPath && !pathsParam) {
       return NextResponse.json(

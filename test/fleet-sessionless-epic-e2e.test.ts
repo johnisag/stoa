@@ -829,6 +829,7 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
       stopSession,
       sendMessage: async () => undefined,
       sampleCosts: async () => 0,
+      resolveBaseSha: async () => BASE_SHA,
     };
 
     const automationDeps = {
@@ -1435,6 +1436,7 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
       stopSession,
       sendMessage: async () => undefined,
       sampleCosts: async () => 0,
+      resolveBaseSha: async () => BASE_SHA,
     };
     const automationDeps = {
       db,

@@ -36,6 +36,7 @@ vi.mock("@/lib/fleet/stop", () => ({
 
 import { queries } from "@/lib/db";
 import {
+  hashFleetAutomationPolicy,
   hashFleetExecutionContract,
   hashFleetTaskRows,
 } from "@/lib/fleet/hash";
@@ -74,10 +75,31 @@ function createDraftFleetRun(
   actor?: string,
   runIdOverride?: string
 ) {
-  const payload =
+  const record =
     input && typeof input === "object" && !Array.isArray(input)
-      ? { reviewPolicy: "manual", ...input }
-      : input;
+      ? (input as Record<string, unknown>)
+      : null;
+  const targetBound = Boolean(record?.repoId || record?.projectId);
+  const automationPolicy =
+    record?.automationPolicy &&
+    typeof record.automationPolicy === "object" &&
+    !Array.isArray(record.automationPolicy)
+      ? (record.automationPolicy as Record<string, unknown>)
+      : {};
+  const payload = record
+    ? {
+        reviewPolicy: "manual",
+        ...record,
+        ...(targetBound
+          ? {
+              automationPolicy: {
+                ...automationPolicy,
+                allowUnconfinedAgents: true,
+              },
+            }
+          : {}),
+      }
+    : input;
   return createDraftFleetRunService(payload, actor, runIdOverride);
 }
 
@@ -458,7 +480,13 @@ describe("Fleet pause and resume interrupt integration", () => {
          WHERE id = ?`
       )
       .run(workerId);
-    await expect(resumeFleetRun(runId, {})).resolves.toHaveProperty("run");
+    await expect(
+      resumeFleetRun(
+        runId,
+        {},
+        { db: db(), reconcileRun: vi.fn(async () => 0) }
+      )
+    ).resolves.toHaveProperty("run");
     expect(
       db().prepare(`SELECT status FROM fleet_runs WHERE id = ?`).get(runId)
     ).toEqual({ status: "running" });
@@ -1792,6 +1820,109 @@ describe("Fleet list attention and readiness presentation", () => {
 });
 
 describe("createDraftFleetRun", () => {
+  it("requires consent for target-bound runs but permits an unbound draft", () => {
+    expect(
+      createDraftFleetRunService({
+        name: "Executable manual run",
+        goal: "Eventually launch Fleet workers",
+        repoId: "repo-fleet",
+        reviewPolicy: "manual",
+      })
+    ).toEqual({
+      error:
+        "executable Fleet runs require explicit unconfined-agent consent until strong Fleet isolation is available",
+    });
+
+    const unbound = createDraftFleetRunService({
+      name: "Unbound draft",
+      goal: "Capture scope without executable authority",
+      reviewPolicy: "manual",
+    });
+    expect(unbound).toHaveProperty("run");
+    if ("error" in unbound) throw new Error(unbound.error);
+    expect(unbound.run.run.repoId).toBeNull();
+    expect(unbound.run.run.projectId).toBeNull();
+    expect(unbound.run.run.automationPolicy.allowUnconfinedAgents).toBe(false);
+  });
+
+  it("blocks legacy consent drift before approval or resume mutates state", async () => {
+    const created = createDraftFleetRun({
+      name: "Legacy consent",
+      goal: "Fail before an internal agent can launch",
+      repoId: "repo-fleet",
+      provider: "codex",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    const planned = ingestFleetRunPlan(runId, {
+      planText: "- Preserve consent boundary [files: lib/consent.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+    const unconsentedPolicy = {
+      ...planned.run.run.automationPolicy,
+      allowUnconfinedAgents: false,
+    };
+    const persistUnconsentedPolicy = () =>
+      db()
+        .prepare(
+          `UPDATE fleet_runs
+           SET automation_policy_json = ?, automation_policy_hash = ?
+           WHERE id = ?`
+        )
+        .run(
+          JSON.stringify(unconsentedPolicy),
+          hashFleetAutomationPolicy(unconsentedPolicy),
+          runId
+        );
+    persistUnconsentedPolicy();
+
+    expect(
+      approveFleetRunPlan(runId, {
+        expectedPlanHash: planned.run.run.planHash!,
+      })
+    ).toEqual({
+      error:
+        "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before approval",
+      status: 409,
+    });
+    expect(getFleetRunDetail(runId)?.run.approvalState).toBe("needs_approval");
+
+    db()
+      .prepare(
+        `UPDATE fleet_runs
+         SET automation_policy_json = ?, automation_policy_hash = ?
+         WHERE id = ?`
+      )
+      .run(
+        JSON.stringify(planned.run.run.automationPolicy),
+        hashFleetAutomationPolicy(planned.run.run.automationPolicy),
+        runId
+      );
+    const approved = approveFleetRunPlan(runId, {
+      expectedPlanHash: planned.run.run.planHash!,
+    });
+    if ("error" in approved) throw new Error(approved.error);
+    persistUnconsentedPolicy();
+    const before = db()
+      .prepare(
+        `SELECT status, desired_state, approval_state FROM fleet_runs WHERE id = ?`
+      )
+      .get(runId);
+
+    expect(await resumeFleetRun(runId, {})).toEqual({
+      error:
+        "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before resume",
+      status: 409,
+    });
+    expect(
+      db()
+        .prepare(
+          `SELECT status, desired_state, approval_state FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual(before);
+  });
+
   it("rejects unsafe or unsupported epic models before writing and persists dynamic defaults", () => {
     expect(
       createDraftFleetRun({

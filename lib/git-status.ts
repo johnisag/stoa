@@ -2,8 +2,8 @@ import {
   execFileSync,
   type ExecFileSyncOptionsWithStringEncoding,
 } from "child_process";
-import { unlinkSync } from "fs";
-import { join, resolve, sep } from "path";
+import { realpathSync, statSync, unlinkSync } from "fs";
+import { isAbsolute, join, posix, relative, resolve, sep, win32 } from "path";
 import { devNull } from "os";
 import { expandHome, isWindows } from "./platform";
 
@@ -302,6 +302,44 @@ export function getFileDiff(
 }
 
 /**
+ * Resolve an existing regular file to a repository-relative path without
+ * permitting absolute input, parent traversal, or a symlink/junction escape.
+ * Both slash styles are interpreted as separators so the boundary behaves the
+ * same way on Windows, macOS, and Linux.
+ */
+export function resolveRepositoryRelativePath(
+  workingDir: string,
+  filePath: string
+): string {
+  if (
+    !filePath ||
+    filePath.includes("\0") ||
+    isAbsolute(filePath) ||
+    posix.isAbsolute(filePath) ||
+    win32.parse(filePath).root !== ""
+  ) {
+    throw new Error("A repository-relative path is required");
+  }
+
+  const repositoryRoot = realpathSync(resolve(workingDir));
+  const portablePath = filePath.replace(/[\\/]+/g, sep);
+  const target = realpathSync(resolve(repositoryRoot, portablePath));
+  const relativeTarget = relative(repositoryRoot, target);
+  if (
+    !relativeTarget ||
+    relativeTarget === ".." ||
+    relativeTarget.startsWith(`..${sep}`) ||
+    isAbsolute(relativeTarget)
+  ) {
+    throw new Error("Path is outside the repository");
+  }
+  if (!statSync(target).isFile()) {
+    throw new Error("Path must resolve to a regular file");
+  }
+  return relativeTarget;
+}
+
+/**
  * Get diff for untracked file (show full content)
  */
 export function getUntrackedFileDiff(
@@ -309,10 +347,18 @@ export function getUntrackedFileDiff(
   filePath: string
 ): string {
   try {
-    const output = git(["diff", "--no-index", devNull, filePath], workingDir, {
-      stdio: "pipe",
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    const repositoryRelativePath = resolveRepositoryRelativePath(
+      workingDir,
+      filePath
+    );
+    const output = git(
+      ["diff", "--no-index", "--", devNull, repositoryRelativePath],
+      workingDir,
+      {
+        stdio: "pipe",
+        maxBuffer: 10 * 1024 * 1024,
+      }
+    );
     return output;
   } catch (error) {
     // `git diff --no-index` exits 1 when the files differ; return its captured

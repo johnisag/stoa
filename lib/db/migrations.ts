@@ -1803,6 +1803,29 @@ function ensureFleetFairnessCursorSchema(db: Database.Database): void {
   db.transaction(() => installFleetFairnessCursorSchema(db)).immediate();
 }
 
+function installFleetSchedulerPollCursorSchema(db: Database.Database): void {
+  if (!hasTable(db, "fleet_runs")) return;
+  addColumnIfMissing(db, "fleet_runs", {
+    name: "scheduler_poll_cursor",
+    ddl: "scheduler_poll_cursor INTEGER NOT NULL DEFAULT 0",
+  });
+  if (hasColumn(db, "fleet_runs", "id")) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_fleet_runs_scheduler_poll_cursor
+        ON fleet_runs(scheduler_poll_cursor, id)
+    `);
+  }
+}
+
+/** Install the active-run scheduler cursor and ordering index atomically. */
+function ensureFleetSchedulerPollCursorSchema(db: Database.Database): void {
+  if (db.inTransaction) {
+    installFleetSchedulerPollCursorSchema(db);
+    return;
+  }
+  db.transaction(() => installFleetSchedulerPollCursorSchema(db)).immediate();
+}
+
 // All migrations in order. Migrations are idempotent (guarded by PRAGMA table_info
 // / IF NOT EXISTS) so a fresh schema or a concurrent-init race never throws a
 // duplicate-column/already-exists error. The runner no longer swallows those
@@ -3348,6 +3371,11 @@ const migrations: Migration[] = [
     id: 77,
     name: "add_fleet_fairness_cursors",
     up: ensureFleetFairnessCursorSchema,
+  },
+  {
+    id: 78,
+    name: "add_fleet_scheduler_poll_cursor",
+    up: ensureFleetSchedulerPollCursorSchema,
   },
 ];
 

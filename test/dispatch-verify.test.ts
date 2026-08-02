@@ -171,6 +171,7 @@ import {
   verifyPass,
 } from "../lib/dispatch/verify";
 import {
+  buildVerificationEnvironment,
   parseVerifySteps,
   runVerify,
   spawnArgs,
@@ -378,6 +379,35 @@ describe("runVerify (mocked execFile, no real build)", () => {
     });
     expect(VERIFY_TIMEOUT_MS).toBeGreaterThan(0);
     expect(VERIFY_MAX_OUTPUT_BUFFER).toBeGreaterThan(0);
+  });
+
+  it("never gives repository-controlled verification server or provider authority", () => {
+    const environment = buildVerificationEnvironment({
+      PATH: "/safe/bin",
+      SystemRoot: "C:\\Windows",
+      LANG: "en_US.UTF-8",
+      STOA_TOKEN: "stoa-secret",
+      STOA_FLEET_SCHEDULER_TOKEN: "scheduler-secret",
+      STOA_WEBHOOK_SECRET: "webhook-secret",
+      ANTHROPIC_API_KEY: "anthropic-secret",
+      OPENAI_API_KEY: "openai-secret",
+      GITHUB_TOKEN: "github-secret",
+      GH_TOKEN: "gh-secret",
+      NPM_TOKEN: "registry-secret",
+      AWS_SECRET_ACCESS_KEY: "cloud-secret",
+      SSH_AUTH_SOCK: "/secret/agent.sock",
+      DATABASE_URL: "postgres://credential@host/db",
+      CI: "0",
+      NODE_ENV: "test",
+    });
+
+    expect(environment).toEqual({
+      CI: "1",
+      NODE_ENV: "test",
+      PATH: "/safe/bin",
+      SystemRoot: "C:\\Windows",
+      LANG: "en_US.UTF-8",
+    });
   });
 
   it("fails with the failing step's output tail on a non-zero exit", async () => {

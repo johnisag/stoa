@@ -25,7 +25,11 @@ import {
   hashFleetExecutionContract,
   validateFleetTaskRowsForApproval,
 } from "./hash";
-import { fleetAutomationPolicyJson } from "./automation-policy";
+import {
+  fleetAutomationPolicyJson,
+  parseFleetAutomationPolicy,
+} from "./automation-policy";
+import { fleetUnattendedAgentLaunchAllowed } from "./confinement";
 import {
   FLEET_PLAN_TASK_DESCRIPTION_MAX,
   FLEET_PLAN_TASK_TITLE_MAX,
@@ -545,6 +549,16 @@ export function createDraftFleetRun(
     if (!project) return { error: "unknown projectId" };
   }
 
+  if (
+    (draft.repoId || draft.projectId) &&
+    !fleetUnattendedAgentLaunchAllowed(draft.automationPolicy)
+  ) {
+    return {
+      error:
+        "executable Fleet runs require explicit unconfined-agent consent until strong Fleet isolation is available",
+    };
+  }
+
   const runId = runIdOverride ?? randomUUID();
   const rootTaskId = randomUUID();
   const grantedBy = actorValue(actor, "operator");
@@ -932,6 +946,22 @@ export function approveFleetRunPlan(
   >(db, () => {
     const run = queries.getFleetRun(db).get(id) as FleetRunRow | undefined;
     if (!run) return { error: "Fleet run not found", status: 404 };
+    const parsedPolicy = parseFleetAutomationPolicy(run.automation_policy_json);
+    if (
+      !parsedPolicy.valid ||
+      !run.automation_policy_hash ||
+      hashFleetAutomationPolicy(parsedPolicy.policy) !==
+        run.automation_policy_hash
+    ) {
+      return { error: "Fleet automation policy is invalid", status: 409 };
+    }
+    if (!fleetUnattendedAgentLaunchAllowed(parsedPolicy.policy)) {
+      return {
+        error:
+          "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before approval",
+        status: 409,
+      };
+    }
     const baseTarget = fleetRunBaseTarget(db, run);
     if (!baseTarget) {
       return {
@@ -1305,6 +1335,33 @@ export async function resumeFleetRun(
   const conductorSessionId =
     cappedText(payload.conductorSessionId, 128) || null;
   const db = overrides.db ?? getDb();
+  // Consent is an admission invariant, not scheduler state. Check it before
+  // the recovery boundary so an unconsented legacy run cannot become
+  // resumable merely because scheduler recovery is still in progress. The
+  // transaction below repeats the check to close the race with persisted
+  // policy changes.
+  const persistedRun = queries.getFleetRun(db).get(id) as
+    FleetRunRow | undefined;
+  if (persistedRun?.approval_state === "approved") {
+    const parsedPolicy = parseFleetAutomationPolicy(
+      persistedRun.automation_policy_json
+    );
+    if (
+      !parsedPolicy.valid ||
+      !persistedRun.automation_policy_hash ||
+      hashFleetAutomationPolicy(parsedPolicy.policy) !==
+        persistedRun.automation_policy_hash
+    ) {
+      return { error: "Fleet automation policy is invalid", status: 409 };
+    }
+    if (!fleetUnattendedAgentLaunchAllowed(parsedPolicy.policy)) {
+      return {
+        error:
+          "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before resume",
+        status: 409,
+      };
+    }
+  }
   const recoveryBlocked = fleetLaunchBlockedResult(db, id);
   if (recoveryBlocked) return recoveryBlocked;
   if (conductorSessionId) {
@@ -1318,6 +1375,22 @@ export async function resumeFleetRun(
     if (!run) return { error: "Fleet run not found", status: 404 };
     if (run.approval_state !== "approved")
       return { error: "approve the plan before resume", status: 409 };
+    const parsedPolicy = parseFleetAutomationPolicy(run.automation_policy_json);
+    if (
+      !parsedPolicy.valid ||
+      !run.automation_policy_hash ||
+      hashFleetAutomationPolicy(parsedPolicy.policy) !==
+        run.automation_policy_hash
+    ) {
+      return { error: "Fleet automation policy is invalid", status: 409 };
+    }
+    if (!fleetUnattendedAgentLaunchAllowed(parsedPolicy.policy)) {
+      return {
+        error:
+          "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before resume",
+        status: 409,
+      };
+    }
     if (!FULL_GIT_SHA.test(run.automation_base_sha ?? "")) {
       return {
         error: "approved run has no exact base commit",

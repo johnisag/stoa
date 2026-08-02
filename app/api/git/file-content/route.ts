@@ -3,6 +3,7 @@ import { execFileSync } from "child_process";
 import { expandPath } from "@/lib/git-status";
 import {
   getAllowedPathRoots,
+  requireAdmin,
   resolveRealSandboxedPath,
 } from "@/lib/api-security";
 
@@ -11,6 +12,9 @@ import {
  * Get file content from git HEAD (original version before changes)
  */
 export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const rawPath = searchParams.get("path");

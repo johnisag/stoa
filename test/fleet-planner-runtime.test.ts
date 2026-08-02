@@ -109,11 +109,28 @@ import {
   startFleetPlanner,
 } from "@/lib/fleet/planner";
 import { reserveFleetPaidSession } from "@/lib/fleet/session-admission";
-import { createDraftFleetRun } from "@/lib/fleet/service";
+import { hashFleetAutomationPolicy } from "@/lib/fleet/hash";
+import { createDraftFleetRun as createDraftFleetRunService } from "@/lib/fleet/service";
 import type { FleetRunRow } from "@/lib/fleet/types";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
+}
+
+function createDraftFleetRun(input: Record<string, unknown>) {
+  const automationPolicy =
+    input.automationPolicy &&
+    typeof input.automationPolicy === "object" &&
+    !Array.isArray(input.automationPolicy)
+      ? (input.automationPolicy as Record<string, unknown>)
+      : {};
+  return createDraftFleetRunService({
+    ...input,
+    automationPolicy: {
+      allowUnconfinedAgents: true,
+      ...automationPolicy,
+    },
+  });
 }
 
 beforeAll(async () => {
@@ -334,7 +351,7 @@ describe("Fleet planner lifecycle", () => {
         requireWorktree: true,
         requireTaskDelivery: true,
         skipSetup: true,
-        approvalMode: "prompt",
+        approvalMode: "full-bypass",
       })
     );
     expect(state.spawn.mock.calls[0]?.[0].task).toContain("at most 40");
@@ -683,7 +700,7 @@ describe("Fleet planner lifecycle", () => {
     [false, "prompt"],
     [true, "full-bypass"],
   ] as const)(
-    "derives automatic planner permissions from explicit unconfined consent (%s)",
+    "requires create-time consent for automatic planner permissions (%s)",
     async (allowUnconfinedAgents, expectedMode) => {
       const created = createDraftFleetRun({
         name: "Automatic planner permissions",
@@ -695,6 +712,14 @@ describe("Fleet planner lifecycle", () => {
           allowUnconfinedAgents,
         },
       });
+      if (!allowUnconfinedAgents) {
+        expect(created).toEqual({
+          error:
+            "executable Fleet runs require explicit unconfined-agent consent until strong Fleet isolation is available",
+        });
+        expect(state.spawn).not.toHaveBeenCalled();
+        return;
+      }
       if ("error" in created) throw new Error(created.error);
 
       const started = await startFleetPlanner(
@@ -702,16 +727,6 @@ describe("Fleet planner lifecycle", () => {
         {},
         "fleet-automation"
       );
-      if (!allowUnconfinedAgents) {
-        expect(started).toMatchObject({
-          status: 409,
-          error: expect.stringContaining(
-            "explicit unconfined-agent authorization"
-          ),
-        });
-        expect(state.spawn).not.toHaveBeenCalled();
-        return;
-      }
       if ("error" in started) throw new Error(started.error);
 
       expect(state.spawn).toHaveBeenCalledWith(
@@ -719,6 +734,37 @@ describe("Fleet planner lifecycle", () => {
       );
     }
   );
+
+  it("rejects an operator-started legacy planner before spawning in prompt mode", async () => {
+    const created = createDraftFleetRun({
+      name: "Legacy planner",
+      goal: "Must not open a hidden prompt",
+      repoId: "planner-repo",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const policy = {
+      ...created.run.run.automationPolicy,
+      allowUnconfinedAgents: false,
+    };
+    db()
+      .prepare(
+        `UPDATE fleet_runs
+         SET automation_policy_json = ?, automation_policy_hash = ?
+         WHERE id = ?`
+      )
+      .run(
+        JSON.stringify(policy),
+        hashFleetAutomationPolicy(policy),
+        created.run.run.id
+      );
+
+    await expect(startFleetPlanner(created.run.run.id)).resolves.toEqual({
+      error:
+        "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before planning",
+      status: 409,
+    });
+    expect(state.spawn).not.toHaveBeenCalled();
+  });
 
   it("accepts the same launch when reconciliation wins the starting race", async () => {
     const created = createDraftFleetRun({

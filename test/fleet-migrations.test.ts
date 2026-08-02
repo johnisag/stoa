@@ -1224,6 +1224,7 @@ describe("fleet migrations", () => {
     ).toEqual([
       { name: "idx_fleet_cost_accounts_fallback_recovery_cursor" },
       { name: "idx_fleet_cost_accounts_sample_attempt_cursor" },
+      { name: "idx_fleet_runs_scheduler_poll_cursor" },
       { name: "idx_fleet_runs_supervisor_poll_cursor" },
     ]);
 
@@ -1246,6 +1247,48 @@ describe("fleet migrations", () => {
         )
         .get()
     ).toEqual({ present: 1 });
+    db.close();
+  });
+
+  it("migration 78 adds and idempotently repairs the active-run poll cursor", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 77);
+    db.exec(`
+      CREATE TABLE fleet_runs (id TEXT PRIMARY KEY);
+      INSERT INTO fleet_runs (id) VALUES ('legacy-run');
+    `);
+
+    runMigrations(db);
+
+    expectColumns(db, "fleet_runs", ["scheduler_poll_cursor"]);
+    expect(
+      db
+        .prepare(
+          `SELECT scheduler_poll_cursor FROM fleet_runs
+           WHERE id = 'legacy-run'`
+        )
+        .get()
+    ).toEqual({ scheduler_poll_cursor: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT 1 AS present FROM sqlite_master
+           WHERE type = 'index'
+             AND name = 'idx_fleet_runs_scheduler_poll_cursor'`
+        )
+        .get()
+    ).toEqual({ present: 1 });
+
+    db.exec(`
+      DELETE FROM _migrations WHERE id = 78;
+      DROP INDEX idx_fleet_runs_scheduler_poll_cursor;
+    `);
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(
+      db
+        .prepare(`SELECT COUNT(*) AS count FROM _migrations WHERE id = 78`)
+        .get()
+    ).toEqual({ count: 1 });
     db.close();
   });
 });

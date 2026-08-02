@@ -4,6 +4,7 @@ import { isGitRepo, getRepoSlug, getDefaultBranch } from "@/lib/git";
 import { expandHome } from "@/lib/platform";
 import {
   getAllowedPathRoots,
+  requireAdmin,
   resolveRealSandboxedPathOrHome,
 } from "@/lib/api-security";
 
@@ -16,6 +17,9 @@ import {
  * source (a Stoa project / a scanned repo / a GitHub clone) instead of typing.
  */
 export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   const rawPath = request.nextUrl.searchParams.get("path")?.trim();
   if (!rawPath) {
     return NextResponse.json({ error: "path is required" }, { status: 400 });

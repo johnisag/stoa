@@ -77,6 +77,10 @@ const FLEET_MERGE_LIMIT = 20;
 const FLEET_MERGE_ARTIFACT_MAX = 16_000;
 const FLEET_INTEGRATION_DISK_ESTIMATE_BYTES = 512 * 1024 ** 2;
 const FLEET_FINAL_VERIFICATION_MAX_ATTEMPTS = 3;
+// A merge operation already owns a durable Git resource lease. This additional
+// repository-keyed guard prevents two local landing commands from different
+// Fleet runs entering the same checkout concurrently inside this server process.
+const localLandingRepositories = new Set<string>();
 
 export interface FleetFinalVerificationRetryStatus {
   action: "retry_final_verification" | null;
@@ -148,8 +152,12 @@ function repositoryResourceKey(
 ): string {
   if (run.repo_id) return run.repo_id;
   if (run.project_id) return run.project_id;
+  return `path:${normalizedRepositoryPath(repoPath)}`;
+}
+
+function normalizedRepositoryPath(repoPath: string): string {
   const normalized = resolve(expandHome(repoPath)).replace(/\\/g, "/");
-  return `path:${isWindows ? normalized.toLowerCase() : normalized}`;
+  return isWindows ? normalized.toLowerCase() : normalized;
 }
 
 function transaction<T>(db: Database.Database, fn: () => T): T {
@@ -255,6 +263,46 @@ async function gitClean(
     1024 * 1024
   );
   return stdout.length === 0;
+}
+
+interface GitCheckoutSnapshot {
+  branch: string;
+  head: string;
+  clean: boolean;
+}
+
+/** Read branch, exact HEAD, and cleanliness through one Git status snapshot. */
+async function gitCheckoutSnapshot(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string
+): Promise<GitCheckoutSnapshot> {
+  const { stdout } = await deps.git(
+    cwd,
+    ["status", "--porcelain=v2", "--branch", "--untracked-files=all"],
+    15_000,
+    1024 * 1024
+  );
+  let branch: string | null = null;
+  let head: string | null = null;
+  let clean = true;
+  for (const line of stdout.split(/\r?\n/)) {
+    if (line.startsWith("# branch.oid ")) {
+      head = line.slice("# branch.oid ".length).trim().toLowerCase();
+    } else if (line.startsWith("# branch.head ")) {
+      const value = line.slice("# branch.head ".length).trim();
+      branch = value === "(detached)" ? "" : value;
+    } else if (line.length > 0 && !line.startsWith("# ")) {
+      clean = false;
+    }
+  }
+  if (branch === null || !validSha(head)) {
+    // Test adapters and older Git-compatible wrappers may omit porcelain-v2
+    // branch headers. Keep the fail-closed checks while falling back to the
+    // existing direct branch/HEAD queries for that compatibility surface.
+    branch = await gitBranch(deps, cwd);
+    head = await gitSha(deps, cwd);
+  }
+  return { branch, head, clean };
 }
 
 async function assertExactCleanHead(
@@ -1655,6 +1703,21 @@ async function finalizeLocal(
   run: FleetMergeRunRow,
   target: FleetMergeTargetInfo
 ): Promise<boolean> {
+  const repositoryKey = normalizedRepositoryPath(target.repoPath);
+  if (localLandingRepositories.has(repositoryKey)) return false;
+  localLandingRepositories.add(repositoryKey);
+  try {
+    return await finalizeLocalLocked(deps, run, target);
+  } finally {
+    localLandingRepositories.delete(repositoryKey);
+  }
+}
+
+async function finalizeLocalLocked(
+  deps: FleetMergeRuntimeDeps,
+  run: FleetMergeRunRow,
+  target: FleetMergeTargetInfo
+): Promise<boolean> {
   if (
     !validSha(run.integration_base_sha) ||
     !validSha(run.integration_head_sha) ||
@@ -1673,10 +1736,11 @@ async function finalizeLocal(
   if (operation.state === "completed") return false;
   if (operation.state === "failed") {
     try {
+      const checkout = await gitCheckoutSnapshot(deps, target.repoPath);
       if (
-        (await gitBranch(deps, target.repoPath)) !== target.baseBranch ||
-        (await gitSha(deps, target.repoPath)) !== run.integration_head_sha ||
-        !(await gitClean(deps, target.repoPath))
+        checkout.branch !== target.baseBranch ||
+        checkout.head !== run.integration_head_sha ||
+        !checkout.clean
       ) {
         return false;
       }
@@ -1697,18 +1761,16 @@ async function finalizeLocal(
       run.integration_head_sha,
       "local landing preflight"
     );
-    const branch = await gitBranch(deps, target.repoPath);
-    const sourceHead = await gitSha(deps, target.repoPath);
-    const clean = await gitClean(deps, target.repoPath);
-    if (branch !== target.baseBranch) {
+    const source = await gitCheckoutSnapshot(deps, target.repoPath);
+    if (source.branch !== target.baseBranch) {
       throw new Error(
-        `local checkout is on ${branch || "detached HEAD"}, expected ${target.baseBranch}`
+        `local checkout is on ${source.branch || "detached HEAD"}, expected ${target.baseBranch}`
       );
     }
-    if (!clean) throw new Error("local checkout is dirty");
+    if (!source.clean) throw new Error("local checkout is dirty");
     if (
-      sourceHead !== run.integration_base_sha &&
-      sourceHead !== run.integration_head_sha
+      source.head !== run.integration_base_sha &&
+      source.head !== run.integration_head_sha
     ) {
       throw new Error("local checkout base moved after Fleet bound it");
     }
@@ -1722,7 +1784,7 @@ async function finalizeLocal(
     ) {
       throw new Error("integration head is not descended from the bound base");
     }
-    if (sourceHead !== run.integration_head_sha) {
+    if (source.head !== run.integration_head_sha) {
       // A git process may apply the fast-forward and still report an I/O error.
       // Once invoked, authoritative HEAD recovery decides the durable outcome.
       externalActionStarted = true;
@@ -1732,26 +1794,32 @@ async function finalizeLocal(
         120_000
       );
     }
-    const mergedHead = await gitSha(deps, target.repoPath);
-    if (mergedHead !== run.integration_head_sha) {
+    const merged = await gitCheckoutSnapshot(deps, target.repoPath);
+    if (merged.branch !== target.baseBranch) {
+      throw new Error(
+        `local checkout changed to ${merged.branch || "detached HEAD"} during landing; expected ${target.baseBranch}`
+      );
+    }
+    if (merged.head !== run.integration_head_sha) {
       throw new Error(
         "local fast-forward did not land the exact integration head"
       );
     }
-    completeRun(deps, run, claimed, mergedHead);
+    if (!merged.clean) {
+      throw new Error("local checkout became dirty during landing");
+    }
+    completeRun(deps, run, claimed, merged.head);
     return true;
   } catch (error) {
     try {
-      const branch = await gitBranch(deps, target.repoPath);
-      const head = await gitSha(deps, target.repoPath);
-      const clean = await gitClean(deps, target.repoPath);
+      const checkout = await gitCheckoutSnapshot(deps, target.repoPath);
       if (
-        branch === target.baseBranch &&
-        head === run.integration_head_sha &&
-        clean
+        checkout.branch === target.baseBranch &&
+        checkout.head === run.integration_head_sha &&
+        checkout.clean
       ) {
         try {
-          completeRun(deps, run, claimed, head);
+          completeRun(deps, run, claimed, checkout.head);
           return true;
         } catch (persistenceError) {
           leaveExternallyCompletedOperationRecoverable(
@@ -1964,6 +2032,40 @@ async function readFleetPr(
   }
 }
 
+function fleetPrTargetError(
+  pr: FleetPrStatus,
+  run: FleetMergeRunRow,
+  target: FleetMergeTargetInfo,
+  requirePinnedBaseSha: boolean
+): string | null {
+  if (pr.baseRefName !== target.baseBranch) {
+    return `GitHub PR target branch changed after Fleet bound it: expected ${target.baseBranch}, received ${pr.baseRefName ?? "unknown"}`;
+  }
+  if (requirePinnedBaseSha && pr.baseSha !== run.integration_base_sha) {
+    return "GitHub PR base changed after Fleet bound it";
+  }
+  return null;
+}
+
+function assertExactFleetPrTarget(
+  pr: FleetPrStatus,
+  run: FleetMergeRunRow,
+  target: FleetMergeTargetInfo,
+  requirePinnedBaseSha: boolean
+): void {
+  const error = fleetPrTargetError(pr, run, target, requirePinnedBaseSha);
+  if (error) throw new Error(error);
+}
+
+function isExactFleetPrTarget(
+  pr: FleetPrStatus,
+  run: FleetMergeRunRow,
+  target: FleetMergeTargetInfo,
+  requirePinnedBaseSha: boolean
+): boolean {
+  return fleetPrTargetError(pr, run, target, requirePinnedBaseSha) === null;
+}
+
 function persistGitHubPr(
   deps: FleetMergeRuntimeDeps,
   run: FleetMergeRunRow,
@@ -2040,7 +2142,14 @@ async function ensureGitHubPr(
       target.repoSlug
     );
     if (
-      existing?.headSha !== run.integration_head_sha ||
+      !existing ||
+      !isExactFleetPrTarget(
+        existing,
+        run,
+        target,
+        existing.state !== "MERGED"
+      ) ||
+      existing.headSha !== run.integration_head_sha ||
       (existing.state !== "OPEN" && existing.state !== "MERGED")
     ) {
       return false;
@@ -2095,9 +2204,7 @@ async function ensureGitHubPr(
       );
     }
     if (!pr) throw new Error("GitHub PR could not be created or recovered");
-    if (pr.baseSha !== run.integration_base_sha) {
-      throw new Error("GitHub PR base changed after fleet integration began");
-    }
+    assertExactFleetPrTarget(pr, run, target, pr.state !== "MERGED");
     if (pr.headSha !== run.integration_head_sha) {
       throw new Error(
         "GitHub PR head differs from the verified integration head"
@@ -2120,7 +2227,13 @@ async function ensureGitHubPr(
       target.repoSlug
     );
     if (
-      recovered?.baseSha === run.integration_base_sha &&
+      recovered &&
+      isExactFleetPrTarget(
+        recovered,
+        run,
+        target,
+        recovered.state !== "MERGED"
+      ) &&
       recovered.headSha === run.integration_head_sha &&
       (recovered.state === "OPEN" || recovered.state === "MERGED")
     ) {
@@ -2160,6 +2273,35 @@ async function ensureGitHubPr(
   }
 }
 
+function recordGitHubPrWait(
+  deps: FleetMergeRuntimeDeps,
+  run: FleetMergeRunRow,
+  operation: FleetMergeOperationRow,
+  pr: FleetPrStatus
+): boolean {
+  if (
+    pr.mergeable === "MERGEABLE" &&
+    pr.checks !== "pending" &&
+    pr.checks !== "failing"
+  ) {
+    return false;
+  }
+  const error =
+    pr.checks === "failing"
+      ? "GitHub checks are failing"
+      : "GitHub mergeability or checks are pending";
+  finishOperation(deps, operation, { state: "waiting", error });
+  const now = deps.now().toISOString();
+  deps.db
+    .prepare(
+      `UPDATE fleet_runs SET integration_state = 'waiting_ci',
+       integration_error = ?, integration_updated_at = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .run(pr.checks === "failing" ? error : null, now, now, run.id);
+  return true;
+}
+
 async function finalizeGitHub(
   deps: FleetMergeRuntimeDeps,
   run: FleetMergeRunRow,
@@ -2188,7 +2330,9 @@ async function finalizeGitHub(
       target.repoSlug
     );
     if (
-      existing?.state !== "MERGED" ||
+      !existing ||
+      existing.state !== "MERGED" ||
+      !isExactFleetPrTarget(existing, run, target, false) ||
       existing.headSha !== run.integration_head_sha ||
       !validSha(existing.mergeSha)
     ) {
@@ -2209,9 +2353,7 @@ async function finalizeGitHub(
       target.repoSlug
     );
     if (!pr) throw new Error("GitHub PR status is unavailable");
-    if (pr.state !== "MERGED" && pr.baseSha !== run.integration_base_sha) {
-      throw new Error("GitHub PR base changed after final verification");
-    }
+    assertExactFleetPrTarget(pr, run, target, pr.state !== "MERGED");
     if (pr.headSha !== run.integration_head_sha) {
       throw new Error("GitHub PR head changed after final verification");
     }
@@ -2229,32 +2371,37 @@ async function finalizeGitHub(
     if (pr.state !== "OPEN") {
       throw new Error(`GitHub PR is not open (state ${pr.state ?? "unknown"})`);
     }
-    if (
-      pr.mergeable !== "MERGEABLE" ||
-      pr.checks === "pending" ||
-      pr.checks === "failing"
-    ) {
-      finishOperation(deps, claimed, {
-        state: "waiting",
-        error:
-          pr.checks === "failing"
-            ? "GitHub checks are failing"
-            : "GitHub mergeability or checks are pending",
-      });
-      deps.db
-        .prepare(
-          `UPDATE fleet_runs SET integration_state = 'waiting_ci',
-           integration_error = ?, integration_updated_at = ?, updated_at = ?
-           WHERE id = ?`
-        )
-        .run(
-          pr.checks === "failing" ? "GitHub checks are failing" : null,
-          deps.now().toISOString(),
-          deps.now().toISOString(),
-          run.id
-        );
-      return false;
+    if (recordGitHubPrWait(deps, run, claimed, pr)) return false;
+
+    // GitHub's merge mutation can pin the head OID but not the base branch.
+    // Re-read immediately before invoking it to minimize the unavoidable remote
+    // race, then validate the target again after the authoritative merge state.
+    pr = await readFleetPr(
+      deps,
+      target.repoPath,
+      run.integration_pr_number,
+      target.repoSlug
+    );
+    if (!pr) throw new Error("GitHub PR status is unavailable before merge");
+    assertExactFleetPrTarget(pr, run, target, pr.state !== "MERGED");
+    if (pr.headSha !== run.integration_head_sha) {
+      throw new Error("GitHub PR head changed immediately before merge");
     }
+    if (pr.state === "MERGED") {
+      if (!validSha(pr.mergeSha)) {
+        throw new Error("merged GitHub PR has no authoritative merge commit");
+      }
+      completeRun(deps, run, claimed, pr.mergeSha, {
+        number: pr.number,
+        url: pr.url,
+        headSha: pr.headSha,
+      });
+      return true;
+    }
+    if (pr.state !== "OPEN") {
+      throw new Error(`GitHub PR is not open (state ${pr.state ?? "unknown"})`);
+    }
+    if (recordGitHubPrWait(deps, run, claimed, pr)) return false;
     deps.db
       .prepare(
         `UPDATE fleet_runs SET integration_state = 'merging',
@@ -2275,6 +2422,7 @@ async function finalizeGitHub(
       run.integration_pr_number,
       target.repoSlug
     );
+    if (pr) assertExactFleetPrTarget(pr, run, target, false);
     if (
       !pr ||
       pr.state !== "MERGED" ||
@@ -2304,6 +2452,7 @@ async function finalizeGitHub(
     );
     if (
       recovered?.state === "MERGED" &&
+      isExactFleetPrTarget(recovered, run, target, false) &&
       recovered.headSha === run.integration_head_sha &&
       validSha(recovered.mergeSha)
     ) {

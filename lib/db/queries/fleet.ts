@@ -102,7 +102,50 @@ export const fleetQueries = {
           r.status NOT IN ('completed', 'failed', 'canceled')
         THEN (
             CASE WHEN
-              r.approval_state IN ('needs_approval', 'blocked') OR
+              r.approval_state = 'blocked' OR
+              (
+                r.approval_state = 'needs_approval' AND
+                r.plan_hash IS NOT NULL AND
+                COALESCE(json_extract(r.settings_json, '$.planner.state'), 'idle')
+                  NOT IN ('starting', 'running', 'finalizing', 'cleanup_pending') AND
+                NOT EXISTS (
+                  SELECT 1 FROM fleet_artifacts approval_blocker
+                  WHERE approval_blocker.fleet_run_id = r.id
+                    AND approval_blocker.severity = 'blocker'
+                    AND (
+                      approval_blocker.plan_hash = r.plan_hash OR
+                      approval_blocker.plan_hash IS NULL
+                    )
+                ) AND
+                (
+                  r.review_policy = 'manual' OR
+                  (
+                    COALESCE(json_extract(
+                      r.automation_policy_json,
+                      '$.automaticPlanApproval'
+                    ), 0) = 0 AND
+                    EXISTS (
+                      SELECT 1 FROM fleet_reviews plan_review
+                      WHERE plan_review.fleet_run_id = r.id
+                        AND plan_review.subject_type = 'plan'
+                        AND plan_review.subject_hash = r.plan_hash
+                        AND plan_review.policy_hash = r.automation_policy_hash
+                        AND plan_review.base_sha = r.automation_base_sha
+                        AND plan_review.state = 'clean'
+                        AND plan_review.verdict = 'clean'
+                        AND plan_review.lens IN (
+                          'correctness_security',
+                          'conventions_cross_platform',
+                          'simplicity_ux',
+                          'adversarial_red_team'
+                        )
+                      GROUP BY plan_review.execution_hash
+                      HAVING COUNT(DISTINCT plan_review.lens) = 4
+                        AND COUNT(DISTINCT plan_review.reviewer_session_id) = 4
+                    )
+                  )
+                )
+              ) OR
               r.automation_last_error IS NOT NULL OR
               json_extract(r.settings_json, '$.planner.state') = 'failed' OR
               r.pause_reason = 'budget_exhausted' OR

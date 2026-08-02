@@ -976,6 +976,32 @@ async function reconcileOneFleetAutomation(
       run.status === "planned" &&
       run.approval_state === "approved"
     ) {
+      let currentStartBaseSha: string;
+      try {
+        // The earlier read may have preceded planning, reviews, and approval.
+        // Resolve again at the paid-work boundary so the start CAS never relies
+        // on a stale observation of the target branch.
+        currentStartBaseSha = await deps.resolveBaseSha(deps.db, run);
+      } catch (error) {
+        recordAutomationFailure(
+          deps.db,
+          run,
+          "start",
+          error,
+          deps.now().toISOString()
+        );
+        return;
+      }
+      if (currentStartBaseSha !== base.stored) {
+        recordAutomationFailure(
+          deps.db,
+          run,
+          "start",
+          new Error("base commit changed"),
+          deps.now().toISOString()
+        );
+        return;
+      }
       const preview = executionPreview(deps.db, run);
       const start = evaluateAutomaticStart({
         policy: parsed.policy,
@@ -990,7 +1016,7 @@ async function reconcileOneFleetAutomation(
         approvedExecutionHash: approvedExecutionHash(run),
         currentExecutionHash: preview?.executionHash ?? null,
         baseSha: base.stored,
-        currentBaseSha: base.current,
+        currentBaseSha: currentStartBaseSha,
         recoveryRequired: run.recovery_required === 1,
         schedulerReady: deps.schedulerReady(),
         confinementAvailable: deps.confinementAvailable(),
@@ -1017,7 +1043,7 @@ async function reconcileOneFleetAutomation(
           parsed.policy,
           policyHash,
           base.stored,
-          base.current
+          currentStartBaseSha
         )
       ) {
         await deps.reconcileRun(run.id);

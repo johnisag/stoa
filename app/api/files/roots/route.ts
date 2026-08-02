@@ -1,7 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { existsSync } from "fs";
 import path from "path";
 import { isWindows } from "@/lib/platform";
+import { requireAdmin } from "@/lib/api-security";
 
 /**
  * GET /api/files/roots
@@ -10,7 +11,10 @@ import { isWindows } from "@/lib/platform";
  * can navigate without hardcoding "/". On Windows the roots are the available
  * drive letters (e.g. ["C:\\", "D:\\"]); on POSIX it is a single ["/"].
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   const separator = path.sep;
 
   if (!isWindows) {

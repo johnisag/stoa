@@ -37,7 +37,10 @@ import {
   reserveFleetPaidSession,
 } from "./session-admission";
 import { hashFleetAutomationPolicy } from "./hash";
-import { fleetAgentApprovalMode } from "./confinement";
+import {
+  fleetAgentApprovalMode,
+  fleetUnattendedAgentLaunchAllowed,
+} from "./confinement";
 import type { FleetRunDetailDto, FleetRunRow } from "./types";
 import {
   buildFleetPlannerPrompt,
@@ -591,15 +594,24 @@ export async function startFleetPlanner(
   if (recoveryBlocked) return recoveryBlocked;
   const run = queries.getFleetRun(db).get(runId) as FleetRunRow | undefined;
   if (!run) return { error: "Fleet run not found", status: 404 };
-  let approvalMode: ApprovalMode = "prompt";
+  const parsed = parseFleetAutomationPolicy(run.automation_policy_json);
+  if (
+    !parsed.valid ||
+    !run.automation_policy_hash ||
+    hashFleetAutomationPolicy(parsed.policy) !== run.automation_policy_hash
+  ) {
+    return { error: "Fleet automation policy is invalid", status: 409 };
+  }
+  if (!fleetUnattendedAgentLaunchAllowed(parsed.policy)) {
+    return {
+      error:
+        "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before planning",
+      status: 409,
+    };
+  }
+  const approvalMode: ApprovalMode = fleetAgentApprovalMode(parsed.policy);
   if (actor === "fleet-automation") {
-    const parsed = parseFleetAutomationPolicy(run.automation_policy_json);
-    if (
-      !parsed.valid ||
-      !run.automation_policy_hash ||
-      hashFleetAutomationPolicy(parsed.policy) !== run.automation_policy_hash ||
-      !parsed.policy.automaticPlanning
-    ) {
+    if (!parsed.policy.automaticPlanning) {
       return { error: "automatic planning authorization changed", status: 409 };
     }
     const authorization = db
@@ -611,14 +623,6 @@ export async function startFleetPlanner(
       { status: string } | undefined;
     if (authorization?.status !== "authorized") {
       return { error: "automatic planning is not authorized", status: 409 };
-    }
-    approvalMode = fleetAgentApprovalMode(parsed.policy);
-    if (approvalMode === "prompt") {
-      return {
-        error:
-          "automatic planning requires explicit unconfined-agent authorization until strong Fleet isolation is available",
-        status: 409,
-      };
     }
   }
   if (

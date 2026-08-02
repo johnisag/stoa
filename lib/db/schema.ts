@@ -1247,6 +1247,7 @@ export function createSchema(db: Database.Database): void {
       budget_hard_limit_at TEXT,
       budget_interrupt_deadline_at TEXT,
       managed_supervisor_poll_cursor INTEGER NOT NULL DEFAULT 0,
+      scheduler_poll_cursor INTEGER NOT NULL DEFAULT 0,
       provider_caps_json TEXT NOT NULL DEFAULT '{}',
       resource_limits_json TEXT NOT NULL DEFAULT '{}',
       default_max_attempts INTEGER NOT NULL DEFAULT 2,

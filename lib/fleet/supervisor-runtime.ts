@@ -53,6 +53,7 @@ import { redactAndCapFleetText } from "./redaction";
 import { reconcileUntrackedManagedFleetSupervisors } from "./supervisor-recovery";
 import type { FleetRunRow } from "./types";
 import { fleetLaunchBlockedResult } from "./recovery-gate";
+import { prepareFleetFairnessCursor } from "./fairness-cursor";
 
 const MANAGED_SUPERVISOR_VERSION = 2 as const;
 const MANAGED_SUPERVISOR_TIMEOUT_MS = 10 * 60 * 1000;
@@ -68,6 +69,30 @@ const GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 const ACTIVE_STATES = new Set(["starting", "running", "cleanup_pending"]);
 const TERMINAL_STATES = new Set(["completed", "failed", "canceled"]);
+
+function fleetLifecycleCleanup(
+  run: FleetRunRow
+): { finalState: "failed" | "canceled"; error: string } | null {
+  if (run.status === "failed") {
+    return {
+      finalState: "failed",
+      error: "managed supervisor stopped because the Fleet run failed",
+    };
+  }
+  if (
+    run.archived_at ||
+    run.status === "canceled" ||
+    run.status === "completed" ||
+    run.desired_state === "canceled" ||
+    (run.desired_state === "paused" && run.pause_mode === "pause-and-interrupt")
+  ) {
+    return {
+      finalState: "canceled",
+      error: "managed supervisor was canceled by Fleet lifecycle state",
+    };
+  }
+  return null;
+}
 
 const stoaRequire = createRequire(import.meta.url);
 const TSX_CLI_PATH = stoaRequire.resolve("tsx/cli");
@@ -1087,6 +1112,7 @@ export async function startManagedFleetSupervisor(
     run.archived_at ||
     run.status === "canceled" ||
     run.status === "completed" ||
+    run.status === "failed" ||
     run.status === "paused" ||
     run.desired_state === "canceled" ||
     run.desired_state === "paused"
@@ -1236,7 +1262,8 @@ export async function startManagedFleetSupervisor(
       .prepare(
         `UPDATE fleet_runs SET settings_json = ?, updated_at = ?
          WHERE id = ? AND settings_json = ? AND recovery_required = 0
-           AND archived_at IS NULL AND status NOT IN ('canceled', 'completed')`
+           AND archived_at IS NULL
+           AND status NOT IN ('canceled', 'completed', 'failed')`
       )
       .run(JSON.stringify(settings), startedAt, runId, run.settings_json);
     claimed = changed.changes === 1;
@@ -1288,8 +1315,24 @@ export async function startManagedFleetSupervisor(
   let ambiguousOwnership = false;
   try {
     const beforeLaunch = refreshState(deps.db, runId, requestId);
+    const beforeLaunchCleanup = beforeLaunch
+      ? fleetLifecycleCleanup(beforeLaunch.run)
+      : null;
+    if (beforeLaunch && beforeLaunchCleanup) {
+      queueCleanup(
+        deps,
+        runId,
+        beforeLaunch.state,
+        beforeLaunchCleanup.finalState,
+        {
+          error: beforeLaunchCleanup.error,
+          launchSettled: true,
+        }
+      );
+    }
     if (
       !beforeLaunch ||
+      beforeLaunchCleanup ||
       !writeState(
         deps,
         runId,
@@ -1299,7 +1342,10 @@ export async function startManagedFleetSupervisor(
         "managed_supervisor_launch_attempted"
       )
     ) {
-      throw new Error("Fleet run changed before supervisor process launch");
+      throw new Error(
+        beforeLaunchCleanup?.error ??
+          "Fleet run changed before supervisor process launch"
+      );
     }
     await deps.launchSession(launch);
     backendCreated = true;
@@ -1323,6 +1369,29 @@ export async function startManagedFleetSupervisor(
       })
     ) {
       throw new Error("managed supervisor admission is no longer valid");
+    }
+    const beforeActivation = refreshState(deps.db, runId, requestId);
+    const beforeActivationCleanup = beforeActivation
+      ? fleetLifecycleCleanup(beforeActivation.run)
+      : null;
+    if (beforeActivation && beforeActivationCleanup) {
+      queueCleanup(
+        deps,
+        runId,
+        beforeActivation.state,
+        beforeActivationCleanup.finalState,
+        {
+          error: beforeActivationCleanup.error,
+          launchSettled: true,
+          backendCreated: true,
+        }
+      );
+    }
+    if (!beforeActivation || beforeActivationCleanup) {
+      throw new Error(
+        beforeActivationCleanup?.error ??
+          "Fleet run changed before supervisor activation"
+      );
     }
     const running: ManagedFleetSupervisorState = {
       ...state,
@@ -1372,6 +1441,15 @@ async function recoverStarting(
   run: FleetRunRow,
   state: ManagedFleetSupervisorState
 ): Promise<ManagedFleetSupervisorState> {
+  const lifecycleCleanup = fleetLifecycleCleanup(run);
+  if (lifecycleCleanup) {
+    queueCleanup(deps, run.id, state, lifecycleCleanup.finalState, {
+      error: lifecycleCleanup.error,
+      launchSettled: true,
+      backendCreated: state.backendCreated || state.launchAttempted,
+    });
+    return refreshState(deps.db, run.id, state.requestId)?.state ?? state;
+  }
   const durableError = validDurableState(run, state);
   const session = queries.getSession(deps.db).get(state.sessionId) as
     Session | undefined;
@@ -1512,18 +1590,17 @@ async function pollRunning(
     return;
   }
   const account = ownCostAccount(deps.db, run.id, state.requestId);
-  if (
-    run.archived_at ||
-    run.status === "canceled" ||
-    run.status === "completed" ||
-    run.desired_state === "canceled" ||
-    account?.interrupt_requested_at ||
-    (run.desired_state === "paused" && run.pause_mode === "pause-and-interrupt")
-  ) {
+  const lifecycleCleanup = fleetLifecycleCleanup(run);
+  if (lifecycleCleanup) {
+    queueCleanup(deps, run.id, state, lifecycleCleanup.finalState, {
+      error: lifecycleCleanup.error,
+      launchSettled: true,
+    });
+    return;
+  }
+  if (account?.interrupt_requested_at) {
     queueCleanup(deps, run.id, state, "canceled", {
-      error: account?.interrupt_requested_at
-        ? "managed supervisor was interrupted"
-        : "managed supervisor was canceled by Fleet lifecycle state",
+      error: "managed supervisor was interrupted",
       launchSettled: true,
     });
     return;
@@ -1680,6 +1757,7 @@ function claimManagedSupervisorRuns(
   limit: number
 ): Array<{ id: string }> {
   return transaction(db, () => {
+    let nextCursor = prepareFleetFairnessCursor(db, "supervisorPoll");
     const selected = db
       .prepare(
         `SELECT id FROM fleet_runs
@@ -1701,13 +1779,12 @@ function claimManagedSupervisorRuns(
       .all(limit) as Array<{ id: string }>;
     const advance = db.prepare(
       `UPDATE fleet_runs
-       SET managed_supervisor_poll_cursor = (
-         SELECT COALESCE(MAX(managed_supervisor_poll_cursor), 0) + 1
-         FROM fleet_runs
-       )
+       SET managed_supervisor_poll_cursor = ?
        WHERE id = ?`
     );
-    return selected.filter((run) => advance.run(run.id).changes === 1);
+    return selected.filter(
+      (run) => advance.run(++nextCursor, run.id).changes === 1
+    );
   });
 }
 

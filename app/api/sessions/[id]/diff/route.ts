@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionDiff } from "@/lib/session-diff";
+import { requireAdmin } from "@/lib/api-security";
 import {
   assertGenericSessionRouteAccess,
   genericSessionRouteFailure,
@@ -9,9 +10,12 @@ import {
 // GET /api/sessions/[id]/diff — the cumulative diff of what the agent changed in
 // this session (committed-since-base + uncommitted + untracked). Read-only.
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   try {
     const { id } = await params;
     const session = queries.getSession(getDb()).get(id) as Session | undefined;

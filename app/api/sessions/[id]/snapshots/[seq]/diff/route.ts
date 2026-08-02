@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSnapshotDiff } from "@/lib/snapshots";
+import { requireAdmin } from "@/lib/api-security";
 import {
   assertGenericSessionRouteAccess,
   genericSessionRouteFailure,
@@ -9,9 +10,12 @@ import {
 // GET /api/sessions/[id]/snapshots/[seq]/diff — the delta a snapshot introduced
 // (vs the previous snapshot), as a unified diff.
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string; seq: string }> }
 ) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   try {
     const { id, seq } = await params;
     const seqNum = parseInt(seq, 10);

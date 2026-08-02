@@ -604,6 +604,76 @@ describe("managed Fleet supervisor captured-output runtime", () => {
     });
   });
 
+  it("rejects a failed run before reserving or launching a supervisor", async () => {
+    db.prepare(`UPDATE fleet_runs SET status = 'failed' WHERE id = ?`).run(
+      RUN_ID
+    );
+
+    await expect(
+      startManagedFleetSupervisor(RUN_ID, {}, deps)
+    ).resolves.toEqual({
+      error: "Fleet run is not available for managed supervision",
+      statusCode: 409,
+    });
+    expect(launchSession).not.toHaveBeenCalled();
+    expect(
+      db.prepare(`SELECT COUNT(*) AS count FROM fleet_cost_accounts`).get()
+    ).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM sessions`).get()).toEqual({
+      count: 1,
+    });
+  });
+
+  it("stops and settles a supervisor when its Fleet run fails", async () => {
+    await start();
+    db.prepare(`UPDATE fleet_runs SET status = 'failed' WHERE id = ?`).run(
+      RUN_ID
+    );
+
+    await reconcileManagedFleetSupervisors(40, deps);
+
+    expect(state(db)).toMatchObject({
+      state: "failed",
+      finalState: "failed",
+      error: expect.stringMatching(/Fleet run failed/),
+    });
+    expect(stopSession).toHaveBeenCalledWith(SESSION_ID, "failed");
+    expect(
+      db
+        .prepare(
+          `SELECT terminal_at, reservation_released_at
+           FROM fleet_cost_accounts
+           WHERE owner_type = 'supervisor' AND owner_id = ?`
+        )
+        .get(REQUEST_ID)
+    ).toMatchObject({
+      terminal_at: expect.any(String),
+      reservation_released_at: expect.any(String),
+    });
+  });
+
+  it("never reactivates a starting supervisor after its Fleet run fails", async () => {
+    await start();
+    patchState(db, {
+      state: "starting",
+      launchSettled: false,
+      backendCreated: true,
+    });
+    capture = `${MANAGED_SUPERVISOR_READY}\n${MANAGED_SUPERVISOR_STARTED}\n`;
+    db.prepare(`UPDATE fleet_runs SET status = 'failed' WHERE id = ?`).run(
+      RUN_ID
+    );
+
+    await reconcileManagedFleetSupervisors(40, deps);
+
+    expect(state(db)).toMatchObject({
+      state: "failed",
+      finalState: "failed",
+      error: expect.stringMatching(/Fleet run failed/),
+    });
+    expect(stopSession).toHaveBeenCalledWith(SESSION_ID, "failed");
+  });
+
   it("keeps an incomplete frame pending while the exact broker is live", async () => {
     await start();
     capture = "STOA_FLEET_SUPERVISOR_V1_BEGIN\nOK\n0\n100";

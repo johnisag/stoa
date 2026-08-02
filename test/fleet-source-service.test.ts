@@ -47,11 +47,47 @@ vi.mock("@/lib/readiness-server", async (importOriginal) => {
 });
 
 import { queries } from "@/lib/db";
-import { createFleetRunFromSource } from "@/lib/fleet/source-service";
+import { createFleetRunFromSource as createFleetRunFromSourceService } from "@/lib/fleet/source-service";
 import { approveFleetRunPlan } from "@/lib/fleet/service";
 
 function db() {
   return state.db as InstanceType<typeof Database>;
+}
+
+function createFleetRunFromSource(
+  ...args: Parameters<typeof createFleetRunFromSourceService>
+) {
+  const [input, ...rest] = args;
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return createFleetRunFromSourceService(input, ...rest);
+  }
+  const record = input as Record<string, unknown>;
+  if (
+    record.options != null &&
+    (typeof record.options !== "object" || Array.isArray(record.options))
+  ) {
+    return createFleetRunFromSourceService(input, ...rest);
+  }
+  const options = (record.options ?? {}) as Record<string, unknown>;
+  const automationPolicy =
+    options.automationPolicy &&
+    typeof options.automationPolicy === "object" &&
+    !Array.isArray(options.automationPolicy)
+      ? (options.automationPolicy as Record<string, unknown>)
+      : {};
+  return createFleetRunFromSourceService(
+    {
+      ...record,
+      options: {
+        ...options,
+        automationPolicy: {
+          allowUnconfinedAgents: true,
+          ...automationPolicy,
+        },
+      },
+    },
+    ...rest
+  );
 }
 
 beforeAll(() => {
@@ -107,6 +143,30 @@ beforeEach(() => {
 });
 
 describe("createFleetRunFromSource", () => {
+  it("requires create-time consent for an imported manual executable plan", () => {
+    expect(
+      createFleetRunFromSourceService({
+        source: {
+          kind: "text",
+          name: "Manual imported plan",
+          text: "- Implement import [files: lib/import.ts]",
+          claimMode: "write",
+          repoId: "repo-source",
+          provider: "codex",
+          verifyCommand: "npm test",
+        },
+        options: { reviewPolicy: "manual" },
+      })
+    ).toEqual({
+      error:
+        "executable Fleet runs require explicit unconfined-agent consent until strong Fleet isolation is available",
+      status: 400,
+    });
+    expect(db().prepare("SELECT COUNT(*) AS n FROM fleet_runs").get()).toEqual({
+      n: 0,
+    });
+  });
+
   it("rejects unsafe and unsupported imported models atomically", () => {
     const unsafe = createFleetRunFromSource({
       source: {

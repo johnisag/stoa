@@ -35,7 +35,10 @@ import {
   reconcileFleetAutomation,
 } from "@/lib/fleet/automation";
 import { DEFAULT_FLEET_AUTOMATION_POLICY } from "@/lib/fleet/automation-policy";
-import { hashFleetExecutionContract } from "@/lib/fleet/hash";
+import {
+  hashFleetAutomationPolicy,
+  hashFleetExecutionContract,
+} from "@/lib/fleet/hash";
 import {
   createDraftFleetRun,
   ingestFleetRunPlan,
@@ -301,6 +304,7 @@ function createPlannedAutomationRun(automaticStart: boolean) {
       automaticPlanning: true,
       automaticPlanApproval: true,
       automaticStart,
+      allowUnconfinedAgents: true,
     },
   });
   if ("error" in created) throw new Error(created.error);
@@ -334,10 +338,35 @@ function createPlanningAutomationRun(allowUnconfinedAgents = true) {
     automationPolicy: {
       automaticPlanning: true,
       plannerTaskCap: 12,
-      allowUnconfinedAgents,
+      allowUnconfinedAgents: true,
     },
   });
   if ("error" in created) throw new Error(created.error);
+  if (!allowUnconfinedAgents) {
+    // Reproduce a pre-consent-gate persisted run so reconciliation's
+    // defense-in-depth remains covered without bypassing today's create API.
+    const unconsentedPolicy = {
+      ...created.run.run.automationPolicy,
+      allowUnconfinedAgents: false,
+    };
+    const policyHash = hashFleetAutomationPolicy(unconsentedPolicy);
+    db().transaction(() => {
+      db()
+        .prepare(
+          `UPDATE fleet_runs
+           SET automation_policy_json = ?, automation_policy_hash = ?
+           WHERE id = ?`
+        )
+        .run(JSON.stringify(unconsentedPolicy), policyHash, created.run.run.id);
+      db()
+        .prepare(
+          `UPDATE fleet_action_authorizations
+           SET policy_hash = ?
+           WHERE fleet_run_id = ?`
+        )
+        .run(policyHash, created.run.run.id);
+    })();
+  }
   return created;
 }
 
@@ -691,7 +720,7 @@ describe("reconcileFleetAutomation", () => {
     await reconcileFleetAutomation(40, common);
     const executionHash = insertExactCleanReviews(runId);
     await reconcileFleetAutomation(40, common);
-    expect(common.reconcilePlanReviews).not.toHaveBeenCalled();
+    expect(common.reconcilePlanReviews).toHaveBeenCalledTimes(1);
 
     let run = queries.getFleetRun(db()).get(runId) as FleetRunRow;
     expect(run.status).toBe("planned");
@@ -709,25 +738,8 @@ describe("reconcileFleetAutomation", () => {
       schedulerReady: () => true,
     });
     run = queries.getFleetRun(db()).get(runId) as FleetRunRow;
-    expect(run.status).toBe("planned");
-
-    const reconcileRun = vi.fn(async () => 0);
-    await reconcileFleetAutomation(40, {
-      ...common,
-      schedulerReady: () => true,
-      confinementAvailable: () => true,
-      reconcileRun,
-    });
-    await reconcileFleetAutomation(40, {
-      ...common,
-      schedulerReady: () => true,
-      confinementAvailable: () => true,
-      reconcileRun,
-    });
-
-    run = queries.getFleetRun(db()).get(runId) as FleetRunRow;
     expect(run.status).toBe("running");
-    expect(reconcileRun).toHaveBeenCalledTimes(1);
+    expect(common.reconcileRun).toHaveBeenCalledTimes(1);
     expect(
       db()
         .prepare(
@@ -735,5 +747,50 @@ describe("reconcileFleetAutomation", () => {
         )
         .get(runId)
     ).toEqual({ status: "consumed", execution_hash: executionHash });
+  });
+
+  it("resolves the target branch again immediately before automatic start", async () => {
+    const runId = createPlannedAutomationRun(true);
+    const driftedBaseSha = "b".repeat(40);
+    const resolveBaseSha = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce(BASE_SHA)
+      .mockResolvedValueOnce(BASE_SHA)
+      .mockResolvedValueOnce(driftedBaseSha);
+    const common = {
+      db: db(),
+      resolveBaseSha,
+      schedulerReady: () => true,
+      confinementAvailable: () => true,
+      reconcileRun: vi.fn(async () => 0),
+      reconcilePlanReviews: vi.fn(async () => undefined),
+    };
+
+    await reconcileFleetAutomation(40, common);
+    insertExactCleanReviews(runId);
+    await reconcileFleetAutomation(40, common);
+
+    expect(resolveBaseSha).toHaveBeenCalledTimes(3);
+    expect(common.reconcileRun).not.toHaveBeenCalled();
+    expect(
+      db()
+        .prepare(
+          `SELECT status, approval_state, automation_last_error
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      status: "planned",
+      approval_state: "approved",
+      automation_last_error: "base commit changed",
+    });
+    expect(
+      db()
+        .prepare(
+          `SELECT status FROM fleet_action_authorizations
+           WHERE fleet_run_id = ? AND action = 'start'`
+        )
+        .get(runId)
+    ).toEqual({ status: "authorized" });
   });
 });

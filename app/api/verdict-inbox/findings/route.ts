@@ -3,14 +3,19 @@ import { getDb, queries, type Session } from "@/lib/db";
 import { expandHome } from "@/lib/platform";
 import { readReviewerFindings } from "@/lib/dispatch/reviewer";
 import type { IssueDispatch } from "@/lib/dispatch/types";
+import { requireAdmin } from "@/lib/api-security";
 
 /**
  * GET /api/verdict-inbox/findings?type=&id=&session=&pr= — the per-lens critic
- * findings (verdict + prose) for one inbox item, read live from the PR. The
- * worktree (cwd for gh) is resolved server-side from the dispatch/session row;
+ * findings (verdict + prose) for one inbox item, read live from the PR.
+ * Admin-only because reviewer prose can quote source. The worktree (cwd for gh)
+ * is resolved server-side from the dispatch/session row;
  * the caller passes the PR number it already has. Empty on any failure.
  */
 export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   const sp = request.nextUrl.searchParams;
   const type = sp.get("type");
   const id = sp.get("id");

@@ -199,15 +199,23 @@ export function buildFleetApprovalPreview(
 ): FleetApprovalPreview {
   return {
     requiredGates: [
-      "operator phase-start authorization",
-      "full local verification gate",
-      "four-agent review with adversarial lane",
-      "green CI on the final PR head",
-      "authorized head-SHA-pinned merge",
+      "exact plan, execution, policy, and base-SHA binding",
+      "manual approval or four independent clean plan critics",
+      "unattended-agent consent or strong confinement",
+      "exact task verification and four exact-head task reviews",
+      "final integration verification and exact landing authorization",
     ],
     blockedActions: canApproveExecutableWork
-      ? ["merge or cleanup"]
-      : ["worker spawning", "resume or tick execution", "merge or cleanup"],
+      ? [
+          "landing until final verification and authorization",
+          "cleanup until terminal/archive and exact preview",
+        ]
+      : [
+          "worker launch until exact plan approval",
+          "resume or tick execution until exact plan approval",
+          "landing until final verification and authorization",
+          "cleanup until terminal/archive and exact preview",
+        ],
     canApproveExecutableWork,
   };
 }

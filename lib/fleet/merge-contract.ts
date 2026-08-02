@@ -6,6 +6,7 @@ export interface FleetPrStatus {
   number: number;
   url: string;
   state: string | null;
+  baseRefName: string | null;
   baseSha: string | null;
   headSha: string | null;
   mergeSha: string | null;
@@ -81,6 +82,10 @@ export function parseFleetPrStatus(value: string): FleetPrStatus | null {
       number,
       url: parsedUrl.toString(),
       state: typeof parsed.state === "string" ? parsed.state : null,
+      baseRefName:
+        typeof parsed.baseRefName === "string" && parsed.baseRefName.length > 0
+          ? parsed.baseRefName
+          : null,
       baseSha: typeof parsed.baseRefOid === "string" ? parsed.baseRefOid : null,
       headSha: typeof parsed.headRefOid === "string" ? parsed.headRefOid : null,
       mergeSha: typeof mergeCommit === "string" ? mergeCommit : null,
@@ -103,7 +108,7 @@ export function buildFleetPrViewArgs(
     "--repo",
     repoSlug,
     "--json",
-    "number,url,state,baseRefOid,headRefOid,mergeCommit,mergeable,statusCheckRollup",
+    "number,url,state,baseRefName,baseRefOid,headRefOid,mergeCommit,mergeable,statusCheckRollup",
   ];
 }
 

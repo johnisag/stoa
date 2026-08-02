@@ -7,6 +7,8 @@ import { computeSessionCosts } from "@/lib/session-cost";
 import { persistCostSamples } from "@/lib/cost-history";
 import type { DispatchRepo } from "@/lib/dispatch/types";
 import type { Project } from "@/lib/db/types";
+import { runGit } from "@/lib/git";
+import { getDefaultBranch } from "@/lib/git-status";
 import {
   availableFleetSlots,
   FLEET_MAX_TOTAL_WORKERS,
@@ -34,7 +36,11 @@ import {
 } from "./spawn";
 import { executeFleetWorker } from "./executor";
 import { fleetProviderRetryNotBefore } from "./backoff";
-import { hashFleetExecutionContract, hashFleetTaskRows } from "./hash";
+import {
+  hashFleetAutomationPolicy,
+  hashFleetExecutionContract,
+  hashFleetTaskRows,
+} from "./hash";
 import { stopFleetSession } from "./stop";
 import { parseFleetAutomationPolicy } from "./automation-policy";
 import { insertFleetArtifact } from "./durable-write";
@@ -74,6 +80,8 @@ import {
   isFleetSchedulerReady,
   setFleetSchedulerReady,
 } from "./recovery-gate";
+import { prepareFleetFairnessCursor } from "./fairness-cursor";
+import { fleetUnattendedAgentLaunchAllowed } from "./confinement";
 
 export { isFleetSchedulerReady } from "./recovery-gate";
 
@@ -97,6 +105,8 @@ const AUXILIARY_COST_OWNER_TYPES = new Set<FleetCostOwnerType>([
 const LEASE_MS = 2 * 60 * 1000;
 const FLEET_COST_SAMPLE_INTERVAL_MS = 30_000;
 const FLEET_COST_SAMPLE_MAX_PER_TICK = 8;
+const FLEET_RUN_RECONCILE_MAX_PER_TICK = 40;
+const FLEET_RUN_RECONCILE_CONCURRENCY = 4;
 const FULL_GIT_SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 const runLocks = new Set<string>();
 const launchingWorkers = new Set<string>();
@@ -112,6 +122,7 @@ export interface FleetSchedulerDeps {
   ) => Promise<void>;
   sendMessage: (sessionId: string, message: string) => Promise<void>;
   sampleCosts: (sessions: Session[], nowMs: number) => Promise<number>;
+  resolveBaseSha: (db: Database.Database, run: FleetRunRow) => Promise<string>;
   prepareAttempt: typeof prepareFleetWorkerAttempt;
   collectReport: typeof collectFleetWorkerReport;
 }
@@ -162,6 +173,7 @@ function schedulerDeps(
         const costs = await computeSessionCosts(sessions);
         return persistCostSamples(db, sessions, costs, nowMs);
       }),
+    resolveBaseSha: overrides.resolveBaseSha ?? resolveFleetRunCurrentBaseSha,
     prepareAttempt: overrides.prepareAttempt ?? prepareFleetWorkerAttempt,
     collectReport: overrides.collectReport ?? collectFleetWorkerReport,
   };
@@ -183,10 +195,30 @@ function activePlaceholders(): string {
   return ACTIVE_WORKER_STATUSES.map(() => "?").join(", ");
 }
 
-function runAllowsFleetExecution(run: FleetRunRow): boolean {
+function runWantsFleetExecution(run: FleetRunRow): boolean {
   return (
     ACTIVE_RUN_PHASE_STATUSES.includes(run.status) &&
     run.desired_state === "running"
+  );
+}
+
+function fleetExecutionConsentError(run: FleetRunRow): string | null {
+  const parsedPolicy = parseFleetAutomationPolicy(run.automation_policy_json);
+  if (
+    !parsedPolicy.valid ||
+    run.automation_policy_hash !==
+      hashFleetAutomationPolicy(parsedPolicy.policy)
+  ) {
+    return "Fleet automation policy is invalid";
+  }
+  return fleetUnattendedAgentLaunchAllowed(parsedPolicy.policy)
+    ? null
+    : "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before execution";
+}
+
+function runAllowsFleetExecution(run: FleetRunRow): boolean {
+  return (
+    runWantsFleetExecution(run) && fleetExecutionConsentError(run) === null
   );
 }
 
@@ -592,6 +624,100 @@ function resolveBaseBranch(
     if (repo?.base_branch) return repo.base_branch;
   }
   return "main";
+}
+
+async function resolveFleetRunCurrentBaseSha(
+  db: Database.Database,
+  run: FleetRunRow
+): Promise<string> {
+  let workingDirectory: string | null = null;
+  let baseBranch: string | null = null;
+  if (run.repo_id) {
+    const repo = queries.getDispatchRepo(db).get(run.repo_id) as
+      DispatchRepo | undefined;
+    workingDirectory = repo?.repo_path ?? null;
+    baseBranch = repo?.base_branch ?? "main";
+  } else if (run.project_id) {
+    const project = queries.getProject(db).get(run.project_id) as
+      Project | undefined;
+    workingDirectory = project?.working_directory ?? null;
+    baseBranch = workingDirectory ? getDefaultBranch(workingDirectory) : null;
+  }
+  if (!workingDirectory || !baseBranch) {
+    throw new Error("Fleet execution requires a repository or project target");
+  }
+  const result = await runGit(
+    workingDirectory,
+    ["rev-parse", `${baseBranch}^{commit}`],
+    5000
+  );
+  const sha = result.stdout.trim();
+  if (!FULL_GIT_SHA.test(sha)) {
+    throw new Error("failed to resolve the current Fleet base commit");
+  }
+  return sha;
+}
+
+function blockFleetRunForBaseDrift(
+  deps: FleetSchedulerDeps,
+  run: FleetRunRow,
+  currentBaseSha: string | null,
+  error: string
+): void {
+  transaction(deps.db, () => {
+    const now = deps.now().toISOString();
+    const changed = deps.db
+      .prepare(
+        `UPDATE fleet_runs
+         SET status = 'paused', approval_state = 'blocked',
+             pause_mode = 'pause-new', pause_reason = 'approval_changed',
+             automation_last_error = ?, updated_at = ?
+         WHERE id = ? AND automation_base_sha IS ?
+           AND status IN ('running', 'reviewing', 'merging')
+           AND desired_state = 'running'`
+      )
+      .run(error, now, run.id, run.automation_base_sha);
+    if (changed.changes !== 1) return;
+    queries.createFleetEvent(deps.db).run(
+      run.id,
+      "fleet_base_drift_detected",
+      "scheduler",
+      JSON.stringify({
+        expectedBaseSha: run.automation_base_sha,
+        currentBaseSha,
+        error,
+      })
+    );
+  });
+}
+
+function blockFleetRunForExecutionConsent(
+  deps: FleetSchedulerDeps,
+  run: FleetRunRow,
+  error: string
+): void {
+  transaction(deps.db, () => {
+    const now = deps.now().toISOString();
+    const changed = deps.db
+      .prepare(
+        `UPDATE fleet_runs
+         SET status = 'paused', approval_state = 'blocked',
+             pause_mode = 'pause-new', pause_reason = 'approval_changed',
+             automation_last_error = ?, updated_at = ?
+         WHERE id = ? AND status IN ('running', 'reviewing', 'merging')
+           AND desired_state = 'running' AND approval_state = 'approved'`
+      )
+      .run(error, now, run.id);
+    if (changed.changes !== 1) return;
+    queries
+      .createFleetEvent(deps.db)
+      .run(
+        run.id,
+        "fleet_unattended_consent_required",
+        "scheduler",
+        JSON.stringify({ error })
+      );
+  });
 }
 
 interface LeasedTask {
@@ -2729,6 +2855,7 @@ async function reconcileFleetCostTelemetryWithDeps(
   // turning the scheduler cadence into a tight cost-reader retry loop.
   fleetCostSampleAt.set(deps.db, now.getTime());
   const accounts = transaction(deps.db, () => {
+    let nextCursor = prepareFleetFairnessCursor(deps.db, "costSample");
     const selected = deps.db
       .prepare(
         `SELECT a.id, a.fleet_run_id, a.owner_type, a.owner_id, a.session_id
@@ -2747,13 +2874,12 @@ async function reconcileFleetCostTelemetryWithDeps(
     }>;
     const advance = deps.db.prepare(
       `UPDATE fleet_cost_accounts
-       SET sample_attempt_cursor = (
-         SELECT COALESCE(MAX(sample_attempt_cursor), 0) + 1
-         FROM fleet_cost_accounts
-       )
+       SET sample_attempt_cursor = ?
        WHERE id = ? AND terminal_at IS NULL`
     );
-    return selected.filter((account) => advance.run(account.id).changes === 1);
+    return selected.filter(
+      (account) => advance.run(++nextCursor, account.id).changes === 1
+    );
   });
   if (accounts.length === 0) return 0;
   const getSession = queries.getSession(deps.db);
@@ -2975,6 +3101,40 @@ export async function reconcileFleetRun(
     enforceFleetBudget(deps, runId);
     await processFleetInterrupts(deps, runId);
     await processFleetAuxiliaryInterrupts(deps, runId);
+    const launchRun = queries.getFleetRun(deps.db).get(runId) as
+      FleetRunRow | undefined;
+    if (
+      launchRun &&
+      runWantsFleetExecution(launchRun) &&
+      launchRun.approval_state === "approved"
+    ) {
+      const consentError = fleetExecutionConsentError(launchRun);
+      if (consentError) {
+        blockFleetRunForExecutionConsent(deps, launchRun, consentError);
+        return 0;
+      }
+      let currentBaseSha: string;
+      try {
+        currentBaseSha = await deps.resolveBaseSha(deps.db, launchRun);
+      } catch (error) {
+        blockFleetRunForBaseDrift(
+          deps,
+          launchRun,
+          null,
+          error instanceof Error ? error.message : String(error)
+        );
+        return 0;
+      }
+      if (currentBaseSha !== launchRun.automation_base_sha) {
+        blockFleetRunForBaseDrift(
+          deps,
+          launchRun,
+          currentBaseSha,
+          "Fleet base commit changed before worker admission"
+        );
+        return 0;
+      }
+    }
     const leases: LeasedTask[] = [];
     while (true) {
       const lease = leaseOne(deps, runId);
@@ -2986,6 +3146,46 @@ export async function reconcileFleetRun(
   } finally {
     runLocks.delete(runId);
   }
+}
+
+function claimFleetRunsForReconciliation(
+  db: Database.Database
+): Array<{ id: string }> {
+  return transaction(db, () => {
+    let nextCursor = prepareFleetFairnessCursor(db, "schedulerPoll");
+    const selected = db
+      .prepare(
+        `SELECT id FROM fleet_runs
+         WHERE (
+           status IN ('running', 'reviewing', 'merging')
+             AND desired_state = 'running' AND recovery_required = 0
+         ) OR (
+           status = 'paused' AND recovery_required = 0 AND (
+             EXISTS (
+               SELECT 1 FROM fleet_workers
+               WHERE fleet_workers.fleet_run_id = fleet_runs.id
+                 AND fleet_workers.status IN ('running', 'waiting_for_operator')
+             ) OR EXISTS (
+               SELECT 1 FROM fleet_cost_accounts account
+               WHERE account.fleet_run_id = fleet_runs.id
+                 AND account.owner_type <> 'worker'
+                 AND account.terminal_at IS NULL
+                 AND account.reservation_released_at IS NULL
+                 AND account.interrupt_requested_at IS NOT NULL
+             )
+           )
+         )
+         ORDER BY scheduler_poll_cursor ASC, id ASC
+         LIMIT ?`
+      )
+      .all(FLEET_RUN_RECONCILE_MAX_PER_TICK) as Array<{ id: string }>;
+    const advance = db.prepare(
+      `UPDATE fleet_runs SET scheduler_poll_cursor = ? WHERE id = ?`
+    );
+    return selected.filter(
+      (run) => advance.run(++nextCursor, run.id).changes === 1
+    );
+  });
 }
 
 export async function reconcileFleetRuns(
@@ -3008,34 +3208,21 @@ export async function reconcileFleetRuns(
   if (Object.keys(overrides).length === 0) {
     await reconcileFleetRenderedStatuses({ db: deps.db, now: deps.now });
   }
-  const runs = deps.db
-    .prepare(
-      `SELECT id FROM fleet_runs
-       WHERE (
-         status IN ('running', 'reviewing', 'merging')
-           AND desired_state = 'running' AND recovery_required = 0
-       ) OR (
-         status = 'paused' AND recovery_required = 0 AND (
-           EXISTS (
-             SELECT 1 FROM fleet_workers
-             WHERE fleet_workers.fleet_run_id = fleet_runs.id
-               AND fleet_workers.status IN ('running', 'waiting_for_operator')
-           ) OR EXISTS (
-             SELECT 1 FROM fleet_cost_accounts account
-             WHERE account.fleet_run_id = fleet_runs.id
-               AND account.owner_type <> 'worker'
-               AND account.terminal_at IS NULL
-               AND account.reservation_released_at IS NULL
-               AND account.interrupt_requested_at IS NOT NULL
-           )
-         )
-       )`
-    )
-    .all() as { id: string }[];
-  const results = await Promise.all(
-    runs.map((run) => reconcileFleetRun(run.id, deps))
-  );
-  return results.reduce((total, count) => total + count, 0);
+  const runs = claimFleetRunsForReconciliation(deps.db);
+  let total = 0;
+  for (
+    let offset = 0;
+    offset < runs.length;
+    offset += FLEET_RUN_RECONCILE_CONCURRENCY
+  ) {
+    const results = await Promise.all(
+      runs
+        .slice(offset, offset + FLEET_RUN_RECONCILE_CONCURRENCY)
+        .map((run) => reconcileFleetRun(run.id, deps))
+    );
+    total += results.reduce((sum, count) => sum + count, 0);
+  }
+  return total;
 }
 
 export async function recoverFleetRuns(

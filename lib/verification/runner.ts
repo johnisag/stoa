@@ -22,6 +22,84 @@ export const VERIFY_MAX_OUTPUT_BUFFER = 64 * 1024 * 1024;
 /** Maximum failing output persisted in a verification result. */
 export const VERIFY_OUTPUT_TAIL_MAX = 8000;
 
+const VERIFICATION_ENV_ALLOWLIST = new Set(
+  [
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "COMMONPROGRAMFILES",
+    "COMMONPROGRAMFILES(X86)",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "TERM",
+    "COLORTERM",
+    "TZ",
+    "NODE_ENV",
+    "JAVA_HOME",
+    "JDK_HOME",
+    "GOROOT",
+    "GOPATH",
+    "GOBIN",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "DOTNET_ROOT",
+    "DOTNET_CLI_HOME",
+    "VIRTUAL_ENV",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_IDENTIFIER",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+  ].map((name) => name.toUpperCase())
+);
+
+/**
+ * Verification commands are repository-controlled code. Give them only the
+ * OS/toolchain environment needed to execute; never inherit Stoa authority,
+ * provider credentials, package-registry tokens, or cloud credentials.
+ */
+export function buildVerificationEnvironment(
+  source: Readonly<Record<string, string | undefined>> = process.env
+): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    CI: "1",
+    NODE_ENV:
+      source.NODE_ENV === "development" || source.NODE_ENV === "production"
+        ? source.NODE_ENV
+        : "test",
+  };
+  for (const [name, value] of Object.entries(source)) {
+    const normalized = name.toUpperCase();
+    if (
+      normalized !== "CI" &&
+      value !== undefined &&
+      VERIFICATION_ENV_ALLOWLIST.has(normalized)
+    ) {
+      environment[name] = value;
+    }
+  }
+  return environment;
+}
+
 export type VerifyStatus = "running" | "pass" | "fail" | "error";
 
 // `&&` is consumed as Stoa's delimiter before tokenization. The remaining shell
@@ -382,7 +460,7 @@ async function runVerifyStep(
     try {
       child = spawn(file, args, {
         cwd,
-        env: { ...process.env, CI: "1" },
+        env: buildVerificationEnvironment(),
         detached: !onWindows,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],

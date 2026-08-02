@@ -360,6 +360,7 @@ describe("Fleet report scheduler integration", () => {
       collectReport,
       sessionExists: async () => true,
       stopSession: async () => {},
+      resolveBaseSha: async () => BASE,
     };
 
     await reconcileFleetRun("run-1", deps);

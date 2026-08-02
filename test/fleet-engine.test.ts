@@ -271,15 +271,21 @@ describe("normalizeFleetRunDraft", () => {
 });
 
 describe("buildFleetApprovalPreview", () => {
-  it("is a preview only and cannot approve executable work in phase 2", () => {
+  it("describes the current exact execution and landing gates", () => {
     const preview = buildFleetApprovalPreview();
 
     expect(preview.canApproveExecutableWork).toBe(false);
     expect(preview.requiredGates).toContain(
-      "four-agent review with adversarial lane"
+      "exact plan, execution, policy, and base-SHA binding"
+    );
+    expect(preview.requiredGates).toContain(
+      "manual approval or four independent clean plan critics"
     );
     expect(preview.blockedActions).toEqual(
-      expect.arrayContaining(["worker spawning"])
+      expect.arrayContaining(["worker launch until exact plan approval"])
+    );
+    expect(preview.requiredGates).not.toContain(
+      "operator phase-start authorization"
     );
   });
 });

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCommitDetail } from "@/lib/git-history";
 import {
   getAllowedPathRoots,
+  requireAdmin,
   resolveRealSandboxedPath,
 } from "@/lib/api-security";
 
@@ -10,6 +11,8 @@ interface RouteParams {
 }
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
   try {
     const { hash } = await params;
     const searchParams = request.nextUrl.searchParams;

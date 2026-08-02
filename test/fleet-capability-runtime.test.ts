@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST as useCapabilityRoute } from "@/app/api/fleet/capabilities/action/route";
 import { POST as issueCapabilityRoute } from "@/app/api/fleet/capabilities/route";
 import { createSchema } from "@/lib/db/schema";
+import { DEFAULT_FLEET_AUTOMATION_POLICY } from "@/lib/fleet/automation-policy";
 import {
+  hashFleetAutomationPolicy,
   hashFleetExecutionContract,
   hashFleetTaskRows,
 } from "@/lib/fleet/hash";
@@ -203,6 +205,20 @@ describe("durable Fleet capabilities", () => {
   it("fails closed when a capability starts an approved run without an exact base", async () => {
     const db = database();
     seedExactMergeRun(db);
+    const automationPolicy = {
+      ...DEFAULT_FLEET_AUTOMATION_POLICY,
+      allowUnconfinedAgents: true,
+    };
+    db.prepare(
+      `UPDATE fleet_runs
+       SET automation_policy_json = ?, automation_policy_hash = ?
+       WHERE id = ?`
+    ).run(
+      JSON.stringify(automationPolicy),
+      hashFleetAutomationPolicy(automationPolicy),
+      MERGE_RUN_ID
+    );
+    approveCurrentMergeContract(db, false);
     db.prepare(
       `UPDATE fleet_runs SET status = 'planned', automation_base_sha = NULL
        WHERE id = ?`

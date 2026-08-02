@@ -870,6 +870,7 @@ describe("FleetManagementView status drilldowns", () => {
       screen.getByText(/Four independent clean plan critics must finish/)
         .textContent
     ).toContain("2/4 clean lenses, 2 independent reviewers");
+    expect(screen.queryByText("Reviewed plan requires approval")).toBeNull();
 
     first.unmount();
     state.planReviewComplete = true;
@@ -879,6 +880,22 @@ describe("FleetManagementView status drilldowns", () => {
       (screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement)
         .disabled
     ).toBe(false);
+    expect(screen.getByText("Reviewed plan requires approval")).toBeTruthy();
+  });
+
+  it("keeps healthy automatic plan approval out of operator attention", async () => {
+    state.detail!.run.status = "draft";
+    state.detail!.run.approvalState = "needs_approval";
+    state.detail!.run.reviewPolicy = "four_agent";
+    state.detail!.run.automationPolicy.automaticPlanApproval = true;
+    state.detail!.run.automationLastError = null;
+    state.detail!.run.approvedPlanHash = null;
+    state.detail!.artifacts = [];
+    state.planReviewComplete = true;
+
+    render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+    expect(screen.queryByText("Reviewed plan requires approval")).toBeNull();
   });
 
   it("renders structured task risk severity and mitigation beside acceptance", async () => {
@@ -1845,6 +1862,48 @@ describe("FleetManagementView status drilldowns", () => {
     );
   });
 
+  it("retains consent when switching a target-bound run to manual planning", async () => {
+    render(<FleetManagementView />);
+    const consent = await screen.findByLabelText(
+      "Allow unconfined unattended agents"
+    );
+    fireEvent.click(consent);
+    fireEvent.click(screen.getByLabelText("Plan automatically"));
+    fireEvent.click(screen.getByLabelText("Repository"));
+    fireEvent.click(await screen.findByText("acme/stoa"));
+
+    expect(
+      (
+        screen.getByLabelText(
+          "Allow unconfined unattended agents"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+  });
+
+  it("requires consent for a target-bound imported manual plan", async () => {
+    render(<FleetManagementView />);
+    fireEvent.click(await screen.findByLabelText("Fleet input mode"));
+    fireEvent.click(await screen.findByText(/Existing Markdown task plan/));
+    fireEvent.click(screen.getByLabelText("Review policy"));
+    fireEvent.click(
+      screen.getByRole("option", {
+        name: "Manual plan approval + four task reviews",
+      })
+    );
+    fireEvent.click(screen.getByLabelText("Repository"));
+    fireEvent.click(await screen.findByText("acme/stoa"));
+
+    expect(
+      screen.getByLabelText("Allow unconfined unattended agents")
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Manual approval does not make Fleet workers interactive/
+      )
+    ).toBeTruthy();
+  });
+
   it("explains imported-plan critic consent before either approval mode", async () => {
     render(<FleetManagementView />);
     fireEvent.click(await screen.findByLabelText("Fleet input mode"));
@@ -1868,6 +1927,61 @@ describe("FleetManagementView status drilldowns", () => {
         ) as HTMLInputElement
       ).checked
     ).toBe(false);
+  });
+
+  it("does not erase exact approval-control edits on polling refreshes", async () => {
+    state.approvalPreview!.run.pauseReason = "budget_exhausted";
+    const view = render(<FleetManagementView />);
+    await screen.findByRole("heading", { name: "Autonomous delivery" });
+    const concurrency = screen.getByLabelText(
+      "Approved Fleet concurrency"
+    ) as HTMLInputElement;
+    const usd = screen.getByLabelText(
+      "Approved Fleet USD budget"
+    ) as HTMLInputElement;
+    const tokens = screen.getByLabelText(
+      "Approved Fleet token budget"
+    ) as HTMLInputElement;
+    const hardStop = screen.getByLabelText(
+      "Override exact budget hard stop"
+    ) as HTMLInputElement;
+    fireEvent.change(concurrency, { target: { value: "9" } });
+    fireEvent.change(usd, { target: { value: "20" } });
+    fireEvent.change(tokens, { target: { value: "200000" } });
+    fireEvent.click(hardStop);
+
+    state.approvalPreview = {
+      ...state.approvalPreview!,
+      bindings: {
+        ...state.approvalPreview!.bindings,
+        runUpdatedAt: "2026-08-01T10:01:00.000Z",
+      },
+    };
+    view.rerender(<FleetManagementView />);
+    expect(concurrency.value).toBe("9");
+    expect(usd.value).toBe("20");
+    expect(tokens.value).toBe("200000");
+    expect(hardStop.checked).toBe(true);
+
+    state.approvalPreview = {
+      ...state.approvalPreview!,
+      run: { ...state.approvalPreview!.run, maxConcurrency: 7, budgetUsd: 30 },
+    };
+    view.rerender(<FleetManagementView />);
+    await waitFor(() => expect(concurrency.value).toBe("7"));
+    expect(usd.value).toBe("30");
+  });
+
+  it("explains that active planner sessions are intentionally hidden", async () => {
+    state.detail!.run.plannerState = "running";
+    state.detail!.run.plannerSessionId = "planner-internal-session";
+    state.detail!.run.plannerProvider = "codex";
+
+    render(<FleetManagementView />);
+    expect(
+      await screen.findByText(/intentionally hidden from Sessions/)
+    ).toBeTruthy();
+    expect(screen.queryByText(/Open it from Sessions/)).toBeNull();
   });
 
   it("shows the exact configured base branch for a selected repository", async () => {

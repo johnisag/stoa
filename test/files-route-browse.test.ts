@@ -17,6 +17,7 @@ const resolveSandboxedPath = vi.hoisted(() => vi.fn());
 const resolveRealSandboxedPath = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api-security", () => ({
   getAllowedPathRoots: () => ["/allowed"],
+  requireAdmin: () => null,
   resolveSandboxedPath,
   resolveRealSandboxedPath,
 }));

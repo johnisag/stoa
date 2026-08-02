@@ -370,7 +370,8 @@ function blockerArtifactNeedsAttention(
 
 function buildFleetAttention(
   detail: FleetRunDetailDto,
-  approvalPreview?: FleetApprovalControlPreviewDto | null
+  approvalPreview?: FleetApprovalControlPreviewDto | null,
+  planApprovalNeedsOperator = false
 ): FleetAttentionItem[] {
   const items: FleetAttentionItem[] = [];
   const push = (
@@ -382,8 +383,8 @@ function buildFleetAttention(
   const specializedTasks = new Set<string>();
 
   if (
-    detail.run.approvalState === "needs_approval" ||
-    detail.run.approvalState === "blocked"
+    detail.run.approvalState === "blocked" ||
+    (detail.run.approvalState === "needs_approval" && planApprovalNeedsOperator)
   ) {
     push(
       "approval",
@@ -933,7 +934,7 @@ function ApprovalPreview({
         </div>
         <div>
           <div className="text-muted-foreground mb-1 text-[10px] font-medium uppercase">
-            Blocked actions
+            Further gated actions
           </div>
           <div className="flex flex-wrap gap-1.5">
             {preview.blockedActions.map((action) => (
@@ -1069,6 +1070,15 @@ function FleetApprovalControls({
   const [usdBudget, setUsdBudget] = useState("");
   const [tokenBudget, setTokenBudget] = useState("");
   const [overrideHardStop, setOverrideHardStop] = useState(false);
+  const approvalFormAuthorityKey = preview
+    ? JSON.stringify([
+        runId,
+        preview.run.maxConcurrency,
+        preview.run.budgetUsd,
+        preview.run.budgetTokens,
+        preview.run.pauseReason,
+      ])
+    : null;
 
   useEffect(() => {
     if (!preview) return;
@@ -1080,7 +1090,7 @@ function FleetApprovalControls({
       preview.run.budgetTokens == null ? "" : String(preview.run.budgetTokens)
     );
     setOverrideHardStop(false);
-  }, [preview?.bindings.runUpdatedAt, preview]);
+  }, [approvalFormAuthorityKey]);
 
   if (previewQuery.isLoading) {
     return (
@@ -2101,18 +2111,23 @@ function RunDetail({
   const planReviewGate = supervisor.data?.gates?.planReview;
   const planReviewsComplete =
     detail.run.reviewPolicy === "manual" || planReviewGate?.complete === true;
-  const canApprove =
+  const currentPlanHasBlocker = detail.artifacts.some(
+    (artifact) =>
+      artifact.severity === "blocker" &&
+      (artifact.planHash === detail.run.planHash || artifact.planHash == null)
+  );
+  const planApprovalActionable =
     !plannerActive &&
     planReviewsComplete &&
     detail.run.approvalState === "needs_approval" &&
     !!detail.run.planHash &&
     !!reviewedPlanText &&
-    planText === reviewedPlanText &&
-    !detail.artifacts.some(
-      (artifact) =>
-        artifact.severity === "blocker" &&
-        (artifact.planHash === detail.run.planHash || artifact.planHash == null)
-    );
+    !currentPlanHasBlocker;
+  const planApprovalNeedsOperator =
+    planApprovalActionable &&
+    (!detail.run.automationPolicy.automaticPlanApproval ||
+      Boolean(detail.run.automationLastError));
+  const canApprove = planApprovalActionable && planText === reviewedPlanText;
   const canReplacePlan =
     detail.run.status === "draft" &&
     (detail.run.approvalState === "draft" ||
@@ -2240,8 +2255,13 @@ function RunDetail({
     authorizeLanding.reset();
   };
   const attention = useMemo(
-    () => buildFleetAttention(detail, attentionApprovalPreview.data),
-    [detail, attentionApprovalPreview.data]
+    () =>
+      buildFleetAttention(
+        detail,
+        attentionApprovalPreview.data,
+        planApprovalNeedsOperator
+      ),
+    [detail, attentionApprovalPreview.data, planApprovalNeedsOperator]
   );
   const attentionWorkers = detail.workers.filter(
     (worker) => workerAttentionPriority(worker) < 99
@@ -2355,8 +2375,9 @@ function RunDetail({
           </div>
           {detail.run.plannerSessionId && plannerActive && (
             <div className="text-muted-foreground mt-1 text-[10px] break-all">
-              Session {detail.run.plannerSessionId}. Open it from Sessions if
-              the provider requests permission to write PLAN.md.
+              Internal session {detail.run.plannerSessionId} is intentionally
+              hidden from Sessions. Fleet captures its result automatically;
+              cancel the planner here if it stalls.
             </div>
           )}
         </div>
@@ -3989,7 +4010,9 @@ export function FleetManagementView({
 
   const automaticPlanNeedsTarget =
     autoPlan && repoId === NONE && projectId === NONE;
+  const executableTargetSelected = repoId !== NONE || projectId !== NONE;
   const unattendedAgentLaunchEnabled =
+    executableTargetSelected ||
     reviewPolicy !== "manual" ||
     (autoPlan && inputMode === "epic") ||
     autoApprove ||
@@ -4386,7 +4409,6 @@ export function FleetManagementView({
                       setAutoStart(false);
                       setAutoFix(false);
                       setAutoMerge(false);
-                      setAllowUnconfinedAgents(false);
                     }
                   }}
                 />
@@ -4519,11 +4541,12 @@ export function FleetManagementView({
               {unattendedAgentLaunchEnabled && (
                 <div className="grid gap-2 rounded-md border border-amber-500/50 bg-amber-500/5 px-3 py-2 text-xs">
                   <div className="text-amber-700 dark:text-amber-300">
-                    Automatic planning, four-agent plan review, and automatic
-                    start can launch unattended agents that execute code or
-                    modify the selected repository. When strong isolation is
-                    unavailable, those launches remain paused unless you grant
-                    the consent below.
+                    Every repository- or project-bound Fleet run eventually
+                    launches internal unattended agents, including workflows
+                    with manual plan approval. Automatic planning and four-agent
+                    review can launch them before approval. When strong
+                    isolation is unavailable, those launches remain paused
+                    unless you grant the consent below.
                   </div>
                   {inputMode === "plan" && reviewPolicy !== "manual" && (
                     <div className="text-muted-foreground">
@@ -4685,8 +4708,9 @@ export function FleetManagementView({
               {unattendedConsentMissing && (
                 <div className="text-xs text-amber-700 dark:text-amber-300">
                   Grant unattended-agent consent above before creating an
-                  automatic run. Disable automatic planning and select the
-                  manual review policy to create without unattended agents.
+                  executable Fleet run. Manual approval does not make Fleet
+                  workers interactive; only an unbound goal draft can be saved
+                  without this consent.
                 </div>
               )}
               {!budgetsValid && (

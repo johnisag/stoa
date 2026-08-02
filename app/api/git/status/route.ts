@@ -9,6 +9,7 @@ import {
 } from "@/lib/git-status";
 import {
   getAllowedPathRoots,
+  requireAdmin,
   resolveRealSandboxedPath,
 } from "@/lib/api-security";
 
@@ -17,6 +18,11 @@ export async function GET(request: NextRequest) {
   const rawPath = searchParams.get("path");
   const filePath = searchParams.get("file");
   const staged = searchParams.get("staged") === "true";
+
+  if (searchParams.has("file")) {
+    const adminError = requireAdmin(request);
+    if (adminError) return adminError;
+  }
 
   if (!rawPath) {
     return NextResponse.json({ error: "Path is required" }, { status: 400 });

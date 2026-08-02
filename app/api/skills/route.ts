@@ -7,6 +7,7 @@ import {
   deleteSkill,
   SkillValidationError,
 } from "@/lib/skills";
+import { requireAdmin } from "@/lib/api-security";
 
 // Skills → native per-provider slash commands (#8). Author a command and Stoa
 // writes it into the provider's native command directory (~/.claude/commands/...)
@@ -25,6 +26,10 @@ function badRequest(message: string) {
 export async function GET(request: NextRequest) {
   try {
     const provider = request.nextUrl.searchParams.get("provider");
+    if (provider !== null) {
+      const adminError = requireAdmin(request);
+      if (adminError) return adminError;
+    }
     if (!provider) {
       return NextResponse.json({ providers: supportedSkillProviders() });
     }

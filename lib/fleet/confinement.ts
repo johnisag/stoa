@@ -48,3 +48,10 @@ export function fleetAgentApprovalMode(
   if (fleetStrongConfinementAvailable()) return "sandboxed-auto";
   return policy.allowUnconfinedAgents ? "full-bypass" : "prompt";
 }
+
+/** Fleet-owned sessions are internal and cannot service interactive prompts. */
+export function fleetUnattendedAgentLaunchAllowed(
+  policy: Pick<FleetAutomationPolicy, "allowUnconfinedAgents">
+): boolean {
+  return fleetAgentApprovalMode(policy) !== "prompt";
+}

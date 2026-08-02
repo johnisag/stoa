@@ -6,6 +6,7 @@ import {
   validateManagedSupervisorSessionIdentity,
   type ManagedSupervisorCostIdentity,
 } from "./supervisor-session-identity";
+import { prepareFleetFairnessCursor } from "./fairness-cursor";
 
 interface SupervisorCostAccountRow extends ManagedSupervisorCostIdentity {
   id: string;
@@ -162,6 +163,7 @@ function claimUntrackedAccounts(
   limit: number
 ): Array<{ id: string; fleet_run_id: string }> {
   const claim = () => {
+    let nextCursor = prepareFleetFairnessCursor(db, "supervisorRecovery");
     const selected = db
       .prepare(
         `SELECT account.id, account.fleet_run_id
@@ -201,15 +203,12 @@ function claimUntrackedAccounts(
       .all(limit) as Array<{ id: string; fleet_run_id: string }>;
     const advance = db.prepare(
       `UPDATE fleet_cost_accounts
-       SET fallback_recovery_cursor = (
-         SELECT COALESCE(MAX(fallback_recovery_cursor), 0) + 1
-         FROM fleet_cost_accounts WHERE owner_type = 'supervisor'
-       )
+       SET fallback_recovery_cursor = ?
        WHERE id = ? AND owner_type = 'supervisor'
          AND (reservation_released_at IS NULL OR terminal_at IS NULL)`
     );
     return selected.filter(
-      (candidate) => advance.run(candidate.id).changes === 1
+      (candidate) => advance.run(++nextCursor, candidate.id).changes === 1
     );
   };
   return db.inTransaction ? claim() : db.transaction(claim).immediate();

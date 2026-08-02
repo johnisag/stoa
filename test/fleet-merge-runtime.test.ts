@@ -116,12 +116,16 @@ function authorizeIntegrationCleanup(
 interface FakeGitOptions {
   conflict?: boolean;
   dirtyLocal?: boolean;
+  dirtyLocalAfterFastForward?: boolean;
+  localBranchAfterFastForward?: string;
   taskHead?: string;
   prHead?: string;
   prBase?: string;
+  prBaseBranch?: string;
   prChecks?: unknown[];
   github?: boolean;
   mergeThrowsAfterCompletion?: boolean;
+  retargetOnMerge?: string;
 }
 
 type VerificationMutation = "tracked" | "staged" | "untracked" | "head";
@@ -363,6 +367,8 @@ function fakeRuntime(options: FakeGitOptions = {}) {
   let prMerged = false;
   let prExists = false;
   let prBase = options.prBase ?? BASE;
+  let prBaseBranch = options.prBaseBranch ?? "main";
+  let localDirty = options.dirtyLocal ?? false;
   let mergeCalls = 0;
   let prCreateCalls = 0;
   let ids = 0;
@@ -388,9 +394,30 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       };
     }
     if (args[0] === "status") {
+      const dirtyStatus =
+        cwd === "/repo" && localDirty
+          ? "1 .M N... 100644 100644 100644 a b dirty.ts\n"
+          : cwd === integration.worktree
+            ? mergeInProgress
+              ? "1 M. N... 100644 100644 100644 a b src/file.ts\n"
+              : `${integrationTrackedStatus}${integrationUntrackedStatus}`
+            : "";
+      if (args.includes("--porcelain=v2")) {
+        return {
+          stdout: [
+            `# branch.oid ${heads.get(cwd) ?? BASE}`,
+            `# branch.head ${branches.get(cwd) || "(detached)"}`,
+            dirtyStatus.trimEnd(),
+          ]
+            .filter(Boolean)
+            .join("\n")
+            .concat("\n"),
+          stderr: "",
+        };
+      }
       return {
         stdout:
-          cwd === "/repo" && options.dirtyLocal
+          cwd === "/repo" && localDirty
             ? " M dirty.ts\n"
             : cwd === integration.worktree
               ? mergeInProgress
@@ -445,6 +472,10 @@ function fakeRuntime(options: FakeGitOptions = {}) {
     }
     if (args[0] === "merge" && args[1] === "--ff-only") {
       heads.set(cwd, args[2]);
+      if (options.localBranchAfterFastForward) {
+        branches.set(cwd, options.localBranchAfterFastForward);
+      }
+      if (options.dirtyLocalAfterFastForward) localDirty = true;
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "merge" && args[1] === "--abort") {
@@ -484,6 +515,7 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       url: "https://github.com/owner/repo/pull/17",
       state: prMerged ? "MERGED" : "OPEN",
       baseRefOid: prBase,
+      baseRefName: prBaseBranch,
       headRefOid: options.prHead ?? INTEGRATED,
       mergeCommit: prMerged ? { oid: MERGED } : null,
       mergeable: "MERGEABLE",
@@ -503,6 +535,12 @@ function fakeRuntime(options: FakeGitOptions = {}) {
     },
     setPrBase(value: string) {
       prBase = value;
+    },
+    setPrBaseBranch(value: string) {
+      prBaseBranch = value;
+    },
+    markPrMerged() {
+      prMerged = true;
     },
     mutateIntegration(kind: VerificationMutation) {
       if (kind === "head") {
@@ -541,6 +579,9 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       },
       mergePullRequest: async () => {
         mergeCalls++;
+        if (options.retargetOnMerge) {
+          prBaseBranch = options.retargetOnMerge;
+        }
         prMerged = true;
         if (options.mergeThrowsAfterCompletion) {
           throw new Error("transport closed after GitHub accepted merge");
@@ -1816,6 +1857,53 @@ describe("Fleet exact-SHA merge runtime", () => {
     );
   });
 
+  it("does not certify a local fast-forward when the checkout switches branches during landing", async () => {
+    seed(db);
+    const fake = fakeRuntime({ localBranchAfterFastForward: "release" });
+    await requestFleetMerge(RUN_ID, "local", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
+
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+
+    expect(fake.heads.get("/repo")).toBe(INTEGRATED);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).not.toBe(
+      "completed"
+    );
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "awaiting_operator",
+      error: expect.stringContaining("expected main"),
+    });
+  });
+
+  it("does not certify a local fast-forward that leaves the checkout dirty", async () => {
+    seed(db);
+    const fake = fakeRuntime({ dirtyLocalAfterFastForward: true });
+    await requestFleetMerge(RUN_ID, "local", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    await authorizeLandingIfReady(db, "local", fake.overrides);
+
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).not.toBe(
+      "completed"
+    );
+    await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "awaiting_operator",
+      error: expect.stringContaining("dirty"),
+    });
+  });
+
   it("recovers a crash after an exact local fast-forward without replaying it", async () => {
     seed(db);
     const fake = fakeRuntime();
@@ -2241,6 +2329,88 @@ describe("Fleet exact-SHA merge runtime", () => {
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
       state: "awaiting_operator",
       error: expect.stringContaining("base changed"),
+    });
+  });
+
+  it("refuses a GitHub PR retargeted to another branch at the same base SHA", async () => {
+    seed(db);
+    const fake = fakeRuntime({ github: true });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 7; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+      const current = db
+        .prepare(`SELECT integration_pr_number FROM fleet_runs WHERE id = ?`)
+        .get(RUN_ID) as { integration_pr_number: number | null };
+      if (current.integration_pr_number != null) break;
+    }
+    fake.setPrBaseBranch("release");
+
+    for (let tick = 0; tick < 3; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    }
+
+    expect(fake.mergeCalls).toBe(0);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "awaiting_operator",
+      error: expect.stringContaining("target branch changed"),
+    });
+  });
+
+  it("does not certify a GitHub PR retargeted during the merge request", async () => {
+    seed(db);
+    const fake = fakeRuntime({
+      github: true,
+      retargetOnMerge: "release",
+      mergeThrowsAfterCompletion: true,
+    });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 9; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+    }
+
+    expect(fake.mergeCalls).toBe(1);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).not.toBe(
+      "completed"
+    );
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.error).toContain(
+      "target branch changed"
+    );
+  });
+
+  it("does not recover an already-merged GitHub PR on the wrong target branch", async () => {
+    seed(db);
+    const fake = fakeRuntime({ github: true });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 7; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+      const current = db
+        .prepare(`SELECT integration_pr_number FROM fleet_runs WHERE id = ?`)
+        .get(RUN_ID) as { integration_pr_number: number | null };
+      if (current.integration_pr_number != null) break;
+    }
+    fake.setPrBaseBranch("release");
+    fake.markPrMerged();
+
+    for (let tick = 0; tick < 3; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+    }
+
+    expect(fake.mergeCalls).toBe(0);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "awaiting_operator",
+      error: expect.stringContaining("target branch changed"),
     });
   });
 

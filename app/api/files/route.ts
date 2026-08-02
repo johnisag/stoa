@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { listDirectory } from "@/lib/files";
 import {
   getAllowedPathRoots,
+  requireAdmin,
   resolveSandboxedPath,
   resolveRealSandboxedPath,
 } from "@/lib/api-security";
@@ -17,6 +18,10 @@ export async function GET(request: NextRequest) {
     // The folder PICKER's listing mode (see the sandbox note below). Forced shallow:
     // a crafted browse+recursive call must not deep-enumerate the host.
     const browse = searchParams.get("browse") === "true";
+    if (browse) {
+      const adminError = requireAdmin(request);
+      if (adminError) return adminError;
+    }
     const recursive = searchParams.get("recursive") === "true" && !browse;
     // Optional recursion depth (recursive only), clamped so a caller can't ask
     // the server to walk an unbounded tree. Defaults to the historical 2.

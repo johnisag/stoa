@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCommitFileDiff } from "@/lib/git-history";
 import {
   getAllowedPathRoots,
+  requireAdmin,
   resolveRealSandboxedPath,
 } from "@/lib/api-security";
 
@@ -10,6 +11,9 @@ interface RouteParams {
 }
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   try {
     const { hash } = await params;
     const searchParams = request.nextUrl.searchParams;

@@ -13,9 +13,11 @@ import {
   type FleetSchedulerDeps,
 } from "@/lib/fleet/scheduler";
 import {
+  hashFleetAutomationPolicy,
   hashFleetExecutionContract,
   hashFleetTaskRows,
 } from "@/lib/fleet/hash";
+import { DEFAULT_FLEET_AUTOMATION_POLICY } from "@/lib/fleet/automation-policy";
 import type {
   FleetRunRow,
   FleetTaskClaimRow,
@@ -36,16 +38,21 @@ function addRun(
     recovery?: number;
     budget?: number | null;
     desiredState?: string;
+    allowUnconfinedAgents?: boolean;
   } = {}
 ) {
   const id = `run-${++serial}`;
   const status = overrides.status ?? "running";
+  const automationPolicy = {
+    ...DEFAULT_FLEET_AUTOMATION_POLICY,
+    allowUnconfinedAgents: overrides.allowUnconfinedAgents ?? true,
+  };
   db.prepare(
     `INSERT INTO fleet_runs
     (id, name, goal, status, desired_state, approval_state, provider,
      max_concurrency, recovery_required, budget_usd, automation_base_sha,
-     settings_json)
-    VALUES (?, 'Fleet', 'Ship safely', ?, ?, 'approved', ?, ?, ?, ?, ?, '{}')`
+     automation_policy_json, automation_policy_hash, settings_json)
+    VALUES (?, 'Fleet', 'Ship safely', ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, '{}')`
   ).run(
     id,
     status,
@@ -59,7 +66,9 @@ function addRun(
     overrides.concurrency ?? 6,
     overrides.recovery ?? 0,
     overrides.budget ?? null,
-    RUN_BASE_SHA
+    RUN_BASE_SHA,
+    JSON.stringify(automationPolicy),
+    hashFleetAutomationPolicy(automationPolicy)
   );
   return id;
 }
@@ -181,6 +190,7 @@ function schedulerDeps(
     db,
     now: () => new Date("2026-08-01T12:00:00.000Z"),
     spawn,
+    resolveBaseSha: async () => RUN_BASE_SHA,
     prepareAttempt: vi.fn(async ({ runId, taskId, attempt, baseRef }) => ({
       attemptDirectory: `C:\\fleet\\${runId}\\${taskId}\\${attempt}`,
       reportPath: `C:\\fleet\\${runId}\\${taskId}\\${attempt}\\report.json`,
@@ -1087,6 +1097,75 @@ describe("fleet scheduler", () => {
     );
   });
 
+  it("rechecks the current target branch before leasing any worker", async () => {
+    const runId = addRun();
+    addTask(runId, "lib/base-drift.ts", 1);
+    const spawn = vi.fn(async ({ task }) => fakeSpawnResult(task.id));
+    const deps = {
+      ...schedulerDeps(spawn),
+      resolveBaseSha: vi.fn(async () => "b".repeat(40)),
+    };
+
+    expect(await reconcileFleetRun(runId, deps)).toBe(0);
+    expect(deps.resolveBaseSha).toHaveBeenCalledOnce();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(deps.prepareAttempt).not.toHaveBeenCalled();
+    expect(
+      db
+        .prepare(
+          `SELECT status, approval_state, pause_reason, automation_last_error
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      status: "paused",
+      approval_state: "blocked",
+      pause_reason: "approval_changed",
+      automation_last_error:
+        "Fleet base commit changed before worker admission",
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_events
+           WHERE fleet_run_id = ? AND event_type = 'fleet_base_drift_detected'`
+        )
+        .get(runId)
+    ).toEqual({ count: 1 });
+  });
+
+  it("durably blocks a legacy unconsented run before leasing", async () => {
+    const runId = addRun({ allowUnconfinedAgents: false });
+    addTask(runId, "lib/consent.ts", 1);
+    const spawn = vi.fn(async ({ task }) => fakeSpawnResult(task.id));
+
+    expect(await reconcileFleetRun(runId, schedulerDeps(spawn))).toBe(0);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(
+      db
+        .prepare(
+          `SELECT status, approval_state, pause_reason, automation_last_error
+           FROM fleet_runs WHERE id = ?`
+        )
+        .get(runId)
+    ).toEqual({
+      status: "paused",
+      approval_state: "blocked",
+      pause_reason: "approval_changed",
+      automation_last_error:
+        "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before execution",
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_events
+           WHERE fleet_run_id = ?
+             AND event_type = 'fleet_unattended_consent_required'`
+        )
+        .get(runId)
+    ).toEqual({ count: 1 });
+  });
+
   it("blocks an approved run whose exact base binding is absent", async () => {
     const runId = addRun();
     addTask(runId, "lib/missing-base.ts", 1);
@@ -1135,6 +1214,31 @@ describe("fleet scheduler", () => {
       [merging]: "running",
       [pausedIntent]: "ready",
     });
+  });
+
+  it("rotates a bounded durable batch across every active run", async () => {
+    for (let index = 0; index < 45; index += 1) addRun();
+    const deps = schedulerDeps();
+
+    await reconcileFleetRuns(deps);
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_runs
+           WHERE scheduler_poll_cursor = 0`
+        )
+        .get()
+    ).toEqual({ count: 5 });
+
+    await reconcileFleetRuns(deps);
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM fleet_runs
+           WHERE scheduler_poll_cursor = 0`
+        )
+        .get()
+    ).toEqual({ count: 0 });
   });
 
   it("recovers an in-flight worker while the run is presented as reviewing", async () => {
