@@ -335,7 +335,7 @@ These pieces should become the fleet manager's substrate.
 
 ### Current implementation snapshot (2026-08-02)
 
-Implemented on `feat/fleet-autonomous-delivery`:
+Merged on `main` via PR #399:
 
 - First-class durable `fleet_runs`, tasks, dependencies, claims, workers,
   artifacts, events, approvals, leases, reservations, verification records,
@@ -2627,7 +2627,7 @@ Definition of done:
   clear terminal cause; the task transitions to `needs_inspection` when the
   report/diff is missing, stale, malformed, or claim-drifting.
 
-Status: Implemented; release gate pending. The prompt carries a nonce/attempt
+Status: Completed; merged via PR #399. The prompt carries a nonce/attempt
 report contract; the collector binds it to exact Git base/head/timestamps,
 derives changed files and sensitive paths independently, bounds
 reads/polls/artifacts, and quarantines invalid or missing evidence. Restart
@@ -2653,7 +2653,7 @@ Definition of done:
 - A task cannot become `ready_to_merge` without four clean independent reviews
   when it changes implementation/docs/config.
 
-Status: Implemented; release gate pending. Verification is shell-free/direct-argv
+Status: Completed; merged via PR #399. Verification is shell-free/direct-argv
 and bound to an unchanged clean head. Its subprocess environment contains only
 an explicit OS/toolchain allowlist plus `CI=1`, not inherited Stoa authority or
 provider/cloud credentials. Timeout and output bounds use Windows tree
@@ -2681,7 +2681,7 @@ Definition of done:
 - Conflict tasks stop and request operator input.
 - Verified/reviewed SHA pinning prevents stale merges.
 
-Status: Implemented; release gate pending. Fleet owns a durable integration
+Status: Completed; merged via PR #399. Fleet owns a durable integration
 lease/worktree and applies tasks in dependency order, with per-task and final
 verification. Each task merge first writes the exact merge tree and two-parent
 commit object, durably binds that expected commit to the operation, and only
@@ -2726,7 +2726,7 @@ Definition of done:
 - Archived runs keep audit trails without unbounded artifact growth.
 - Cleanup is explicit, scoped, and restart-safe.
 
-Status: Implemented; release gate pending. Provider and auxiliary launches retry
+Status: Completed; merged via PR #399. Provider and auxiliary launches retry
 only transient/rate-limit failures after exact ownership-safe cleanup, stopping
 after three failures; restart-safe deterministic exponential backoff starts at
 5 seconds and caps at 5 minutes. Registry-deterministic installed
@@ -2762,7 +2762,7 @@ Definition of done:
 - Supervisor can help manage the run, but killing/closing it does not lose run
   truth.
 
-Status: Implemented; release gate pending. The deterministic supervisor snapshot
+Status: Completed; merged via PR #399. The deterministic supervisor snapshot
 is bound to current plan/execution/policy/base/task-head evidence. Built-in
 recommendations are pure advice. An optional Claude managed one-shot session
 persists and recovers its exact request, nonce-bound framed PTY result, owned paid
