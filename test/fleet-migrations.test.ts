@@ -1291,4 +1291,86 @@ describe("fleet migrations", () => {
     ).toEqual({ count: 1 });
     db.close();
   });
+
+  it("migration 79 installs exact immutable Fleet session ownership", () => {
+    const db = new Database(":memory:");
+    markAppliedThrough(db, 78);
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE fleet_workers (id TEXT PRIMARY KEY);
+    `);
+
+    runMigrations(db);
+
+    expectColumns(db, "sessions", ["fleet_ownership_key"]);
+    expectColumns(db, "fleet_workers", ["session_ownership_key"]);
+    const objects = db
+      .prepare(
+        `SELECT type, name FROM sqlite_master
+         WHERE name IN (
+           'idx_sessions_fleet_ownership',
+           'idx_fleet_workers_session_ownership',
+           'trg_sessions_fleet_ownership_immutable',
+           'trg_fleet_workers_session_ownership_immutable'
+         ) ORDER BY name`
+      )
+      .all();
+    expect(objects).toEqual([
+      { type: "index", name: "idx_fleet_workers_session_ownership" },
+      { type: "index", name: "idx_sessions_fleet_ownership" },
+      {
+        type: "trigger",
+        name: "trg_fleet_workers_session_ownership_immutable",
+      },
+      { type: "trigger", name: "trg_sessions_fleet_ownership_immutable" },
+    ]);
+
+    const key = "c".repeat(64);
+    db.prepare(
+      `INSERT INTO fleet_workers (id, session_ownership_key)
+       VALUES ('worker-79', ?)`
+    ).run(key);
+    db.prepare(
+      `INSERT INTO sessions (id, name, fleet_ownership_key)
+       VALUES ('session-79', 'Session', ?)`
+    ).run(key);
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE sessions SET fleet_ownership_key = NULL WHERE id = 'session-79'`
+        )
+        .run()
+    ).toThrow(/immutable/i);
+
+    // The session row is durable orphan evidence after Fleet history is pruned.
+    // Replaying the migration must repair enforcement without rejecting it.
+    db.exec(`
+      DELETE FROM fleet_workers WHERE id = 'worker-79';
+      DELETE FROM _migrations WHERE id = 79;
+      DROP INDEX idx_sessions_fleet_ownership;
+      DROP INDEX idx_fleet_workers_session_ownership;
+      DROP TRIGGER trg_sessions_fleet_ownership_immutable;
+      DROP TRIGGER trg_fleet_workers_session_ownership_immutable;
+    `);
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(
+      db
+        .prepare(`SELECT COUNT(*) AS count FROM _migrations WHERE id = 79`)
+        .get()
+    ).toEqual({ count: 1 });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM sqlite_master
+           WHERE name IN (
+             'idx_sessions_fleet_ownership',
+             'idx_fleet_workers_session_ownership',
+             'trg_sessions_fleet_ownership_immutable',
+             'trg_fleet_workers_session_ownership_immutable'
+           )`
+        )
+        .get()
+    ).toEqual({ count: 4 });
+    db.close();
+  });
 });

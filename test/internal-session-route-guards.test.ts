@@ -167,6 +167,7 @@ describe("internal session generic-route isolation", () => {
   it("keeps every generic mutation boundary and live status/attach path on the shared guard", () => {
     const guardedRoutes = [
       "app/api/sessions/[id]/route.ts",
+      "app/api/sessions/[id]/launch/route.ts",
       "app/api/sessions/[id]/send-keys/route.ts",
       "app/api/sessions/[id]/respond/route.ts",
       "app/api/sessions/[id]/mcp-config/route.ts",

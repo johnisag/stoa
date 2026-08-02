@@ -37,6 +37,9 @@ export interface Session {
   conductor_session_id: string | null;
   worker_task: string | null;
   worker_status: "pending" | "running" | "completed" | "failed" | null;
+  /** Exact, immutable subsystem ownership key. Fleet restart recovery uses
+   * equality on this field and never searches prompt text for ownership. */
+  fleet_ownership_key?: string | null;
   // Conductor launch args: extra argv tokens replayed at every spawn to wire the
   // stoa MCP server into a provider with no on-disk config (Codex's
   // `-c mcp_servers.stoa.*`). NULL for non-conductors and file-configured

@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import type Database from "better-sqlite3";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionBackend } from "@/lib/session-backend";
@@ -30,6 +30,8 @@ import {
 } from "./cost-runtime";
 import { fleetClaimsConflict } from "./conflicts";
 import {
+  expectedFleetWorkerBranch,
+  expectedFleetWorkerWorktreePath,
   FleetSpawnError,
   spawnFleetWorker,
   type FleetSpawnResult,
@@ -82,6 +84,7 @@ import {
 } from "./recovery-gate";
 import { prepareFleetFairnessCursor } from "./fairness-cursor";
 import { fleetUnattendedAgentLaunchAllowed } from "./confinement";
+import { normalizeWorktreePath } from "@/lib/worktrees";
 
 export { isFleetSchedulerReady } from "./recovery-gate";
 
@@ -725,10 +728,156 @@ interface LeasedTask {
   task: FleetTaskRow;
   workerId: string;
   spawnRequestId: string;
+  sessionOwnershipKey: string;
   attempt: number;
   claims: string[];
   dependencies: string[];
   workingDirectory: string;
+}
+
+type FleetOwnedSessionLookup =
+  | { kind: "valid"; session: Session }
+  | { kind: "missing"; error: string }
+  | { kind: "ambiguous" | "invalid"; error: string };
+
+function normalizedFleetModel(value: string | null | undefined): string | null {
+  return value?.trim() || null;
+}
+
+function validateFleetOwnedSession(input: {
+  db: Database.Database;
+  run: FleetRunRow;
+  task: FleetTaskRow;
+  worker: FleetWorkerRow;
+  session: Session;
+}): string | null {
+  const { db, run, task, worker, session } = input;
+  if (
+    worker.fleet_run_id !== run.id ||
+    worker.task_id !== task.id ||
+    task.fleet_run_id !== run.id ||
+    worker.attempt !== task.current_attempt
+  ) {
+    return "Fleet session run, task, or attempt identity changed";
+  }
+  if (
+    worker.session_ownership_key != null &&
+    session.fleet_ownership_key !== worker.session_ownership_key
+  ) {
+    return "Fleet session ownership key does not match its worker";
+  }
+  if (
+    worker.session_ownership_key == null &&
+    session.fleet_ownership_key != null
+  ) {
+    return "legacy Fleet worker cannot claim an owned session";
+  }
+  if (worker.session_id != null && worker.session_id !== session.id) {
+    return "Fleet worker session id does not match its ownership key";
+  }
+  const expectedProvider = task.agent_type ?? run.provider;
+  if (
+    worker.provider !== expectedProvider ||
+    session.agent_type !== expectedProvider
+  ) {
+    return "Fleet session provider identity changed";
+  }
+  const expectedModel = normalizedFleetModel(task.model ?? run.model);
+  if (
+    normalizedFleetModel(worker.model) !== expectedModel ||
+    normalizedFleetModel(session.model) !== expectedModel
+  ) {
+    return "Fleet session model identity changed";
+  }
+  if (
+    !worker.base_sha ||
+    worker.base_sha !== task.base_sha ||
+    session.base_branch !== worker.base_sha
+  ) {
+    return "Fleet session base identity changed";
+  }
+
+  const workingDirectory = resolveWorkingDirectory(db, run, task);
+  if (!workingDirectory) return "Fleet session has no owned repository";
+  const location = { run, task, attempt: worker.attempt, workingDirectory };
+  const expectedBranch =
+    worker.branch_name ?? expectedFleetWorkerBranch(location);
+  const expectedWorktree =
+    worker.worktree_path ?? expectedFleetWorkerWorktreePath(location);
+  if (
+    task.branch_name != null &&
+    worker.branch_name != null &&
+    task.branch_name !== worker.branch_name
+  ) {
+    return "Fleet task and worker branch identities differ";
+  }
+  if (
+    task.worktree_path != null &&
+    worker.worktree_path != null &&
+    normalizeWorktreePath(task.worktree_path) !==
+      normalizeWorktreePath(worker.worktree_path)
+  ) {
+    return "Fleet task and worker worktree identities differ";
+  }
+  if (
+    session.branch_name !== expectedBranch ||
+    !session.worktree_path ||
+    normalizeWorktreePath(session.worktree_path) !==
+      normalizeWorktreePath(expectedWorktree) ||
+    normalizeWorktreePath(session.working_directory) !==
+      normalizeWorktreePath(expectedWorktree)
+  ) {
+    return "Fleet session worktree or branch identity changed";
+  }
+  if (session.conductor_session_id !== run.conductor_session_id) {
+    return "Fleet session conductor identity changed";
+  }
+  const competingOwner = db
+    .prepare(
+      `SELECT id FROM fleet_workers
+       WHERE id <> ? AND session_id = ?
+         AND status IN ('leasing', 'spawning', 'running', 'waiting_for_operator', 'cleanup_pending')
+       LIMIT 1`
+    )
+    .get(worker.id, session.id) as { id: string } | undefined;
+  if (competingOwner) return "Fleet session has another active worker owner";
+  return null;
+}
+
+function findFleetOwnedSession(input: {
+  db: Database.Database;
+  run: FleetRunRow;
+  task: FleetTaskRow;
+  worker: FleetWorkerRow;
+}): FleetOwnedSessionLookup {
+  const { db, run, task, worker } = input;
+  let sessions: Session[];
+  if (worker.session_ownership_key) {
+    sessions = queries
+      .getSessionsByFleetOwnershipKey(db)
+      .all(worker.session_ownership_key) as Session[];
+  } else if (worker.session_id) {
+    const legacy = queries.getSession(db).get(worker.session_id) as
+      Session | undefined;
+    sessions = legacy ? [legacy] : [];
+  } else {
+    return {
+      kind: "missing",
+      error: "Fleet worker has no persisted session ownership identity",
+    };
+  }
+  if (sessions.length === 0) {
+    return { kind: "missing", error: "owned Fleet session was not found" };
+  }
+  if (sessions.length !== 1) {
+    return {
+      kind: "ambiguous",
+      error: "multiple sessions claim one Fleet ownership key",
+    };
+  }
+  const session = sessions[0];
+  const error = validateFleetOwnedSession({ db, run, task, worker, session });
+  return error ? { kind: "invalid", error } : { kind: "valid", session };
 }
 
 function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
@@ -903,6 +1052,7 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
 
     const attempt = (task.current_attempt ?? 0) + 1;
     const spawnRequestId = `${runId}:${task.id}:${attempt}`;
+    const sessionOwnershipKey = randomBytes(32).toString("hex");
     const workerId = randomUUID();
     const leaseOwner = randomUUID();
     const nowIso = now().toISOString();
@@ -969,9 +1119,9 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
     db.prepare(
       `INSERT INTO fleet_workers
        (id, fleet_run_id, task_id, status, provider, model, attempt, spawn_request_id,
-        lease_owner, lease_expires_at, reservation_usd, reservation_tokens,
+        session_ownership_key, lease_owner, lease_expires_at, reservation_usd, reservation_tokens,
         reservation_confidence, reservation_basis, cost_confidence, created_at)
-       VALUES (?, ?, ?, 'spawning', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, 'spawning', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       workerId,
       runId,
@@ -980,6 +1130,7 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
       effectiveModel,
       attempt,
       spawnRequestId,
+      sessionOwnershipKey,
       leaseOwner,
       leaseExpires,
       reservation.usd,
@@ -1027,6 +1178,7 @@ function leaseOne(deps: FleetSchedulerDeps, runId: string): LeasedTask | null {
       },
       workerId,
       spawnRequestId,
+      sessionOwnershipKey,
       attempt,
       claims: taskClaims(db, runId, task.id),
       dependencies: dependencySummaries(
@@ -1116,6 +1268,7 @@ async function launchLease(
         dependencies: lease.dependencies,
         attempt: lease.attempt,
         spawnRequestId: lease.spawnRequestId,
+        sessionOwnershipKey: lease.sessionOwnershipKey,
         reportContract: {
           ...attemptContract,
           workerId: lease.workerId,
@@ -2925,21 +3078,26 @@ async function reconcilePendingCleanup(
       worker.terminal_cause?.startsWith("operator_completion") === true ||
       worker.terminal_cause?.startsWith("session_completed") === true ||
       (reportCleanup && successfulReport);
-    let session = worker.session_id
-      ? (queries.getSession(deps.db).get(worker.session_id) as
-          Session | undefined)
+    const run = queries.getFleetRun(deps.db).get(worker.fleet_run_id) as
+      FleetRunRow | undefined;
+    const task = worker.task_id
+      ? (deps.db
+          .prepare(`SELECT * FROM fleet_tasks WHERE id = ?`)
+          .get(worker.task_id) as FleetTaskRow | undefined)
       : undefined;
-    if (!session && worker.spawn_request_id) {
-      session = deps.db
-        .prepare(
-          `SELECT * FROM sessions WHERE worker_task LIKE ? ORDER BY created_at DESC LIMIT 1`
-        )
-        .get(`%${worker.spawn_request_id}%`) as Session | undefined;
-    }
-    let stopped = !session;
-    if (!session && launchingWorkers.has(worker.id)) {
-      stopped = false;
-    }
+    const owned =
+      run && task
+        ? findFleetOwnedSession({ db: deps.db, run, task, worker })
+        : {
+            kind: "invalid" as const,
+            error: "Fleet cleanup owner graph is incomplete",
+          };
+    const session = owned.kind === "valid" ? owned.session : undefined;
+    let stopped =
+      owned.kind === "missing" &&
+      worker.session_id == null &&
+      worker.worktree_path == null &&
+      !launchingWorkers.has(worker.id);
     if (session) {
       try {
         await deps.stopSession(
@@ -2950,6 +3108,14 @@ async function reconcilePendingCleanup(
       } catch {
         stopped = false;
       }
+    }
+    if (!stopped && owned.kind !== "valid") {
+      deps.db
+        .prepare(
+          `UPDATE fleet_workers SET failure_code = ?
+           WHERE id = ? AND status = 'cleanup_pending'`
+        )
+        .run(`session_ownership: ${owned.error}`.slice(0, 500), worker.id);
     }
     transaction(deps.db, () => {
       const nowIso = deps.now().toISOString();
@@ -3261,17 +3427,18 @@ export async function recoverFleetRuns(
       .all(run.id) as FleetWorkerRow[];
     let unresolved = false;
     for (const worker of workers) {
-      let session = worker.session_id
-        ? (queries.getSession(deps.db).get(worker.session_id) as
-            Session | undefined)
+      const task = worker.task_id
+        ? (deps.db
+            .prepare(`SELECT * FROM fleet_tasks WHERE id = ?`)
+            .get(worker.task_id) as FleetTaskRow | undefined)
         : undefined;
-      if (!session && worker.spawn_request_id) {
-        session = deps.db
-          .prepare(
-            `SELECT * FROM sessions WHERE worker_task LIKE ? ORDER BY created_at DESC LIMIT 1`
-          )
-          .get(`%${worker.spawn_request_id}%`) as Session | undefined;
-      }
+      const owned = task
+        ? findFleetOwnedSession({ db: deps.db, run, task, worker })
+        : {
+            kind: "invalid" as const,
+            error: "Fleet recovery task identity is missing",
+          };
+      const session = owned.kind === "valid" ? owned.session : undefined;
       if (session && (await deps.sessionExists(session))) {
         transaction(deps.db, () => {
           const workerUpdate = deps.db
@@ -3292,7 +3459,7 @@ export async function recoverFleetRuns(
           deps.db
             .prepare(
               `UPDATE fleet_tasks SET status = 'running', worktree_path = ?,
-               branch_name = COALESCE(branch_name, ?), lease_owner = NULL,
+                branch_name = ?, lease_owner = NULL,
                lease_expires_at = NULL, retry_not_before = NULL,
                provider_failure_count = 0, provider_state = 'running',
                provider_last_error = NULL, provider_backoff_event_at = NULL,
@@ -3355,10 +3522,12 @@ export async function recoverFleetRuns(
         unresolved = true;
         continue;
       }
-      const task = deps.db
-        .prepare(`SELECT * FROM fleet_tasks WHERE id = ?`)
-        .get(worker.task_id) as FleetTaskRow | undefined;
-      const committed = session != null || worker.worktree_path != null;
+      const committed =
+        owned.kind === "valid" ||
+        owned.kind === "invalid" ||
+        owned.kind === "ambiguous" ||
+        worker.session_id != null ||
+        worker.worktree_path != null;
       const retry =
         !committed &&
         !!task &&

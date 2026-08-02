@@ -3,8 +3,7 @@ import { mkdir, stat } from "fs/promises";
 import { dirname, resolve } from "path";
 import type Database from "better-sqlite3";
 import { getDb, queries } from "@/lib/db";
-import { mergePR } from "@/lib/dispatch/merge";
-import { runGit } from "@/lib/git";
+import { parseGitHubSlug, runGit } from "@/lib/git";
 import { expandHome, isWindows, resolveBinary } from "@/lib/platform";
 import { runVerify, type VerifyResult } from "@/lib/verification/runner";
 import { execFile } from "child_process";
@@ -122,7 +121,6 @@ interface FleetMergeRuntimeDeps {
   ) => Promise<GitResult>;
   verify: (cwd: string, command: string) => Promise<VerifyResult>;
   gh: (cwd: string, args: string[]) => Promise<GitResult>;
-  mergePullRequest: typeof mergePR;
   removeWorktree: typeof deleteWorktree;
   ensureDirectory: (path: string) => Promise<void>;
   pathExists: (path: string) => Promise<boolean>;
@@ -202,7 +200,6 @@ function runtimeDeps(
         });
         return { stdout: result.stdout, stderr: result.stderr };
       }),
-    mergePullRequest: overrides.mergePullRequest ?? mergePR,
     removeWorktree: overrides.removeWorktree ?? deleteWorktree,
     ensureDirectory:
       overrides.ensureDirectory ??
@@ -1785,12 +1782,37 @@ async function finalizeLocalLocked(
       throw new Error("integration head is not descended from the bound base");
     }
     if (source.head !== run.integration_head_sha) {
-      // A git process may apply the fast-forward and still report an I/O error.
-      // Once invoked, authoritative HEAD recovery decides the durable outcome.
+      // Move the exact target ref with an old-OID compare-and-swap. A plain
+      // `git merge --ff-only` acts on whichever branch happens to be checked
+      // out when the process starts; an external checkout between our preflight
+      // and that command could therefore advance an unrelated branch. The
+      // explicit ref CAS can only advance the approved base branch.
       externalActionStarted = true;
       await deps.git(
         target.repoPath,
-        ["merge", "--ff-only", run.integration_head_sha],
+        [
+          "update-ref",
+          `refs/heads/${target.baseBranch}`,
+          run.integration_head_sha,
+          run.integration_base_sha,
+        ],
+        120_000
+      );
+      // The target branch may be the checkout's symbolic HEAD. `update-ref`
+      // deliberately does not touch its index/worktree, so refresh them with a
+      // two-tree update. This operation acquires Git's index lock and refuses
+      // to overwrite a checkout or local edit that no longer matches the old
+      // tree. If it loses that race, the catch/recovery path reports the target
+      // ref as externally landed without mutating the newly checked-out ref.
+      await deps.git(
+        target.repoPath,
+        [
+          "read-tree",
+          "-u",
+          "-m",
+          run.integration_base_sha,
+          run.integration_head_sha,
+        ],
         120_000
       );
     }
@@ -1861,11 +1883,12 @@ async function finalizeLocalLocked(
 async function remoteBranchHead(
   deps: FleetMergeRuntimeDeps,
   cwd: string,
-  branch: string
+  branch: string,
+  remote = "origin"
 ): Promise<string | null> {
   const { stdout } = await deps.git(
     cwd,
-    ["ls-remote", "--heads", "origin", `refs/heads/${branch}`],
+    ["ls-remote", "--heads", remote, `refs/heads/${branch}`],
     30_000,
     64 * 1024
   );
@@ -1874,6 +1897,63 @@ async function remoteBranchHead(
   const sha = line.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   if (!validSha(sha)) throw new Error("origin returned an invalid branch head");
   return sha;
+}
+
+async function verifiedGitHubRemoteUrl(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string,
+  expectedRepoSlug: string
+): Promise<string> {
+  const { stdout } = await deps.git(
+    cwd,
+    ["remote", "get-url", "origin"],
+    15_000,
+    16 * 1024
+  );
+  const actualRepoSlug = parseGitHubSlug(stdout.trim());
+  if (
+    !actualRepoSlug ||
+    actualRepoSlug.toLowerCase() !== expectedRepoSlug.toLowerCase()
+  ) {
+    throw new Error(
+      "GitHub repository identity differs from the checkout's origin"
+    );
+  }
+  return stdout.trim();
+}
+
+/**
+ * Advance one explicit remote branch only when it still has the reviewed base.
+ * GitHub's PR merge mutation can bind the PR head but cannot compare-and-swap
+ * the target ref. Git's receive-pack protocol can: the exact force-with-lease
+ * value is the old OID expected by the server, while the refspec names both the
+ * reviewed new OID and the approved destination. Callers must separately prove
+ * that the new OID descends from the old one, so this remains a fast-forward;
+ * the lease is used for atomicity, never to authorize history replacement.
+ */
+async function pushExactRemoteBranch(
+  deps: FleetMergeRuntimeDeps,
+  cwd: string,
+  remote: string,
+  branch: string,
+  expectedOldSha: string,
+  newSha: string
+): Promise<void> {
+  if (!validSha(expectedOldSha) || !validSha(newSha)) {
+    throw new Error("remote branch compare-and-swap requires full Git SHAs");
+  }
+  const ref = `refs/heads/${branch}`;
+  await deps.git(
+    cwd,
+    [
+      "push",
+      "--porcelain",
+      `--force-with-lease=${ref}:${expectedOldSha}`,
+      remote,
+      `${newSha}:${ref}`,
+    ],
+    120_000
+  );
 }
 
 function persistGitHubPush(
@@ -1911,6 +1991,7 @@ async function ensureGitHubPush(
   target: FleetMergeTargetInfo
 ): Promise<boolean> {
   if (
+    !target.repoSlug ||
     !run.integration_branch ||
     !run.integration_worktree ||
     !validSha(run.integration_head_sha)
@@ -1925,11 +2006,19 @@ async function ensureGitHubPush(
     baseSha: run.integration_head_sha,
   });
   if (operation.state === "completed") return false;
+  let githubRemote: string | null = null;
   if (operation.state === "failed") {
+    githubRemote = await verifiedGitHubRemoteUrl(
+      deps,
+      target.repoPath,
+      target.repoSlug
+    ).catch(() => null);
+    if (!githubRemote) return false;
     const remote = await remoteBranchHead(
       deps,
       target.repoPath,
-      run.integration_branch
+      run.integration_branch,
+      githubRemote
     ).catch(() => null);
     if (remote !== run.integration_head_sha) return false;
     operation =
@@ -1940,6 +2029,11 @@ async function ensureGitHubPush(
   if (!claimed) return false;
   let pushAttempted = false;
   try {
+    githubRemote ??= await verifiedGitHubRemoteUrl(
+      deps,
+      target.repoPath,
+      target.repoSlug
+    );
     await assertExactCleanHead(
       deps,
       run.integration_worktree,
@@ -1949,7 +2043,8 @@ async function ensureGitHubPush(
     const remote = await remoteBranchHead(
       deps,
       target.repoPath,
-      run.integration_branch
+      run.integration_branch,
+      githubRemote
     );
     if (remote && remote !== run.integration_head_sha) {
       throw new Error("remote integration branch exists at a different head");
@@ -1958,14 +2053,19 @@ async function ensureGitHubPush(
       pushAttempted = true;
       await deps.git(
         run.integration_worktree,
-        ["push", "--set-upstream", "origin", run.integration_branch],
+        [
+          "push",
+          githubRemote,
+          `${run.integration_head_sha}:refs/heads/${run.integration_branch}`,
+        ],
         120_000
       );
     }
     const confirmed = await remoteBranchHead(
       deps,
       target.repoPath,
-      run.integration_branch
+      run.integration_branch,
+      githubRemote
     );
     if (confirmed !== run.integration_head_sha) {
       throw new Error("remote integration branch did not reach the exact head");
@@ -1973,30 +2073,38 @@ async function ensureGitHubPush(
     persistGitHubPush(deps, run, claimed, confirmed);
     return true;
   } catch (error) {
-    try {
-      const confirmed = await remoteBranchHead(
-        deps,
-        target.repoPath,
-        run.integration_branch
-      );
-      if (confirmed === run.integration_head_sha) {
-        try {
-          persistGitHubPush(deps, run, claimed, confirmed);
-          return true;
-        } catch (persistenceError) {
+    if (githubRemote) {
+      try {
+        const confirmed = await remoteBranchHead(
+          deps,
+          target.repoPath,
+          run.integration_branch,
+          githubRemote
+        );
+        if (confirmed === run.integration_head_sha) {
+          try {
+            persistGitHubPush(deps, run, claimed, confirmed);
+            return true;
+          } catch (persistenceError) {
+            leaveExternallyCompletedOperationRecoverable(
+              deps,
+              run,
+              claimed,
+              persistenceError
+            );
+            return false;
+          }
+        }
+      } catch {
+        if (pushAttempted) {
           leaveExternallyCompletedOperationRecoverable(
             deps,
             run,
             claimed,
-            persistenceError
+            error
           );
           return false;
         }
-      }
-    } catch {
-      if (pushAttempted) {
-        leaveExternallyCompletedOperationRecoverable(deps, run, claimed, error);
-        return false;
       }
     }
     if (pushAttempted) {
@@ -2279,17 +2387,15 @@ function recordGitHubPrWait(
   operation: FleetMergeOperationRow,
   pr: FleetPrStatus
 ): boolean {
-  if (
-    pr.mergeable === "MERGEABLE" &&
-    pr.checks !== "pending" &&
-    pr.checks !== "failing"
-  ) {
+  if (pr.mergeable === "MERGEABLE" && pr.checks === "passing") {
     return false;
   }
   const error =
     pr.checks === "failing"
       ? "GitHub checks are failing"
-      : "GitHub mergeability or checks are pending";
+      : pr.checks === "none"
+        ? "GitHub has not reported any checks; waiting to avoid the check-registration race"
+        : "GitHub mergeability or checks are pending";
   finishOperation(deps, operation, { state: "waiting", error });
   const now = deps.now().toISOString();
   deps.db
@@ -2298,7 +2404,12 @@ function recordGitHubPrWait(
        integration_error = ?, integration_updated_at = ?, updated_at = ?
        WHERE id = ?`
     )
-    .run(pr.checks === "failing" ? error : null, now, now, run.id);
+    .run(
+      pr.checks === "failing" || pr.checks === "none" ? error : null,
+      now,
+      now,
+      run.id
+    );
   return true;
 }
 
@@ -2310,6 +2421,8 @@ async function finalizeGitHub(
   if (
     !target.repoSlug ||
     !run.integration_pr_number ||
+    !run.integration_worktree ||
+    !validSha(run.integration_base_sha) ||
     !validSha(run.integration_head_sha)
   ) {
     throw new Error("GitHub merge contract is incomplete");
@@ -2322,30 +2435,35 @@ async function finalizeGitHub(
     baseSha: run.integration_head_sha,
   });
   if (operation.state === "completed") return false;
+  let githubRemote: string | null = null;
   if (operation.state === "failed") {
-    const existing = await readFleetPr(
+    githubRemote = await verifiedGitHubRemoteUrl(
       deps,
       target.repoPath,
-      run.integration_pr_number,
       target.repoSlug
-    );
-    if (
-      !existing ||
-      existing.state !== "MERGED" ||
-      !isExactFleetPrTarget(existing, run, target, false) ||
-      existing.headSha !== run.integration_head_sha ||
-      !validSha(existing.mergeSha)
-    ) {
-      return false;
-    }
+    ).catch(() => null);
+    if (!githubRemote) return false;
+    const landedHead = await remoteBranchHead(
+      deps,
+      target.repoPath,
+      target.baseBranch,
+      githubRemote
+    ).catch(() => null);
+    if (landedHead !== run.integration_head_sha) return false;
     operation =
       reopenFailedOperationForExactRecovery(deps, operation) ?? operation;
     if (operation.state === "failed") return false;
   }
   const claimed = claimOperation(deps, operation.id);
   if (!claimed) return false;
-  let mergeAttempted = false;
+  let landingAttempted = false;
+  let exactPr: FleetPrStatus | null = null;
   try {
+    githubRemote ??= await verifiedGitHubRemoteUrl(
+      deps,
+      target.repoPath,
+      target.repoSlug
+    );
     let pr = await readFleetPr(
       deps,
       target.repoPath,
@@ -2357,11 +2475,20 @@ async function finalizeGitHub(
     if (pr.headSha !== run.integration_head_sha) {
       throw new Error("GitHub PR head changed after final verification");
     }
+    exactPr = pr;
     if (pr.state === "MERGED") {
-      if (!validSha(pr.mergeSha)) {
-        throw new Error("merged GitHub PR has no authoritative merge commit");
+      const landedHead = await remoteBranchHead(
+        deps,
+        target.repoPath,
+        target.baseBranch,
+        githubRemote
+      );
+      if (landedHead !== run.integration_head_sha) {
+        throw new Error(
+          "GitHub target branch does not equal the verified integration head; the merged PR cannot be certified"
+        );
       }
-      completeRun(deps, run, claimed, pr.mergeSha, {
+      completeRun(deps, run, claimed, run.integration_head_sha, {
         number: pr.number,
         url: pr.url,
         headSha: pr.headSha,
@@ -2373,9 +2500,10 @@ async function finalizeGitHub(
     }
     if (recordGitHubPrWait(deps, run, claimed, pr)) return false;
 
-    // GitHub's merge mutation can pin the head OID but not the base branch.
-    // Re-read immediately before invoking it to minimize the unavoidable remote
-    // race, then validate the target again after the authoritative merge state.
+    // Re-read the PR for operator-facing audit context immediately before the
+    // external action. The action itself does not derive its destination from
+    // mutable PR metadata: it advances the configured target ref with an exact
+    // old-OID lease below.
     pr = await readFleetPr(
       deps,
       target.repoPath,
@@ -2387,11 +2515,20 @@ async function finalizeGitHub(
     if (pr.headSha !== run.integration_head_sha) {
       throw new Error("GitHub PR head changed immediately before merge");
     }
+    exactPr = pr;
     if (pr.state === "MERGED") {
-      if (!validSha(pr.mergeSha)) {
-        throw new Error("merged GitHub PR has no authoritative merge commit");
+      const landedHead = await remoteBranchHead(
+        deps,
+        target.repoPath,
+        target.baseBranch,
+        githubRemote
+      );
+      if (landedHead !== run.integration_head_sha) {
+        throw new Error(
+          "GitHub target branch does not equal the verified integration head; the merged PR cannot be certified"
+        );
       }
-      completeRun(deps, run, claimed, pr.mergeSha, {
+      completeRun(deps, run, claimed, run.integration_head_sha, {
         number: pr.number,
         url: pr.url,
         headSha: pr.headSha,
@@ -2402,66 +2539,99 @@ async function finalizeGitHub(
       throw new Error(`GitHub PR is not open (state ${pr.state ?? "unknown"})`);
     }
     if (recordGitHubPrWait(deps, run, claimed, pr)) return false;
+
+    await assertExactCleanHead(
+      deps,
+      run.integration_worktree,
+      run.integration_head_sha,
+      "GitHub target landing preflight"
+    );
+    if (
+      !(await isAncestor(
+        deps,
+        run.integration_worktree,
+        run.integration_base_sha,
+        run.integration_head_sha
+      ))
+    ) {
+      throw new Error(
+        "verified integration head is not descended from its base"
+      );
+    }
+    const remoteBase = await remoteBranchHead(
+      deps,
+      target.repoPath,
+      target.baseBranch,
+      githubRemote
+    );
+    if (remoteBase !== run.integration_base_sha) {
+      throw new Error(
+        "GitHub target base changed before the exact-ref compare-and-swap"
+      );
+    }
     deps.db
       .prepare(
         `UPDATE fleet_runs SET integration_state = 'merging',
          integration_updated_at = ?, updated_at = ? WHERE id = ?`
       )
       .run(deps.now().toISOString(), deps.now().toISOString(), run.id);
-    mergeAttempted = true;
-    await deps.mergePullRequest({
-      cwd: target.repoPath,
-      prNumber: pr.number,
-      method: "merge",
-      matchHeadCommit: run.integration_head_sha,
-      repoSlug: target.repoSlug,
-    });
-    pr = await readFleetPr(
+    landingAttempted = true;
+    await pushExactRemoteBranch(
+      deps,
+      run.integration_worktree,
+      githubRemote,
+      target.baseBranch,
+      run.integration_base_sha,
+      run.integration_head_sha
+    );
+    const landedHead = await remoteBranchHead(
       deps,
       target.repoPath,
-      run.integration_pr_number,
-      target.repoSlug
+      target.baseBranch,
+      githubRemote
     );
-    if (pr) assertExactFleetPrTarget(pr, run, target, false);
-    if (
-      !pr ||
-      pr.state !== "MERGED" ||
-      pr.headSha !== run.integration_head_sha ||
-      !validSha(pr.mergeSha)
-    ) {
-      // Do not claim success from the gh command alone. A following tick recovers
-      // by reading the same PR and only persists an authoritative merged state.
-      finishOperation(deps, claimed, {
-        state: "waiting",
-        error: "waiting for authoritative GitHub merged state",
-      });
-      return false;
+    if (landedHead !== run.integration_head_sha) {
+      throw new Error(
+        "GitHub target ref did not reach the exact verified integration head"
+      );
     }
-    completeRun(deps, run, claimed, pr.mergeSha, {
+    completeRun(deps, run, claimed, run.integration_head_sha, {
       number: pr.number,
       url: pr.url,
       headSha: pr.headSha,
     });
     return true;
   } catch (error) {
-    const recovered = await readFleetPr(
-      deps,
-      target.repoPath,
-      run.integration_pr_number,
-      target.repoSlug
-    );
-    if (
-      recovered?.state === "MERGED" &&
-      isExactFleetPrTarget(recovered, run, target, false) &&
-      recovered.headSha === run.integration_head_sha &&
-      validSha(recovered.mergeSha)
-    ) {
+    let observedTargetHead: string | null | undefined;
+    if (!githubRemote) {
+      observedTargetHead = undefined;
+    } else {
       try {
-        completeRun(deps, run, claimed, recovered.mergeSha, {
-          number: recovered.number,
-          url: recovered.url,
-          headSha: recovered.headSha,
-        });
+        observedTargetHead = await remoteBranchHead(
+          deps,
+          target.repoPath,
+          target.baseBranch,
+          githubRemote
+        );
+      } catch {
+        observedTargetHead = undefined;
+      }
+    }
+    if (observedTargetHead === run.integration_head_sha) {
+      try {
+        completeRun(
+          deps,
+          run,
+          claimed,
+          run.integration_head_sha,
+          exactPr
+            ? {
+                number: exactPr.number,
+                url: exactPr.url,
+                headSha: run.integration_head_sha,
+              }
+            : null
+        );
         return true;
       } catch (persistenceError) {
         leaveExternallyCompletedOperationRecoverable(
@@ -2473,7 +2643,7 @@ async function finalizeGitHub(
         return false;
       }
     }
-    if (mergeAttempted) {
+    if (landingAttempted && observedTargetHead === undefined) {
       leaveExternallyCompletedOperationRecoverable(deps, run, claimed, error);
       return false;
     }

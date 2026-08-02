@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { ensureSessionLaunchProfileSchema } from "./session-launch-profile-schema";
+import { ensureFleetSessionOwnershipSchema } from "./fleet-session-ownership-schema";
 
 const SAFE_FLEET_AUTOMATION_POLICY_JSON =
   '{"version":1,"automaticPlanning":false,"automaticPlanApproval":false,"automaticStart":false,"automaticFixes":false,"maxAutomaticFixRounds":0,"automaticMerge":false,"mergeTarget":"github_pr","allowSensitivePaths":false,"allowUnconfinedAgents":false,"plannerTaskCap":8,"cleanupPolicy":"preserve","retentionDays":null}';
@@ -742,6 +743,7 @@ export function createSchema(db: Database.Database): void {
       conductor_session_id TEXT REFERENCES sessions(id),
       worker_task TEXT,
       worker_status TEXT,
+      fleet_ownership_key TEXT,
       auto_approve INTEGER NOT NULL DEFAULT 0,
       -- #27 tri-state launch tier (mirrors migration 53). NULL → the launch
       -- resolver derives it from auto_approve (fail-closed).
@@ -1347,6 +1349,7 @@ export function createSchema(db: Database.Database): void {
       model TEXT,
       attempt INTEGER NOT NULL DEFAULT 1,
       spawn_request_id TEXT,
+      session_ownership_key TEXT,
       worktree_path TEXT,
       branch_name TEXT,
       base_sha TEXT,
@@ -1996,4 +1999,5 @@ export function createSchema(db: Database.Database): void {
   // Keep repair atomic with migration 76 so no process observes half-installed
   // profile columns or a dropped enforcement trigger.
   ensureSessionLaunchProfileSchema(db);
+  ensureFleetSessionOwnershipSchema(db);
 }

@@ -27,7 +27,8 @@ export const fleetQueries = {
   listFleetRuns: (db: Database.Database) =>
     getStmt(
       db,
-      `SELECT
+      `SELECT * FROM (
+       SELECT
         r.id,
         r.name,
         substr(r.goal, 1, 600) AS goal,
@@ -108,17 +109,16 @@ export const fleetQueries = {
                 r.plan_hash IS NOT NULL AND
                 COALESCE(json_extract(r.settings_json, '$.planner.state'), 'idle')
                   NOT IN ('starting', 'running', 'finalizing', 'cleanup_pending') AND
-                NOT EXISTS (
-                  SELECT 1 FROM fleet_artifacts approval_blocker
-                  WHERE approval_blocker.fleet_run_id = r.id
-                    AND approval_blocker.severity = 'blocker'
-                    AND (
-                      approval_blocker.plan_hash = r.plan_hash OR
-                      approval_blocker.plan_hash IS NULL
-                    )
-                ) AND
                 (
-                  r.review_policy = 'manual' OR
+                  EXISTS (
+                    SELECT 1 FROM fleet_artifacts approval_blocker
+                    WHERE approval_blocker.fleet_run_id = r.id
+                      AND approval_blocker.severity = 'blocker'
+                      AND (
+                        approval_blocker.plan_hash = r.plan_hash OR
+                        approval_blocker.plan_hash IS NULL
+                      )
+                  ) OR r.review_policy = 'manual' OR
                   (
                     COALESCE(json_extract(
                       r.automation_policy_json,
@@ -201,8 +201,26 @@ export const fleetQueries = {
              ))
           ) THEN 1 ELSE 0 END AS awaiting_manual_merge
        FROM fleet_runs r
-       ORDER BY r.updated_at DESC, r.created_at DESC, r.id DESC
-       LIMIT ?`
+       WHERE (
+         r.archived_at IS NULL
+         AND r.status NOT IN ('completed', 'failed', 'canceled')
+       ) OR r.id IN (
+         SELECT history.id
+         FROM fleet_runs history
+         WHERE history.archived_at IS NOT NULL
+           OR history.status IN ('completed', 'failed', 'canceled')
+         ORDER BY history.updated_at DESC, history.created_at DESC, history.id DESC
+         LIMIT ?
+       )
+       ) prioritized_fleet_runs
+       ORDER BY
+         CASE
+           WHEN attention_count > 0 OR awaiting_manual_merge = 1 THEN 0
+           WHEN archived_at IS NULL
+             AND status NOT IN ('completed', 'failed', 'canceled') THEN 1
+           ELSE 2
+         END,
+         updated_at DESC, created_at DESC, id DESC`
     ),
 
   getFleetRun: (db: Database.Database) =>
@@ -440,6 +458,7 @@ export const fleetQueries = {
            updated_at = ?
        WHERE id = ?
          AND plan_hash = ?
+         AND automation_policy_hash = ?
          AND (automation_base_sha IS NULL OR LOWER(automation_base_sha) = ?)
          AND status = 'draft'
          AND approval_state = 'needs_approval'

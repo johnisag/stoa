@@ -397,18 +397,28 @@ function mergeRuntime(
     [PROJECT_PATH, "main"],
     [taskWorktree, taskBranch],
   ]);
+  const repoBranchHeads = new Map<string, string>([["main", BASE_SHA]]);
   const existingPaths = new Set([PROJECT_PATH, taskWorktree]);
+  const gitCalls: Array<{ cwd: string; args: string[] }> = [];
   const verify = vi.fn(async () => ({
     status: "pass" as const,
     output: "all checks passed",
   }));
   let serial = 0;
   let integrationBranchDeleted = false;
+  let localDirty = false;
 
   const git = async (cwd: string, args: string[]) => {
+    gitCalls.push({ cwd, args: [...args] });
     if (args[0] === "rev-parse") {
       const rawRef = args.at(-1) ?? "HEAD";
       const ref = rawRef.replace(/\^\{commit\}$/, "");
+      if (cwd === PROJECT_PATH && ref.startsWith("refs/heads/")) {
+        const branch = ref.slice("refs/heads/".length);
+        const head = repoBranchHeads.get(branch);
+        if (!head) throw new Error(`unknown fake Git branch: ${branch}`);
+        return { stdout: `${head}\n`, stderr: "" };
+      }
       if (ref === integration.branch && !heads.has(integration.worktree)) {
         throw new Error("integration branch does not exist yet");
       }
@@ -422,7 +432,12 @@ function mergeRuntime(
     if (args[0] === "branch" && args[1] === "--show-current") {
       return { stdout: `${branches.get(cwd) ?? ""}\n`, stderr: "" };
     }
-    if (args[0] === "status") return { stdout: "", stderr: "" };
+    if (args[0] === "status") {
+      return {
+        stdout: cwd === PROJECT_PATH && localDirty ? "1 dirty-index\n" : "",
+        stderr: "",
+      };
+    }
     if (args[0] === "worktree" && args[1] === "add") {
       existingPaths.add(integration.worktree);
       heads.set(integration.worktree, BASE_SHA);
@@ -464,8 +479,38 @@ function mergeRuntime(
       heads.set(integration.worktree, INTEGRATION_HEAD_SHA);
       return { stdout: "", stderr: "" };
     }
-    if (args[0] === "merge" && args[1] === "--ff-only") {
-      heads.set(cwd, args[2]);
+    if (args[0] === "update-ref") {
+      const branch = args[1]?.replace(/^refs\/heads\//, "");
+      const newHead = args[2];
+      const oldHead = args[3];
+      if (
+        cwd !== PROJECT_PATH ||
+        branch !== "main" ||
+        !newHead ||
+        oldHead !== repoBranchHeads.get(branch) ||
+        newHead !== heads.get(integration.worktree)
+      ) {
+        throw new Error("invalid fake target-ref compare-and-swap");
+      }
+      repoBranchHeads.set(branch, newHead);
+      heads.set(PROJECT_PATH, newHead);
+      localDirty = true;
+      return { stdout: "", stderr: "" };
+    }
+    if (args[0] === "read-tree" && args[1] === "-u") {
+      const oldHead = args[3];
+      const newHead = args[4];
+      if (
+        cwd !== PROJECT_PATH ||
+        args[2] !== "-m" ||
+        oldHead !== BASE_SHA ||
+        !newHead ||
+        repoBranchHeads.get("main") !== newHead ||
+        heads.get(PROJECT_PATH) !== newHead
+      ) {
+        throw new Error("invalid fake checkout refresh");
+      }
+      localDirty = false;
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "merge" && args[1] === "--abort") {
@@ -482,6 +527,9 @@ function mergeRuntime(
   return {
     integration,
     verify,
+    gitCalls,
+    projectHead: () => heads.get(PROJECT_PATH),
+    projectClean: () => !localDirty,
     overrides: {
       db,
       now: () => NOW,
@@ -521,9 +569,11 @@ function multiTaskMergeRuntime(
   const integrationHeads = ["e".repeat(40), "f".repeat(40), "9".repeat(40)];
   const heads = new Map<string, string>([[PROJECT_PATH, BASE_SHA]]);
   const branches = new Map<string, string>([[PROJECT_PATH, "main"]]);
+  const repoBranchHeads = new Map<string, string>([["main", BASE_SHA]]);
   const ancestors = new Map<string, Set<string>>([[BASE_SHA, new Set()]]);
   const existingPaths = new Set([PROJECT_PATH]);
   const removedWorktrees: string[] = [];
+  const gitCalls: Array<{ cwd: string; args: string[] }> = [];
   const verify = vi.fn(async () => ({
     status: "pass" as const,
     output: "all exact integration checks passed",
@@ -532,6 +582,7 @@ function multiTaskMergeRuntime(
   let integrationCommit = 0;
   let pendingTaskHead: string | null = null;
   let integrationBranchDeleted = false;
+  let localDirty = false;
 
   const recordCommit = (sha: string, parents: string[]) => {
     const inherited = new Set<string>();
@@ -553,9 +604,16 @@ function multiTaskMergeRuntime(
   };
 
   const git = async (cwd: string, args: string[]) => {
+    gitCalls.push({ cwd, args: [...args] });
     if (args[0] === "rev-parse") {
       const rawRef = args.at(-1) ?? "HEAD";
       const ref = rawRef.replace(/\^\{commit\}$/, "");
+      if (cwd === PROJECT_PATH && ref.startsWith("refs/heads/")) {
+        const branch = ref.slice("refs/heads/".length);
+        const head = repoBranchHeads.get(branch);
+        if (!head) throw new Error(`unknown fake Git branch: ${branch}`);
+        return { stdout: `${head}\n`, stderr: "" };
+      }
       if (ref === integration.branch && !heads.has(integration.worktree)) {
         throw new Error("integration branch does not exist yet");
       }
@@ -569,7 +627,12 @@ function multiTaskMergeRuntime(
     if (args[0] === "branch" && args[1] === "--show-current") {
       return { stdout: `${branches.get(cwd) ?? ""}\n`, stderr: "" };
     }
-    if (args[0] === "status") return { stdout: "", stderr: "" };
+    if (args[0] === "status") {
+      return {
+        stdout: cwd === PROJECT_PATH && localDirty ? "1 dirty-index\n" : "",
+        stderr: "",
+      };
+    }
     if (args[0] === "worktree" && args[1] === "add") {
       existingPaths.add(integration.worktree);
       heads.set(integration.worktree, BASE_SHA);
@@ -623,10 +686,38 @@ function multiTaskMergeRuntime(
       pendingTaskHead = null;
       return { stdout: "", stderr: "" };
     }
-    if (args[0] === "merge" && args[1] === "--ff-only") {
-      const nextHead = args[2];
-      if (!nextHead) throw new Error("fast-forward target is missing");
-      heads.set(cwd, nextHead);
+    if (args[0] === "update-ref") {
+      const branch = args[1]?.replace(/^refs\/heads\//, "");
+      const newHead = args[2];
+      const oldHead = args[3];
+      if (
+        cwd !== PROJECT_PATH ||
+        branch !== "main" ||
+        !newHead ||
+        oldHead !== repoBranchHeads.get(branch) ||
+        newHead !== heads.get(integration.worktree)
+      ) {
+        throw new Error("invalid fake target-ref compare-and-swap");
+      }
+      repoBranchHeads.set(branch, newHead);
+      heads.set(PROJECT_PATH, newHead);
+      localDirty = true;
+      return { stdout: "", stderr: "" };
+    }
+    if (args[0] === "read-tree" && args[1] === "-u") {
+      const oldHead = args[3];
+      const newHead = args[4];
+      if (
+        cwd !== PROJECT_PATH ||
+        args[2] !== "-m" ||
+        oldHead !== BASE_SHA ||
+        !newHead ||
+        repoBranchHeads.get("main") !== newHead ||
+        heads.get(PROJECT_PATH) !== newHead
+      ) {
+        throw new Error("invalid fake checkout refresh");
+      }
+      localDirty = false;
       return { stdout: "", stderr: "" };
     }
     if (args[0] === "merge" && args[1] === "--abort") {
@@ -648,6 +739,9 @@ function multiTaskMergeRuntime(
     integrationHeads,
     registerTask,
     verify,
+    gitCalls,
+    projectHead: () => heads.get(PROJECT_PATH),
+    projectClean: () => !localDirty,
     removedWorktrees,
     integrationPathExists: () => existingPaths.has(integration.worktree),
     integrationBranchExists: () => !integrationBranchDeleted,
@@ -1201,6 +1295,29 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
       integration_merge_sha: INTEGRATION_HEAD_SHA,
     });
     expect(
+      merge.gitCalls.filter((call) => call.args[0] === "update-ref")
+    ).toEqual([
+      {
+        cwd: PROJECT_PATH,
+        args: ["update-ref", "refs/heads/main", INTEGRATION_HEAD_SHA, BASE_SHA],
+      },
+    ]);
+    expect(
+      merge.gitCalls.filter((call) => call.args[0] === "read-tree")
+    ).toEqual([
+      {
+        cwd: PROJECT_PATH,
+        args: ["read-tree", "-u", "-m", BASE_SHA, INTEGRATION_HEAD_SHA],
+      },
+    ]);
+    expect(
+      merge.gitCalls.some(
+        (call) => call.args[0] === "merge" && call.args[1] === "--ff-only"
+      )
+    ).toBe(false);
+    expect(merge.projectHead()).toBe(INTEGRATION_HEAD_SHA);
+    expect(merge.projectClean()).toBe(true);
+    expect(
       db
         .prepare(`SELECT status, head_sha FROM fleet_tasks WHERE id = ?`)
         .get(task.id)
@@ -1641,6 +1758,34 @@ describe("Fleet sessionless epic-to-merge orchestration", () => {
       integration_state: "cleanup_complete",
       integration_merge_sha: merge.integrationHeads[2],
     });
+    expect(
+      merge.gitCalls.filter((call) => call.args[0] === "update-ref")
+    ).toEqual([
+      {
+        cwd: PROJECT_PATH,
+        args: [
+          "update-ref",
+          "refs/heads/main",
+          merge.integrationHeads[2],
+          BASE_SHA,
+        ],
+      },
+    ]);
+    expect(
+      merge.gitCalls.filter((call) => call.args[0] === "read-tree")
+    ).toEqual([
+      {
+        cwd: PROJECT_PATH,
+        args: ["read-tree", "-u", "-m", BASE_SHA, merge.integrationHeads[2]],
+      },
+    ]);
+    expect(
+      merge.gitCalls.some(
+        (call) => call.args[0] === "merge" && call.args[1] === "--ff-only"
+      )
+    ).toBe(false);
+    expect(merge.projectHead()).toBe(merge.integrationHeads[2]);
+    expect(merge.projectClean()).toBe(true);
     expect(
       db
         .prepare(

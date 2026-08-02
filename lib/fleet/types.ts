@@ -337,6 +337,7 @@ export interface FleetWorkerRow {
   model: string | null;
   attempt: number;
   spawn_request_id?: string | null;
+  session_ownership_key?: string | null;
   worktree_path?: string | null;
   branch_name?: string | null;
   base_sha?: string | null;
@@ -815,8 +816,16 @@ export interface FleetRunDetailDto {
   tasks: FleetTaskDto[];
   workers: FleetWorkerDto[];
   artifacts: FleetArtifactDto[];
+  /** Total persisted artifacts, including metadata omitted from this response. */
+  artifactTotal?: number;
+  /** True when non-referenced artifact metadata was omitted from this response. */
+  artifactHasMore?: boolean;
   verifications: FleetVerificationDto[];
   events: FleetEventDto[];
+  /** Total persisted events, including timeline rows omitted from this response. */
+  eventTotal?: number;
+  /** True when older event rows were omitted from this response. */
+  eventHasMore?: boolean;
 }
 
 export interface CreateFleetRunInput {

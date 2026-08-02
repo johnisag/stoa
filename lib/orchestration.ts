@@ -82,6 +82,8 @@ export interface SpawnWorkerOptions {
   fleetArtifactPaths?: string[];
   /** Fleet requires stronger isolation than the legacy generic worker sandbox. */
   requireStrongIsolation?: boolean;
+  /** Opaque, scheduler-issued identity for exact Fleet restart recovery. */
+  fleetOwnershipKey?: string;
   /** Override the default worker approval policy (planners use prompt mode). */
   approvalMode?: ApprovalMode;
   model?: string;
@@ -317,6 +319,12 @@ export function fleetDeliveryTaskForContainer(
 export async function spawnWorker(
   options: SpawnWorkerOptions
 ): Promise<Session> {
+  if (
+    options.fleetOwnershipKey != null &&
+    !/^[0-9a-f]{64}$/.test(options.fleetOwnershipKey)
+  ) {
+    throw new Error("Invalid Fleet session ownership key");
+  }
   const backend = getSessionBackend();
   const {
     conductorSessionId,
@@ -441,19 +449,12 @@ export async function spawnWorker(
       model,
       "sessions", // group_path
       agentType,
-      "uncategorized" // project_id
+      "uncategorized", // project_id
+      worktreePath,
+      worktreePath ? actualBranchName : null,
+      worktreePath ? actualBaseBranch : null,
+      options.fleetOwnershipKey ?? null
     );
-
-    // Update worktree info if created
-    if (worktreePath) {
-      queries.updateSessionWorktree(db).run(
-        worktreePath,
-        actualBranchName,
-        actualBaseBranch,
-        null, // dev_server_port
-        sessionId
-      );
-    }
 
     // Create the session and start the agent. Workers use auto-approve.
     const tmuxSessionName = sessionKey({

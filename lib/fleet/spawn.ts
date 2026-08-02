@@ -7,6 +7,8 @@ import { parseFleetAutomationPolicy } from "./automation-policy";
 import { fleetAgentApprovalMode } from "./confinement";
 import { isFleetUnattendedProvider } from "./provider-eligibility";
 import { resolveExactModelForAgent } from "@/lib/model-catalog";
+import { generateBranchName } from "@/lib/git";
+import { worktreePathForFeature } from "@/lib/worktrees";
 
 export interface FleetSpawnResult {
   sessionId: string;
@@ -33,7 +35,37 @@ export interface FleetSpawnInput {
   dependencies: string[];
   attempt: number;
   spawnRequestId: string;
+  sessionOwnershipKey: string;
   reportContract?: FleetWorkerAttemptContract & { workerId: string };
+}
+
+type FleetWorkerLocationInput = Pick<
+  FleetSpawnInput,
+  "run" | "task" | "attempt" | "workingDirectory"
+>;
+
+export function fleetWorkerFeatureName(
+  input: FleetWorkerLocationInput
+): string {
+  return (
+    input.task.branch_name ??
+    `fleet-${input.run.id.slice(0, 8)}-${input.task.id.slice(0, 8)}-${input.attempt}`
+  );
+}
+
+export function expectedFleetWorkerBranch(
+  input: FleetWorkerLocationInput
+): string {
+  return generateBranchName(fleetWorkerFeatureName(input));
+}
+
+export function expectedFleetWorkerWorktreePath(
+  input: FleetWorkerLocationInput
+): string {
+  return worktreePathForFeature(
+    input.workingDirectory,
+    fleetWorkerFeatureName(input)
+  );
 }
 
 export async function spawnFleetWorker(
@@ -88,9 +120,7 @@ export async function spawnFleetWorker(
       task: persistedTask,
       ...(input.reportContract ? { deliveryTask } : {}),
       workingDirectory: input.workingDirectory,
-      branchName:
-        input.task.branch_name ??
-        `fleet-${input.run.id.slice(0, 8)}-${input.task.id.slice(0, 8)}-${input.attempt}`,
+      branchName: fleetWorkerFeatureName(input),
       baseBranch: input.task.base_branch ?? "main",
       useWorktree: true,
       requireWorktree: true,
@@ -102,6 +132,7 @@ export async function spawnFleetWorker(
         ? [input.reportContract.reportPath]
         : [],
       requireStrongIsolation: true,
+      fleetOwnershipKey: input.sessionOwnershipKey,
       approvalMode,
       model: input.task.model ?? undefined,
       requireExactModel: true,

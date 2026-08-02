@@ -126,6 +126,8 @@ interface FakeGitOptions {
   github?: boolean;
   mergeThrowsAfterCompletion?: boolean;
   retargetOnMerge?: string;
+  advanceBaseOnLanding?: string;
+  originUrl?: string;
 }
 
 type VerificationMutation = "tracked" | "staged" | "untracked" | "head";
@@ -360,16 +362,25 @@ function fakeRuntime(options: FakeGitOptions = {}) {
     ["/task-one", "task-one"],
     ["/task-two", "task-two"],
   ]);
+  const repoBranchHeads = new Map<string, string>([
+    ["main", BASE],
+    ["release", BASE],
+  ]);
   const paths = new Set<string>(["/repo", "/task-one", "/task-two"]);
   const calls: string[][] = [];
   const verified: string[] = [];
-  let remoteHead: string | null = null;
+  let remoteIntegrationHead: string | null = null;
+  const remoteBranchHeads = new Map<string, string>([
+    ["main", BASE],
+    ["release", BASE],
+  ]);
   let prMerged = false;
   let prExists = false;
   let prBase = options.prBase ?? BASE;
   let prBaseBranch = options.prBaseBranch ?? "main";
   let localDirty = options.dirtyLocal ?? false;
-  let mergeCalls = 0;
+  let landingPushCalls = 0;
+  let landingUpdates = 0;
   let prCreateCalls = 0;
   let ids = 0;
   let integrationBranchDeleted = false;
@@ -381,6 +392,12 @@ function fakeRuntime(options: FakeGitOptions = {}) {
     calls.push([cwd, ...args]);
     if (args[0] === "rev-parse") {
       const ref = args.at(-1) ?? "HEAD";
+      if (cwd === "/repo" && ref.startsWith("refs/heads/")) {
+        const branch = ref.slice("refs/heads/".length);
+        const head = repoBranchHeads.get(branch);
+        if (!head) throw new Error("missing ref");
+        return { stdout: `${head}\n`, stderr: "" };
+      }
       if (ref.startsWith("stoa/fleet/integration-")) {
         if (!heads.has(integration.worktree)) throw new Error("missing ref");
         return { stdout: `${heads.get(integration.worktree)}\n`, stderr: "" };
@@ -470,11 +487,31 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       mergeInProgress = false;
       return { stdout: "", stderr: "" };
     }
-    if (args[0] === "merge" && args[1] === "--ff-only") {
-      heads.set(cwd, args[2]);
+    if (args[0] === "update-ref") {
+      const branch = args[1].slice("refs/heads/".length);
+      const current = repoBranchHeads.get(branch);
+      if (current !== args[3]) throw new Error("ref changed");
+      repoBranchHeads.set(branch, args[2]);
+      if (branches.get(cwd) === branch) {
+        heads.set(cwd, args[2]);
+        localDirty = true;
+      }
       if (options.localBranchAfterFastForward) {
         branches.set(cwd, options.localBranchAfterFastForward);
+        heads.set(
+          cwd,
+          repoBranchHeads.get(options.localBranchAfterFastForward) ?? BASE
+        );
+        localDirty = false;
       }
+      return { stdout: "", stderr: "" };
+    }
+    if (args[0] === "read-tree" && args[1] === "-u") {
+      if (branches.get(cwd) !== "main") {
+        throw new Error("checkout changed before worktree refresh");
+      }
+      heads.set(cwd, args.at(-1) ?? BASE);
+      localDirty = false;
       if (options.dirtyLocalAfterFastForward) localDirty = true;
       return { stdout: "", stderr: "" };
     }
@@ -494,16 +531,68 @@ function fakeRuntime(options: FakeGitOptions = {}) {
       integrationUntrackedStatus = "";
       return { stdout: "", stderr: "" };
     }
-    if (args[0] === "ls-remote") {
+    if (args[0] === "remote" && args[1] === "get-url") {
       return {
-        stdout: remoteHead
-          ? `${remoteHead}\trefs/heads/${integration.branch}\n`
-          : "",
+        stdout: `${options.originUrl ?? "https://github.com/owner/repo.git"}\n`,
+        stderr: "",
+      };
+    }
+    if (args[0] === "ls-remote") {
+      const ref = args.at(-1) ?? "";
+      const branch = ref.startsWith("refs/heads/")
+        ? ref.slice("refs/heads/".length)
+        : "";
+      const remoteHead =
+        branch === integration.branch
+          ? remoteIntegrationHead
+          : (remoteBranchHeads.get(branch) ?? null);
+      return {
+        stdout: remoteHead ? `${remoteHead}\trefs/heads/${branch}\n` : "",
         stderr: "",
       };
     }
     if (args[0] === "push") {
-      remoteHead = heads.get(integration.worktree) ?? INTEGRATED;
+      const pushedRefspec = args.at(-1) ?? "";
+      if (pushedRefspec.endsWith(`:refs/heads/${integration.branch}`)) {
+        remoteIntegrationHead = pushedRefspec.slice(
+          0,
+          pushedRefspec.indexOf(":refs/heads/")
+        );
+        return { stdout: "", stderr: "" };
+      }
+      landingPushCalls++;
+      if (options.retargetOnMerge) {
+        prBaseBranch = options.retargetOnMerge;
+      }
+      if (options.advanceBaseOnLanding) {
+        remoteBranchHeads.set("main", options.advanceBaseOnLanding);
+      }
+      const lease = args.find((arg) =>
+        arg.startsWith("--force-with-lease=refs/heads/")
+      );
+      const refspec = args.at(-1) ?? "";
+      const separator = refspec.indexOf(":refs/heads/");
+      if (!lease || separator < 0) throw new Error("missing exact ref lease");
+      const leaseValue = lease.slice("--force-with-lease=".length);
+      const leaseSeparator = leaseValue.lastIndexOf(":");
+      const targetRef = leaseValue.slice(0, leaseSeparator);
+      const expectedOld = leaseValue.slice(leaseSeparator + 1);
+      const branch = targetRef.slice("refs/heads/".length);
+      if (remoteBranchHeads.get(branch) !== expectedOld) {
+        throw new Error("stale remote target lease");
+      }
+      const newHead = refspec.slice(0, separator);
+      remoteBranchHeads.set(branch, newHead);
+      landingUpdates++;
+      if (
+        branch === prBaseBranch &&
+        newHead === (options.prHead ?? INTEGRATED)
+      ) {
+        prMerged = true;
+      }
+      if (options.mergeThrowsAfterCompletion) {
+        throw new Error("transport closed after Git accepted ref update");
+      }
       return { stdout: "", stderr: "" };
     }
     throw new Error(`unexpected git: ${cwd} ${args.join(" ")}`);
@@ -527,8 +616,11 @@ function fakeRuntime(options: FakeGitOptions = {}) {
     heads,
     calls,
     verified,
-    get mergeCalls() {
-      return mergeCalls;
+    get landingPushCalls() {
+      return landingPushCalls;
+    },
+    get landingUpdates() {
+      return landingUpdates;
     },
     get prCreateCalls() {
       return prCreateCalls;
@@ -538,6 +630,12 @@ function fakeRuntime(options: FakeGitOptions = {}) {
     },
     setPrBaseBranch(value: string) {
       prBaseBranch = value;
+    },
+    refHead(branch: string) {
+      return repoBranchHeads.get(branch) ?? null;
+    },
+    remoteRefHead(branch: string) {
+      return remoteBranchHeads.get(branch) ?? null;
     },
     markPrMerged() {
       prMerged = true;
@@ -576,16 +674,6 @@ function fakeRuntime(options: FakeGitOptions = {}) {
         }
         if (!prExists) throw new Error("PR not found");
         return { stdout: prJson(), stderr: "" };
-      },
-      mergePullRequest: async () => {
-        mergeCalls++;
-        if (options.retargetOnMerge) {
-          prBaseBranch = options.retargetOnMerge;
-        }
-        prMerged = true;
-        if (options.mergeThrowsAfterCompletion) {
-          throw new Error("transport closed after GitHub accepted merge");
-        }
       },
       removeWorktree: async (worktree: string) => {
         paths.delete(worktree);
@@ -1857,7 +1945,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     );
   });
 
-  it("does not certify a local fast-forward when the checkout switches branches during landing", async () => {
+  it("advances only the target ref when the checkout switches branches during landing", async () => {
     seed(db);
     const fake = fakeRuntime({ localBranchAfterFastForward: "release" });
     await requestFleetMerge(RUN_ID, "local", "admin", {
@@ -1870,7 +1958,14 @@ describe("Fleet exact-SHA merge runtime", () => {
 
     await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
 
-    expect(fake.heads.get("/repo")).toBe(INTEGRATED);
+    expect(fake.refHead("main")).toBe(INTEGRATED);
+    expect(fake.refHead("release")).toBe(BASE);
+    expect(fake.heads.get("/repo")).toBe(BASE);
+    expect(
+      fake.calls.filter(
+        (call) => call[1] === "merge" && call[2] === "--ff-only"
+      )
+    ).toHaveLength(0);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).not.toBe(
       "completed"
     );
@@ -2022,7 +2117,7 @@ describe("Fleet exact-SHA merge runtime", () => {
 
     expect(
       fake.calls.filter(
-        (call) => call[1] === "merge" && call[2] === "--ff-only"
+        (call) => call[1] === "update-ref" && call[2] === "refs/heads/main"
       )
     ).toHaveLength(1);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
@@ -2187,7 +2282,7 @@ describe("Fleet exact-SHA merge runtime", () => {
     ).toEqual({ count: 0 });
   });
 
-  it("pushes without force, creates one PR, and merges only the green exact PR head", async () => {
+  it("creates one PR and atomically fast-forwards only the exact target ref", async () => {
     seed(db);
     const fake = fakeRuntime({ github: true });
     await requestFleetMerge(RUN_ID, "github_pr", "admin", {
@@ -2198,18 +2293,62 @@ describe("Fleet exact-SHA merge runtime", () => {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
       await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
-    const push = fake.calls.find((call) => call[1] === "push");
-    expect(push).toEqual([
+    const integrationPush = fake.calls.find(
+      (call) =>
+        call[1] === "push" &&
+        call.at(-1)?.endsWith(`:refs/heads/${fake.integration.branch}`)
+    );
+    expect(integrationPush).toEqual([
       fake.integration.worktree,
       "push",
-      "--set-upstream",
-      "origin",
-      fake.integration.branch,
+      "https://github.com/owner/repo.git",
+      `${INTEGRATED}:refs/heads/${fake.integration.branch}`,
     ]);
-    expect(push).not.toContain("--force");
+    expect(integrationPush).not.toContain("--force");
+    const landingPush = fake.calls.find(
+      (call) =>
+        call[1] === "push" &&
+        call.some((arg) => arg.startsWith("--force-with-lease="))
+    );
+    expect(landingPush).toEqual([
+      fake.integration.worktree,
+      "push",
+      "--porcelain",
+      `--force-with-lease=refs/heads/main:${BASE}`,
+      "https://github.com/owner/repo.git",
+      `${INTEGRATED}:refs/heads/main`,
+    ]);
+    expect(landingPush).not.toContain("--force");
     expect(fake.prCreateCalls).toBe(1);
-    expect(fake.mergeCalls).toBe(1);
-    expect(getFleetMergeStatus(RUN_ID, db)?.integration.mergeSha).toBe(MERGED);
+    expect(fake.landingUpdates).toBe(1);
+    expect(fake.remoteRefHead("main")).toBe(INTEGRATED);
+    expect(fake.remoteRefHead("release")).toBe(BASE);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration.mergeSha).toBe(
+      INTEGRATED
+    );
+  });
+
+  it("refuses to publish when the checkout origin differs from the registered GitHub repository", async () => {
+    seed(db);
+    const fake = fakeRuntime({
+      github: true,
+      originUrl: "https://github.com/other/repository.git",
+    });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 6; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+    }
+
+    expect(fake.calls.some((call) => call[1] === "push")).toBe(false);
+    expect(fake.prCreateCalls).toBe(0);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "awaiting_operator",
+      error: expect.stringContaining("repository identity differs"),
+    });
   });
 
   it("recovers a GitHub merge that completed before the client reported failure", async () => {
@@ -2227,10 +2366,11 @@ describe("Fleet exact-SHA merge runtime", () => {
       await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
 
-    expect(fake.mergeCalls).toBe(1);
+    expect(fake.landingPushCalls).toBe(1);
+    expect(fake.landingUpdates).toBe(1);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
       state: "cleanup_complete",
-      mergeSha: MERGED,
+      mergeSha: INTEGRATED,
     });
     expect(
       db
@@ -2239,7 +2379,7 @@ describe("Fleet exact-SHA merge runtime", () => {
            WHERE operation_type = 'github_merge'`
         )
         .get()
-    ).toEqual({ state: "completed", result_head_sha: MERGED });
+    ).toEqual({ state: "completed", result_head_sha: INTEGRATED });
   });
 
   it("refuses a changed GitHub PR head even when checks are green", async () => {
@@ -2253,7 +2393,6 @@ describe("Fleet exact-SHA merge runtime", () => {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
       await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
-    expect(fake.mergeCalls).toBe(0);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).toBe(
       "awaiting_operator"
     );
@@ -2274,7 +2413,6 @@ describe("Fleet exact-SHA merge runtime", () => {
       await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
 
-    expect(fake.mergeCalls).toBe(0);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
       state: "waiting_ci",
       error: "GitHub checks are failing",
@@ -2293,7 +2431,6 @@ describe("Fleet exact-SHA merge runtime", () => {
       await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
 
-    expect(fake.mergeCalls).toBe(0);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
       state: "awaiting_operator",
       error: expect.stringContaining("base changed"),
@@ -2325,7 +2462,6 @@ describe("Fleet exact-SHA merge runtime", () => {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     }
 
-    expect(fake.mergeCalls).toBe(0);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
       state: "awaiting_operator",
       error: expect.stringContaining("base changed"),
@@ -2353,14 +2489,13 @@ describe("Fleet exact-SHA merge runtime", () => {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     }
 
-    expect(fake.mergeCalls).toBe(0);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
       state: "awaiting_operator",
       error: expect.stringContaining("target branch changed"),
     });
   });
 
-  it("does not certify a GitHub PR retargeted during the merge request", async () => {
+  it("cannot redirect an exact-ref landing when the PR is retargeted concurrently", async () => {
     seed(db);
     const fake = fakeRuntime({
       github: true,
@@ -2376,13 +2511,39 @@ describe("Fleet exact-SHA merge runtime", () => {
       await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
 
-    expect(fake.mergeCalls).toBe(1);
-    expect(getFleetMergeStatus(RUN_ID, db)?.integration.state).not.toBe(
-      "completed"
-    );
-    expect(getFleetMergeStatus(RUN_ID, db)?.integration.error).toContain(
-      "target branch changed"
-    );
+    expect(fake.landingUpdates).toBe(1);
+    expect(fake.remoteRefHead("main")).toBe(INTEGRATED);
+    expect(fake.remoteRefHead("release")).toBe(BASE);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "cleanup_complete",
+      mergeSha: INTEGRATED,
+    });
+  });
+
+  it("performs no Fleet update when the target base advances during landing", async () => {
+    seed(db);
+    const fake = fakeRuntime({
+      github: true,
+      advanceBaseOnLanding: STALE,
+    });
+    await requestFleetMerge(RUN_ID, "github_pr", "admin", {
+      db,
+      ...fake.overrides,
+    });
+    for (let tick = 0; tick < 9; tick++) {
+      await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
+      await authorizeLandingIfReady(db, "github_pr", fake.overrides);
+    }
+
+    expect(fake.landingPushCalls).toBe(1);
+    expect(fake.landingUpdates).toBe(0);
+    expect(fake.remoteRefHead("main")).toBe(STALE);
+    expect(fake.remoteRefHead("release")).toBe(BASE);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "awaiting_operator",
+      mergeSha: null,
+      error: expect.stringContaining("stale remote target lease"),
+    });
   });
 
   it("does not recover an already-merged GitHub PR on the wrong target branch", async () => {
@@ -2407,14 +2568,13 @@ describe("Fleet exact-SHA merge runtime", () => {
       await reconcileFleetMerges({ db, ...fake.overrides }, RUN_ID);
     }
 
-    expect(fake.mergeCalls).toBe(0);
     expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
       state: "awaiting_operator",
       error: expect.stringContaining("target branch changed"),
     });
   });
 
-  it("allows an explicitly empty GitHub check set after final verification", async () => {
+  it("does not merge while GitHub has not registered any checks", async () => {
     seed(db);
     const fake = fakeRuntime({ github: true, prChecks: [] });
     await requestFleetMerge(RUN_ID, "github_pr", "admin", {
@@ -2426,8 +2586,11 @@ describe("Fleet exact-SHA merge runtime", () => {
       await authorizeLandingIfReady(db, "github_pr", fake.overrides);
     }
 
-    expect(fake.mergeCalls).toBe(1);
-    expect(getFleetMergeStatus(RUN_ID, db)?.integration.mergeSha).toBe(MERGED);
+    expect(getFleetMergeStatus(RUN_ID, db)?.integration).toMatchObject({
+      state: "waiting_ci",
+      error: expect.stringContaining("not reported any checks"),
+      mergeSha: null,
+    });
   });
 
   it("parses bounded GitHub readiness metadata defensively", () => {

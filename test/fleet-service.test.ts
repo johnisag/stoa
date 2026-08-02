@@ -1653,6 +1653,41 @@ describe("generated Fleet plans", () => {
 });
 
 describe("Fleet list attention and readiness presentation", () => {
+  it("keeps a current-plan blocker visible even before the review gate is clean", () => {
+    const created = createDraftFleetRun({
+      name: "Blocked automatic approval",
+      goal: "Keep critic findings visible to the operator",
+      repoId: "repo-fleet",
+      provider: "codex",
+      reviewPolicy: "four_agent",
+    });
+    if ("error" in created) throw new Error(created.error);
+    const runId = created.run.run.id;
+    const planned = ingestFleetRunPlan(runId, {
+      planText: "- Implement the reviewed change [files: lib/reviewed.ts]",
+    });
+    if ("error" in planned) throw new Error(planned.error);
+
+    expect(listFleetRuns().find((run) => run.id === runId)).toMatchObject({
+      attentionCount: 0,
+    });
+
+    const attached = attachFleetPlanCriticArtifact(runId, {
+      taskId: planned.run.tasks[0].id,
+      expectedPlanHash: planned.run.run.planHash!,
+      title: "Unsafe boundary",
+      body: "The current plan must be revised before approval.",
+      severity: "blocker",
+      actor: "adversarial-reviewer",
+    });
+    if ("error" in attached) throw new Error(attached.error);
+
+    expect(listFleetRuns().find((run) => run.id === runId)).toMatchObject({
+      attentionCount: 1,
+    });
+    expect(getFleetRunDetail(runId)?.run.attentionCount).toBe(1);
+  });
+
   it("keeps reviewed work and a staged exact head in Ready until landing is authorized", () => {
     const created = createDraftFleetRun({
       name: "Manual landing",
@@ -2577,6 +2612,56 @@ describe("Phase 2 plan ingestion and approval", () => {
       eventType: "critic_artifact_attached",
       actor: "critic-a",
     });
+  });
+
+  it("returns task-referenced evidence beyond the newest 100 artifacts", () => {
+    const runId = createRun();
+    const planned = ingestFleetRunPlan(runId, {
+      planText: "- Build parser\n- Add approval",
+    });
+    expect(planned).toHaveProperty("run");
+    if ("error" in planned) return;
+    const taskId = planned.run.tasks[0].id;
+
+    for (let index = 0; index < 105; index += 1) {
+      const id = `evidence-${String(index).padStart(3, "0")}`;
+      queries
+        .createFleetArtifact(db())
+        .run(
+          id,
+          runId,
+          taskId,
+          planned.run.run.planHash,
+          "task_review_result",
+          `Evidence ${index}`,
+          `body ${index}`,
+          "info",
+          "reviewer"
+        );
+      db()
+        .prepare(`UPDATE fleet_artifacts SET created_at = ? WHERE id = ?`)
+        .run(`2026-08-02T00:00:00.${String(index).padStart(3, "0")}Z`, id);
+    }
+    db()
+      .prepare(
+        `UPDATE fleet_tasks
+         SET report_artifact_id = 'evidence-000',
+             diff_artifact_id = 'evidence-001',
+             verification_artifact_id = 'evidence-002'
+         WHERE id = ?`
+      )
+      .run(taskId);
+
+    const detail = getFleetRunDetail(runId);
+    expect(detail).not.toBeNull();
+    expect(detail).toMatchObject({ artifactTotal: 105, artifactHasMore: true });
+    expect(detail?.artifacts).toHaveLength(103);
+    expect(detail?.artifacts.map((artifact) => artifact.id)).toEqual(
+      expect.arrayContaining(["evidence-000", "evidence-001", "evidence-002"])
+    );
+    expect(detail?.artifacts.map((artifact) => artifact.id)).not.toContain(
+      "evidence-003"
+    );
   });
 
   it("rejects stale or late critic artifact submissions", () => {

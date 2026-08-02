@@ -223,7 +223,7 @@ export class TmuxBackend implements SessionBackend {
         "-c",
         resolvedCwd,
         ...envArgs,
-        sessionCommand,
+        ...(sessionCommand ? [sessionCommand] : []),
       ],
       { windowsHide: true }
     );

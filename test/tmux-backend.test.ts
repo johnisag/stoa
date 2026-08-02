@@ -94,6 +94,28 @@ describe("TmuxBackend command construction (macOS/Linux path)", () => {
     expect(execCalls).toHaveLength(0);
   });
 
+  it("create: an empty command opens tmux's default shell", async () => {
+    await tb.create({
+      name: "shell-1",
+      cwd: "~/proj",
+      command: "",
+    });
+    expect(execFileCalls).toEqual([
+      { file: "tmux", args: ["set", "-g", "mouse", "on"] },
+      {
+        file: "tmux",
+        args: [
+          "new-session",
+          "-d",
+          "-s",
+          "shell-1",
+          "-c",
+          expect.stringMatching(/[\\/]proj$/),
+        ],
+      },
+    ]);
+  });
+
   it("create: hostile cwd and command remain argv data, not shell syntax", async () => {
     const cwd = String.raw`/tmp/repo" ; touch /tmp/pwn #`;
     const command = String.raw`bash /tmp/stoa"$(touch /tmp/pwn)`.trim();

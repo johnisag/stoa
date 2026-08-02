@@ -87,16 +87,46 @@ function serverEnv(extra = {}) {
   return { ...env, PORT: resolvedPort, ...extra };
 }
 
-// ~/.stoa is the Stoa home; operational files (pid, logs) live under it and honor
-// STOA_HOME. AUTH files (token, shared-origins) are owned by the running server's
-// lib/auth.ts, which resolves them from os.homedir()+.stoa and does NOT honor
-// STOA_HOME — so `stoa share` must use the SAME base to interoperate (read the token
-// the server uses, write origins where the server reads them).
-const STOA_HOME = process.env.STOA_HOME || path.join(os.homedir(), ".stoa");
-const STOA_AUTH_HOME = path.join(os.homedir(), ".stoa");
-const PID_FILE = path.join(STOA_HOME, "stoa.pid");
-const LOG_DIR = path.join(STOA_HOME, "logs");
-const LOG_FILE = path.join(LOG_DIR, "stoa.log");
+/** Match lib/platform.ts stoaHomeDir(): default to ~/.stoa and expand only a
+ * leading `~`, including the native-Windows `~\...` spelling. */
+function resolveStoaHome(
+  value = process.env.STOA_HOME,
+  userHome = os.homedir()
+) {
+  if (!value) return path.join(userHome, ".stoa");
+  if (value === "~") return userHome;
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(userHome, value.slice(2));
+  }
+  return value;
+}
+
+/** Keep every CLI/server interoperability path on the same resolved STOA_HOME. */
+function stoaStatePaths(
+  value = process.env.STOA_HOME,
+  userHome = os.homedir()
+) {
+  const stoaHome = resolveStoaHome(value, userHome);
+  const logDir = path.join(stoaHome, "logs");
+  return {
+    stoaHome,
+    pidFile: path.join(stoaHome, "stoa.pid"),
+    logDir,
+    logFile: path.join(logDir, "stoa.log"),
+    tokenFile: path.join(stoaHome, "token"),
+    sharedOriginsFile: path.join(stoaHome, "shared-origins"),
+    sharePidFile: path.join(stoaHome, "share.pid"),
+  };
+}
+
+const STOA_PATHS = stoaStatePaths();
+const STOA_HOME = STOA_PATHS.stoaHome;
+const PID_FILE = STOA_PATHS.pidFile;
+const LOG_DIR = STOA_PATHS.logDir;
+const LOG_FILE = STOA_PATHS.logFile;
+const TOKEN_FILE = STOA_PATHS.tokenFile;
+const SHARED_ORIGINS_FILE = STOA_PATHS.sharedOriginsFile;
+const SHARE_PID_FILE = STOA_PATHS.sharePidFile;
 
 // Native modules whose compiled `.node` binary must be built for the running Node.
 // Two ways a plain `npm install` leaves them broken, both of which 500 every DB route
@@ -1378,14 +1408,9 @@ function cmdStatusline() {
 // share (#11) — secure remote access over a tunnel (Tailscale funnel / cloudflared)
 // ---------------------------------------------------------------------------
 
-// stoa share registers the live tunnel origin here; the server reads it per WS
-// upgrade (lib/auth.ts readSharedOrigins). MUST match SHARED_ORIGINS_PATH exactly —
-// hence STOA_AUTH_HOME (os.homedir-based, not STOA_HOME), see the note by that const.
-const SHARED_ORIGINS_FILE = path.join(STOA_AUTH_HOME, "shared-origins");
-const TOKEN_FILE = path.join(STOA_AUTH_HOME, "token");
-// PID of the tunnel child, so a later `stoa share` can reap an orphan left by a hard
-// kill (SIGKILL/crash) that skipped the in-process teardown handlers.
-const SHARE_PID_FILE = path.join(STOA_AUTH_HOME, "share.pid");
+// stoa share registers the live tunnel origin under the resolved STOA_HOME; the
+// server reads the same path per WS upgrade (lib/auth.ts readSharedOrigins).
+// The token and tunnel PID share that authority root as well.
 // Cap the registered-origins list so repeated shares (esp. cloudflared's new random
 // subdomain each run) can't grow it — and the per-WS-upgrade scan — without bound.
 const MAX_SHARED_ORIGINS = 20;
@@ -1504,7 +1529,7 @@ function decideShare(state) {
       ok: false,
       code: "no-token",
       message:
-        "Couldn't find the server token. Set STOA_TOKEN, or start the server so it writes ~/.stoa/token.",
+        "Couldn't find the server token. Set STOA_TOKEN, or start the server so it writes the token under STOA_HOME (default: ~/.stoa/token).",
     };
   if (!provider)
     return {
@@ -1517,7 +1542,8 @@ function decideShare(state) {
 }
 
 /** The server token as a running server resolved it: STOA_TOKEN env, else the
- *  persisted ~/.stoa/token. null if neither (we never generate one here). */
+ *  persisted STOA_HOME/token (default ~/.stoa/token). null if neither (we never
+ *  generate one here). */
 function readServerToken() {
   const fromEnv = (process.env.STOA_TOKEN || "").trim();
   if (fromEnv) return fromEnv;
@@ -1538,7 +1564,7 @@ function readOriginsFile() {
 }
 
 function writeOriginsFile(list) {
-  ensureDir(STOA_AUTH_HOME);
+  ensureDir(STOA_HOME);
   const body = list.length ? list.join("\n") + "\n" : "";
   // Atomic write (tmp + same-dir rename) so the server's per-upgrade read never sees
   // a torn/truncated file and momentarily drops the live origin (transient false-deny).
@@ -1639,7 +1665,7 @@ function stopTunnel(pid) {
 
 function writeSharePid(pid) {
   try {
-    ensureDir(STOA_AUTH_HOME);
+    ensureDir(STOA_HOME);
     fs.writeFileSync(SHARE_PID_FILE, String(pid), { mode: 0o600 });
   } catch {
     /* non-fatal */
@@ -1943,6 +1969,9 @@ module.exports = {
   parseEnvFile,
   loadEnvFile,
   serverEnv,
+  resolveStoaHome,
+  stoaStatePaths,
+  stoaPaths: STOA_PATHS,
   commandSpec,
   buildIsComplete,
   waitUntilDead,

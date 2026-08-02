@@ -12,6 +12,7 @@ import type {
   FleetArtifactDto,
   FleetDestructiveActionPreview,
   FleetRunDetailDto,
+  FleetRunDto,
   FleetTaskDto,
   FleetWorkerDto,
 } from "@/lib/fleet/types";
@@ -21,6 +22,7 @@ import type { FleetMergeStatusDto } from "@/data/fleet/queries";
 
 const state = vi.hoisted(() => ({
   detail: null as FleetRunDetailDto | null,
+  runs: null as FleetRunDto[] | null,
   approvalPreview: null as FleetApprovalControlPreviewDto | null,
   outputHook: vi.fn(),
   artifactBodyHook: vi.fn(),
@@ -69,7 +71,7 @@ vi.mock("@/data/projects/queries", () => ({
 }));
 vi.mock("@/data/fleet/queries", () => ({
   useFleetRunsQuery: () => ({
-    data: state.detail ? [state.detail.run] : [],
+    data: state.runs ?? (state.detail ? [state.detail.run] : []),
     isLoading: false,
     isError: false,
     error: null,
@@ -802,6 +804,7 @@ describe("FleetManagementView status drilldowns", () => {
       value: vi.fn(),
     });
     state.detail = detailFixture();
+    state.runs = null;
     state.approvalPreview = approvalPreviewFixture();
     state.cancellationPreview = destructivePreviewFixture();
     state.cleanupPreview = null;
@@ -948,6 +951,9 @@ describe("FleetManagementView status drilldowns", () => {
         ) as HTMLInputElement
       ).disabled
     ).toBe(false);
+    fireEvent.click(screen.getByLabelText("Merge green results automatically"));
+    expect(screen.getByText(/exact old-OID-leased fast-forward/)).toBeTruthy();
+    expect(screen.getByText(/does not fall back/)).toBeTruthy();
     expect(
       (
         screen.getByLabelText(
@@ -1051,10 +1057,43 @@ describe("FleetManagementView status drilldowns", () => {
     expect(within(queue).getByText(new RegExp(currentTitle))).toBeTruthy();
 
     const artifacts = screen.getByRole("heading", {
-      name: "Critic artifacts",
+      name: "Run artifacts",
     }).parentElement?.parentElement;
     expect(artifacts).toBeTruthy();
     expect(within(artifacts!).getByText(historicalTitle)).toBeTruthy();
+  });
+
+  it("discloses bounded artifact and event metadata windows", async () => {
+    state.detail!.artifactTotal = 143;
+    state.detail!.artifactHasMore = true;
+    state.detail!.eventTotal = 87;
+    state.detail!.eventHasMore = true;
+
+    render(<FleetManagementView />);
+
+    expect(await screen.findByText("Showing 1 of 143 artifacts")).toBeTruthy();
+    expect(
+      screen.getByText(/every task-referenced report, diff, and verification/)
+    ).toBeTruthy();
+    expect(screen.getByText("Showing the newest 2 of 87 events.")).toBeTruthy();
+  });
+
+  it("discloses that only terminal history is capped", async () => {
+    state.runs = Array.from({ length: 100 }, (_, index) => ({
+      ...state.detail!.run,
+      id: `terminal-${index}`,
+      name: `Terminal ${index}`,
+      status: "completed" as const,
+    }));
+
+    render(<FleetManagementView />);
+
+    expect(
+      await screen.findByText(/Terminal and archived history is capped/)
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/All unarchived active work remains visible/)
+    ).toBeTruthy();
   });
 
   it("fails closed when a clean task has malformed current-head evidence", async () => {

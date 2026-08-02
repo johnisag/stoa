@@ -24,7 +24,9 @@ import {
   ingestFleetRunPlan,
   listFleetRuns,
   pauseFleetRun,
+  resolveFleetApprovalContract,
   resumeFleetRun,
+  type FleetApprovalContract,
 } from "./service";
 import {
   authorizeFleetManualLanding,
@@ -129,6 +131,13 @@ interface ExactFleetMergeIntent {
 
 interface ExactFleetLandingIntent extends ExactFleetMergeIntent {
   integrationHeadSha: string;
+}
+
+interface ExactFleetLifecycleIntent {
+  action: "fleet:start" | "fleet:resume";
+  sourceStatus: "planned" | "paused";
+  executionHash: string;
+  stateEpoch: number;
 }
 
 function authorizeStoredFleetCapabilityReadOnly(
@@ -287,6 +296,50 @@ function approvedExecutionHash(run: FleetRunRow): string | null {
   }
 }
 
+function exactFleetLifecycleIntent(
+  run: FleetRunRow,
+  action: ExactFleetLifecycleIntent["action"]
+): ExactFleetLifecycleIntent | FleetCapabilityRuntimeError {
+  const sourceStatus = action === "fleet:start" ? "planned" : "paused";
+  if (run.status !== sourceStatus) {
+    return {
+      error: `${action} requires a ${sourceStatus} run`,
+      status: 409,
+    };
+  }
+  const executionHash = approvedExecutionHash(run);
+  if (!executionHash) {
+    return { error: "run has no approved execution hash", status: 409 };
+  }
+  const stateEpoch = run.scheduler_epoch ?? 0;
+  if (!Number.isSafeInteger(stateEpoch) || stateEpoch < 0) {
+    return { error: "run has an invalid state epoch", status: 409 };
+  }
+  return { action, sourceStatus, executionHash, stateEpoch };
+}
+
+function fleetLifecycleIntentHash(
+  intent: ExactFleetLifecycleIntent
+): FleetCapabilityHashScope {
+  return { kind: "execution", value: stableHash(intent) };
+}
+
+function exactFleetApprovalIntent(
+  db: Database.Database,
+  runId: string
+): FleetApprovalContract | FleetCapabilityRuntimeError {
+  const resolved = resolveFleetApprovalContract(runId, { db });
+  return "error" in resolved
+    ? { error: resolved.error, status: resolved.status ?? 409 }
+    : resolved.contract;
+}
+
+function fleetApprovalIntentHash(
+  intent: FleetApprovalContract
+): FleetCapabilityHashScope {
+  return { kind: "execution", value: stableHash(intent) };
+}
+
 function mergeTarget(payload: unknown): FleetMergeTarget | null {
   const target = objectValue(payload)?.target;
   return target === "local" || target === "github_pr" ? target : null;
@@ -403,20 +456,17 @@ function deriveBoundHash(
     };
   }
 
+  if (action === "fleet:approve") {
+    const intent = exactFleetApprovalIntent(db, runId);
+    return "error" in intent ? intent : fleetApprovalIntentHash(intent);
+  }
   const run = getRun(db, runId);
   if (!run) return { error: "Fleet run not found", status: 404 };
-
-  if (action === "fleet:approve") {
-    return run.plan_hash && /^[0-9a-f]{64}$/.test(run.plan_hash)
-      ? { kind: "plan", value: run.plan_hash }
-      : { error: "run has no exact plan hash", status: 409 };
+  if (action === "fleet:start" || action === "fleet:resume") {
+    const intent = exactFleetLifecycleIntent(run, action);
+    return "error" in intent ? intent : fleetLifecycleIntentHash(intent);
   }
-  if (
-    action === "fleet:start" ||
-    action === "fleet:pause" ||
-    action === "fleet:resume" ||
-    action === "fleet:cancel"
-  ) {
+  if (action === "fleet:pause" || action === "fleet:cancel") {
     const executionHash = approvedExecutionHash(run);
     return executionHash
       ? { kind: "execution", value: executionHash }
@@ -754,6 +804,41 @@ export async function executeStoredFleetCapability(
     );
     if (recoveryBlocked) return recoveryBlocked;
   }
+  let approvalIntent: FleetApprovalContract | null = null;
+  if (authorized.scope.action === "fleet:approve") {
+    const current = exactFleetApprovalIntent(db, authorized.scope.runId);
+    if ("error" in current) return current;
+    const expected = authorized.scope.boundHash;
+    const currentHash = fleetApprovalIntentHash(current);
+    if (
+      !expected ||
+      expected.kind !== currentHash.kind ||
+      expected.value !== currentHash.value
+    ) {
+      return { error: "capability action intent changed", status: 409 };
+    }
+    approvalIntent = current;
+  }
+  let lifecycleIntent: ExactFleetLifecycleIntent | null = null;
+  if (
+    authorized.scope.action === "fleet:start" ||
+    authorized.scope.action === "fleet:resume"
+  ) {
+    const run = getRun(db, authorized.scope.runId);
+    if (!run) return { error: "Fleet run not found", status: 404 };
+    const current = exactFleetLifecycleIntent(run, authorized.scope.action);
+    if ("error" in current) return current;
+    const expected = authorized.scope.boundHash;
+    const currentHash = fleetLifecycleIntentHash(current);
+    if (
+      !expected ||
+      expected.kind !== currentHash.kind ||
+      expected.value !== currentHash.value
+    ) {
+      return { error: "capability action intent changed", status: 409 };
+    }
+    lifecycleIntent = current;
+  }
   let mergeIntent: ExactFleetMergeIntent | null = null;
   if (authorized.scope.action === "fleet:merge") {
     const current = exactFleetMergeIntent(
@@ -798,7 +883,7 @@ export async function executeStoredFleetCapability(
   try {
     const intentError = verifyCurrentIntent(db, claim.record, request.payload);
     if (intentError) return intentError;
-    const { action, runId, taskId, boundHash } = claim.record.scope;
+    const { action, runId, taskId } = claim.record.scope;
     const payload = withoutUntrustedActor(request.payload) ?? {};
     const actor = `fleet-capability:${claim.record.id}`;
     let result: unknown;
@@ -831,20 +916,33 @@ export async function executeStoredFleetCapability(
     } else if (action === "fleet:plan") {
       result = ingestFleetRunPlan(runId, { ...payload, actor });
     } else if (action === "fleet:approve") {
-      result = approveFleetRunPlan(
-        runId,
-        { expectedPlanHash: boundHash?.value },
-        actor
-      );
+      result = approvalIntent
+        ? approveFleetRunPlan(
+            runId,
+            { expectedPlanHash: approvalIntent.planHash },
+            actor,
+            undefined,
+            { db, capabilityGuard: approvalIntent }
+          )
+        : { error: "approval intent is unavailable", status: 409 };
     } else if (action === "fleet:start" || action === "fleet:resume") {
-      result = await resumeFleetRun(
-        runId,
-        {
-          actor,
-          conductorSessionId: null,
-        },
-        { db }
-      );
+      result = lifecycleIntent
+        ? await resumeFleetRun(
+            runId,
+            {
+              actor,
+              conductorSessionId: null,
+            },
+            {
+              db,
+              transitionGuard: {
+                sourceStatus: lifecycleIntent.sourceStatus,
+                executionHash: lifecycleIntent.executionHash,
+                stateEpoch: lifecycleIntent.stateEpoch,
+              },
+            }
+          )
+        : { error: "lifecycle intent is unavailable", status: 409 };
     } else if (action === "fleet:pause") {
       result = await pauseFleetRun(runId, { actor, mode: "pause-new" });
     } else if (action === "fleet:cancel") {

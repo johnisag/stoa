@@ -2207,6 +2207,8 @@ function RunDetail({
     () => new Map(detail.artifacts.map((artifact) => [artifact.id, artifact])),
     [detail.artifacts]
   );
+  const artifactTotal = detail.artifactTotal ?? detail.artifacts.length;
+  const eventTotal = detail.eventTotal ?? detail.events.length;
   const latestTaskEvent = useMemo(() => {
     const events = new Map<string, FleetEventDto>();
     for (const event of detail.events) {
@@ -3356,7 +3358,7 @@ function RunDetail({
                         resetLifecycleErrors();
                         const action =
                           manualLandingPreconditions.target === "github_pr"
-                            ? "push the integration branch, open or reuse its GitHub PR, wait for required checks, and merge it"
+                            ? "push the integration branch, open or reuse its GitHub PR, wait for required checks, and fast-forward the configured target ref with an exact old-OID lease"
                             : "fast-forward the local base checkout";
                         if (
                           !window.confirm(
@@ -3458,7 +3460,7 @@ function RunDetail({
       >
         <div className="flex items-center gap-2 border-b px-3 py-2">
           <Paperclip className="h-4 w-4" />
-          <h3 className="text-sm font-medium">Critic artifacts</h3>
+          <h3 className="text-sm font-medium">Run artifacts</h3>
         </div>
         <div className="grid gap-3 p-3">
           <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_9rem_12rem]">
@@ -3510,7 +3512,9 @@ function RunDetail({
               </div>
             ) : (
               <span className="text-muted-foreground text-xs">
-                {detail.artifacts.length} findings
+                {detail.artifactHasMore
+                  ? `Showing ${detail.artifacts.length} of ${artifactTotal} artifacts`
+                  : `${artifactTotal} artifacts`}
               </span>
             )}
             <Button
@@ -3532,6 +3536,13 @@ function RunDetail({
               Attach
             </Button>
           </div>
+          {detail.artifactHasMore && (
+            <p className="text-muted-foreground text-xs" role="status">
+              The newest artifact window and every task-referenced report, diff,
+              and verification record are shown. Older unreferenced metadata is
+              omitted from this view.
+            </p>
+          )}
           {detail.artifacts.length > 0 && (
             <div className="grid gap-2">
               {detail.artifacts.map((artifact) => {
@@ -3814,10 +3825,21 @@ function RunDetail({
             mobileSection === "events" ? "block" : "hidden lg:block"
           )}
         >
-          <div className="border-b px-3 py-2">
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
             <h3 className="text-sm font-medium">Events</h3>
+            <span className="text-muted-foreground text-[11px]">
+              {detail.eventHasMore
+                ? `${detail.events.length} of ${eventTotal}`
+                : eventTotal}
+            </span>
           </div>
           <div className="grid gap-2 p-3">
+            {detail.eventHasMore && (
+              <p className="text-muted-foreground text-xs" role="status">
+                Showing the newest {detail.events.length} of {eventTotal}{" "}
+                events.
+              </p>
+            )}
             {detail.events.map((event) => (
               <div key={event.id} className="rounded border px-3 py-2">
                 <div className="flex items-center justify-between gap-2">
@@ -3913,6 +3935,12 @@ export function FleetManagementView({
     () => (runs.data ?? []).find((run) => run.id === selectedRunId) ?? null,
     [runs.data, selectedRunId]
   );
+  const terminalHistoryAtLimit =
+    (runs.data ?? []).filter(
+      (run) =>
+        run.archivedAt != null ||
+        ["completed", "failed", "canceled"].includes(run.status)
+    ).length >= 100;
   const selectedRepo = useMemo(
     () => (repos.data ?? []).find((repo) => repo.id === repoId) ?? null,
     [repoId, repos.data]
@@ -4077,7 +4105,7 @@ export function FleetManagementView({
           <Network className="h-4 w-4 flex-shrink-0" />
           <span className="text-sm font-medium">Fleet Management</span>
           <span className="text-muted-foreground text-xs">
-            {runs.data?.length ?? 0} runs
+            {runs.data?.length ?? 0} visible runs
           </span>
           {analytics.data && (
             <span className="text-muted-foreground hidden items-center gap-1 text-xs sm:flex">
@@ -4634,13 +4662,22 @@ export function FleetManagementView({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="github_pr">
-                        GitHub PR, CI, then merge
+                        GitHub PR checks, then leased fast-forward
                       </SelectItem>
                       <SelectItem value="local">
                         Local fast-forward only
                       </SelectItem>
                     </SelectContent>
                   </Select>
+                  {mergeTarget === "github_pr" && (
+                    <span className="text-muted-foreground">
+                      After PR checks pass, Fleet lands with an exact
+                      old-OID-leased fast-forward of the configured target ref.
+                      If branch rules reject that update, the run waits for
+                      operator action; Fleet does not fall back to a
+                      base-unpinned PR merge.
+                    </span>
+                  )}
                 </label>
               )}
               <label className="grid gap-1 text-xs">
@@ -4770,6 +4807,12 @@ export function FleetManagementView({
               <GitBranch className="h-4 w-4" />
               <h3 className="text-sm font-medium">Runs</h3>
             </div>
+            {terminalHistoryAtLimit && (
+              <p className="text-muted-foreground mb-2 text-xs" role="status">
+                Terminal and archived history is capped at the 100 most recently
+                updated runs. All unarchived active work remains visible.
+              </p>
+            )}
             {runs.isLoading ? (
               <div className="text-muted-foreground flex items-center gap-2 py-4 text-sm">
                 <Loader2 className="h-4 w-4 animate-spin" />

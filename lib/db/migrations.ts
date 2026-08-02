@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { ensureSessionLaunchProfileSchema } from "./session-launch-profile-schema";
+import { ensureFleetSessionOwnershipSchema } from "./fleet-session-ownership-schema";
 
 const SAFE_FLEET_AUTOMATION_POLICY_JSON =
   '{"version":1,"automaticPlanning":false,"automaticPlanApproval":false,"automaticStart":false,"automaticFixes":false,"maxAutomaticFixRounds":0,"automaticMerge":false,"mergeTarget":"github_pr","allowSensitivePaths":false,"allowUnconfinedAgents":false,"plannerTaskCap":8,"cleanupPolicy":"preserve","retentionDays":null}';
@@ -3376,6 +3377,11 @@ const migrations: Migration[] = [
     id: 78,
     name: "add_fleet_scheduler_poll_cursor",
     up: ensureFleetSchedulerPollCursorSchema,
+  },
+  {
+    id: 79,
+    name: "add_fleet_session_ownership",
+    up: ensureFleetSessionOwnershipSchema,
   },
 ];
 

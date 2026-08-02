@@ -607,8 +607,10 @@ export function composeFleetRunDetail(input: {
   dependencies?: import("./types").FleetTaskDependencyRow[];
   workers: FleetWorkerRow[];
   artifacts: FleetArtifactRow[];
+  artifactTotal?: number;
   verifications?: FleetVerificationRow[];
   events: FleetEventRow[];
+  eventTotal?: number;
 }): FleetRunDetailDto {
   const attentionActive =
     input.run.archived_at == null &&
@@ -710,7 +712,13 @@ export function composeFleetRunDetail(input: {
     ),
     workers: input.workers.map(toFleetWorkerDto),
     artifacts: input.artifacts.map(toFleetArtifactDto),
+    artifactTotal: input.artifactTotal ?? input.artifacts.length,
+    artifactHasMore:
+      (input.artifactTotal ?? input.artifacts.length) > input.artifacts.length,
     verifications: (input.verifications ?? []).map(toFleetVerificationDto),
     events: input.events.map(toFleetEventDto),
+    eventTotal: input.eventTotal ?? input.events.length,
+    eventHasMore:
+      (input.eventTotal ?? input.events.length) > input.events.length,
   };
 }

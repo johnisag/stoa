@@ -62,8 +62,11 @@ import {
 import { redactAndCapFleetText } from "./redaction";
 import type { FleetDestructiveConfirmation } from "./lifecycle";
 import { hasFourIndependentCleanPlanReviews } from "./plan-review-evidence";
+import {
+  countFleetEventsForDetail,
+  loadFleetDetailArtifactMetadata,
+} from "./detail-metadata";
 import type {
-  FleetArtifactRow,
   FleetArtifactSeverity,
   FleetEventRow,
   FleetRunDetailDto,
@@ -85,7 +88,7 @@ interface FleetRunListRow extends FleetRunRow {
   awaiting_manual_merge: number;
 }
 
-const FLEET_RUN_LIST_LIMIT = 100;
+const FLEET_TERMINAL_RUN_HISTORY_LIMIT = 100;
 const FLEET_ARTIFACT_LIST_LIMIT = 100;
 const FLEET_ACTOR_MAX = 80;
 const FLEET_ARTIFACT_TITLE_MAX = 160;
@@ -463,7 +466,7 @@ function immediateTransaction<T>(db: Database.Database, callback: () => T): T {
 export function listFleetRuns(): FleetRunDto[] {
   const rows = queries
     .listFleetRuns(getDb())
-    .all(FLEET_RUN_LIST_LIMIT) as FleetRunListRow[];
+    .all(FLEET_TERMINAL_RUN_HISTORY_LIMIT) as FleetRunListRow[];
   return rows.map((row) =>
     toFleetRunDto(row, {
       taskCount: row.task_count,
@@ -488,23 +491,29 @@ function fleetRunDetailFromDb(
   const workers = queries
     .listFleetWorkersForRun(db)
     .all(id) as FleetWorkerRow[];
-  const artifacts = queries
-    .listFleetArtifactsForRun(db)
-    .all(id, FLEET_ARTIFACT_LIST_LIMIT) as FleetArtifactRow[];
+  const artifactMetadata = loadFleetDetailArtifactMetadata(
+    db,
+    id,
+    tasks,
+    FLEET_ARTIFACT_LIST_LIMIT
+  );
   const verifications = queries
     .listFleetVerificationsForRun(db)
     .all(id) as FleetVerificationRow[];
   const events = queries
     .listFleetEventsForRun(db)
     .all(id, 50) as FleetEventRow[];
+  const eventTotal = countFleetEventsForDetail(db, id);
   return composeFleetRunDetail({
     run,
     tasks,
     dependencies,
     workers,
-    artifacts,
+    artifacts: artifactMetadata.rows,
+    artifactTotal: artifactMetadata.total,
     verifications,
     events,
+    eventTotal,
   });
 }
 
@@ -902,6 +911,22 @@ export interface FleetAutomationApprovalGuard {
   executionHash: string;
 }
 
+export interface FleetApprovalContract {
+  planHash: string;
+  policyHash: string;
+  executionHash: string;
+  baseSha: string;
+}
+
+interface FleetApprovalPreparation {
+  contract: FleetApprovalContract;
+  defaultWorkingDirectory: string;
+  defaultBaseBranch: string;
+}
+
+type FleetApprovalPreparationResult =
+  FleetApprovalPreparation | { error: string; status?: number };
+
 function fleetRunBaseTarget(
   db: Database.Database,
   run: FleetRunRow
@@ -929,98 +954,196 @@ function fleetRunBaseTarget(
   return null;
 }
 
+function prepareFleetApprovalContract(
+  db: Database.Database,
+  run: FleetRunRow
+): FleetApprovalPreparationResult {
+  const parsedPolicy = parseFleetAutomationPolicy(run.automation_policy_json);
+  if (
+    !parsedPolicy.valid ||
+    !run.automation_policy_hash ||
+    hashFleetAutomationPolicy(parsedPolicy.policy) !==
+      run.automation_policy_hash
+  ) {
+    return { error: "Fleet automation policy is invalid", status: 409 };
+  }
+  if (!fleetUnattendedAgentLaunchAllowed(parsedPolicy.policy)) {
+    return {
+      error:
+        "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before approval",
+      status: 409,
+    };
+  }
+  if (!run.plan_hash) {
+    return { error: "ingest a plan before approval", status: 400 };
+  }
+  if (
+    !PROVIDER_IDS.includes(run.provider as (typeof PROVIDER_IDS)[number]) ||
+    run.provider === "shell"
+  ) {
+    return {
+      error: "select a supported agent provider before approval",
+      status: 409,
+    };
+  }
+
+  const baseTarget = fleetRunBaseTarget(db, run);
+  if (!baseTarget) {
+    return {
+      error:
+        "an executable fleet plan requires a repository or project working directory",
+      status: 409,
+    };
+  }
+  const currentBaseSha = resolveGitCommit(
+    baseTarget.workingDirectory,
+    baseTarget.baseBranch
+  )?.toLowerCase();
+  if (!currentBaseSha) {
+    return { error: "failed to resolve the Fleet base commit", status: 409 };
+  }
+  if (
+    run.automation_base_sha &&
+    run.automation_base_sha.toLowerCase() !== currentBaseSha
+  ) {
+    return { error: "Fleet run base commit changed", status: 409 };
+  }
+
+  const tasks = queries.listFleetTasksForRun(db).all(run.id) as FleetTaskRow[];
+  if (tasks.length === 0) return { error: "plan has no tasks", status: 400 };
+  const modelContracts = validateFleetModelContractsForApproval(run, tasks);
+  if ("error" in modelContracts) return modelContracts;
+  const dependencies = db
+    .prepare(`SELECT * FROM fleet_task_dependencies WHERE fleet_run_id = ?`)
+    .all(run.id) as FleetTaskDependencyRow[];
+  const validation = validateFleetTaskRowsForApproval(tasks, dependencies);
+  if ("error" in validation) return { error: validation.error, status: 409 };
+  if (validation.hash !== run.plan_hash) {
+    return { error: "plan hash changed", status: 409 };
+  }
+
+  const defaultWorkingDirectory = baseTarget.workingDirectory;
+  const defaultBaseBranch = baseTarget.baseBranch;
+  if (!isGitRepo(defaultWorkingDirectory)) {
+    return {
+      error: "working directory must be an accessible Git repository",
+      status: 409,
+    };
+  }
+  const executionTasks = tasks.map((task) => ({
+    ...task,
+    working_directory: task.working_directory ?? defaultWorkingDirectory,
+    base_branch: task.base_branch ?? defaultBaseBranch,
+  }));
+  const executionDirectories = new Set<string>();
+  for (const task of executionTasks) {
+    const provider = task.agent_type ?? run.provider;
+    if (
+      !PROVIDER_IDS.includes(provider as (typeof PROVIDER_IDS)[number]) ||
+      provider === "shell"
+    ) {
+      return {
+        error: `task ${task.id} has an unsupported provider`,
+        status: 409,
+      };
+    }
+    if (!task.working_directory || !task.base_branch) {
+      return {
+        error: `task ${task.id} has an incomplete execution target`,
+        status: 409,
+      };
+    }
+    executionDirectories.add(task.working_directory);
+  }
+  for (const directory of executionDirectories) {
+    if (!isGitRepo(directory)) {
+      return {
+        error: `task working directory is not an accessible Git repository: ${directory}`,
+        status: 409,
+      };
+    }
+  }
+
+  const claims = db
+    .prepare(`SELECT * FROM fleet_task_claims WHERE fleet_run_id = ?`)
+    .all(run.id) as FleetTaskClaimRow[];
+  const claimValidation = validateFleetClaimRowsForApproval(
+    executionTasks,
+    claims
+  );
+  if ("error" in claimValidation) {
+    return { error: claimValidation.error, status: 409 };
+  }
+  const executionHash = hashFleetExecutionContract({
+    run,
+    tasks: executionTasks,
+    claims,
+    dependencies,
+  });
+  return {
+    contract: {
+      planHash: run.plan_hash,
+      policyHash: run.automation_policy_hash,
+      executionHash,
+      baseSha: currentBaseSha,
+    },
+    defaultWorkingDirectory,
+    defaultBaseBranch,
+  };
+}
+
+export function resolveFleetApprovalContract(
+  id: string,
+  overrides: { db?: Database.Database } = {}
+): { contract: FleetApprovalContract } | { error: string; status?: number } {
+  const db = overrides.db ?? getDb();
+  const run = queries.getFleetRun(db).get(id) as FleetRunRow | undefined;
+  if (!run) return { error: "Fleet run not found", status: 404 };
+  if (!canApprovePlan(run)) {
+    return { error: "run is not awaiting plan approval", status: 409 };
+  }
+  const prepared = prepareFleetApprovalContract(db, run);
+  return "error" in prepared ? prepared : { contract: prepared.contract };
+}
+
+function sameFleetApprovalContract(
+  left: FleetApprovalContract,
+  right: FleetApprovalContract
+): boolean {
+  return (
+    left.planHash === right.planHash &&
+    left.policyHash === right.policyHash &&
+    left.executionHash === right.executionHash &&
+    left.baseSha.toLowerCase() === right.baseSha.toLowerCase()
+  );
+}
+
 export function approveFleetRunPlan(
   id: string,
   input: unknown,
   actor = "operator",
-  automationGuard?: FleetAutomationApprovalGuard
+  automationGuard?: FleetAutomationApprovalGuard,
+  overrides: {
+    db?: Database.Database;
+    capabilityGuard?: FleetApprovalContract;
+  } = {}
 ): { run: FleetRunDetailDto } | { error: string; status?: number } {
   const payload = payloadObject(input);
   const expectedPlanHash = cappedText(payload.expectedPlanHash, 128);
   if (!expectedPlanHash) return { error: "expectedPlanHash is required" };
 
-  const db = getDb();
+  const db = overrides.db ?? getDb();
   const approvedBy = actorValue(actor, "operator");
   const result = immediateTransaction<
     { ok: true } | { error: string; status?: number }
   >(db, () => {
     const run = queries.getFleetRun(db).get(id) as FleetRunRow | undefined;
     if (!run) return { error: "Fleet run not found", status: 404 };
-    const parsedPolicy = parseFleetAutomationPolicy(run.automation_policy_json);
-    if (
-      !parsedPolicy.valid ||
-      !run.automation_policy_hash ||
-      hashFleetAutomationPolicy(parsedPolicy.policy) !==
-        run.automation_policy_hash
-    ) {
-      return { error: "Fleet automation policy is invalid", status: 409 };
-    }
-    if (!fleetUnattendedAgentLaunchAllowed(parsedPolicy.policy)) {
-      return {
-        error:
-          "Fleet run lacks explicit unconfined-agent consent; recreate it with consent before approval",
-        status: 409,
-      };
-    }
-    const baseTarget = fleetRunBaseTarget(db, run);
-    if (!baseTarget) {
-      return {
-        error:
-          "an executable fleet plan requires a repository or project working directory",
-        status: 409,
-      };
-    }
-    const currentBaseSha = resolveGitCommit(
-      baseTarget.workingDirectory,
-      baseTarget.baseBranch
-    );
-    if (!currentBaseSha) {
-      return { error: "failed to resolve the Fleet base commit", status: 409 };
-    }
-    if (
-      run.automation_base_sha &&
-      run.automation_base_sha.toLowerCase() !== currentBaseSha
-    ) {
-      return { error: "Fleet run base commit changed", status: 409 };
-    }
-    if (automationGuard) {
-      if (
-        approvedBy !== "fleet-automation" ||
-        run.automation_policy_hash !== automationGuard.policyHash ||
-        automationGuard.baseSha.toLowerCase() !== currentBaseSha
-      ) {
-        return {
-          error: "automatic approval authorization changed",
-          status: 409,
-        };
-      }
-      const authorization = db
-        .prepare(
-          `SELECT status FROM fleet_action_authorizations
-           WHERE fleet_run_id = ? AND action = 'plan_approval' AND policy_hash = ?`
-        )
-        .get(id, automationGuard.policyHash) as { status: string } | undefined;
-      if (authorization?.status !== "authorized") {
-        return {
-          error: "automatic plan approval is not authorized",
-          status: 409,
-        };
-      }
-    }
     if (!canApprovePlan(run)) {
       return { error: "run is not awaiting plan approval", status: 409 };
     }
     if (!run.plan_hash) {
       return { error: "ingest a plan before approval", status: 400 };
-    }
-    if (
-      !PROVIDER_IDS.includes(run.provider as (typeof PROVIDER_IDS)[number]) ||
-      run.provider === "shell"
-    ) {
-      return {
-        error: "select a supported agent provider before approval",
-        status: 409,
-      };
     }
     if (run.plan_hash !== expectedPlanHash) {
       return { error: "plan hash changed", status: 409 };
@@ -1043,17 +1166,46 @@ export function approveFleetRunPlan(
       };
     }
 
-    const tasks = queries.listFleetTasksForRun(db).all(id) as FleetTaskRow[];
-    if (tasks.length === 0) return { error: "plan has no tasks", status: 400 };
-    const modelContracts = validateFleetModelContractsForApproval(run, tasks);
-    if ("error" in modelContracts) return modelContracts;
-    const dependencies = db
-      .prepare(`SELECT * FROM fleet_task_dependencies WHERE fleet_run_id = ?`)
-      .all(id) as FleetTaskDependencyRow[];
-    const validation = validateFleetTaskRowsForApproval(tasks, dependencies);
-    if ("error" in validation) return { error: validation.error, status: 409 };
-    if (validation.hash !== run.plan_hash) {
-      return { error: "plan hash changed", status: 409 };
+    const prepared = prepareFleetApprovalContract(db, run);
+    if ("error" in prepared) return prepared;
+    const { contract, defaultWorkingDirectory, defaultBaseBranch } = prepared;
+    const approvedExecutionHash = contract.executionHash;
+    const currentBaseSha = contract.baseSha;
+    if (overrides.capabilityGuard) {
+      if (
+        !approvedBy.startsWith("fleet-capability:") ||
+        !sameFleetApprovalContract(contract, overrides.capabilityGuard)
+      ) {
+        return {
+          error: "capability approval intent changed",
+          status: 409,
+        };
+      }
+    }
+    if (automationGuard) {
+      if (
+        approvedBy !== "fleet-automation" ||
+        contract.policyHash !== automationGuard.policyHash ||
+        automationGuard.baseSha.toLowerCase() !== currentBaseSha ||
+        approvedExecutionHash !== automationGuard.executionHash
+      ) {
+        return {
+          error: "automatic approval authorization changed",
+          status: 409,
+        };
+      }
+      const authorization = db
+        .prepare(
+          `SELECT status FROM fleet_action_authorizations
+           WHERE fleet_run_id = ? AND action = 'plan_approval' AND policy_hash = ?`
+        )
+        .get(id, automationGuard.policyHash) as { status: string } | undefined;
+      if (authorization?.status !== "authorized") {
+        return {
+          error: "automatic plan approval is not authorized",
+          status: 409,
+        };
+      }
     }
 
     const blockers = queries
@@ -1076,74 +1228,7 @@ export function approveFleetRunPlan(
       };
     }
 
-    const defaultWorkingDirectory = baseTarget.workingDirectory;
-    const defaultBaseBranch = baseTarget.baseBranch;
-    if (!isGitRepo(defaultWorkingDirectory)) {
-      return {
-        error: "working directory must be an accessible Git repository",
-        status: 409,
-      };
-    }
-    const executionTasks = tasks.map((task) => ({
-      ...task,
-      working_directory: task.working_directory ?? defaultWorkingDirectory,
-      base_branch: task.base_branch ?? defaultBaseBranch,
-    }));
-    const executionDirectories = new Set<string>();
-    for (const task of executionTasks) {
-      const provider = task.agent_type ?? run.provider;
-      if (
-        !PROVIDER_IDS.includes(provider as (typeof PROVIDER_IDS)[number]) ||
-        provider === "shell"
-      ) {
-        return {
-          error: `task ${task.id} has an unsupported provider`,
-          status: 409,
-        };
-      }
-      if (!task.working_directory || !task.base_branch) {
-        return {
-          error: `task ${task.id} has an incomplete execution target`,
-          status: 409,
-        };
-      }
-      executionDirectories.add(task.working_directory);
-    }
-    for (const directory of executionDirectories) {
-      if (!isGitRepo(directory)) {
-        return {
-          error: `task working directory is not an accessible Git repository: ${directory}`,
-          status: 409,
-        };
-      }
-    }
-
     const approvedAt = new Date().toISOString();
-    const claims = db
-      .prepare(`SELECT * FROM fleet_task_claims WHERE fleet_run_id = ?`)
-      .all(id) as FleetTaskClaimRow[];
-    const claimValidation = validateFleetClaimRowsForApproval(
-      executionTasks,
-      claims
-    );
-    if ("error" in claimValidation) {
-      return { error: claimValidation.error, status: 409 };
-    }
-    const approvedExecutionHash = hashFleetExecutionContract({
-      run,
-      tasks: executionTasks,
-      claims,
-      dependencies,
-    });
-    if (
-      automationGuard &&
-      approvedExecutionHash !== automationGuard.executionHash
-    ) {
-      return {
-        error: "automatic approval execution hash changed",
-        status: 409,
-      };
-    }
     if (run.review_policy !== "manual") {
       if (!run.automation_policy_hash || !run.automation_base_sha) {
         return {
@@ -1203,6 +1288,7 @@ export function approveFleetRunPlan(
         approvedAt,
         id,
         expectedPlanHash,
+        contract.policyHash,
         currentBaseSha
       );
     if (approval.changes === 1) {
@@ -1243,7 +1329,7 @@ export function approveFleetRunPlan(
     return result;
   }
 
-  const detail = getFleetRunDetail(id);
+  const detail = fleetRunDetailFromDb(db, id);
   if (!detail) return { error: "failed to read approved run" };
   return { run: detail };
 }
@@ -1322,12 +1408,31 @@ export function attachFleetPlanCriticArtifact(
   return { run: detail };
 }
 
+export interface FleetResumeTransitionGuard {
+  sourceStatus: "planned" | "paused";
+  executionHash: string;
+  stateEpoch: number;
+}
+
+function storedApprovedExecutionHash(run: FleetRunRow): string | null {
+  try {
+    const settings = payloadObject(JSON.parse(run.settings_json));
+    const hash = settings.approvedExecutionHash;
+    return typeof hash === "string" && /^[0-9a-f]{64}$/.test(hash)
+      ? hash
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function resumeFleetRun(
   id: string,
   input: unknown,
   overrides: {
     db?: Database.Database;
     reconcileRun?: typeof reconcileFleetRun;
+    transitionGuard?: FleetResumeTransitionGuard;
   } = {}
 ): Promise<{ run: FleetRunDetailDto } | { error: string; status?: number }> {
   const payload = payloadObject(input);
@@ -1396,6 +1501,15 @@ export async function resumeFleetRun(
         error: "approved run has no exact base commit",
         status: 409,
       };
+    }
+    if (
+      overrides.transitionGuard &&
+      (run.status !== overrides.transitionGuard.sourceStatus ||
+        (run.scheduler_epoch ?? 0) !== overrides.transitionGuard.stateEpoch ||
+        storedApprovedExecutionHash(run) !==
+          overrides.transitionGuard.executionHash)
+    ) {
+      return { error: "capability action intent changed", status: 409 };
     }
     if (
       !["planned", "paused", "running", "reviewing", "merging"].includes(
@@ -1477,10 +1591,30 @@ export async function resumeFleetRun(
       };
     }
     const now = new Date().toISOString();
-    db.prepare(
-      `UPDATE fleet_runs SET status = 'running', desired_state = 'running', conductor_session_id = ?, pause_mode = NULL, pause_reason = NULL,
-      started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?`
-    ).run(conductorSessionId ?? run.conductor_session_id ?? null, now, now, id);
+    const sourceStatus = overrides.transitionGuard?.sourceStatus ?? run.status;
+    const stateEpoch =
+      overrides.transitionGuard?.stateEpoch ?? run.scheduler_epoch ?? 0;
+    if (!Number.isSafeInteger(stateEpoch) || stateEpoch < 0) {
+      return { error: "run has an invalid state epoch", status: 409 };
+    }
+    const resumed = db
+      .prepare(
+        `UPDATE fleet_runs SET status = 'running', desired_state = 'running', conductor_session_id = ?, pause_mode = NULL, pause_reason = NULL,
+         scheduler_epoch = scheduler_epoch + 1,
+         started_at = COALESCE(started_at, ?), updated_at = ?
+         WHERE id = ? AND status = ? AND scheduler_epoch = ?`
+      )
+      .run(
+        conductorSessionId ?? run.conductor_session_id ?? null,
+        now,
+        now,
+        id,
+        sourceStatus,
+        stateEpoch
+      );
+    if (resumed.changes !== 1) {
+      return { error: "run state changed before resume", status: 409 };
+    }
     queries
       .createFleetEvent(db)
       .run(id, "run_resumed", actor, JSON.stringify({ conductorSessionId }), {
@@ -1494,7 +1628,7 @@ export async function resumeFleetRun(
   } else {
     await reconcileFleetRun(id, { db });
   }
-  const detail = getFleetRunDetail(id);
+  const detail = fleetRunDetailFromDb(db, id);
   return detail ? { run: detail } : { error: "failed to read resumed run" };
 }
 

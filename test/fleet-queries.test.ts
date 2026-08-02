@@ -75,16 +75,7 @@ describe("fleet run queries", () => {
     db.prepare(
       `INSERT INTO fleet_workers (id, fleet_run_id, task_id, session_id, status, provider, model, attempt)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      "worker-a",
-      "run-a",
-      "task-a1",
-      null,
-      "waiting_for_operator",
-      "claude",
-      "opus",
-      1
-    );
+    ).run("worker-a", "run-a", "task-a1", null, "running", "claude", "opus", 1);
 
     const rows = queries.listFleetRuns(db).all(100) as Array<
       FleetRunRow & { task_count: number; worker_count: number }
@@ -98,6 +89,65 @@ describe("fleet run queries", () => {
       approval_state: "draft",
       plan_hash: null,
     });
+  });
+
+  it("keeps an old attention run ahead of more than 100 newer terminal runs", () => {
+    createFleetRun("attention-run", "Needs operator recovery");
+    db.prepare(
+      `UPDATE fleet_runs
+       SET status = 'paused', approval_state = 'blocked',
+           updated_at = '2026-01-01T00:00:00.000Z'
+       WHERE id = 'attention-run'`
+    ).run();
+
+    db.transaction(() => {
+      for (let index = 0; index < 101; index += 1) {
+        const id = `terminal-${String(index).padStart(3, "0")}`;
+        createFleetRun(id, `Terminal ${index}`);
+        db.prepare(
+          `UPDATE fleet_runs
+           SET status = 'completed', approval_state = 'approved',
+               updated_at = ?
+           WHERE id = ?`
+        ).run(`2026-08-02T00:00:00.${String(index).padStart(3, "0")}Z`, id);
+      }
+    })();
+
+    const rows = queries.listFleetRuns(db).all(100) as Array<
+      FleetRunRow & { attention_count: number }
+    >;
+    expect(rows).toHaveLength(101);
+    expect(rows[0]).toMatchObject({
+      id: "attention-run",
+      attention_count: 1,
+    });
+    expect(rows.some((row) => row.id === "attention-run")).toBe(true);
+    expect(rows.filter((row) => row.status === "completed")).toHaveLength(100);
+    expect(rows.some((row) => row.id === "terminal-000")).toBe(false);
+    expect(rows.some((row) => row.id === "terminal-100")).toBe(true);
+  });
+
+  it("never applies the terminal-history cap to actionable runs", () => {
+    db.transaction(() => {
+      for (let index = 0; index < 101; index += 1) {
+        const id = `attention-${String(index).padStart(3, "0")}`;
+        createFleetRun(id, `Attention ${index}`);
+        db.prepare(
+          `UPDATE fleet_runs
+           SET status = 'paused', approval_state = 'blocked', updated_at = ?
+           WHERE id = ?`
+        ).run(`2026-08-02T00:00:00.${String(index).padStart(3, "0")}Z`, id);
+      }
+    })();
+
+    const rows = queries.listFleetRuns(db).all(100) as Array<
+      FleetRunRow & { attention_count: number }
+    >;
+    expect(rows).toHaveLength(101);
+    expect(rows.every((row) => row.attention_count > 0)).toBe(true);
+    expect(rows.map((row) => row.id)).toEqual(
+      expect.arrayContaining(["attention-000", "attention-100"])
+    );
   });
 
   it("reads a run graph in stable task, worker, and event order", () => {
@@ -192,7 +242,7 @@ describe("fleet run queries", () => {
     });
   });
 
-  it("bounds the polling list and truncates previews without losing detail rows", () => {
+  it("keeps active runs visible and truncates previews without losing detail rows", () => {
     const longGoal = "g".repeat(800);
     const longProvider = "p".repeat(80);
     const longModel = "m".repeat(160);
@@ -206,7 +256,7 @@ describe("fleet run queries", () => {
     const rows = queries.listFleetRuns(db).all(100) as FleetRunRow[];
     const fullRow = queries.getFleetRun(db).get("run-104") as FleetRunRow;
 
-    expect(rows).toHaveLength(100);
+    expect(rows).toHaveLength(105);
     expect(rows[0].id).toBe("run-104");
     expect(rows[0].goal).toHaveLength(600);
     expect(rows[0].provider).toHaveLength(40);

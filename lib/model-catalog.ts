@@ -211,11 +211,11 @@ export function resolveModelForAgent(
  * `nextAgent`, carrying the previously-selected `currentModel` only when it
  * makes sense.
  *
- * Switching TO a free-text agent always resets to its default (empty) — a
- * static model name (e.g. "sonnet") accepted verbatim by a free-text agent
- * would otherwise leak into its field and be passed as a bogus `-m`. Switching
- * to a static agent keeps the current model if it's valid there, else the
- * agent's default.
+ * Switching TO a free-text agent always resets to its Stoa default (empty for
+ * providers without one, `kimi-k3` for Hermes) — a static model name (e.g.
+ * "sonnet") accepted verbatim by a free-text agent would otherwise leak into
+ * its field and be passed as a bogus `-m`. Switching to a static agent keeps
+ * the current model if it's valid there, else the agent's default.
  */
 export function nextModelOnAgentChange(
   nextAgent: AgentType,

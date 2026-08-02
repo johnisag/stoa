@@ -17,6 +17,7 @@ const AUTHORIZED_AUTOMATION_POLICY = fleetAutomationPolicyJson({
   ...DEFAULT_FLEET_AUTOMATION_POLICY,
   allowUnconfinedAgents: true,
 });
+const SESSION_OWNERSHIP_KEY = "1".repeat(64);
 
 describe("fleet spawn wrapper", () => {
   it("rejects a persisted unsupported model instead of clamping at spawn", async () => {
@@ -41,6 +42,7 @@ describe("fleet spawn wrapper", () => {
         dependencies: [],
         attempt: 1,
         spawnRequestId: "run-invalid-model:task-invalid-model:1",
+        sessionOwnershipKey: SESSION_OWNERSHIP_KEY,
       })
     ).rejects.toThrow("model is not supported by codex");
     expect(spawnWorker).not.toHaveBeenCalled();
@@ -68,6 +70,7 @@ describe("fleet spawn wrapper", () => {
         dependencies: [],
         attempt: 1,
         spawnRequestId: "run-kilo:task-kilo:1",
+        sessionOwnershipKey: SESSION_OWNERSHIP_KEY,
       })
     ).rejects.toThrow("Fleet provider cannot run unattended: kilo");
     expect(spawnWorker).not.toHaveBeenCalled();
@@ -105,6 +108,7 @@ describe("fleet spawn wrapper", () => {
         dependencies: [],
         attempt: 1,
         spawnRequestId: `${run.id}:${task.id}:1`,
+        sessionOwnershipKey: SESSION_OWNERSHIP_KEY,
       });
     }
     const options = spawnWorker.mock.calls.map((call) => call[0]);
@@ -144,6 +148,7 @@ describe("fleet spawn wrapper", () => {
       dependencies: [],
       attempt: 1,
       spawnRequestId: "request-1",
+      sessionOwnershipKey: SESSION_OWNERSHIP_KEY,
     });
     expect(spawnWorker).toHaveBeenLastCalledWith(
       expect.objectContaining({ useWorktree: true, requireWorktree: true })
@@ -179,6 +184,7 @@ describe("fleet spawn wrapper", () => {
       dependencies: [],
       attempt: 1,
       spawnRequestId: "run-1:task-1:1",
+      sessionOwnershipKey: SESSION_OWNERSHIP_KEY,
       reportContract: {
         attemptDirectory: "C:\\fleet\\run-1\\task-1\\1",
         reportPath: "C:\\fleet\\run-1\\task-1\\1\\report.json",

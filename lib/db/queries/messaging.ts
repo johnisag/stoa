@@ -21,8 +21,12 @@ export const messagingQueries = {
       // Workers always run unattended with the bypass flag (autoApprove: true in
       // lib/orchestration.ts), so persist auto_approve=1 — otherwise the YOLO
       // danger badge would miss them (a miss is worse than a false alarm).
-      `INSERT INTO sessions (id, name, tmux_name, working_directory, conductor_session_id, worker_task, worker_status, model, group_path, agent_type, project_id, auto_approve)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1)`
+      `INSERT INTO sessions
+       (id, name, tmux_name, working_directory, conductor_session_id,
+        worker_task, worker_status, model, group_path, agent_type, project_id,
+        auto_approve, worktree_path, branch_name, base_branch,
+        fleet_ownership_key)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1, ?, ?, ?, ?)`
     ),
 
   // Messages
