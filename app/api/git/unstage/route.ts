@@ -8,7 +8,7 @@ import {
 import {
   parseJsonBody,
   getAllowedPathRoots,
-  resolveSandboxedPath,
+  resolveRealSandboxedPath,
 } from "@/lib/api-security";
 
 export async function POST(request: NextRequest) {
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
 
   const expandedPath = expandPath(rawPath);
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  const { allowed } = await resolveRealSandboxedPath(expandedPath, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "Path is outside the allowed workspace" },

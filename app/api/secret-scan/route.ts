@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import {
   getAllowedPathRoots,
-  resolveSandboxedPathOrHome,
+  resolveRealSandboxedPathOrHome,
+  requireAdmin,
   requireLocalhost,
 } from "@/lib/api-security";
 import { classifySecretFiles } from "@/lib/secret-scan";
@@ -14,7 +15,7 @@ import { classifySecretFiles } from "@/lib/secret-scan";
  * picked working directory (entry names only — no recursion, no file contents)
  * run through the pure name matchers in lib/secret-scan.
  *
- * LOCALHOST-GATED: a 200 with findings signals that id_rsa/.env/credentials
+ * ADMIN + LOCALHOST-GATED: a 200 with findings signals that id_rsa/.env/credentials
  * EXIST at an arbitrary home-tree path, so on a tunneled/shared instance this
  * is a filesystem-reconnaissance oracle (worse than the #30 readiness route,
  * which this now matches). The scan only ever runs for the local operator
@@ -27,6 +28,9 @@ import { classifySecretFiles } from "@/lib/secret-scan";
  * empty result, not an error — this route never blocks session creation.
  */
 export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   const auth = requireLocalhost(request);
   if (!auth.ok) return auth.response;
   try {
@@ -39,7 +43,10 @@ export async function GET(request: NextRequest) {
     }
 
     const roots = getAllowedPathRoots();
-    const { allowed, resolved } = resolveSandboxedPathOrHome(inputPath, roots);
+    const { allowed, resolved } = await resolveRealSandboxedPathOrHome(
+      inputPath,
+      roots
+    );
     if (!allowed) {
       return NextResponse.json(
         { error: "Path is outside the allowed workspace" },

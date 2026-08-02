@@ -188,6 +188,11 @@ export const Pane = memo(function Pane({
   } = usePanes();
 
   const [viewMode, setViewMode] = useState<ViewMode>("terminal");
+  const [fleetSelection, setFleetSelection] = useState<{
+    runId: string;
+    taskId?: string;
+    requestKey: string;
+  } | null>(null);
   // The right-side drawer shows Git OR Files — never both. Persisted per-pane
   // (paneId is stable across reloads); migrates the old global `gitDrawerOpen`
   // boolean on first run.
@@ -345,6 +350,18 @@ export const Pane = memo(function Pane({
       detachSession(paneId);
     });
   }, [detachSession, paneId, terminalRef]);
+
+  const handleOpenFleetRun = useCallback(
+    (runId: string, taskId?: string) => {
+      setFleetSelection({
+        runId,
+        taskId,
+        requestKey: `${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      });
+      addViewTab(paneId, "fleet-management");
+    },
+    [addViewTab, paneId]
+  );
 
   // Create ref callback for a specific tab
   const getTerminalRef = useCallback(
@@ -574,11 +591,19 @@ export const Pane = memo(function Pane({
             onOpenDispatch={onDispatchClick}
             onOpenWorkflows={onWorkflowsClick}
             onOpenVerdictInbox={onVerdictInboxClick}
+            onOpenFleetRun={handleOpenFleetRun}
             onClose={() => closeTab(paneId, tab.id)}
           />
         );
       case "fleet-management":
-        return <FleetManagementView onClose={() => closeTab(paneId, tab.id)} />;
+        return (
+          <FleetManagementView
+            initialRunId={fleetSelection?.runId}
+            initialTaskId={fleetSelection?.taskId}
+            selectionKey={fleetSelection?.requestKey}
+            onClose={() => closeTab(paneId, tab.id)}
+          />
+        );
       case "analytics":
         return <AnalyticsView onClose={() => closeTab(paneId, tab.id)} />;
       case "dispatch":

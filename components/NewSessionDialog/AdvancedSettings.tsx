@@ -112,7 +112,7 @@ export function AdvancedSettings({
                 <span className="text-muted-foreground ml-1">
                   {supportsOrchestration
                     ? "(conductor — can spawn worker sessions via spawn_worker)"
-                    : "(Claude only for now)"}
+                    : "(not available for plain terminals)"}
                 </span>
               </label>
             </div>

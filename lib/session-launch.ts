@@ -39,6 +39,39 @@ import { resolveModelForAgent } from "./model-catalog";
 import { resolveNativeForkParentId } from "./fork";
 import { coerceApprovalMode } from "./sandbox/types";
 import type { Session } from "./db";
+import { isInteractiveSessionRole } from "./session-role";
+
+/** Process-local identity consumed by the orchestration MCP server. */
+export const STOA_CONDUCTOR_SESSION_ENV = "STOA_CONDUCTOR_SESSION_ID";
+
+export function isGenericSessionLaunchAllowed(session: Session): boolean {
+  return isInteractiveSessionRole(session);
+}
+
+/** Server-owned launch profiles are intentionally not reproducible from the
+ * generic Session fields: doing so would silently restore tools/MCP/authority. */
+export function assertGenericSessionLaunchAllowed(session: Session): void {
+  if (!isGenericSessionLaunchAllowed(session)) {
+    throw new Error(
+      `Session ${session.id} has an internal launch profile and cannot be recreated, resumed, or forked generically`
+    );
+  }
+}
+
+/**
+ * Environment attached to a persisted session launch.
+ *
+ * `mcp_launch_args` is the durable conductor discriminator. Providers whose MCP
+ * configuration lives in a file (and Hermes, whose registration is global) use
+ * an intentionally empty JSON array as their conductor sentinel, so checking
+ * truthiness here would silently drop their identity. Only SQL NULL means the
+ * session is not a conductor.
+ */
+export function sessionLaunchEnv(session: Session): Record<string, string> {
+  return session.mcp_launch_args !== null
+    ? { [STOA_CONDUCTOR_SESSION_ENV]: session.id }
+    : {};
+}
 
 /** Per-call overrides layered on top of what the Session row itself dictates. */
 export interface SessionLaunchOptions {
@@ -70,6 +103,7 @@ export function resolveSessionLaunchOptions(
   session: Session,
   opts?: SessionLaunchOptions
 ): { agentType: AgentType; options: BuildFlagsOptions } | null {
+  assertGenericSessionLaunchAllowed(session);
   const agentType: AgentType = session.agent_type || "claude";
   if (getProvider(agentType).id === "shell") return null;
 

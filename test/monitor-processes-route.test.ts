@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
     id: string;
     tmux_name: string | null;
     agent_type: string;
+    session_role?: string | null;
     dev_server_port?: number | null;
     project_id?: string | null;
   }>,
@@ -182,5 +183,31 @@ describe("GET /api/monitor/processes (M3 + M4)", () => {
       mcpServers: [],
       ports: [],
     });
+  });
+
+  it("never inspects a live server-owned session process tree", async () => {
+    state.sessions = [
+      {
+        id: "visible",
+        tmux_name: "claude-visible",
+        agent_type: "claude",
+        session_role: "interactive",
+      },
+      {
+        id: "internal",
+        tmux_name: "claude-internal",
+        agent_type: "claude",
+        session_role: "fleet_supervisor",
+      },
+    ];
+    backend.list.mockResolvedValue(["claude-visible", "claude-internal"]);
+    backend.getPid.mockResolvedValue(100);
+
+    const body = await (await GET()).json();
+
+    expect(body.fanouts).toHaveProperty("visible");
+    expect(body.fanouts).not.toHaveProperty("internal");
+    expect(backend.getPid).toHaveBeenCalledTimes(1);
+    expect(backend.getPid).toHaveBeenCalledWith("claude-visible");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { listDirectory } from "@/lib/files";
@@ -58,5 +58,35 @@ describe("listDirectory: gitignored content is visible", () => {
   it("still lists ordinary source files", () => {
     const names = listDirectory(root).map((n) => n.name);
     expect(names).toContain("index.ts");
+  });
+});
+
+describe("listDirectory: symbolic-link boundary", () => {
+  it("shows a linked directory without recursively enumerating its target", () => {
+    const root = mkdtempSync(join(tmpdir(), "stoa-files-link-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "stoa-files-link-outside-"));
+    try {
+      writeFileSync(join(outside, "authority-secret"), "secret\n");
+      const link = join(root, "linked-directory");
+      symlinkSync(
+        outside,
+        link,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+
+      const result = listDirectory(root, { recursive: true, maxDepth: 3 });
+      expect(result).toEqual([
+        expect.objectContaining({
+          name: "linked-directory",
+          path: link,
+          type: "directory",
+        }),
+      ]);
+      expect(result[0]?.children).toBeUndefined();
+      expect(JSON.stringify(result)).not.toContain("authority-secret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

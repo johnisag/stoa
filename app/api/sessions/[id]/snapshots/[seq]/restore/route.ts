@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { restoreSnapshot } from "@/lib/snapshots";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 // POST /api/sessions/[id]/snapshots/[seq]/restore — rewind the working tree to a
 // snapshot (a safety snapshot of the current state is captured first).
@@ -15,9 +19,14 @@ export async function POST(
       return NextResponse.json({ error: "Bad snapshot id" }, { status: 400 });
     }
     const session = queries.getSession(getDb()).get(id) as Session | undefined;
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
     // Don't rewind the working tree out from under a live agent — it may have
     // files open and would clobber/confuse its in-flight work.
     if (session.status === "running") {

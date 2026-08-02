@@ -78,6 +78,108 @@ function runContract(makeBackend: () => PtyBackend) {
     await backend.kill("b-echo");
   });
 
+  it("empty environment overlays clear inherited authority values", async () => {
+    const previous = {
+      STOA_TOKEN: process.env.STOA_TOKEN,
+      CONDUCTOR_SESSION_ID: process.env.CONDUCTOR_SESSION_ID,
+      DB_PATH: process.env.DB_PATH,
+    };
+    process.env.STOA_TOKEN = "parent-stoa-token";
+    process.env.CONDUCTOR_SESSION_ID = "parent-conductor";
+    process.env.DB_PATH = "parent-database";
+    const backend = makeBackend();
+    try {
+      await backend.create({
+        name: "b-env-clear",
+        cwd: process.cwd(),
+        command: "",
+        binary: "node",
+        args: [
+          "-e",
+          "setInterval(() => process.stdout.write('AUTH:<' + process.env.STOA_TOKEN + '>|<' + process.env.CONDUCTOR_SESSION_ID + '>|<' + process.env.DB_PATH + '>\\r\\n'), 250);",
+        ],
+        env: {
+          STOA_TOKEN: "",
+          CONDUCTOR_SESSION_ID: "",
+          DB_PATH: "",
+        },
+      });
+      const seen = await waitFor(async () =>
+        (await backend.capture("b-env-clear", { lines: 20 })).includes(
+          "AUTH:<>|<>|<>"
+        )
+      );
+      expect(
+        seen,
+        JSON.stringify({
+          alive: await backend.exists("b-env-clear"),
+          capture: await backend.capture("b-env-clear", { lines: 20 }),
+        })
+      ).toBe(true);
+    } finally {
+      await backend.kill("b-env-clear");
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("replacement environment excludes inherited values", async () => {
+    const secretKey = "STOA_TEST_REPLACEMENT_PARENT_SECRET";
+    const previous = process.env[secretKey];
+    process.env[secretKey] = "must-not-reach-child";
+    const backend = makeBackend();
+    const replacementEnv: Record<string, string> = {
+      STOA_TEST_ALLOWED: "visible",
+    };
+    // Windows CreateProcess/node-pty needs a small OS runtime envelope. These
+    // are copied explicitly, so the assertion still proves replacement rather
+    // than inheritance and mirrors the supervisor's allowlist builder.
+    for (const key of [
+      "PATH",
+      "SystemRoot",
+      "WINDIR",
+      "ComSpec",
+      "PATHEXT",
+      "TEMP",
+      "TMP",
+    ]) {
+      const value = process.env[key];
+      if (value !== undefined) replacementEnv[key] = value;
+    }
+    try {
+      await backend.create({
+        name: "b-env-replace",
+        cwd: process.cwd(),
+        command: "",
+        binary: "node",
+        args: [
+          "-e",
+          `setInterval(() => process.stdout.write('REPLACE:<' + String(process.env['${secretKey}']) + '>|<' + String(process.env.STOA_TEST_ALLOWED) + '>\\r\\n'), 250);`,
+        ],
+        env: replacementEnv,
+        envMode: "replace",
+      });
+      const seen = await waitFor(async () =>
+        (await backend.capture("b-env-replace", { lines: 20 })).includes(
+          "REPLACE:<undefined>|<visible>"
+        )
+      );
+      expect(
+        seen,
+        JSON.stringify({
+          alive: await backend.exists("b-env-replace"),
+          capture: await backend.capture("b-env-replace", { lines: 20 }),
+        })
+      ).toBe(true);
+    } finally {
+      await backend.kill("b-env-replace");
+      if (previous === undefined) delete process.env[secretKey];
+      else process.env[secretKey] = previous;
+    }
+  });
+
   it("rename moves the session; a no-op rename rejects", async () => {
     const backend = makeBackend();
     await backend.create({
@@ -157,5 +259,101 @@ describe("PtyBackend control bytes", () => {
     } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
     await new PtyBackend(spy).pasteText("s1", "hi");
     expect(writes).toEqual([["s1", "\x1b[200~hi\x1b[201~"]]);
+  });
+});
+
+describe("PtyBackend create environment", () => {
+  it("forwards the environment on a direct argv spawn", async () => {
+    const spawns: import("@/lib/session-backend/pty/registry").SpawnSpec[] = [];
+    const spy = {
+      spawn: async (
+        _key: string,
+        spec: import("@/lib/session-backend/pty/registry").SpawnSpec
+      ) => void spawns.push(spec),
+    } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
+
+    await new PtyBackend(spy).create({
+      name: "conductor",
+      cwd: process.cwd(),
+      command: "ignored",
+      binary: "node",
+      args: ["script.js"],
+      env: { STOA_CONDUCTOR_SESSION_ID: "session-1" },
+    });
+
+    expect(spawns).toHaveLength(1);
+    expect(spawns[0].env).toEqual({
+      STOA_CONDUCTOR_SESSION_ID: "session-1",
+    });
+    expect(spawns[0].envMode).toBeUndefined();
+  });
+
+  it("forwards replacement mode on a direct argv spawn", async () => {
+    const spawns: import("@/lib/session-backend/pty/registry").SpawnSpec[] = [];
+    const spy = {
+      spawn: async (
+        _key: string,
+        spec: import("@/lib/session-backend/pty/registry").SpawnSpec
+      ) => void spawns.push(spec),
+    } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
+
+    await new PtyBackend(spy).create({
+      name: "supervisor",
+      cwd: process.cwd(),
+      command: "ignored",
+      binary: "node",
+      args: ["broker.js"],
+      env: { STOA_TEST_ALLOWED: "yes" },
+      envMode: "replace",
+    });
+
+    expect(spawns[0]).toMatchObject({
+      env: { STOA_TEST_ALLOWED: "yes" },
+      envMode: "replace",
+    });
+  });
+
+  it("forwards validated Fleet attempt roots as container-only spawn metadata", async () => {
+    const spawns: import("@/lib/session-backend/pty/registry").SpawnSpec[] = [];
+    const spy = {
+      spawn: async (
+        _key: string,
+        spec: import("@/lib/session-backend/pty/registry").SpawnSpec
+      ) => void spawns.push(spec),
+    } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
+    const fleetWritableRoots = ["/stoa/fleet/run/task/1"];
+
+    await new PtyBackend(spy).create({
+      name: "fleet-worker",
+      cwd: process.cwd(),
+      command: "ignored",
+      binary: "node",
+      args: ["worker.js"],
+      fleetWritableRoots,
+    });
+
+    expect(spawns[0].fleetWritableRoots).toEqual(fleetWritableRoots);
+  });
+
+  it("forwards the environment on the shell fallback too", async () => {
+    const spawns: import("@/lib/session-backend/pty/registry").SpawnSpec[] = [];
+    const spy = {
+      spawn: async (
+        _key: string,
+        spec: import("@/lib/session-backend/pty/registry").SpawnSpec
+      ) => void spawns.push(spec),
+    } as unknown as import("@/lib/session-backend/pty/transport").PtyTransport;
+
+    await new PtyBackend(spy).create({
+      name: "conductor-fallback",
+      cwd: process.cwd(),
+      command: "agent --flag",
+      env: { STOA_CONDUCTOR_SESSION_ID: "session-2" },
+    });
+
+    expect(spawns).toHaveLength(1);
+    expect(spawns[0].env).toEqual({
+      STOA_CONDUCTOR_SESSION_ID: "session-2",
+    });
   });
 });

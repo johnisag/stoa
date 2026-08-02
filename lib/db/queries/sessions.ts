@@ -13,6 +13,12 @@ export const sessionsQueries = {
   getSession: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM sessions WHERE id = ?`),
 
+  getSessionsByFleetOwnershipKey: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT * FROM sessions WHERE fleet_ownership_key = ? ORDER BY id LIMIT 2`
+    ),
+
   getAllSessions: (db: Database.Database) =>
     getStmt(db, `SELECT * FROM sessions ORDER BY updated_at DESC`),
 

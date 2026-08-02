@@ -14,15 +14,22 @@ import { generatePRContent } from "@/lib/pr-generation";
 import {
   parseJsonBody,
   getAllowedPathRoots,
-  resolveSandboxedPath,
+  requireAdmin,
+  resolveRealSandboxedPath,
 } from "@/lib/api-security";
 
 // GET /api/git/pr - Get PR status (fast - no AI generation)
-// Use ?generate=true to also generate suggested title/body (slow - uses Claude CLI)
+// Use ?generate=true to also generate suggested title/body (slow, admin-only,
+// uses Claude CLI). Metadata-only reads remain available to observers.
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const rawPath = searchParams.get("path");
   const shouldGenerate = searchParams.get("generate") === "true";
+
+  if (shouldGenerate) {
+    const adminError = requireAdmin(request);
+    if (adminError) return adminError;
+  }
 
   if (!rawPath) {
     return NextResponse.json({ error: "Path is required" }, { status: 400 });
@@ -30,7 +37,7 @@ export async function GET(request: NextRequest) {
 
   const expandedPath = expandPath(rawPath);
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  const { allowed } = await resolveRealSandboxedPath(expandedPath, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "Path is outside the allowed workspace" },
@@ -130,7 +137,7 @@ export async function POST(request: NextRequest) {
 
   const expandedPath = expandPath(rawPath);
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  const { allowed } = await resolveRealSandboxedPath(expandedPath, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "Path is outside the allowed workspace" },

@@ -37,15 +37,12 @@ import { useSessionStatuses } from "@/hooks/useSessionStatuses";
 import { useStatusEventStream } from "@/data/statuses";
 import type { Session } from "@/lib/db";
 import type { TerminalHandle } from "@/components/Terminal";
-import {
-  getProvider,
-  shellQuoteArg,
-  escapeForDoubleQuotes,
-  buildTmuxFlags,
-  buildAgentArgs,
-} from "@/lib/providers";
+import { getProvider, shellQuoteArg } from "@/lib/providers";
 import { sessionKey } from "@/lib/providers/registry";
-import { resolveSessionLaunchOptions } from "@/lib/session-launch";
+import {
+  buildAgentArgsForSession,
+  sessionLaunchEnv,
+} from "@/lib/session-launch";
 import { DesktopView } from "@/components/views/DesktopView";
 import { MobileView } from "@/components/views/MobileView";
 import { getPendingPrompt, clearPendingPrompt } from "@/stores/initialPrompt";
@@ -53,7 +50,7 @@ import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
 import { nextAttentionSession } from "@/lib/session-attention";
 import { parseAppAction } from "@/lib/share-intake";
-import { getActiveBackend } from "@/lib/client/backend";
+import { getActiveBackend, launchTmuxSession } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
 import { StoaGuide } from "@/components/StoaGuide";
@@ -300,34 +297,6 @@ function HomeContent() {
     reconcileSessions(new Set(sessions.map((s) => s.id)));
   }, [sessionsLoaded, sessions, reconcileSessions]);
 
-  // Helper to get init script command from API
-  const getInitScriptCommand = useCallback(
-    async (agentCommand: string): Promise<string> => {
-      // Fallback when the init-script POST is unavailable. The init-script path
-      // returns a bare `bash <path>` (metacharacter-free), but the raw
-      // agentCommand is not — and the tmux backend interpolates `command` into an
-      // OUTER double-quoted `"${command}"`. Escape it for that context (shared
-      // helper, same char-class shellQuoteArg uses) so a metacharacter-bearing
-      // token (e.g. a free-text model) can't break out of that wrapper; the agent
-      // CLI in the pane still receives the original command (buildFlags' per-token
-      // quoting keeps it safe there). Also preserves a literal `$` in the prompt.
-      const safeFallback = escapeForDoubleQuotes(agentCommand);
-      try {
-        const res = await fetch("/api/sessions/init-script", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agentCommand }),
-        });
-        if (!res.ok) return safeFallback;
-        const data = await res.json();
-        return data.command || safeFallback;
-      } catch {
-        return safeFallback;
-      }
-    },
-    []
-  );
-
   // Set CSS variable for viewport height (handles mobile keyboard)
   useViewportHeight();
 
@@ -391,38 +360,40 @@ function HomeContent() {
     return undefined;
   }, [focusedPaneId, getActiveTab]);
 
-  // Build tmux command for a session
-  const buildSessionCommand = useCallback(
+  // Build the native spawn request and carry the first-launch prompt to the
+  // server-owned tmux creation endpoint. The browser only attaches afterward.
+  const buildSessionLaunch = useCallback(
     async (
       session: Session
     ): Promise<{
       sessionName: string;
-      cwd: string;
-      command: string;
-      spawn: { binary: string; args: string[]; cwd: string };
+      initialPrompt?: string;
+      spawn: {
+        binary: string;
+        args: string[];
+        cwd: string;
+        env: Record<string, string>;
+      };
     }> => {
       const provider = getProvider(session.agent_type || "claude");
       const sessionName =
         session.tmux_name ||
         sessionKey({ kind: "agent", provider: provider.id, id: session.id });
-      const cwd = session.working_directory?.replace("~", "$HOME") || "$HOME";
       // Raw cwd for the pty backend (the registry expands a leading "~").
       const ptyCwd = session.working_directory || "~";
+      const env = sessionLaunchEnv(session);
 
       // Shell sessions just open a terminal - no agent command
       if (provider.id === "shell") {
         return {
           sessionName,
-          cwd,
-          command: "",
-          spawn: { binary: "", args: [], cwd: ptyCwd },
+          spawn: { binary: "", args: [], cwd: ptyCwd, env },
         };
       }
 
-      // TODO: Add explicit "Enable Orchestration" toggle that creates .mcp.json
-      // for conductor sessions. Removed auto-creation because it pollutes projects
-      // with .mcp.json files that aren't in their .gitignore.
-      // See: /api/sessions/[id]/mcp-config, lib/mcp-config.ts
+      // Orchestration is configured explicitly at session creation (or repaired
+      // through /api/sessions/[id]/mcp-config) using each provider's native MCP
+      // convention. Generated project files are locally git-excluded.
 
       // Check for pending initial prompt
       const initialPrompt = getPendingPrompt(session.id);
@@ -430,82 +401,60 @@ function HomeContent() {
         clearPendingPrompt(session.id);
       }
 
-      // SINGLE chokepoint (lib/session-launch): resolve the launch options from the
-      // Session once — the shell short-circuit, the NON-BYPASSABLE model clamp, the
-      // conductor MCP-arg parse, and the native-fork parent resolution all live
-      // there, so this tmux/pty path and buildSpawnForSession's re-attach path can't
-      // drift or skip a step. The shell short-circuit already returned above, so a
-      // non-shell session always resolves here.
-      const resolved = resolveSessionLaunchOptions(session, {
+      // SINGLE chokepoint (lib/session-launch): native argv uses the same model
+      // clamp, conductor args, and native-fork resolution as the server tmux path.
+      const { binary, args } = buildAgentArgsForSession(session, {
         initialPrompt: initialPrompt || undefined,
         allSessions: sessions,
       });
-      // Defensive: only a shell session yields null, and that path returned above.
-      const buildFlagsOptions = resolved?.options ?? {};
-      const extraArgs = buildFlagsOptions.extraArgs ?? [];
-
-      // tmux execs a shell command, so shell-quote the conductor tokens here
-      // (buildFlags itself doesn't emit extraArgs); the pty path gets them as
-      // clean argv via buildAgentArgs below. extraArgs (the `-c mcp_servers.*`
-      // conductor wiring) must land BEFORE the positional prompt — same order
-      // as the pty path — so splice rather than append.
-      const flags = buildTmuxFlags(
-        provider.buildFlags(buildFlagsOptions),
-        extraArgs.map(shellQuoteArg),
-        !!buildFlagsOptions.initialPrompt?.trim()
-      );
-      const flagsStr = flags.join(" ");
-
-      const agentCmd = `${provider.command} ${flagsStr}`;
-      // The init-script POST writes a bash .sh banner used only by the tmux
-      // backend's `command` field. The native pty backend spawns via
-      // binary/args and ignores `command`, so skip the round-trip there.
-      const backend = await getActiveBackend();
-      const command =
-        backend === "tmux" ? await getInitScriptCommand(agentCmd) : agentCmd;
-
-      // Structured argv for the native pty backend (no shell quoting) — built from
-      // the SAME resolved object as the tmux flags above (not a second resolve),
-      // so the tmux and pty argv are guaranteed identical by construction.
-      const { binary, args } = resolved
-        ? buildAgentArgs(resolved.agentType, resolved.options)
-        : { binary: "", args: [] };
 
       return {
         sessionName,
-        cwd,
-        command,
-        spawn: { binary, args, cwd: ptyCwd },
+        initialPrompt: initialPrompt || undefined,
+        spawn: { binary, args, cwd: ptyCwd, env },
       };
     },
-    [sessions, getInitScriptCommand]
+    [sessions]
   );
 
   // Attach a session to a terminal
   const runSessionInTerminal = useCallback(
-    (
+    async (
       terminal: TerminalHandle,
       paneId: string,
       session: Session,
       sessionInfo: {
         sessionName: string;
-        cwd: string;
-        command: string;
-        spawn: { binary: string; args: string[]; cwd: string };
+        initialPrompt?: string;
+        spawn: {
+          binary: string;
+          args: string[];
+          cwd: string;
+          env: Record<string, string>;
+        };
       },
       backend: "pty" | "tmux"
     ) => {
-      const { sessionName, cwd, command, spawn } = sessionInfo;
-      if (backend === "pty") {
-        // Native: subscribe to (or spawn) the registry session directly.
-        terminal.attachSession({ key: sessionName, spawn });
-      } else {
-        const tmuxNew = command
-          ? `tmux new -s ${sessionName} -c "${cwd}" "${command}"`
-          : `tmux new -s ${sessionName} -c "${cwd}"`;
-        terminal.sendCommand(
-          `tmux set -g mouse on 2>/dev/null; tmux attach -t ${sessionName} 2>/dev/null || ${tmuxNew}`
-        );
+      const { sessionName, initialPrompt, spawn } = sessionInfo;
+      try {
+        if (backend === "pty") {
+          // Native: subscribe to (or spawn) the registry session directly.
+          terminal.attachSession({ key: sessionName, spawn });
+        } else {
+          const launchedSessionName = await launchTmuxSession(
+            session.id,
+            initialPrompt
+          );
+          terminal.sendCommand(
+            `tmux attach -t ${shellQuoteArg(launchedSessionName)}`
+          );
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to launch session";
+        debugLog(`ERROR: ${message}`);
+        toast.error("Could not launch session", { description: message });
+        return;
       }
       attachSession(paneId, session.id, sessionName);
       terminal.focus();
@@ -535,8 +484,14 @@ function HomeContent() {
         // Native: switching sessions just re-subscribes the socket; the server
         // detaches the previous session and repaints the new one. No tmux
         // detach (Ctrl-B d) / Ctrl-C dance.
-        const sessionInfo = await buildSessionCommand(session);
-        runSessionInTerminal(terminal, paneId, session, sessionInfo, "pty");
+        const sessionInfo = await buildSessionLaunch(session);
+        await runSessionInTerminal(
+          terminal,
+          paneId,
+          session,
+          sessionInfo,
+          "pty"
+        );
         return;
       }
 
@@ -550,8 +505,8 @@ function HomeContent() {
         () => {
           terminal.sendInput("\x03");
           setTimeout(async () => {
-            const sessionInfo = await buildSessionCommand(session);
-            runSessionInTerminal(
+            const sessionInfo = await buildSessionLaunch(session);
+            await runSessionInTerminal(
               terminal,
               paneId,
               session,
@@ -566,7 +521,7 @@ function HomeContent() {
     [
       getTerminalWithFallback,
       getActiveTab,
-      buildSessionCommand,
+      buildSessionLaunch,
       runSessionInTerminal,
     ]
   );
@@ -587,9 +542,9 @@ function HomeContent() {
           if (!existingKeys.has(key) && key.startsWith(`${focusedPaneId}:`)) {
             const terminal = terminalRefs.current.get(key);
             if (terminal) {
-              buildSessionCommand(session).then(async (sessionInfo) => {
+              buildSessionLaunch(session).then(async (sessionInfo) => {
                 const backend = await getActiveBackend();
-                runSessionInTerminal(
+                await runSessionInTerminal(
                   terminal,
                   focusedPaneId,
                   session,
@@ -611,7 +566,7 @@ function HomeContent() {
 
       setTimeout(waitForNewTerminal, 50);
     },
-    [addTab, focusedPaneId, buildSessionCommand, runSessionInTerminal]
+    [addTab, focusedPaneId, buildSessionLaunch, runSessionInTerminal]
   );
 
   // Notification click handler

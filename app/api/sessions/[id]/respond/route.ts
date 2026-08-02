@@ -8,6 +8,10 @@ import {
   canApproveFromPrompt,
 } from "@/lib/notification-actions";
 import { detectPrompt, pushApproveEnabled } from "@/lib/auto-steer";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 // Sessions with an Approve currently being processed — serializes concurrent approves so a
 // lock-screen double-tap can't fire two Enters (the second landing on whatever's then
@@ -32,9 +36,14 @@ export async function POST(
     }
 
     const session = queries.getSession(getDb()).get(id) as Session | undefined;
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     // Authoritative backend key (honors a renamed session's tmux_name), same as
     // the DELETE/summarize routes — sessionKey() alone would 409 after a rename.

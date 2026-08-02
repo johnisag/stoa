@@ -33,6 +33,14 @@ function hasTable(name: string): boolean {
   );
 }
 
+function hasTrigger(name: string): boolean {
+  return Boolean(
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?")
+      .get(name)
+  );
+}
+
 function hasColumn(table: string, column: string): boolean {
   return db
     .prepare(`PRAGMA table_info(${table})`)
@@ -49,6 +57,7 @@ describe("fresh schema indexes", () => {
     expect(hasIndex("idx_sessions_group")).toBe(true);
     expect(hasIndex("idx_sessions_conductor")).toBe(true);
     expect(hasIndex("idx_sessions_project")).toBe(true);
+    expect(hasIndex("idx_sessions_fleet_ownership")).toBe(true);
   });
 });
 
@@ -56,12 +65,28 @@ describe("fresh schema sessions columns", () => {
   it("has the orchestration columns referenced by indexes", () => {
     expect(hasColumn("sessions", "conductor_session_id")).toBe(true);
     expect(hasColumn("sessions", "project_id")).toBe(true);
+    expect(hasColumn("sessions", "fleet_ownership_key")).toBe(true);
   });
 
   it("has the fork_cost_baseline column (#1 — schema/migration parity)", () => {
     // schema.ts must carry it too, so migration 44's guarded ALTER is a no-op on a
     // fresh DB (and the cost path can read s.fork_cost_baseline).
     expect(hasColumn("sessions", "fork_cost_baseline")).toBe(true);
+  });
+});
+
+describe("fresh schema session deletion claims", () => {
+  it("has the durable claim/tombstone tables and relationship guards", () => {
+    expect(hasTable("session_deletion_claims")).toBe(true);
+    expect(hasTable("session_deletion_claim_members")).toBe(true);
+    for (const trigger of [
+      "trg_sessions_deletion_claim_insert_guard",
+      "trg_sessions_deletion_claim_attach_guard",
+      "trg_sessions_deletion_claim_member_update_guard",
+      "trg_sessions_deletion_claim_member_delete_guard",
+    ]) {
+      expect(hasTrigger(trigger)).toBe(true);
+    }
   });
 });
 
@@ -97,6 +122,10 @@ describe("fresh schema fleet management tables", () => {
       "fleet_workers",
       "fleet_events",
       "fleet_artifacts",
+      "fleet_action_authorizations",
+      "fleet_reviews",
+      "fleet_capabilities",
+      "fleet_capability_audit",
     ]) {
       expect(hasTable(table)).toBe(true);
     }
@@ -120,6 +149,14 @@ describe("fresh schema fleet management tables", () => {
       "approved_plan_hash",
       "approved_by",
       "approved_at",
+      "desired_state",
+      "automation_policy_version",
+      "automation_policy_json",
+      "automation_policy_hash",
+      "automation_base_sha",
+      "source_kind",
+      "source_id",
+      "source_name",
       "settings_json",
     ]) {
       expect(hasColumn("fleet_runs", col)).toBe(true);
@@ -133,6 +170,10 @@ describe("fresh schema fleet management tables", () => {
       "task_type",
       "sort_order",
       "file_claims_json",
+      "source_ref",
+      "source_step_id",
+      "source_issue_id",
+      "source_issue_number",
     ]) {
       expect(hasColumn("fleet_tasks", col)).toBe(true);
     }
@@ -144,6 +185,7 @@ describe("fresh schema fleet management tables", () => {
       "status",
       "attempt",
       "last_heartbeat_at",
+      "session_ownership_key",
     ]) {
       expect(hasColumn("fleet_workers", col)).toBe(true);
     }
@@ -175,9 +217,64 @@ describe("fresh schema fleet management tables", () => {
   it("has the fleet management query indexes", () => {
     expect(hasIndex("idx_fleet_runs_status")).toBe(true);
     expect(hasIndex("idx_fleet_runs_updated")).toBe(true);
+    expect(hasIndex("idx_fleet_runs_source")).toBe(true);
     expect(hasIndex("idx_fleet_tasks_run")).toBe(true);
+    expect(hasIndex("idx_fleet_tasks_source")).toBe(true);
+    expect(hasIndex("idx_fleet_tasks_source_issue")).toBe(true);
     expect(hasIndex("idx_fleet_workers_run")).toBe(true);
+    expect(hasIndex("idx_fleet_workers_session_ownership")).toBe(true);
     expect(hasIndex("idx_fleet_events_run")).toBe(true);
     expect(hasIndex("idx_fleet_artifacts_run")).toBe(true);
+    expect(hasIndex("idx_fleet_action_authorizations_run")).toBe(true);
+    expect(hasIndex("idx_fleet_reviews_subject")).toBe(true);
+    expect(hasIndex("idx_fleet_capabilities_token_hash")).toBe(true);
+    expect(hasIndex("idx_fleet_capability_audit_capability")).toBe(true);
+  });
+
+  it("enforces unique immutable ownership keys and tolerates orphan evidence on replay", () => {
+    const firstKey = "a".repeat(64);
+    const secondKey = "b".repeat(64);
+    db.prepare(
+      `INSERT INTO fleet_runs (id, name, goal) VALUES ('ownership-run', 'Run', 'Goal')`
+    ).run();
+    db.prepare(
+      `INSERT INTO fleet_workers
+       (id, fleet_run_id, status, session_ownership_key)
+       VALUES ('ownership-worker', 'ownership-run', 'spawning', ?)`
+    ).run(firstKey);
+    db.prepare(
+      `INSERT INTO sessions (id, name, fleet_ownership_key)
+       VALUES ('ownership-session', 'Session', ?)`
+    ).run(firstKey);
+
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE fleet_workers SET session_ownership_key = ? WHERE id = 'ownership-worker'`
+        )
+        .run(secondKey)
+    ).toThrow(/immutable/i);
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE sessions SET fleet_ownership_key = ? WHERE id = 'ownership-session'`
+        )
+        .run(secondKey)
+    ).toThrow(/immutable/i);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO sessions (id, name, fleet_ownership_key)
+           VALUES ('ownership-duplicate', 'Duplicate', ?)`
+        )
+        .run(firstKey)
+    ).toThrow();
+    expect(hasTrigger("trg_sessions_fleet_ownership_immutable")).toBe(true);
+    expect(hasTrigger("trg_fleet_workers_session_ownership_immutable")).toBe(
+      true
+    );
+
+    db.prepare(`DELETE FROM fleet_workers WHERE id = 'ownership-worker'`).run();
+    expect(() => createSchema(db)).not.toThrow();
   });
 });

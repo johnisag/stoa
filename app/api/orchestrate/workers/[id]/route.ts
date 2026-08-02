@@ -5,10 +5,22 @@ import {
   completeWorker,
   failWorker,
   killWorker,
+  WorkerSessionAccessError,
 } from "@/lib/orchestration";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
+}
+
+function workerRouteError(error: unknown, fallback: string) {
+  if (error instanceof WorkerSessionAccessError) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: error.status }
+    );
+  }
+  console.error(`${fallback}:`, error);
+  return NextResponse.json({ error: fallback }, { status: 500 });
 }
 
 // GET /api/orchestrate/workers/[id] - Get worker output
@@ -28,11 +40,7 @@ export async function GET(request: Request, { params }: RouteParams) {
     const output = await getWorkerOutput(id, lines);
     return NextResponse.json({ output });
   } catch (error) {
-    console.error("Failed to get worker output:", error);
-    return NextResponse.json(
-      { error: "Failed to get worker output" },
-      { status: 500 }
-    );
+    return workerRouteError(error, "Failed to get worker output");
   }
 }
 
@@ -69,11 +77,7 @@ export async function POST(request: Request, { params }: RouteParams) {
         );
     }
   } catch (error) {
-    console.error("Failed to perform worker action:", error);
-    return NextResponse.json(
-      { error: "Failed to perform worker action" },
-      { status: 500 }
-    );
+    return workerRouteError(error, "Failed to perform worker action");
   }
 }
 
@@ -87,10 +91,6 @@ export async function DELETE(request: Request, { params }: RouteParams) {
     await killWorker(id, cleanupWorktree);
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Failed to kill worker:", error);
-    return NextResponse.json(
-      { error: "Failed to kill worker" },
-      { status: 500 }
-    );
+    return workerRouteError(error, "Failed to kill worker");
   }
 }

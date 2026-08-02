@@ -355,9 +355,9 @@ describe("orchestration readiness contract", () => {
   });
 
   // "Enable orchestration" wires the stoa MCP server per provider convention:
-  // Claude reads a project .mcp.json; Codex gets per-launch `-c mcp_servers.stoa.*`
-  // flags; Hermes gets a global `mcp add` + a cwd marker file. The New Session box
-  // and the create route both gate on this flag — only `shell` stays off.
+  // Claude/Kilo/Kimi read their native project configs; Codex gets per-launch
+  // `-c mcp_servers.stoa.*` flags; Hermes gets a global `mcp add` + cwd marker.
+  // The New Session box and create/repair routes gate on this flag.
   it("every agent provider advertises supportsOrchestration; shell does not", () => {
     for (const id of PROVIDER_IDS) {
       const expected = id !== "shell";

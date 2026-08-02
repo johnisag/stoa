@@ -8,10 +8,20 @@ import {
   defaultInteractiveShell,
   extraBinDirsForPlatform,
   pathWithExtraBinDirs,
+  stoaHomeDir,
 } from "@/lib/platform";
 import os from "os";
 import path from "path";
 import net from "net";
+
+describe("stoaHomeDir", () => {
+  it("uses the cross-platform default and expands an explicit tilde path", () => {
+    expect(stoaHomeDir("")).toBe(path.join(os.homedir(), ".stoa"));
+    expect(stoaHomeDir("~/custom-stoa")).toBe(
+      path.join(os.homedir(), "custom-stoa")
+    );
+  });
+});
 
 describe("extraBinDirsForPlatform / pathWithExtraBinDirs (macOS Homebrew PATH)", () => {
   it("extraBinDirsForPlatform returns the Homebrew dirs only on darwin", () => {

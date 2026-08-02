@@ -10,6 +10,8 @@ import {
   ELICITATIONS_KEY,
   type PendingElicitation,
 } from "@/data/mcp-elicitations/queries";
+import { fetchFleetRuns } from "@/data/fleet/queries";
+import { fleetKeys } from "@/data/fleet/keys";
 
 /**
  * Always-on "needs me" count for the nav badges (Verdict Inbox + Fleet Board).
@@ -22,11 +24,9 @@ import {
  * is open there's the 6s poll plus this cheap 30s one; that's the intended cost,
  * not a double-poll of the same instant.)
  *
- * Cost is one cheap `/api/verdict-inbox` GET every 30s (the read model is pure DB
- * rows — see lib/verdict-inbox.ts — no `gh`); the count is derived from the SAME
- * `needsMe` selector the inbox view's "Needs me" tab uses. Pass `enabled = false`
- * on surfaces that don't render the badge (e.g. the desktop sidebar footer) to
- * avoid keeping a timer no one reads.
+ * Cost is two cheap DB-read requests every 30s (`/api/verdict-inbox` and the
+ * shared Fleet run list; neither invokes `gh`). Pass `enabled = false` on
+ * surfaces that don't render the badge to avoid keeping timers no one reads.
  */
 export function useAttentionCount(enabled = true): number {
   const { data = 0 } = useQuery({
@@ -53,5 +53,16 @@ export function useAttentionCount(enabled = true): number {
     select: (items: PendingElicitation[]) => items.length,
   });
 
-  return data + elicitations;
+  const { data: fleetAttention = 0 } = useQuery({
+    queryKey: fleetKeys.runs(),
+    queryFn: fetchFleetRuns,
+    enabled,
+    staleTime: 30000,
+    refetchInterval: 30000,
+    // Keep the global badge item-based: one noisy Fleet run is one board card,
+    // while that card retains its more detailed run/task/worker signal count.
+    select: (runs) => runs.filter((run) => run.attentionCount > 0).length,
+  });
+
+  return data + elicitations + fleetAttention;
 }

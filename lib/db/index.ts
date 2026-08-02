@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import { homeDir, expandHome } from "../platform";
+import { expandHome, stoaHomeDir } from "../platform";
 import { createSchema } from "./schema";
 import { runMigrations } from "./migrations";
 
@@ -27,7 +27,7 @@ export function resolveDbPath(): string {
   // An empty DB_PATH ("") is treated as unset. A relative DB_PATH is resolved from
   // process.cwd() at startup (better-sqlite3's behavior); prefer absolute.
   if (process.env.DB_PATH) return expandHome(process.env.DB_PATH);
-  const stoaHome = process.env.STOA_HOME || path.join(homeDir(), ".stoa");
+  const stoaHome = stoaHomeDir();
   const canonical = path.join(stoaHome, "stoa.db");
   const legacy = path.join(process.cwd(), "stoa.db");
   if (!fs.existsSync(canonical) && fs.existsSync(legacy)) {

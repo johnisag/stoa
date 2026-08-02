@@ -26,6 +26,7 @@ import { getAnalyticsReport } from "./analytics/queries";
 import { computeManagedStatuses } from "./session-status";
 import { getDb, queries, type Session } from "./db";
 import type { AgentType } from "./providers";
+import { isInteractiveSessionRole } from "./session-role";
 
 /**
  * The providers Ask Stoa can route a question to. Phase 1 ships claude + codex
@@ -164,9 +165,15 @@ export async function gatherStoaContext(windowDays = 1): Promise<string> {
     directory: string;
   }> = [];
   const nameById = new Map<string, string>();
+  const genericSessionIds = new Set<string>();
   try {
-    const sessions = queries.getAllSessions(getDb()).all() as Session[];
-    for (const s of sessions) nameById.set(s.id, s.name);
+    const sessions = (
+      queries.getAllSessions(getDb()).all() as Session[]
+    ).filter(isInteractiveSessionRole);
+    for (const s of sessions) {
+      nameById.set(s.id, s.name);
+      genericSessionIds.add(s.id);
+    }
     roster = sessions.map((s) => ({
       name: s.name,
       agent: s.agent_type,
@@ -181,12 +188,14 @@ export async function gatherStoaContext(windowDays = 1): Promise<string> {
   // Live sessions: status + last line under the HUMAN name (fall back to the
   // managed key if the row is gone); flag the ones that need the operator
   // (waiting AT an actual prompt) so a "what needs me?" question is answerable.
-  const live = statuses.map((s) => ({
-    name: nameById.get(s.id) ?? s.name,
-    status: s.status,
-    lastLine: s.lastLine,
-    needsMe: s.status === "waiting" && s.prompt != null,
-  }));
+  const live = statuses
+    .filter((s) => genericSessionIds.has(s.id))
+    .map((s) => ({
+      name: nameById.get(s.id) ?? s.name,
+      status: s.status,
+      lastLine: s.lastLine,
+      needsMe: s.status === "waiting" && s.prompt != null,
+    }));
   const needsMe = live.filter((s) => s.needsMe).map((s) => s.name);
 
   const context = {

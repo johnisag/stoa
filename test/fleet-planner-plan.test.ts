@@ -1,15 +1,26 @@
+import { createHash } from "crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildFleetPlannerPrompt,
   fleetPlannerPlanText,
   normalizeFleetPlannerTaskCap,
   parseFleetPlannerOutput,
+  parseFleetPlannerResult,
 } from "@/lib/fleet/planner-plan";
 
 const validPlan = `noise
 STOA_FLEET_PLAN_BEGIN
-{"tasks":[{"key":"api","title":"Build API","description":"Add the endpoint","taskType":"implementation","fileClaims":["app/api/"],"dependsOn":[],"acceptanceCriteria":"Tests pass","verifyCommand":"npm test","suggestedProvider":"codex"},{"key":"review","title":"Review API","description":"Inspect the result","taskType":"review","fileClaims":[],"dependsOn":["api"]}]}
+{"tasks":[{"key":"api","title":"Build API","description":"Add the endpoint","taskType":"implementation","fileClaims":["app/api/"],"dependsOn":[],"acceptanceCriteria":"Tests pass","riskNotes":[{"severity":"medium","risk":"Callers may rely on the old response","mitigation":"Run compatibility tests"}],"verifyCommand":"npm test","suggestedProvider":"codex","suggestedModel":"gpt-5.5"},{"key":"review","title":"Review API","description":"Inspect the result","taskType":"review","fileClaims":[],"dependsOn":["api"],"riskNotes":[]}]}
 STOA_FLEET_PLAN_END`;
+
+const RESULT_NONCE = "planner-result-nonce";
+const RESULT_IDENTITY = {
+  runId: "run-one",
+  requestId: "request-one",
+  attempt: 1,
+  baseSha: "a".repeat(40),
+  nonceHash: createHash("sha256").update(RESULT_NONCE).digest("hex"),
+};
 
 describe("Fleet planner plan contract", () => {
   it("builds a bounded, no-authority planner prompt", () => {
@@ -18,10 +29,15 @@ describe("Fleet planner plan contract", () => {
       baseBranch: "main",
       taskCap: 12,
       availableProviders: ["claude", "codex"],
+      resultPath: "/stoa/fleet/run-one/planner/request-one/result.json",
+      nonce: RESULT_NONCE,
+      ...RESULT_IDENTITY,
     });
     expect(prompt).toContain("at most 12");
     expect(prompt).toContain("do not modify project files, commit, push");
-    expect(prompt).toContain("STOA_FLEET_PLAN_BEGIN");
+    expect(prompt).toContain("external Fleet-owned path");
+    expect(prompt).toContain(RESULT_NONCE);
+    expect(prompt).toContain(RESULT_IDENTITY.baseSha);
   });
 
   it("parses dependencies, claims, criteria, and provider suggestions", () => {
@@ -37,8 +53,16 @@ describe("Fleet planner plan contract", () => {
           fileClaims: ["app/api"],
           dependsOn: [],
           acceptanceCriteria: "Tests pass",
+          riskNotes: [
+            {
+              severity: "medium",
+              risk: "Callers may rely on the old response",
+              mitigation: "Run compatibility tests",
+            },
+          ],
           verifyCommand: "npm test",
           suggestedProvider: "codex",
+          suggestedModel: "gpt-5.5",
         },
         {
           key: "review",
@@ -48,8 +72,10 @@ describe("Fleet planner plan contract", () => {
           fileClaims: [],
           dependsOn: ["api"],
           acceptanceCriteria: null,
+          riskNotes: [],
           verifyCommand: null,
           suggestedProvider: null,
+          suggestedModel: null,
         },
       ],
     });
@@ -95,6 +121,126 @@ describe("Fleet planner plan contract", () => {
     expect(parseFleetPlannerOutput(validPlan, 1)).toMatchObject({
       ok: false,
       error: expect.stringContaining("cap"),
+    });
+  });
+
+  it("rejects missing or unsafe write-task verification commands", () => {
+    expect(
+      parseFleetPlannerOutput(
+        validPlan.replace('"verifyCommand":"npm test",', ""),
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "write task api has no verification command",
+    });
+    expect(
+      parseFleetPlannerOutput(
+        validPlan.replace('"npm test"', '"npm test | tee result.txt"'),
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "planner task api has an unsafe verification command",
+    });
+  });
+
+  it("requires bounded acceptance criteria and structured risk notes for write tasks", () => {
+    expect(
+      parseFleetPlannerOutput(
+        validPlan.replace('"acceptanceCriteria":"Tests pass",', ""),
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "write task api needs bounded acceptance criteria",
+    });
+    expect(
+      parseFleetPlannerOutput(
+        validPlan.replace(
+          '"riskNotes":[{"severity":"medium","risk":"Callers may rely on the old response","mitigation":"Run compatibility tests"}]',
+          '"riskNotes":[]'
+        ),
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "planner task api needs bounded structured risk notes",
+    });
+    expect(
+      parseFleetPlannerOutput(
+        validPlan.replace('"severity":"medium"', '"severity":"critical"'),
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "planner task api has a malformed risk note",
+    });
+  });
+
+  it("authenticates planner results to one request, attempt, nonce, and base", () => {
+    const tasks = JSON.parse(
+      validPlan.slice(validPlan.indexOf("{"), validPlan.lastIndexOf("}") + 1)
+    ).tasks;
+    const result = JSON.stringify({
+      schemaVersion: 1,
+      nonce: RESULT_NONCE,
+      runId: RESULT_IDENTITY.runId,
+      requestId: RESULT_IDENTITY.requestId,
+      attempt: RESULT_IDENTITY.attempt,
+      baseSha: RESULT_IDENTITY.baseSha,
+      tasks,
+    });
+    expect(parseFleetPlannerResult(result, RESULT_IDENTITY, 8)).toMatchObject({
+      ok: true,
+    });
+    expect(
+      parseFleetPlannerResult(
+        result.replace('"requestId":"request-one"', '"requestId":"stale"'),
+        RESULT_IDENTITY,
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "planner result requestId does not match",
+    });
+    expect(
+      parseFleetPlannerResult(
+        result.replace(RESULT_NONCE, "wrong-nonce"),
+        RESULT_IDENTITY,
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "planner result nonce does not match",
+    });
+    expect(
+      parseFleetPlannerResult(
+        result.replace(RESULT_NONCE, ` ${RESULT_NONCE} `),
+        RESULT_IDENTITY,
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "planner result nonce does not match",
+    });
+  });
+
+  it("rejects unsafe or unscoped model suggestions", () => {
+    expect(
+      parseFleetPlannerOutput(validPlan.replace('"gpt-5.5"', '"gpt-5.5;rm"'), 8)
+    ).toEqual({
+      ok: false,
+      error: "planner task api has an unsafe model suggestion",
+    });
+    expect(
+      parseFleetPlannerOutput(
+        validPlan.replace('"suggestedProvider":"codex",', ""),
+        8
+      )
+    ).toEqual({
+      ok: false,
+      error: "planner task api has an unsafe model suggestion",
     });
   });
 

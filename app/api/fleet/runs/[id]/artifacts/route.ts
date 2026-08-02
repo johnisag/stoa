@@ -4,11 +4,14 @@ import {
   readCappedJsonBody,
 } from "@/lib/fleet/http";
 import { attachFleetPlanCriticArtifact } from "@/lib/fleet/service";
+import { requireAdmin } from "@/lib/api-security";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
   const { id } = await params;
   const body = await readCappedJsonBody(request, FLEET_ARTIFACT_JSON_BODY_MAX);
   if ("error" in body) {
@@ -16,7 +19,11 @@ export async function POST(
   }
 
   try {
-    const result = attachFleetPlanCriticArtifact(id, body.body);
+    const input =
+      body.body && typeof body.body === "object"
+        ? { ...(body.body as Record<string, unknown>), actor: "operator" }
+        : { actor: "operator" };
+    const result = attachFleetPlanCriticArtifact(id, input);
     if ("error" in result) {
       return NextResponse.json(
         { error: result.error },

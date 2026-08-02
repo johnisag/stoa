@@ -97,12 +97,16 @@ describe("classifySecretFiles — name matcher matrix", () => {
 
 // ── route ──
 
-function req(params: Record<string, string>, host = "localhost"): NextRequest {
+function req(
+  params: Record<string, string>,
+  host = "localhost",
+  scope: "admin" | "observer" = "admin"
+): NextRequest {
   const url = new URL("http://localhost/api/secret-scan");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   // The handler touches request.nextUrl.searchParams + requireLocalhost, which
   // (with no connection IP) falls back to the Host header.
-  const headers = new Headers({ host });
+  const headers = new Headers({ host, "x-stoa-scope": scope });
   return { nextUrl: url, headers } as unknown as NextRequest;
 }
 

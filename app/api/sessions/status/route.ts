@@ -14,6 +14,7 @@ import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionBackend, type SessionActivity } from "@/lib/session-backend";
 import { claudeProjectDirName, findClaudeProjectDir } from "@/lib/platform";
 import { getBudgetStage, isBudgetParked } from "@/lib/budget-park";
+import { isGenericSessionLaunchAllowed } from "@/lib/session-launch";
 import {
   clearCodexThreadVerification,
   markCodexThreadVerified,
@@ -225,6 +226,9 @@ export async function GET() {
       const id = getSessionIdFromName(sessionName);
       const sessionRow =
         (getSessionStmt.get(id) as Session | undefined) ?? null;
+      if (sessionRow && !isGenericSessionLaunchAllowed(sessionRow)) {
+        return null;
+      }
       // One screen capture yields the status, the preview line, rate-limit, and
       // whether an actual prompt is on screen.
       const { status, lastLine, rateLimit, prompt } =
@@ -274,7 +278,9 @@ export async function GET() {
       };
     });
 
-    const results = await Promise.all(sessionPromises);
+    const results = (await Promise.all(sessionPromises)).filter(
+      (result) => result !== null
+    );
 
     // #19: attach the last verify verdict (written by the server tick's
     // sessionVerifyTick) so the card can render the badge. The failing-output

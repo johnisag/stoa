@@ -14,9 +14,12 @@ const listDirectory = vi.hoisted(() =>
 vi.mock("@/lib/files", () => ({ listDirectory }));
 
 const resolveSandboxedPath = vi.hoisted(() => vi.fn());
+const resolveRealSandboxedPath = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api-security", () => ({
   getAllowedPathRoots: () => ["/allowed"],
+  requireAdmin: () => null,
   resolveSandboxedPath,
+  resolveRealSandboxedPath,
 }));
 
 import { GET } from "@/app/api/files/route";
@@ -31,11 +34,12 @@ function req(params: Record<string, string>): NextRequest {
 beforeEach(() => {
   listDirectory.mockClear();
   resolveSandboxedPath.mockReset();
+  resolveRealSandboxedPath.mockReset();
 });
 
 describe("/api/files GET — browse mode (folder picker)", () => {
   it("403s a path outside the workspace by default (sandboxed)", async () => {
-    resolveSandboxedPath.mockReturnValue({
+    resolveRealSandboxedPath.mockResolvedValue({
       allowed: false,
       resolved: "C:/outside",
     });
@@ -76,7 +80,7 @@ describe("/api/files GET — browse mode (folder picker)", () => {
   });
 
   it("still serves an in-workspace path without browse", async () => {
-    resolveSandboxedPath.mockReturnValue({
+    resolveRealSandboxedPath.mockResolvedValue({
       allowed: true,
       resolved: "/allowed/x",
     });

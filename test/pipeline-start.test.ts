@@ -6,7 +6,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const state = vi.hoisted(() => ({ conductorExists: true }));
+const state = vi.hoisted(() => ({
+  conductorExists: true,
+  conductorRole: "interactive",
+}));
 const putRunMock = vi.hoisted(() => vi.fn());
 const runInBackgroundMock = vi.hoisted(() => vi.fn());
 
@@ -15,7 +18,9 @@ vi.mock("@/lib/db", () => ({
   queries: {
     getSession: () => ({
       get: (_id: string) =>
-        state.conductorExists ? { id: "conductor-1" } : undefined,
+        state.conductorExists
+          ? { id: "conductor-1", session_role: state.conductorRole }
+          : undefined,
     }),
   },
 }));
@@ -38,6 +43,7 @@ const validSpec: PipelineSpec = {
 
 beforeEach(() => {
   state.conductorExists = true;
+  state.conductorRole = "interactive";
   putRunMock.mockClear();
   runInBackgroundMock.mockClear();
 });
@@ -57,6 +63,17 @@ describe("startPipeline", () => {
       /Unknown conductor session/
     );
     expect(runInBackgroundMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an internal or future-role conductor", () => {
+    for (const role of ["fleet_supervisor", "future_internal_role"]) {
+      state.conductorRole = role;
+      expect(() => startPipeline(validSpec, "conductor-1")).toThrow(
+        PipelineRequestError
+      );
+    }
+    expect(runInBackgroundMock).not.toHaveBeenCalled();
+    expect(putRunMock).not.toHaveBeenCalled();
   });
 
   it("pre-registers the initial run and schedules the background executor", () => {

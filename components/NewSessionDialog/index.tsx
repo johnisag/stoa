@@ -246,11 +246,7 @@ export function NewSessionDialog({
                 </Button>
                 <Button
                   type="submit"
-                  disabled={
-                    form.isLoading ||
-                    (form.useWorktree && !form.featureName.trim()) ||
-                    (form.isWorkspace && !form.featureName.trim())
-                  }
+                  disabled={form.isLoading || !form.worktreeSelectionValid}
                 >
                   {form.isLoading ? "Creating..." : "Create"}
                 </Button>

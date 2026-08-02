@@ -31,10 +31,20 @@ export class PtyBackend implements SessionBackend {
     command,
     binary,
     args,
+    env,
+    envMode,
+    fleetWritableRoots,
   }: CreateOptions): Promise<void> {
     // Preferred: spawn the agent binary directly with argv (no bash banner).
     if (binary && binary.length > 0) {
-      await this.transport.spawn(name, { binary, args: args ?? [], cwd });
+      await this.transport.spawn(name, {
+        binary,
+        args: args ?? [],
+        cwd,
+        env,
+        envMode,
+        fleetWritableRoots,
+      });
       return;
     }
     // Fallback: run the (banner-wrapped) command string through a shell. The
@@ -45,11 +55,21 @@ export class PtyBackend implements SessionBackend {
       await this.transport.spawn(
         name,
         pwsh
-          ? { binary: pwsh, args: ["-NoLogo", "-Command", command], cwd }
+          ? {
+              binary: pwsh,
+              args: ["-NoLogo", "-Command", command],
+              cwd,
+              env,
+              envMode,
+              fleetWritableRoots,
+            }
           : {
               binary: process.env.ComSpec || "cmd.exe",
               args: ["/c", command],
               cwd,
+              env,
+              envMode,
+              fleetWritableRoots,
             }
       );
     } else {
@@ -57,6 +77,9 @@ export class PtyBackend implements SessionBackend {
         binary: defaultInteractiveShell(),
         args: ["-c", command],
         cwd,
+        env,
+        envMode,
+        fleetWritableRoots,
       });
     }
   }

@@ -19,6 +19,7 @@ import { runPipeline, formatValidationErrors } from "./executor";
 import { defaultExecutorDeps } from "./default-deps";
 import { putRun } from "./registry";
 import type { PipelineSpec, PipelineRun } from "./types";
+import { isInteractiveSessionRole } from "../session-role";
 
 export interface StartPipelineResult {
   run: PipelineRun;
@@ -52,9 +53,9 @@ export function startPipeline(
 
   const conductor = queries.getSession(db).get(conductorSessionId) as
     Session | undefined;
-  if (!conductor) {
+  if (!conductor || !isInteractiveSessionRole(conductor)) {
     throw new PipelineRequestError(
-      `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing Stoa session.`
+      `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing interactive Stoa session.`
     );
   }
 

@@ -18,6 +18,7 @@ import {
   AGENT_OPTIONS,
   generateFeatureName,
 } from "../NewSessionDialog.types";
+import { isNewSessionWorktreeSelectionValid } from "../worktree-validation";
 
 interface UseNewSessionFormOptions {
   open: boolean;
@@ -49,7 +50,8 @@ export function useNewSessionForm({
   const [projectId, setProjectId] = useState<string | null>(null);
   const [agentType, setAgentType] = useState<AgentType>("claude");
   // Per-session model. Defaults from the selected project / agent; the picker
-  // overrides it. For free-text agents (Hermes) blank = the agent's own default.
+  // overrides it. Blank selects Stoa's provider default when one exists (Hermes
+  // is explicitly `kimi-k3`), otherwise the provider's configured default.
   const [model, setModel] = useState<string>(() =>
     getDefaultModelForAgent("claude")
   );
@@ -117,6 +119,9 @@ export function useNewSessionForm({
 
   // Check if working directory is a git repo
   const checkGitRepo = useCallback(async (path: string) => {
+    setWorktreeMode("new");
+    setExistingWorktreePath("");
+    setExistingWorktreeBranch("");
     if (!path || path === "~") {
       setGitInfo(null);
       setUseWorktree(false);
@@ -284,23 +289,35 @@ export function useNewSessionForm({
     subRepos.length > 0 && selectedSubRepos.length === subRepos.length;
   const toggleAllSubRepos = () =>
     setSelectedSubRepos(allSubReposSelected ? [] : subRepos.map((r) => r.path));
+  const worktreeSelectionValid = isNewSessionWorktreeSelectionValid({
+    useWorktree,
+    worktreeMode,
+    featureName,
+    existingWorktreePath,
+    gitInfo,
+    isWorkspace,
+  });
+
+  useEffect(() => {
+    if (
+      worktreeMode !== "existing" ||
+      !existingWorktreePath ||
+      gitInfo?.worktrees?.some(
+        (worktree) =>
+          worktree.path === existingWorktreePath && !worktree.attached
+      )
+    ) {
+      return;
+    }
+    setExistingWorktreePath("");
+    setExistingWorktreeBranch("");
+  }, [existingWorktreePath, gitInfo, worktreeMode]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     createSession.reset(); // Clear any previous errors
 
-    if (isWorkspace) {
-      if (!featureName.trim()) return; // need a feature name for the branch
-    } else if (useWorktree) {
-      if (!gitInfo?.isGitRepo) {
-        return;
-      }
-      if (worktreeMode === "existing") {
-        if (!existingWorktreePath) return; // pick a worktree
-      } else if (!featureName.trim()) {
-        return; // Validation handled by button disabled state
-      }
-    }
+    if (!worktreeSelectionValid) return;
 
     setCreationStep("creating");
 
@@ -456,6 +473,7 @@ export function useNewSessionForm({
     setBaseBranch,
     existingWorktreePath,
     setExistingWorktree,
+    worktreeSelectionValid,
     gitInfo,
     checkingGit,
     // Multi-repo workspace

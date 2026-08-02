@@ -21,11 +21,75 @@ import { deleteSchedulesForSession } from "@/lib/scheduler";
 import { expandHome } from "@/lib/platform";
 import {
   parseJsonBody,
-  resolveSandboxedPath,
+  resolveRealSandboxedPath,
   sanitizeSessionName,
   sanitizeGroupPath,
   SYSTEM_PROMPT_MAX_LENGTH,
 } from "@/lib/api-security";
+import {
+  assertGenericSessionRouteAccess,
+  backendKeyOwners,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
+import {
+  claimConductorSessionDeletion,
+  commitConductorSessionDeletion,
+  ConductorSessionDeletionRejectedError,
+  isSessionDeletionBoundaryFenced,
+} from "@/lib/session-deletion";
+
+class SessionDeletionBackendStopError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "SessionDeletionBackendStopError";
+  }
+}
+
+class SessionRenameDeletionRaceError extends Error {
+  constructor() {
+    super("Session deletion is in progress");
+    this.name = "SessionRenameDeletionRaceError";
+  }
+}
+
+async function killRenameCandidates(
+  backend: ReturnType<typeof getSessionBackend>,
+  oldKey: string,
+  newKey: string
+): Promise<void> {
+  await Promise.allSettled([backend.kill(newKey), backend.kill(oldKey)]);
+}
+
+async function rollbackRenameOrStop(
+  db: ReturnType<typeof getDb>,
+  sessionId: string,
+  backend: ReturnType<typeof getSessionBackend>,
+  oldKey: string,
+  newKey: string
+): Promise<boolean> {
+  const fenced = () =>
+    isSessionDeletionBoundaryFenced(db, sessionId, [oldKey, newKey]);
+  if (fenced()) {
+    await killRenameCandidates(backend, oldKey, newKey);
+    return true;
+  }
+
+  let rolledBack = false;
+  try {
+    await backend.rename(newKey, oldKey);
+    rolledBack = true;
+  } catch {
+    // Check the durable fence again before deciding whether only the orphaned
+    // target is safe to stop.
+  }
+
+  if (fenced()) {
+    await killRenameCandidates(backend, oldKey, newKey);
+    return true;
+  }
+  if (!rolledBack) await backend.kill(newKey).catch(() => undefined);
+  return false;
+}
 
 // Sanitize a name for use as tmux session name
 function sanitizeTmuxName(name: string): string {
@@ -56,9 +120,14 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
     const session = queries.getSession(db).get(id) as Session | undefined;
 
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     return NextResponse.json({ session });
   } catch (error) {
@@ -88,8 +157,21 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
 
     const existing = queries.getSession(db).get(id) as Session | undefined;
-    if (!existing) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(existing);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
+    }
+    assertGenericSessionRouteAccess(existing);
+    if (
+      isSessionDeletionBoundaryFenced(db, id, [backendKeyForSession(existing)])
+    ) {
+      return NextResponse.json(
+        { error: "Session deletion is in progress" },
+        { status: 409 }
+      );
     }
 
     // Resolve the session's project root for path validation.
@@ -103,6 +185,11 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     // Build update query dynamically based on provided fields
     const updates: string[] = [];
     const values: unknown[] = [];
+    let completedBackendRename: {
+      oldKey: string;
+      newKey: string;
+      backend: ReturnType<typeof getSessionBackend>;
+    } | null = null;
 
     // Handle name change - also rename tmux session and git branch (for worktrees)
     if (body.name !== undefined && body.name !== existing.name) {
@@ -114,20 +201,64 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         );
       }
       const newTmuxName = sanitizeTmuxName(sanitized);
-      const oldTmuxName = existing.tmux_name;
+      const oldTmuxName = backendKeyForSession(existing);
+      const renameDeletionFenced = () =>
+        isSessionDeletionBoundaryFenced(db, id, [oldTmuxName, newTmuxName]);
 
-      // Try to rename the tmux session
-      if (oldTmuxName && newTmuxName) {
+      // Rename only a live backend and persist the new key only after that
+      // rename succeeds. A requested key owned by any other row (especially an
+      // internal session) or orphan live process is globally reserved.
+      if (newTmuxName && newTmuxName !== oldTmuxName) {
+        if (renameDeletionFenced()) {
+          return NextResponse.json(
+            { error: "Session deletion is in progress" },
+            { status: 409 }
+          );
+        }
+        const allSessions = queries.getAllSessions(db).all() as Session[];
+        if (
+          backendKeyOwners(allSessions, newTmuxName, existing.id).length > 0
+        ) {
+          return NextResponse.json(
+            { error: "The requested session name is already reserved" },
+            { status: 409 }
+          );
+        }
         try {
           const backend = getSessionBackend();
-          await backend.rename(oldTmuxName, newTmuxName);
-          updates.push("tmux_name = ?");
-          values.push(newTmuxName);
-        } catch {
-          // tmux session might not exist or rename failed - that's ok, just update the name
-          // Still update tmux_name in DB so future attachments use the new name
-          updates.push("tmux_name = ?");
-          values.push(newTmuxName);
+          if (await backend.exists(oldTmuxName)) {
+            if (await backend.exists(newTmuxName)) {
+              return NextResponse.json(
+                { error: "The requested session name is already reserved" },
+                { status: 409 }
+              );
+            }
+            if (renameDeletionFenced()) {
+              return NextResponse.json(
+                { error: "Session deletion is in progress" },
+                { status: 409 }
+              );
+            }
+            await backend.rename(oldTmuxName, newTmuxName);
+            updates.push("tmux_name = ?");
+            values.push(newTmuxName);
+            completedBackendRename = {
+              oldKey: oldTmuxName,
+              newKey: newTmuxName,
+              backend,
+            };
+            if (renameDeletionFenced()) {
+              await killRenameCandidates(backend, oldTmuxName, newTmuxName);
+              return NextResponse.json(
+                { error: "Session deletion is in progress" },
+                { status: 409 }
+              );
+            }
+          }
+        } catch (error) {
+          console.error("Failed to rename session backend:", error);
+          // The display name may still change, but the durable backend key must
+          // remain untouched after a failed or unverifiable process rename.
         }
       }
 
@@ -168,7 +299,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       values.push(body.status);
     }
     if (body.workingDirectory !== undefined) {
-      const { allowed, resolved } = resolveSandboxedPath(
+      const { allowed, resolved } = await resolveRealSandboxedPath(
         body.workingDirectory,
         [projectRoot]
       );
@@ -224,10 +355,10 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       const targetRoot = expandHome(targetProject.working_directory);
       const roots = [targetRoot];
       const wdCheck = existing.working_directory
-        ? resolveSandboxedPath(existing.working_directory, roots)
+        ? await resolveRealSandboxedPath(existing.working_directory, roots)
         : { allowed: true };
       const wtCheck = existing.worktree_path
-        ? resolveSandboxedPath(existing.worktree_path, roots)
+        ? await resolveRealSandboxedPath(existing.worktree_path, roots)
         : { allowed: true };
       if (!wdCheck.allowed || !wtCheck.allowed) {
         return NextResponse.json(
@@ -243,15 +374,69 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       updates.push("updated_at = datetime('now')");
       values.push(id);
 
-      db.prepare(`UPDATE sessions SET ${updates.join(", ")} WHERE id = ?`).run(
-        ...values
-      );
+      try {
+        const persistUpdates = () => {
+          if (completedBackendRename) {
+            if (
+              isSessionDeletionBoundaryFenced(db, id, [
+                completedBackendRename.oldKey,
+                completedBackendRename.newKey,
+              ])
+            ) {
+              throw new SessionRenameDeletionRaceError();
+            }
+            const current = queries.getAllSessions(db).all() as Session[];
+            if (
+              backendKeyOwners(
+                current,
+                completedBackendRename.newKey,
+                existing.id
+              ).length > 0
+            ) {
+              throw new Error("Session key was reserved during rename");
+            }
+          }
+          db.prepare(
+            `UPDATE sessions SET ${updates.join(", ")} WHERE id = ?`
+          ).run(...values);
+          if (
+            completedBackendRename &&
+            isSessionDeletionBoundaryFenced(db, id, [
+              completedBackendRename.oldKey,
+              completedBackendRename.newKey,
+            ])
+          ) {
+            throw new SessionRenameDeletionRaceError();
+          }
+        };
+        if (completedBackendRename) db.transaction(persistUpdates)();
+        else persistUpdates();
+      } catch (error) {
+        if (completedBackendRename) {
+          const { backend, oldKey, newKey } = completedBackendRename;
+          const fenced = await rollbackRenameOrStop(
+            db,
+            id,
+            backend,
+            oldKey,
+            newKey
+          );
+          if (fenced) throw new SessionRenameDeletionRaceError();
+        }
+        throw error;
+      }
     }
 
     const session = queries.getSession(db).get(id) as Session;
     return NextResponse.json({ session });
   } catch (error) {
     console.error("Error updating session:", error);
+    if (error instanceof SessionRenameDeletionRaceError) {
+      return NextResponse.json(
+        { error: "Session deletion is in progress" },
+        { status: 409 }
+      );
+    }
     return NextResponse.json(
       { error: "Failed to update session" },
       { status: 500 }
@@ -266,65 +451,93 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     const db = getDb();
 
     const existing = queries.getSession(db).get(id) as Session | undefined;
-    if (!existing) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(existing);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(existing);
 
-    // If this is a conductor, delete all its workers first
-    const workers = queries.getWorkersByConductor(db).all(id) as Session[];
-    for (const worker of workers) {
+    // Claim the complete relationship boundary before killing any process.
+    // Unknown internal roles fail closed; only ordinary orchestration workers
+    // may be deleted and the five known Fleet roles may be detached.
+    const deletionPlan = claimConductorSessionDeletion(db, id);
+    // Re-read after the claim: another Stoa process may have changed a mutable
+    // interactive session between the access check and our IMMEDIATE claim.
+    // The claim trigger freezes every backend/cleanup identity from here on.
+    const claimedSession = queries.getSession(db).get(id) as
+      Session | undefined;
+    if (!claimedSession) {
+      throw new ConductorSessionDeletionRejectedError(
+        "Session disappeared while deletion was being claimed."
+      );
+    }
+    for (const worker of deletionPlan.interactiveWorkers) {
       try {
-        await killWorker(worker.id, false); // false = don't cleanup worktree yet
+        await killWorker(worker.id, false, "failed", {
+          failOnBackendError: true,
+        }); // false = don't cleanup worktree yet
       } catch (error) {
-        console.error(`Failed to kill worker ${worker.id}:`, error);
+        throw new SessionDeletionBackendStopError(
+          `Failed to stop worker ${worker.id}`,
+          { cause: error }
+        );
       }
-      queries.deleteSession(db).run(worker.id);
-      clearQueue(worker.id);
-      // Orphan cleanup: channel_messages + schedules have no FK cascade on
-      // session_id, so remove this worker's rows explicitly (else they linger).
-      deleteChannelMessagesForSession(worker.id);
-      deleteSchedulesForSession(worker.id);
     }
 
     // Kill this session's OWN agent process — not just its workers. Without it a
     // "deleted" agent lingers in the pty-host daemon (Tier-2/Windows default):
     // holding a CLI/auth seat, blocking idle-shutdown, resurrectable by key, and
-    // leaving the client on a live ghost pane. Best-effort + backend-agnostic; a
-    // missing/already-dead session must not fail the delete.
-    const backendKey = backendKeyForSession(existing);
+    // leaving the client on a live ghost pane. SessionBackend.kill is idempotent
+    // for a missing process; a rejection keeps the durable claim for a retry.
+    const backendKey = backendKeyForSession(claimedSession);
     try {
       await getSessionBackend().kill(backendKey);
     } catch (error) {
-      console.error(`Failed to kill session pty ${backendKey}:`, error);
+      throw new SessionDeletionBackendStopError(
+        `Failed to stop session backend ${backendKey}`,
+        { cause: error }
+      );
     }
+
+    // Preserve Fleet evidence and delete the ordinary session graph as one DB
+    // commit. A trigger/FK failure rolls the detachment and every row deletion
+    // back together. The helper also revalidates the pre-kill snapshot.
+    commitConductorSessionDeletion(db, deletionPlan);
+
+    for (const worker of deletionPlan.interactiveWorkers) {
+      clearQueue(worker.id);
+      // channel_messages + schedules have no session FK cascade.
+      deleteChannelMessagesForSession(worker.id);
+      deleteSchedulesForSession(worker.id);
+    }
+    clearQueue(id);
+    deleteChannelMessagesForSession(id);
+    deleteSchedulesForSession(id);
 
     // Drop the conductor marker so a future session in this same dir can't
     // inherit this (now-dead) conductor's id from a stale .stoa-conductor file.
-    if (existing.working_directory) {
-      removeConductorMarker(existing.working_directory, existing.id);
+    if (claimedSession.working_directory) {
+      removeConductorMarker(
+        claimedSession.working_directory,
+        claimedSession.id
+      );
     }
 
     // Release port if this session had one assigned
-    if (existing.dev_server_port) {
+    if (claimedSession.dev_server_port) {
       releasePort(id);
     }
-
-    // Delete from database immediately for instant UI feedback
-    queries.deleteSession(db).run(id);
-    clearQueue(id);
-    // Orphan cleanup: channel_messages + schedules have no FK cascade on
-    // session_id, so remove this session's rows explicitly (else a deleted
-    // session leaves dead channel messages and un-fireable schedules behind).
-    deleteChannelMessagesForSession(id);
-    deleteSchedulesForSession(id);
 
     // Multi-repo workspace session: tear down EVERY worktree this session created
     // (one per picked sub-repo), unregistering each from its parent repo, then
     // remove the workspace dir. Background + best-effort, like the single case.
-    if (existing.worktree_paths) {
+    if (claimedSession.worktree_paths) {
       let childPaths: string[] = [];
       try {
-        const parsed = JSON.parse(existing.worktree_paths);
+        const parsed = JSON.parse(claimedSession.worktree_paths);
         if (Array.isArray(parsed))
           childPaths = parsed.filter((p): p is string => typeof p === "string");
       } catch {
@@ -332,7 +545,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       }
       // Only reclaim worktrees Stoa created (under ~/.stoa/worktrees).
       const stoaChildren = childPaths.filter((p) => isStoaWorktree(p));
-      const workspaceDir = existing.working_directory;
+      const workspaceDir = claimedSession.working_directory;
       if (stoaChildren.length > 0) {
         runInBackground(
           () => removeWorkspace(workspaceDir, stoaChildren),
@@ -344,8 +557,11 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     // Clean up worktree in background (non-blocking). Fall back to the worktree's
     // parent dir when the owning repo can't be resolved (a broken worktree) so a
     // dead worktree is still removed rather than silently skipped.
-    if (existing.worktree_path && isStoaWorktree(existing.worktree_path)) {
-      const worktreePath = existing.worktree_path; // Capture for closure
+    if (
+      claimedSession.worktree_path &&
+      isStoaWorktree(claimedSession.worktree_path)
+    ) {
+      const worktreePath = claimedSession.worktree_path; // Capture for closure
       runInBackground(async () => {
         const mainRepoPath = await getMainRepoPath(worktreePath);
         await deleteWorktree(
@@ -357,8 +573,8 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     }
 
     // Also cleanup worker worktrees in background
-    if (workers.length > 0) {
-      for (const worker of workers) {
+    if (deletionPlan.interactiveWorkers.length > 0) {
+      for (const worker of deletionPlan.interactiveWorkers) {
         if (worker.worktree_path && isStoaWorktree(worker.worktree_path)) {
           const worktreePath = worker.worktree_path; // Capture for closure
           const workerId = worker.id; // Capture ID for task name
@@ -376,6 +592,19 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof ConductorSessionDeletionRejectedError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
+    if (error instanceof SessionDeletionBackendStopError) {
+      console.error(error.message, error.cause);
+      return NextResponse.json(
+        {
+          error:
+            "Failed to stop the session backend. The deletion is safely claimed; retry to continue.",
+        },
+        { status: 503 }
+      );
+    }
     console.error("Error deleting session:", error);
     return NextResponse.json(
       { error: "Failed to delete session" },

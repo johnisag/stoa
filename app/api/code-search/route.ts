@@ -2,14 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { searchCode, formatSearchResults } from "@/lib/code-search";
 import {
   getAllowedPathRoots,
-  resolveSandboxedPath,
+  resolveRealSandboxedPath,
   parseBoundedInt,
+  requireAdmin,
 } from "@/lib/api-security";
 
 const MAX_RESULTS = 1000;
 const MAX_CONTEXT_LINES = 10;
 
 export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   try {
     const { searchParams } = request.nextUrl;
     const query = searchParams.get("query");
@@ -42,7 +46,7 @@ export async function GET(request: NextRequest) {
     }
 
     const roots = getAllowedPathRoots();
-    const { allowed, resolved } = resolveSandboxedPath(path, roots);
+    const { allowed, resolved } = await resolveRealSandboxedPath(path, roots);
     if (!allowed) {
       return NextResponse.json(
         { error: "Path is outside the allowed workspace" },

@@ -3,8 +3,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // ── Hoisted state for the mocked I/O ──────────────────────────────────────────
 const { state } = vi.hoisted(() => ({
   state: {
-    // execFile behaviour per step: "pass" | "fail" | "enoent" | "timeout"
+    // Verification child behaviour, including leaked-pipe limit regressions.
     exec: "pass" as string,
+    ps: "success" as "success" | "error" | "timeout",
+    psAvailable: true,
     // verifyPass mocks:
     rows: [] as Array<Record<string, unknown>>,
     repo: { verify_gate: 1, verify_command: "npm run verify" } as
@@ -18,51 +20,128 @@ const { state } = vi.hoisted(() => ({
     tasks: [] as Promise<unknown>[],
     onWindows: false,
     resolvedBin: null as string | null,
-    spawned: [] as Array<{ file: string; args: string[] }>,
+    spawned: [] as Array<{
+      file: string;
+      args: string[];
+      options: Record<string, unknown>;
+    }>,
+    failStdout: "running tests\n",
+    failStderr: "AssertionError: 1 !== 2\n",
+    killCalls: 0,
+    destroyedStreams: 0,
+    unrefedStreams: 0,
+    unrefedChildren: 0,
+    emitClose: null as (() => void) | null,
   },
 }));
 
-// Mock child_process so promisify(execFile) is fully controllable (no real builds).
+// Mock child_process so the owned spawn/process-group runner is fully
+// controllable here. Real descendant teardown has its own integration test.
 vi.mock("child_process", () => ({
   execFile: (
-    file: string,
-    args: string[],
-    _opts: unknown,
-    cb: (err: unknown, res?: { stdout: string; stderr: string }) => void
+    _file: string,
+    _args: string[],
+    options: Record<string, unknown>,
+    callback: (error: Error | null, stdout: string, stderr: string) => void
   ) => {
-    state.spawned.push({ file, args });
-    if (state.exec === "pass") return cb(null, { stdout: "ok\n", stderr: "" });
-    if (state.exec === "fail") {
-      const e = Object.assign(new Error("nonzero"), {
-        code: 1,
-        stdout: "running tests\n",
-        stderr: "AssertionError: 1 !== 2\n",
-      });
-      return cb(e);
-    }
-    if (state.exec === "enoent") {
-      return cb(Object.assign(new Error("spawn"), { code: "ENOENT" }));
-    }
-    if (state.exec === "maxbuffer") {
-      return cb(
-        Object.assign(new Error("maxBuffer exceeded"), {
-          code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
-        })
+    if (state.ps === "timeout") {
+      setTimeout(
+        () => callback(new Error("ps timed out"), "", ""),
+        Number(options.timeout ?? 0)
+      );
+    } else {
+      queueMicrotask(() =>
+        callback(state.ps === "error" ? new Error("ps failed") : null, "", "")
       );
     }
-    // timeout
-    return cb(
-      Object.assign(new Error("killed"), { killed: true, signal: "SIGKILL" })
-    );
+    return {};
+  },
+  spawn: (file: string, args: string[], options: Record<string, unknown>) => {
+    state.spawned.push({ file, args, options });
+    const childListeners = new Map<string, (...values: unknown[]) => void>();
+    const stdoutListeners = new Map<string, (value: Buffer | string) => void>();
+    const stderrListeners = new Map<string, (value: Buffer | string) => void>();
+    let delayedPassTimer: NodeJS.Timeout | null = null;
+    const stream = (
+      listeners: Map<string, (value: Buffer | string) => void>
+    ) => ({
+      on: (event: string, listener: (value: Buffer | string) => void) => {
+        listeners.set(event, listener);
+      },
+      destroy: () => {
+        state.destroyedStreams += 1;
+      },
+      unref: () => {
+        state.unrefedStreams += 1;
+      },
+    });
+    const child = {
+      pid: state.exec === "enoent" ? undefined : 987_654,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      stdout: stream(stdoutListeners),
+      stderr: stream(stderrListeners),
+      once: (event: string, listener: (...values: unknown[]) => void) => {
+        childListeners.set(event, listener);
+        return child;
+      },
+      kill: () => {
+        state.killCalls += 1;
+        if (delayedPassTimer) clearTimeout(delayedPassTimer);
+        child.signalCode = "SIGKILL";
+        if (!state.exec.endsWith("-no-close")) {
+          queueMicrotask(() => childListeners.get("close")?.(null, "SIGKILL"));
+        }
+        return true;
+      },
+      unref: () => {
+        state.unrefedChildren += 1;
+      },
+    };
+    state.emitClose = () => childListeners.get("close")?.(null, "SIGKILL");
+    queueMicrotask(() => {
+      if (state.exec === "pass") {
+        stdoutListeners.get("data")?.("ok\n");
+        child.exitCode = 0;
+        childListeners.get("close")?.(0, null);
+      } else if (state.exec === "slow-pass") {
+        delayedPassTimer = setTimeout(() => {
+          stdoutListeners.get("data")?.("ok\n");
+          child.exitCode = 0;
+          childListeners.get("close")?.(0, null);
+        }, 80);
+      } else if (state.exec === "fail") {
+        stdoutListeners.get("data")?.(state.failStdout);
+        stderrListeners.get("data")?.(state.failStderr);
+        child.exitCode = 1;
+        childListeners.get("close")?.(1, null);
+      } else if (state.exec === "enoent") {
+        childListeners.get("error")?.(
+          Object.assign(new Error("spawn"), { code: "ENOENT" })
+        );
+        childListeners.get("close")?.(null, null);
+      } else if (
+        state.exec === "maxbuffer" ||
+        state.exec === "maxbuffer-no-close"
+      ) {
+        stdoutListeners.get("data")?.(Buffer.alloc(128, "x"));
+      }
+      // The timeout case deliberately stays open until the runner kills it.
+    });
+    return child;
   },
 }));
 vi.mock("@/lib/platform", () => ({
   resolveBinary: (name: string) =>
-    name === "missing" ? null : (state.resolvedBin ?? `/bin/${name}`),
+    name === "missing" || (name === "ps" && !state.psAvailable)
+      ? null
+      : (state.resolvedBin ?? `/bin/${name}`),
   expandHome: (p: string) => p,
   get isWindows() {
     return state.onWindows;
   },
+  killTreeArgs: (pid: number, onWindows: boolean) =>
+    onWindows ? ["taskkill", "/PID", String(pid), "/T", "/F"] : null,
 }));
 vi.mock("@/lib/db", () => ({
   getDb: () => ({}),
@@ -93,13 +172,46 @@ vi.mock("@/lib/async-operations", () => ({
 }));
 
 import {
-  parseVerifySteps,
-  summarizeVerifyExit,
   nextVerifyAction,
-  spawnArgs,
-  runVerify,
+  parseVerifySteps as dispatchParseVerifySteps,
+  runVerify as dispatchRunVerify,
+  spawnArgs as dispatchSpawnArgs,
   verifyPass,
 } from "../lib/dispatch/verify";
+import {
+  buildVerificationEnvironment,
+  parseVerifyTimeoutMs,
+  parseVerifySteps,
+  runVerify,
+  spawnArgs,
+  summarizeVerifyExit,
+  VERIFY_MAX_OUTPUT_BUFFER,
+  VERIFY_OUTPUT_TAIL_MAX,
+  VERIFY_TIMEOUT_MS,
+  VERIFY_TIMEOUT_DEFAULT_MS,
+  VERIFY_TIMEOUT_MAX_MS,
+} from "../lib/verification/runner";
+
+describe("Dispatch verification adapter", () => {
+  it("retains the existing parser, spawn, and runner exports", () => {
+    expect(dispatchParseVerifySteps).toBe(parseVerifySteps);
+    expect(dispatchSpawnArgs).toBe(spawnArgs);
+    expect(dispatchRunVerify).toBe(runVerify);
+  });
+});
+
+describe("verification timeout configuration", () => {
+  it("caps the configured process timeout below the durable 24-hour lease", () => {
+    expect(parseVerifyTimeoutMs(undefined)).toBe(VERIFY_TIMEOUT_DEFAULT_MS);
+    expect(parseVerifyTimeoutMs("1200000")).toBe(1_200_000);
+    expect(parseVerifyTimeoutMs(String(48 * 60 * 60 * 1000))).toBe(
+      VERIFY_TIMEOUT_MAX_MS
+    );
+    expect(parseVerifyTimeoutMs("not-a-number")).toBe(
+      VERIFY_TIMEOUT_DEFAULT_MS
+    );
+  });
+});
 
 describe("spawnArgs — Windows .cmd routing (the must-fix)", () => {
   it("routes a .cmd/.bat shim through cmd.exe /c on Windows (no shell:true)", () => {
@@ -114,6 +226,11 @@ describe("spawnArgs — Windows .cmd routing (the must-fix)", () => {
       "C:\\Program Files\\nodejs\\npm.cmd",
       "run",
       "v",
+    ]);
+    expect(spawnArgs("C:\\tools\\verify.bat", ["--quick"], true).args).toEqual([
+      "/c",
+      "C:\\tools\\verify.bat",
+      "--quick",
     ]);
   });
 
@@ -163,6 +280,9 @@ describe("parseVerifySteps — the no-shell safety gate", () => {
       "rm ${HOME}",
       "a (b)",
       "echo %PATH%", // cmd.exe expands % even quoted → reject (routing safety)
+      'echo "%PATH%"',
+      'vitest --filter "a&b"',
+      'node -e "console.log($(whoami))"',
       "a ^ b", // cmd.exe escape
       "vitest --filter 'a b'", // single quotes unsupported → reject, don't mangle
     ]) {
@@ -254,12 +374,74 @@ describe("nextVerifyAction", () => {
 describe("runVerify (mocked execFile, no real build)", () => {
   beforeEach(() => {
     state.exec = "pass";
+    state.ps = "success";
+    state.psAvailable = true;
+    state.failStdout = "running tests\n";
+    state.failStderr = "AssertionError: 1 !== 2\n";
+    state.spawned = [];
+    state.killCalls = 0;
+    state.destroyedStreams = 0;
+    state.unrefedStreams = 0;
+    state.unrefedChildren = 0;
+    state.emitClose = null;
   });
 
   it("passes when every step exits 0", async () => {
     state.exec = "pass";
     const r = await runVerify("/wt", "npx tsc --noEmit && npm test");
     expect(r.status).toBe("pass");
+  });
+
+  it("applies one deadline to the complete && sequence", async () => {
+    state.exec = "slow-pass";
+    const result = await runVerify("/wt", "npm first && npm second", {
+      timeoutMs: 100,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.output).toMatch(/timed out/i);
+  });
+
+  it("starts a detached no-shell process group for cross-platform tree teardown", async () => {
+    await runVerify("/wt", "npm test");
+    expect(state.spawned).toHaveLength(1);
+    expect(state.spawned[0].options).toMatchObject({
+      detached: true,
+      windowsHide: true,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect(VERIFY_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(VERIFY_MAX_OUTPUT_BUFFER).toBeGreaterThan(0);
+  });
+
+  it("never gives repository-controlled verification server or provider authority", () => {
+    const environment = buildVerificationEnvironment({
+      PATH: "/safe/bin",
+      SystemRoot: "C:\\Windows",
+      LANG: "en_US.UTF-8",
+      STOA_TOKEN: "stoa-secret",
+      STOA_FLEET_SCHEDULER_TOKEN: "scheduler-secret",
+      STOA_WEBHOOK_SECRET: "webhook-secret",
+      ANTHROPIC_API_KEY: "anthropic-secret",
+      OPENAI_API_KEY: "openai-secret",
+      GITHUB_TOKEN: "github-secret",
+      GH_TOKEN: "gh-secret",
+      NPM_TOKEN: "registry-secret",
+      AWS_SECRET_ACCESS_KEY: "cloud-secret",
+      SSH_AUTH_SOCK: "/secret/agent.sock",
+      DATABASE_URL: "postgres://credential@host/db",
+      CI: "0",
+      NODE_ENV: "test",
+    });
+
+    expect(environment).toEqual({
+      CI: "1",
+      NODE_ENV: "test",
+      PATH: "/safe/bin",
+      SystemRoot: "C:\\Windows",
+      LANG: "en_US.UTF-8",
+    });
   });
 
   it("fails with the failing step's output tail on a non-zero exit", async () => {
@@ -270,15 +452,82 @@ describe("runVerify (mocked execFile, no real build)", () => {
     expect(r.output).toContain("AssertionError");
   });
 
+  it("persists only the bounded tail of failing output", async () => {
+    state.exec = "fail";
+    state.failStdout = `discarded-prefix-${"x".repeat(
+      VERIFY_OUTPUT_TAIL_MAX + 100
+    )}`;
+    state.failStderr = "";
+    const result = await runVerify("/wt", "npm test");
+    expect(result.status).toBe("fail");
+    expect(result.output).toContain("(truncated)");
+    expect(result.output).not.toContain("discarded-prefix");
+    expect(result.output.endsWith("x".repeat(VERIFY_OUTPUT_TAIL_MAX))).toBe(
+      true
+    );
+  });
+
   it("errors (not fail) on a missing binary, a spawn ENOENT, or a timeout", async () => {
     expect((await runVerify("/wt", "missing --x")).status).toBe("error"); // resolveBinary null
     state.exec = "enoent";
     expect((await runVerify("/wt", "npm test")).status).toBe("error");
     state.exec = "timeout";
-    const t = await runVerify("/wt", "npm test");
+    const t = await runVerify("/wt", "npm test", { timeoutMs: 5 });
     expect(t.status).toBe("error");
     expect(t.output).toMatch(/timed out/i);
   });
+
+  it.each(["missing", "error", "timeout"] as const)(
+    "keeps POSIX timeout cleanup bounded when ps is %s",
+    async (failure) => {
+      state.exec = "timeout";
+      state.psAvailable = failure !== "missing";
+      state.ps = failure === "missing" ? "success" : failure;
+      const started = Date.now();
+      const result = await runVerify("/wt", "npm test", { timeoutMs: 5 });
+      expect(result.status).toBe("error");
+      expect(result.output).toMatch(/timed out/i);
+      expect(Date.now() - started).toBeLessThan(1_500);
+    }
+  );
+
+  it.each([
+    ["timeout-no-close", { timeoutMs: 5 }, /timed out/i],
+    [
+      "maxbuffer-no-close",
+      { timeoutMs: 5_000, maxOutputBuffer: 32 },
+      /output exceeded/i,
+    ],
+  ] as const)(
+    "finalizes a limited %s child whose inherited pipes never close",
+    async (mode, options, expectedReason) => {
+      state.exec = mode;
+      let settlements = 0;
+      const started = Date.now();
+      const result = await runVerify("/wt", "npm test", options).then(
+        (value) => {
+          settlements += 1;
+          return value;
+        }
+      );
+
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(result.status).toBe("error");
+      expect(result.output).toMatch(expectedReason);
+      expect(state.killCalls).toBe(1);
+      expect(state.destroyedStreams).toBe(2);
+      expect(state.unrefedStreams).toBe(2);
+      expect(state.unrefedChildren).toBe(1);
+
+      // A delayed close from a retained/released FD cannot rerun finalization or
+      // produce a second observable settlement.
+      state.emitClose?.();
+      await Promise.resolve();
+      expect(settlements).toBe(1);
+      expect(state.destroyedStreams).toBe(2);
+      expect(state.unrefedChildren).toBe(1);
+    }
+  );
 
   it("errors on a rejected (shell-operator) command without spawning anything", async () => {
     const r = await runVerify("/wt", "npm test | tee log");
@@ -286,9 +535,9 @@ describe("runVerify (mocked execFile, no real build)", () => {
     expect(r.output).toMatch(/shell operators/i);
   });
 
-  it("an over-8MB-but-otherwise-passing build reads as 'error' with an honest message (not a misleading spawn error)", async () => {
+  it("an over-limit build reads as 'error' with an honest message (not a misleading spawn error)", async () => {
     state.exec = "maxbuffer";
-    const r = await runVerify("/wt", "npm test");
+    const r = await runVerify("/wt", "npm test", { maxOutputBuffer: 32 });
     expect(r.status).toBe("error");
     expect(r.output).toMatch(/output exceeded/i);
     expect(r.output).not.toMatch(/spawn error/i);

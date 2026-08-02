@@ -7,7 +7,11 @@ import {
   getWorktreeBaseChanges,
   expandPath,
 } from "@/lib/git-status";
-import { getAllowedPathRoots, resolveSandboxedPath } from "@/lib/api-security";
+import {
+  getAllowedPathRoots,
+  requireAdmin,
+  resolveRealSandboxedPath,
+} from "@/lib/api-security";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -15,13 +19,18 @@ export async function GET(request: NextRequest) {
   const filePath = searchParams.get("file");
   const staged = searchParams.get("staged") === "true";
 
+  if (searchParams.has("file")) {
+    const adminError = requireAdmin(request);
+    if (adminError) return adminError;
+  }
+
   if (!rawPath) {
     return NextResponse.json({ error: "Path is required" }, { status: 400 });
   }
 
   const expandedPath = expandPath(rawPath);
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPath(expandedPath, roots);
+  const { allowed } = await resolveRealSandboxedPath(expandedPath, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "Path is outside the allowed workspace" },

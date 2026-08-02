@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
+import { internalSessionProfile } from "./internal-session-fixture";
 
 const state = vi.hoisted(() => ({ db: null as unknown }));
 vi.mock("@/lib/db", async (importOriginal) => {
@@ -47,8 +48,21 @@ import type { ScheduleRow } from "@/lib/db/types";
 function db() {
   return state.db as InstanceType<typeof Database>;
 }
-function addSession(id: string) {
-  db().prepare("INSERT INTO sessions (id, name) VALUES (?, ?)").run(id, id);
+function addSession(id: string, role = "interactive") {
+  const profile = role === "interactive" ? null : internalSessionProfile(role);
+  db()
+    .prepare(
+      `INSERT INTO sessions
+       (id, name, session_role, launch_profile_json, launch_profile_hash)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      id,
+      role,
+      profile?.profileJson ?? null,
+      profile?.profileHash ?? null
+    );
 }
 
 const HOUR = 3_600_000;
@@ -189,6 +203,17 @@ describe("createSchedule", () => {
     expect(() => createSchedule({ sessionId: "sess-1", prompt: "" })).toThrow(
       /prompt is required/
     );
+  });
+
+  it("rejects internal and future-role target sessions", () => {
+    addSession("internal", "fleet_supervisor");
+    addSession("future", "future_internal_role");
+
+    for (const sessionId of ["internal", "future"]) {
+      expect(() =>
+        createSchedule({ sessionId, prompt: "must not run" })
+      ).toThrow(/no session with id/);
+    }
   });
 
   it("caps the number of enabled schedules per session", () => {
@@ -343,11 +368,66 @@ describe("fireSchedule (the tick's per-row body)", () => {
     const outcome = fireSchedule(s, T0 + 1, (id, p) => calls.push([id, p]));
     expect(outcome).toBe("session-gone");
     expect(calls).toHaveLength(0); // never enqueued into a dead session
-    expect(getSchedule(s.id)?.enabled).toBe(0); // stopped, not churning
+    expect(
+      db().prepare("SELECT enabled FROM schedules WHERE id = ?").get(s.id)
+    ).toEqual({ enabled: 0 }); // stopped, not churning
+    expect(getSchedule(s.id)?.enabled).toBe(0); // orphan remains recoverable
   });
 });
 
 describe("dueSchedules / list / enable / delete", () => {
+  it("hides and disables a legacy due schedule targeting an internal session", () => {
+    addSession("internal", "fleet_supervisor");
+    db()
+      .prepare(
+        `INSERT INTO schedules
+          (id, name, session_id, prompt, recurrence, next_run_at, enabled)
+         VALUES ('legacy-internal', '', 'internal', 'secret', NULL, ?, 1)`
+      )
+      .run(new Date(T0).toISOString());
+
+    expect(getSchedule("legacy-internal")).toBeNull();
+    expect(listSchedules()).toEqual([]);
+    expect(dueSchedules(T0)).toEqual([]);
+    expect(
+      db()
+        .prepare("SELECT enabled FROM schedules WHERE id = 'legacy-internal'")
+        .get()
+    ).toEqual({ enabled: 0 });
+    expect(setScheduleEnabled("legacy-internal", true)).toBeNull();
+    expect(deleteSchedule("legacy-internal")).toBe(false);
+  });
+
+  it("never fires an injected legacy row for an internal target", () => {
+    addSession("internal", "fleet_supervisor");
+    const row: ScheduleRow = {
+      id: "legacy-internal",
+      name: "",
+      session_id: "internal",
+      prompt: "secret",
+      recurrence: null,
+      next_run_at: new Date(T0).toISOString(),
+      last_run_at: null,
+      enabled: 1,
+      created_at: "",
+      updated_at: "",
+    };
+    db()
+      .prepare(
+        `INSERT INTO schedules
+          (id, name, session_id, prompt, recurrence, next_run_at, enabled)
+         VALUES (?, '', ?, ?, NULL, ?, 1)`
+      )
+      .run(row.id, row.session_id, row.prompt, row.next_run_at);
+    const enqueue = vi.fn();
+
+    expect(fireSchedule(row, T0, enqueue)).toBe("session-gone");
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(
+      db().prepare("SELECT enabled FROM schedules WHERE id = ?").get(row.id)
+    ).toEqual({ enabled: 0 });
+  });
+
   it("dueSchedules returns only enabled rows whose time has passed", () => {
     const due = createSchedule({
       sessionId: "sess-1",

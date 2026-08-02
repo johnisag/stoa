@@ -19,7 +19,10 @@ import {
   type PtyTransport,
 } from "./lib/session-backend/pty/transport";
 import { AttachSession } from "./lib/session-backend/pty/attach-session";
-import { getHostClient } from "./lib/session-backend/pty/host-client";
+import {
+  getHostClient,
+  ptyHostFailureAllowsTier1Fallback,
+} from "./lib/session-backend/pty/host-client";
 import {
   computeManagedStatuses,
   diffStatuses,
@@ -114,6 +117,12 @@ import {
   reconcileFleetRuns,
 } from "./lib/fleet/scheduler";
 import { reconcileFleetPlanners } from "./lib/fleet/planner";
+import { reconcileFleetAutomation } from "./lib/fleet/automation";
+import { reconcileFleetVerifications } from "./lib/fleet/verification";
+import { reconcileFleetTaskReviews } from "./lib/fleet/task-review";
+import { reconcileFleetMerges } from "./lib/fleet/merge-runtime";
+import { reconcileFleetLifecycle } from "./lib/fleet/lifecycle";
+import { reconcileManagedFleetSupervisors } from "./lib/fleet/supervisor-runtime";
 import { evictStale as evictStaleWarmPool } from "./lib/dispatch/warm-pool";
 import {
   getBudgetConfig,
@@ -125,6 +134,7 @@ import {
 import { backendKeyForSession } from "./lib/providers/registry";
 import {
   makeGuardedInterval,
+  startRecoverableFleetRuntime,
   getAutoFeatures,
   anyTickEnabled,
   describeEnabled,
@@ -140,6 +150,9 @@ import {
 } from "./lib/status-tick";
 import { homeDir, defaultInteractiveShell } from "./lib/platform";
 import { getDb, queries, type Session } from "./lib/db";
+import { isGenericSessionLaunchAllowed } from "./lib/session-launch";
+import { genericBackendKeyAccessFailure } from "./lib/session-route-access";
+import { isSessionDeletionBackendKeyFenced } from "./lib/session-deletion";
 import { REMOTE_ADDR_HEADER, SCOPE_HEADER } from "./lib/api-security";
 import { resolveTokenScope } from "./lib/tokens";
 import { statusDetector, type SessionStatus } from "./lib/status-detector";
@@ -200,7 +213,14 @@ app.prepare().then(() => {
       // admin-only route can trust it (like the remote-addr header above).
       delete req.headers[SCOPE_HEADER];
       req.headers[SCOPE_HEADER] = "admin";
-      if (AUTH_ENABLED) {
+      // This single endpoint authenticates with a narrowly-scoped, one-use Fleet
+      // capability in its JSON body. Requiring the broad Stoa admin credential
+      // first would defeat that delegation model. Every other endpoint keeps the
+      // normal HTTP auth gate, including capability issuance and revocation.
+      const isFleetCapabilityAction =
+        (req.method || "GET").toUpperCase() === "POST" &&
+        parsedUrl.pathname === "/api/fleet/capabilities/action";
+      if (AUTH_ENABLED && !isFleetCapabilityAction) {
         const decision = decideHttpAuth({
           serverToken: SERVER_TOKEN,
           remoteAddr: req.socket.remoteAddress,
@@ -925,7 +945,9 @@ app.prepare().then(() => {
       unref: false,
       onError: (err) => console.error("budget tick failed:", err),
       tick: async () => {
-        const sessions = queries.getAllSessions(getDb()).all() as Session[];
+        const sessions = (
+          queries.getAllSessions(getDb()).all() as Session[]
+        ).filter(isGenericSessionLaunchAllowed);
         const costs = await computeSessionCosts(sessions);
         const lite = Object.entries(costs).map(([id, c]) => ({
           id,
@@ -999,7 +1021,9 @@ app.prepare().then(() => {
       runAtStartup: true,
       onError: (err) => console.error("session budget tick failed:", err),
       tick: async () => {
-        const sessions = queries.getAllSessions(getDb()).all() as Session[];
+        const sessions = (
+          queries.getAllSessions(getDb()).all() as Session[]
+        ).filter(isGenericSessionLaunchAllowed);
         pruneBudgetState(new Set(sessions.map((s) => s.id)));
         const budgeted = sessions.filter(
           (s) => s.budget_usd != null && s.budget_usd > 0
@@ -1138,7 +1162,9 @@ app.prepare().then(() => {
       // Advance the cadence clock up front so a PERSISTENT failure backs off to the
       // sample interval instead of retrying (and re-reading transcripts) every 60s.
       lastCostSampleMs = now;
-      const sessions = queries.getAllSessions(getDb()).all() as Session[];
+      const sessions = (
+        queries.getAllSessions(getDb()).all() as Session[]
+      ).filter(isGenericSessionLaunchAllowed);
       const costs = await computeSessionCosts(sessions);
       const written = persistCostSamples(getDb(), sessions, costs, now);
       if (written > 0)
@@ -1163,7 +1189,9 @@ app.prepare().then(() => {
     onError: (err) => console.error("auto-compact tick failed:", err),
     tick: async () => {
       const nowMs = Date.now();
-      const sessions = queries.getAllSessions(getDb()).all() as Session[];
+      const sessions = (
+        queries.getAllSessions(getDb()).all() as Session[]
+      ).filter(isGenericSessionLaunchAllowed);
       const backend = getSessionBackend();
       let liveNames: Set<string>;
       try {
@@ -1421,18 +1449,37 @@ app.prepare().then(() => {
     // The attach state machine (incl. the sequence guard that stops a racing
     // re-attach from double-subscribing) lives in AttachSession; this handler
     // just maps WebSocket frames onto it.
-    const session = new AttachSession(transport, {
-      output: (data) => send({ type: "output", data }),
-      exit: (code) => send({ type: "exit", code }),
-      error: (message) => send({ type: "error", message }),
-      reset: () => send({ type: "reset" }),
-    });
+    const session = new AttachSession(
+      transport,
+      {
+        output: (data) => send({ type: "output", data }),
+        exit: (code) => send({ type: "exit", code }),
+        error: (message) => send({ type: "error", message }),
+        reset: () => send({ type: "reset" }),
+      },
+      (key) => isSessionDeletionBackendKeyFenced(getDb(), key)
+    );
 
     ws.on("message", (message: Buffer) => {
       try {
         const msg = JSON.parse(message.toString());
         switch (msg.type) {
           case "attach":
+            if (typeof msg.key !== "string") {
+              send({ type: "error", message: "Invalid session key" });
+              break;
+            }
+            {
+              const stored = queries.getAllSessions(getDb()).all() as Session[];
+              const failure = genericBackendKeyAccessFailure(stored, msg.key);
+              if (failure) {
+                send({
+                  type: "error",
+                  message: failure,
+                });
+                break;
+              }
+            }
             void session.attach(msg.key, msg.spawn, msg.observer);
             break;
           case "input":
@@ -1462,8 +1509,10 @@ app.prepare().then(() => {
   // so the terminal path and the API/status path (getSessionBackend) agree. If
   // the daemon can't be reached we disable host mode globally and fall back to
   // the in-process registry (Tier 1) — terminals still work, just without
-  // restart-survival. getSessionBackend() is lazy, so flipping the env here
-  // (before its first call) makes the whole process consistently Tier 1.
+  // restart-survival. A reachable but incompatible daemon may still own live
+  // sessions, so that case stays on Tier 2 and fails terminal operations closed
+  // until the daemon and Stoa are restarted. getSessionBackend() is lazy, so
+  // flipping the env only for unreachable hosts keeps one ownership domain.
   (async () => {
     if (usePtyHost()) {
       try {
@@ -1472,43 +1521,87 @@ app.prepare().then(() => {
           "> pty-host daemon ready (Tier 2: sessions survive server restarts)"
         );
       } catch (err) {
-        process.env.STOA_PTY_HOST = "0";
-        resetSessionBackend(); // re-resolve to Tier 1 even if already cached
-        console.error(
-          "> pty-host daemon unreachable; using in-process sessions (Tier 1):",
-          err instanceof Error ? err.message : err
-        );
+        if (ptyHostFailureAllowsTier1Fallback(err)) {
+          process.env.STOA_PTY_HOST = "0";
+          resetSessionBackend(); // re-resolve to Tier 1 even if already cached
+          console.error(
+            "> pty-host daemon unavailable; using in-process sessions (Tier 1) for this Stoa process. Restart Stoa after restoring the daemon to recover restart-surviving sessions:",
+            err instanceof Error ? err.message : err
+          );
+        } else {
+          console.error(
+            "> incompatible pty-host daemon may still own live sessions; refusing Tier 1 fallback to prevent duplicate agents. Restart the daemon, then restart Stoa before using terminal sessions:",
+            err instanceof Error ? err.message : err
+          );
+        }
       }
     }
-    let fleetSchedulerReady = false;
-    try {
-      await initializeFleetScheduler();
-      fleetSchedulerReady = true;
-      console.log("> Fleet recovery complete; scheduler ready");
-    } catch (err) {
-      // Fail closed: explicit ticks also run recovery and reject while the flag
-      // remains set, so a recovery error cannot create duplicate workers.
-      console.error(
-        "> Fleet recovery failed; automatic launches disabled:",
-        err
-      );
-    }
-    makeGuardedInterval({
-      intervalMs: 5000,
-      enabled: true,
-      onError: (err) => console.error("fleet planner tick failed:", err),
-      tick: async () => {
+    const fleetRuntime = await startRecoverableFleetRuntime({
+      recoveryRetryMs: 5000,
+      runtimeIntervalMs: 5000,
+      recover: initializeFleetScheduler,
+      // Recovery failure closes every launch-capable path. Planner polling and
+      // lifecycle cleanup can still settle persisted external runtimes without
+      // admitting a new planner, reviewer, fixer, or worker.
+      pollWhileBlocked: async () => {
+        try {
+          await reconcileFleetPlanners();
+        } catch (err) {
+          console.error("fleet blocked planner poll failed:", err);
+        }
+        try {
+          await reconcileManagedFleetSupervisors();
+        } catch (err) {
+          console.error("fleet blocked supervisor poll failed:", err);
+        }
+        try {
+          await reconcileFleetLifecycle();
+        } catch (err) {
+          console.error("fleet blocked lifecycle cleanup failed:", err);
+        }
+      },
+      onRecovered: async () => {
+        console.log("> Fleet recovery complete; scheduler ready");
+        try {
+          await reconcileFleetAutomation();
+        } catch (err) {
+          console.error("> Fleet automation startup reconcile failed:", err);
+        }
+        try {
+          await reconcileFleetVerifications();
+          await reconcileFleetTaskReviews();
+          await reconcileManagedFleetSupervisors();
+          await reconcileFleetLifecycle();
+        } catch (err) {
+          console.error("> Fleet task runtime startup reconcile failed:", err);
+        }
+      },
+      plannerTick: async () => {
         await reconcileFleetPlanners();
+        await reconcileFleetAutomation();
       },
-    });
-    makeGuardedInterval({
-      intervalMs: 5000,
-      enabled: fleetSchedulerReady,
-      onError: (err) => console.error("fleet scheduler tick failed:", err),
-      tick: async () => {
+      schedulerTick: async () => {
         await reconcileFleetRuns();
+        await reconcileFleetVerifications();
+        await reconcileFleetTaskReviews();
+        await reconcileManagedFleetSupervisors();
+        await reconcileFleetLifecycle();
       },
+      // Merge verification may legitimately run up to its configured timeout.
+      // Keep it on an independent busy guard so landing one run cannot stall
+      // worker admission, reviews, supervision, or lifecycle for every run.
+      mergeTick: () => reconcileFleetMerges(),
+      onRecoveryError: (err) =>
+        console.error(
+          "> Fleet recovery failed; automatic launches disabled:",
+          err
+        ),
+      onPlannerError: (err) => console.error("fleet planner tick failed:", err),
+      onSchedulerError: (err) =>
+        console.error("fleet scheduler tick failed:", err),
+      onMergeError: (err) => console.error("fleet merge tick failed:", err),
     });
+    server.once("close", () => fleetRuntime.stop());
     // Dispatch startup catch-up: free slots held by workers that didn't survive
     // a Tier-1 restart, then run one reconcile pass immediately so a day missed
     // while Stoa was down is topped up now (not only on the next 60s tick).

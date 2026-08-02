@@ -24,6 +24,7 @@
 import { randomUUID } from "crypto";
 import { db, queries, type ScheduleRow, type Session } from "./db";
 import { normalizeRecurrence, nextOccurrence } from "./dispatch/recurrence";
+import { isInteractiveSessionRole } from "./session-role";
 
 /** Max schedule name length — a short label. */
 export const SCHEDULE_NAME_MAX_LENGTH = 256;
@@ -138,6 +139,24 @@ export function computeNextRunAfterFire(
   return nextOccurrence(recurrence, currentNextRunAt, nowMs);
 }
 
+function getTargetSession(sessionId: string): Session | null {
+  return (queries.getSession(db).get(sessionId) as Session | undefined) ?? null;
+}
+
+function getInteractiveSession(sessionId: string): Session | null {
+  const session = getTargetSession(sessionId);
+  return session && isInteractiveSessionRole(session) ? session : null;
+}
+
+function getScheduleRow(id: string): ScheduleRow | null {
+  return (queries.getSchedule(db).get(id) as ScheduleRow | undefined) ?? null;
+}
+
+function hasInternalScheduleTarget(row: ScheduleRow): boolean {
+  const session = getTargetSession(row.session_id);
+  return session !== null && !isInteractiveSessionRole(session);
+}
+
 /** Create a schedule. Validates, requires the target session to exist, computes
  * the first fire time, and stores the row. */
 export function createSchedule(input: {
@@ -156,7 +175,7 @@ export function createSchedule(input: {
   const prompt = validateSchedulePrompt(input.prompt);
   const recurrence = normalizeRecurrence(input.recurrence);
   const runAt = normalizeRunAt(input.runAt);
-  if (!(queries.getSession(db).get(sessionId) as Session | undefined)) {
+  if (!getInteractiveSession(sessionId)) {
     throw new ScheduleValidationError(`no session with id "${sessionId}"`);
   }
   const { n } = queries.countEnabledSchedulesForSession(db).get(sessionId) as {
@@ -178,19 +197,30 @@ export function createSchedule(input: {
 
 /** Read one schedule by id, or null. */
 export function getSchedule(id: string): ScheduleRow | null {
-  return (queries.getSchedule(db).get(id) as ScheduleRow | undefined) ?? null;
+  const row = getScheduleRow(id);
+  return row && !hasInternalScheduleTarget(row) ? row : null;
 }
 
 /** List schedules (enabled first, then soonest next-run), bounded. */
 export function listSchedules(): ScheduleRow[] {
-  return queries.listSchedules(db).all(SCHEDULE_LIST_LIMIT) as ScheduleRow[];
+  return (
+    queries.listSchedules(db).all(SCHEDULE_LIST_LIMIT) as ScheduleRow[]
+  ).filter((row) => !hasInternalScheduleTarget(row));
 }
 
 /** The enabled schedules due to fire at `nowMs` (the tick reads these). */
 export function dueSchedules(nowMs: number): ScheduleRow[] {
-  return queries
+  const rows = queries
     .listDueSchedules(db)
     .all(new Date(nowMs).toISOString(), SCHEDULE_LIST_LIMIT) as ScheduleRow[];
+  return rows.filter((row) => {
+    if (!hasInternalScheduleTarget(row)) return true;
+    // Legacy rows may predate the internal-session boundary. Disable them the
+    // first time they become due so the ticker cannot repeatedly address a
+    // server-owned or now-missing target.
+    queries.setScheduleEnabled(db).run(0, row.id);
+    return false;
+  });
 }
 
 /** Enable/disable a schedule. Returns the updated row, or null when it's gone. */
@@ -198,13 +228,19 @@ export function setScheduleEnabled(
   id: string,
   enabled: boolean
 ): ScheduleRow | null {
-  if (!getSchedule(id)) return null;
+  const row = getScheduleRow(id);
+  if (!row) return null;
+  if (hasInternalScheduleTarget(row)) {
+    if (row.enabled === 1) queries.setScheduleEnabled(db).run(0, id);
+    return null;
+  }
   queries.setScheduleEnabled(db).run(enabled ? 1 : 0, id);
   return getSchedule(id);
 }
 
 /** Delete a schedule. Returns true when a row was removed. */
 export function deleteSchedule(id: string): boolean {
+  if (!getSchedule(id)) return false;
   return queries.deleteSchedule(db).run(id).changes > 0;
 }
 
@@ -228,6 +264,10 @@ export function recordScheduleFired(
   row: ScheduleRow,
   nowMs: number
 ): ScheduleRow | null {
+  if (hasInternalScheduleTarget(row)) {
+    queries.setScheduleEnabled(db).run(0, row.id);
+    return null;
+  }
   const nowIso = new Date(nowMs).toISOString();
   const next = computeNextRunAfterFire(row.recurrence, row.next_run_at, nowMs);
   if (next) {
@@ -235,9 +275,7 @@ export function recordScheduleFired(
   } else {
     queries.markScheduleFiredOnce(db).run(nowIso, row.id);
   }
-  return (
-    (queries.getSchedule(db).get(row.id) as ScheduleRow | undefined) ?? null
-  );
+  return getScheduleRow(row.id);
 }
 
 /** The outcome of firing one due schedule (for the tick's logging). */
@@ -267,8 +305,8 @@ export function fireSchedule(
   enqueue: (sessionId: string, prompt: string) => void,
   isQueued?: (sessionId: string, prompt: string) => boolean
 ): FireOutcome {
-  if (!(queries.getSession(db).get(row.session_id) as Session | undefined)) {
-    setScheduleEnabled(row.id, false);
+  if (!getInteractiveSession(row.session_id)) {
+    queries.setScheduleEnabled(db).run(0, row.id);
     return "session-gone";
   }
   const duplicate = isQueued?.(row.session_id, row.prompt) ?? false;

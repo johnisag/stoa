@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries, type Session } from "@/lib/db";
 import { readClaudeTranscriptRaw } from "@/lib/claude-transcript";
 import { searchTranscript, type OutputHit } from "@/lib/output-search";
+import { isInteractiveSessionRole } from "@/lib/session-role";
 
 // Search agent OUTPUT across every session — "which of my agents mentioned X?".
 // The corpus is each Claude session's on-disk JSONL transcript (the same file
@@ -38,6 +39,7 @@ export async function GET(request: NextRequest) {
     // Only Claude sessions with a captured transcript id are searchable.
     const sessions = (queries.getAllSessions(db).all() as Session[]).filter(
       (s) =>
+        isInteractiveSessionRole(s) &&
         s.agent_type === "claude" &&
         !!s.claude_session_id &&
         !!s.working_directory

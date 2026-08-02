@@ -2,11 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { FLEET_RUN_JSON_BODY_MAX, readCappedJsonBody } from "@/lib/fleet/http";
 import { cancelFleetPlanner, startFleetPlanner } from "@/lib/fleet/planner";
 import { getFleetRunDetail } from "@/lib/fleet/service";
+import { requireAdmin } from "@/lib/api-security";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
   const { id } = await params;
   const body = await readCappedJsonBody(request, FLEET_RUN_JSON_BODY_MAX);
   if ("error" in body) {
@@ -20,7 +23,7 @@ export async function POST(
             provider?: unknown;
           })
         : {};
-    const result = await startFleetPlanner(id, input);
+    const result = await startFleetPlanner(id, input, "operator");
     if ("error" in result) {
       return NextResponse.json(
         { error: result.error },
@@ -49,9 +52,11 @@ export async function GET(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
   const { id } = await params;
   try {
     const result = await cancelFleetPlanner(id);

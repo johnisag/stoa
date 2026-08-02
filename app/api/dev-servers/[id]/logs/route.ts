@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerLogs } from "@/lib/dev-servers";
-import { parseBoundedInt } from "@/lib/api-security";
+import { parseBoundedInt, requireAdmin } from "@/lib/api-security";
 
 const MAX_LOG_LINES = 10000;
 
@@ -9,6 +9,9 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   try {
     const { id } = await params;
     const { searchParams } = new URL(request.url);

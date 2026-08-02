@@ -18,7 +18,7 @@ interface ModelSelectorProps {
 /**
  * Per-session model picker. A dropdown of the agent's known models
  * (Claude/Codex), or a free-text field for dynamic-model agents (Hermes), where
- * blank means "use the agent's own default". Mirrors the Project dialogs.
+ * blank selects Stoa's/provider's default. Mirrors the Project dialogs.
  */
 export function ModelSelector({
   agentType,
@@ -33,11 +33,12 @@ export function ModelSelector({
     <div className="space-y-2">
       <label className="text-sm font-medium">Model</label>
       {isFreeTextModelAgent(agentType) ? (
-        // Dynamic-model agents (e.g. Hermes): free-text. Blank = agent default.
+        // Dynamic-model agents (e.g. Hermes): free-text. Blank selects the
+        // trusted Stoa/provider default; Hermes resolves to kimi-k3.
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="e.g. gpt-5.5 or provider/model — blank for the agent default"
+          placeholder="e.g. kimi-k3 or provider/model — blank for the trusted default"
         />
       ) : (
         <>

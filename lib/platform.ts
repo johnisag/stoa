@@ -22,6 +22,18 @@ export function homeDir(): string {
   return os.homedir();
 }
 
+/**
+ * Stoa's per-user state directory. Keep every server-owned path behind this
+ * helper so an explicit STOA_HOME works consistently on Windows, macOS, and
+ * Linux. A leading `~` is expanded without relying on HOME (which is commonly
+ * unset on native Windows).
+ */
+export function stoaHomeDir(
+  value: string | undefined = process.env.STOA_HOME
+): string {
+  return value ? expandHome(value) : path.join(homeDir(), ".stoa");
+}
+
 /** The OS temp directory. Use instead of a hardcoded "/tmp". */
 export function tmpDir(): string {
   return os.tmpdir();

@@ -25,6 +25,20 @@ describe("fleet runtime pure contracts", () => {
     );
   });
 
+  it("uses repository-aware case semantics with a case-sensitive default", () => {
+    expect(fleetClaimsConflict(["Src/Foo.ts"], ["src/foo.ts"])).toBe(false);
+    expect(
+      fleetClaimsConflict(["Src/Foo.ts"], ["src/foo.ts"], {
+        caseInsensitive: true,
+      })
+    ).toBe(true);
+    expect(
+      fleetClaimsConflict(["Src"], ["src/foo.ts"], {
+        caseInsensitive: true,
+      })
+    ).toBe(true);
+  });
+
   it("enforces provider, local, total, and budget caps", () => {
     expect(providerConcurrencyCap("claude")).toBe(4);
     expect(providerConcurrencyCap("codex")).toBe(6);

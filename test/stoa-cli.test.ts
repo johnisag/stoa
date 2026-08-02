@@ -24,6 +24,8 @@ const {
   isGitInstall,
   parseEnvFile,
   loadEnvFile,
+  resolveStoaHome,
+  stoaStatePaths,
   commandSpec,
   buildIsComplete,
   parseNodeMajor,
@@ -56,6 +58,19 @@ const {
   isGitInstall: (dir?: string) => boolean;
   parseEnvFile: (content: string) => Record<string, string>;
   loadEnvFile: (dir: string) => Record<string, string>;
+  resolveStoaHome: (value?: string, userHome?: string) => string;
+  stoaStatePaths: (
+    value?: string,
+    userHome?: string
+  ) => {
+    stoaHome: string;
+    pidFile: string;
+    logDir: string;
+    logFile: string;
+    tokenFile: string;
+    sharedOriginsFile: string;
+    sharePidFile: string;
+  };
   commandSpec: (
     cmd: string,
     args?: string[]
@@ -131,10 +146,16 @@ const {
 
 function loadCliWith(env: Record<string, string | undefined>) {
   const saved: Record<string, string | undefined> = {};
-  const keys = ["STOA_PORT", "PORT", "STOA_SKIP_ENV_FILE"] as const;
+  const keys = [
+    "STOA_PORT",
+    "PORT",
+    "STOA_HOME",
+    "STOA_SKIP_ENV_FILE",
+  ] as const;
   const overrides: Record<(typeof keys)[number], string | undefined> = {
     STOA_PORT: env.STOA_PORT,
     PORT: env.PORT,
+    STOA_HOME: env.STOA_HOME,
     STOA_SKIP_ENV_FILE: "1",
   };
 
@@ -149,6 +170,7 @@ function loadCliWith(env: Record<string, string | undefined>) {
     return require(CLI_PATH) as {
       PORT: string;
       serverEnv: () => NodeJS.ProcessEnv;
+      stoaPaths: ReturnType<typeof stoaStatePaths>;
     };
   } finally {
     for (const key of keys) {
@@ -632,6 +654,54 @@ describe("stoa CLI: statusline installer (M2b — never-clobber merge)", () => {
 
     // Malformed JSON reads as not installed, never throws.
     expect(checkStatuslineHook("{not json").status).toBe("warn");
+  });
+});
+
+describe("STOA_HOME state paths", () => {
+  const fakeHome = join(tmpdir(), "stoa-cli-user-home");
+
+  it("keeps token, origin, tunnel PID, and operational files under a custom STOA_HOME", () => {
+    const customHome = join(tmpdir(), "custom-stoa-home");
+    const loaded = loadCliWith({ STOA_HOME: customHome });
+
+    expect(resolveStoaHome(customHome, fakeHome)).toBe(customHome);
+    const expected = {
+      stoaHome: customHome,
+      pidFile: join(customHome, "stoa.pid"),
+      logDir: join(customHome, "logs"),
+      logFile: join(customHome, "logs", "stoa.log"),
+      tokenFile: join(customHome, "token"),
+      sharedOriginsFile: join(customHome, "shared-origins"),
+      sharePidFile: join(customHome, "share.pid"),
+    };
+    expect(stoaStatePaths(customHome, fakeHome)).toEqual(expected);
+    expect(loaded.stoaPaths).toEqual(expected);
+  });
+
+  it.each(["~/custom-stoa", "~\\custom-stoa"])(
+    "expands a leading tilde in STOA_HOME (%s) without HOME",
+    (configuredHome) => {
+      const expected = join(fakeHome, "custom-stoa");
+      const paths = stoaStatePaths(configuredHome, fakeHome);
+      const loaded = loadCliWith({ STOA_HOME: configuredHome });
+
+      expect(resolveStoaHome(configuredHome, fakeHome)).toBe(expected);
+      expect(paths.stoaHome).toBe(expected);
+      expect(paths.tokenFile).toBe(join(expected, "token"));
+      expect(paths.sharedOriginsFile).toBe(join(expected, "shared-origins"));
+      expect(paths.sharePidFile).toBe(join(expected, "share.pid"));
+      expect(loaded.stoaPaths.stoaHome).toBe(resolveStoaHome(configuredHome));
+      expect(loaded.stoaPaths.tokenFile).toBe(
+        join(resolveStoaHome(configuredHome), "token")
+      );
+    }
+  );
+
+  it("uses the platform home for an unset or empty STOA_HOME", () => {
+    expect(resolveStoaHome("", fakeHome)).toBe(join(fakeHome, ".stoa"));
+    expect(loadCliWith({ STOA_HOME: undefined }).stoaPaths.stoaHome).toBe(
+      resolveStoaHome("")
+    );
   });
 });
 

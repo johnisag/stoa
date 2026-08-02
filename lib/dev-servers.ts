@@ -13,8 +13,7 @@ import {
 import {
   tokenizeCommand,
   UnsafeCommandError,
-  getAllowedPathRoots,
-  resolveSandboxedPath,
+  resolveRealSandboxedPath,
 } from "./api-security";
 
 const execFileAsync = promisify(execFile);
@@ -354,7 +353,7 @@ export async function startServer(
     throw new Error("Project not found");
   }
   const roots = [expandHome(project.working_directory)];
-  const cwdCheck = resolveSandboxedPath(opts.workingDirectory, roots);
+  const cwdCheck = await resolveRealSandboxedPath(opts.workingDirectory, roots);
   if (!cwdCheck.allowed) {
     throw new Error(
       `Working directory is outside the project workspace: ${opts.workingDirectory}`

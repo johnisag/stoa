@@ -17,6 +17,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveSessionLaunchOptions,
   buildAgentArgsForSession,
+  sessionLaunchEnv,
 } from "@/lib/session-launch";
 import { buildSpawnForSession } from "@/lib/client/backend";
 import { buildAgentArgs } from "@/lib/providers";
@@ -61,6 +62,21 @@ function session(over: Partial<Session> = {}): Session {
 // tmux `-m <model>` launch unescaped.
 const INJECTION = "$(touch /tmp/pwned)";
 
+describe("sessionLaunchEnv", () => {
+  it("adds process identity for argv and empty-array conductor sentinels", () => {
+    expect(
+      sessionLaunchEnv(session({ id: "codex-c", mcp_launch_args: '["-c"]' }))
+    ).toEqual({ STOA_CONDUCTOR_SESSION_ID: "codex-c" });
+    expect(
+      sessionLaunchEnv(session({ id: "file-c", mcp_launch_args: "[]" }))
+    ).toEqual({ STOA_CONDUCTOR_SESSION_ID: "file-c" });
+  });
+
+  it("returns no overlay only for a non-conductor SQL NULL", () => {
+    expect(sessionLaunchEnv(session({ mcp_launch_args: null }))).toEqual({});
+  });
+});
+
 describe("resolveSessionLaunchOptions — the single resolver", () => {
   it("clamps a bogus static-agent model to the safe catalog default", () => {
     const resolved = resolveSessionLaunchOptions(
@@ -85,7 +101,7 @@ describe("resolveSessionLaunchOptions — the single resolver", () => {
     const resolved = resolveSessionLaunchOptions(
       session({ agent_type: "hermes", model: "opus" })
     );
-    expect(resolved!.options.model).toBe("gpt-5.5");
+    expect(resolved!.options.model).toBe("kimi-k3");
   });
 
   it("passes a genuine free-text model through unchanged (no catalog to clamp to)", () => {

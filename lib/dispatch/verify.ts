@@ -21,30 +21,26 @@
  *     each head exactly once (per-SHA guard), and a pass is SHA-pinned so a stale
  *     verdict can never greenlight a newer push.
  *
- * Pure helpers (parseVerifySteps / summarizeVerifyExit / nextVerifyAction) are
- * unit-tested; runVerify + verifyPass do the I/O. Mirrors the ci-fix/merge-train
- * pass anatomy.
+ * The parser and process runner live in the shared verification module; this
+ * file retains Dispatch's SHA-pinned scheduling and compatibility exports.
  */
 
-import { execFile } from "child_process";
-import { promisify } from "util";
 import { getDb, queries, type Session } from "../db";
 import { getSessionBackend } from "../session-backend";
-import { resolveBinary, expandHome, isWindows } from "../platform";
+import { expandHome } from "../platform";
 import { runInBackground } from "../async-operations";
+import { runVerify, VERIFY_OUTPUT_TAIL_MAX } from "../verification/runner";
 import { getPrReadiness } from "./auto-merge";
 import type { DispatchRepo, IssueDispatch } from "./types";
 
-const execFileAsync = promisify(execFile);
-
-/** Hard ceiling for a single verify run before it's SIGKILLed (env-overridable). A
- * watch-mode build that never exits is the failure this prevents (→ status error). */
-export const VERIFY_TIMEOUT_MS = (() => {
-  const raw = process.env.STOA_VERIFY_TIMEOUT_MS;
-  if (raw == null) return 600_000;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 600_000;
-})();
+export {
+  parseVerifySteps,
+  runVerify,
+  spawnArgs,
+  summarizeVerifyExit,
+  VERIFY_TIMEOUT_MS,
+} from "../verification/runner";
+export type { VerifyResult, VerifyStatus } from "../verification/runner";
 
 /** Max builds running at once. Verify is the first pass whose cost is LOCAL CPU
  * (the fixer/critic passes are API-bound), so it needs a cap the others don't —
@@ -56,104 +52,6 @@ export const VERIFY_MAX_CONCURRENT = (() => {
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 2;
 })();
-
-export type VerifyStatus = "running" | "pass" | "fail" | "error";
-
-// Shell metacharacters that must NEVER reach a process unquoted. `&&` is consumed
-// by the step split before this runs, so a lone `&` here is a malformed operator.
-// `%` and `^` are included because a `.cmd` step is routed through `cmd.exe /c`
-// (Windows shims, below), and cmd.exe expands `%VAR%` / `^` even inside quotes.
-const SHELL_METACHARS = "|&;<>`$(){}%^";
-
-/**
- * Tokenize one verify step: whitespace-separated, with double-quote grouping
- * ("a b" → one token). Returns the tokens, or { error } if the step contains a
- * shell metacharacter outside quotes (so no shell string is ever executed). Pure.
- */
-function tokenizeStep(step: string): string[] | { error: string } {
-  const tokens: string[] = [];
-  let cur = "";
-  let inQuote = false;
-  let building = false;
-  for (const ch of step) {
-    if (ch === '"') {
-      inQuote = !inQuote;
-      building = true;
-      continue;
-    }
-    if (!inQuote) {
-      if (ch === "\n" || ch === "\r") {
-        return { error: "a newline is not allowed in a verify step" };
-      }
-      if (ch === "'") {
-        return {
-          error:
-            "single quotes are not supported; use double quotes for args with spaces",
-        };
-      }
-      if (SHELL_METACHARS.includes(ch)) {
-        return {
-          error: `shell operators are not allowed (found "${ch}"); chain steps with && and quote args`,
-        };
-      }
-      if (ch === " " || ch === "\t") {
-        if (building) {
-          tokens.push(cur);
-          cur = "";
-          building = false;
-        }
-        continue;
-      }
-    }
-    cur += ch;
-    building = true;
-  }
-  if (inQuote) return { error: "unterminated quote in the verify command" };
-  if (building) tokens.push(cur);
-  return tokens;
-}
-
-/**
- * Parse a verify_command into a list of argv steps. Steps are chained with a
- * literal `&&` (Stoa's delimiter); each is argv-tokenized and shell-operator-
- * rejected. Returns { steps } or { error }. Pure → unit-tested (the safety story
- * rests on this).
- */
-export function parseVerifySteps(
-  command: string
-): { steps: string[][] } | { error: string } {
-  if (!command || !command.trim()) {
-    return { error: "the verify command is empty" };
-  }
-  const steps: string[][] = [];
-  for (const raw of command.split("&&")) {
-    const tokens = tokenizeStep(raw);
-    if (!Array.isArray(tokens)) return tokens; // { error }
-    if (tokens.length === 0) {
-      return { error: "an empty step (check the && placement)" };
-    }
-    steps.push(tokens);
-  }
-  return { steps };
-}
-
-/**
- * Map one step's process outcome to a verdict. Pure → unit-tested.
- *   exit 0            → pass
- *   non-zero exit     → fail (the code under test is broken)
- *   timeout (killed)  → error (couldn't get a verdict)
- *   spawn error (str) → error (ENOENT / bad binary)
- */
-export function summarizeVerifyExit(info: {
-  ok: boolean;
-  code: number | string | null;
-  killed: boolean;
-}): VerifyStatus {
-  if (info.ok) return "pass";
-  if (info.killed) return "error";
-  if (typeof info.code === "string") return "error";
-  return "fail";
-}
 
 export type VerifyAction = "run" | "wait" | "idle";
 
@@ -197,97 +95,7 @@ export function nextVerifyAction(input: {
   return "run"; // fresh / head moved / stale 'running' (crash recovery)
 }
 
-const MAX_TAIL = 8000;
-const tail = (s: string) =>
-  s.length > MAX_TAIL ? "…(truncated)…\n" + s.slice(-MAX_TAIL) : s;
-
-// Memory ceiling for a step's captured output (the persisted tail is far smaller —
-// see MAX_TAIL). Generous so a chatty-but-PASSING build isn't killed and mislabeled
-// 'error' (the failing-step output we keep is the last few KB regardless).
-const MAX_OUTPUT_BUFFER = 64 * 1024 * 1024;
-
-/**
- * Resolve a verify step's (file, args) for execFile with shell:false. On Windows,
- * npm-installed CLIs (npm/npx/tsc/yarn/pnpm) resolve to `.cmd`/`.bat` shims that
- * execFile CANNOT spawn directly — bare name ENOENTs, and a full `.cmd` path EINVALs
- * since the CVE-2024-27980 hardening (Node ≥18.20). Route those through `cmd.exe /c`
- * WITHOUT shell:true, so Node still quotes each argv entry (no injection — the
- * tokenizer already rejected shell metachars incl. % and ^). Pure → unit-tested on
- * every OS via the `onWindows` param. Mirrors resolveSpawn in the pty backend.
- */
-export function spawnArgs(
-  resolvedBin: string,
-  args: string[],
-  onWindows: boolean
-): { file: string; args: string[] } {
-  if (onWindows && /\.(cmd|bat)$/i.test(resolvedBin)) {
-    const comspec = process.env.ComSpec || "cmd.exe";
-    return { file: comspec, args: ["/c", resolvedBin, ...args] };
-  }
-  return { file: resolvedBin, args };
-}
-
-export interface VerifyResult {
-  status: VerifyStatus;
-  output: string;
-}
-
-/**
- * Run the verify command in `cwd`, step by step, no shell. Returns the verdict +
- * a bounded output tail of the FAILING step (empty on pass). Never throws — every
- * failure mode maps to fail/error. I/O; the parsing/summarizing are pure + tested.
- */
-export async function runVerify(
-  cwd: string,
-  command: string
-): Promise<VerifyResult> {
-  const parsed = parseVerifySteps(command);
-  if (!("steps" in parsed)) return { status: "error", output: parsed.error };
-
-  for (const step of parsed.steps) {
-    const resolved = resolveBinary(step[0]);
-    if (!resolved) {
-      return { status: "error", output: `verify binary not found: ${step[0]}` };
-    }
-    const { file, args } = spawnArgs(resolved, step.slice(1), isWindows);
-    try {
-      await execFileAsync(file, args, {
-        cwd,
-        encoding: "utf-8",
-        timeout: VERIFY_TIMEOUT_MS,
-        killSignal: "SIGKILL",
-        windowsHide: true,
-        maxBuffer: MAX_OUTPUT_BUFFER,
-        env: { ...process.env, CI: "1" }, // non-interactive test runners
-      });
-    } catch (err) {
-      const e = err as {
-        code?: number | string | null;
-        killed?: boolean;
-        stdout?: string;
-        stderr?: string;
-      };
-      const status = summarizeVerifyExit({
-        ok: false,
-        code: e.code ?? null,
-        killed: !!e.killed,
-      });
-      const why = e.killed
-        ? `timed out after ${Math.round(VERIFY_TIMEOUT_MS / 1000)}s`
-        : e.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
-          ? `output exceeded ${MAX_OUTPUT_BUFFER / (1024 * 1024)} MB`
-          : typeof e.code === "string"
-            ? `spawn error: ${e.code}`
-            : `exit ${e.code}`;
-      const body = (e.stdout ?? "") + (e.stderr ?? "");
-      return {
-        status,
-        output: `$ ${step.join(" ")}\n[${why}]\n${tail(body)}`.trim(),
-      };
-    }
-  }
-  return { status: "pass", output: "" };
-}
+const MAX_TAIL = VERIFY_OUTPUT_TAIL_MAX;
 
 // In-flight verify launches, keyed by dispatch id. Module-level is safe: the
 // reconciler is single-process and tickBusy-serialized (same assumption the

@@ -24,7 +24,11 @@ export function getSwitchableSessionOrder(
   sessions: Session[],
   projects: readonly { id: string }[]
 ): string[] {
-  const navigable = sessions.filter((s) => !s.conductor_session_id);
+  const navigable = sessions.filter(
+    (s) =>
+      !s.conductor_session_id &&
+      (!s.session_role || s.session_role === "interactive")
+  );
 
   const ids: string[] = [];
   const seen = new Set<string>();

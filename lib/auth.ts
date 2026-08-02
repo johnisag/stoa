@@ -17,18 +17,18 @@
 import { randomBytes, timingSafeEqual } from "crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
-import os from "os";
+import { stoaHomeDir } from "./platform";
 
 export const COOKIE_NAME = "stoa_token";
 
-const TOKEN_PATH = path.join(os.homedir(), ".stoa", "token");
+const TOKEN_PATH = path.join(stoaHomeDir(), "token");
 
 let cachedToken: string | null | undefined; // undefined = not loaded, null = auth off
 
 /**
  * The server's auth token, or null when auth is disabled (STOA_AUTH=off).
  * Resolution: STOA_AUTH=off → null; STOA_TOKEN env → that; else load (or
- * generate + persist to ~/.stoa/token, 0600). Cached for the process.
+ * generate + persist to $STOA_HOME/token, 0600). Cached for the process.
  */
 export function getServerToken(): string | null {
   if (cachedToken !== undefined) return cachedToken;
@@ -108,17 +108,13 @@ export function configuredAllowedOrigins(): string[] {
 
 /**
  * Tunnel origins registered at runtime by `stoa share` — one per line in
- * ~/.stoa/shared-origins. Read LIVE on each WS upgrade (unioned with the env
+ * $STOA_HOME/shared-origins. Read LIVE on each WS upgrade (unioned with the env
  * allowlist) so a share started AFTER the server is allow-listed without a
  * restart. Absent/unreadable → [] (fail-safe: an unknown origin is denied). Only a
- * process that can write ~/.stoa (which also holds the token) can add entries, so
+ * process that can write STOA_HOME (which also holds the token) can add entries, so
  * this opens no new trust boundary; a malformed line is skipped by isOriginAllowed.
  */
-export const SHARED_ORIGINS_PATH = path.join(
-  os.homedir(),
-  ".stoa",
-  "shared-origins"
-);
+export const SHARED_ORIGINS_PATH = path.join(stoaHomeDir(), "shared-origins");
 
 export function readSharedOrigins(
   filePath: string = SHARED_ORIGINS_PATH

@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getDb, queries } from "@/lib/db";
 import { discoverGitRepos, defaultScanRoots } from "@/lib/dispatch/discover";
+import { requireAdmin } from "@/lib/api-security";
 
 /**
  * GET /api/dispatch/discover
@@ -9,7 +10,10 @@ import { discoverGitRepos, defaultScanRoots } from "@/lib/dispatch/discover";
  * for local git checkouts, so the add-repo form can offer a "scan" source the
  * user picks from instead of typing a path. Read-only; filesystem-only.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   try {
     const projects = queries.getAllProjects(getDb()).all() as {
       working_directory: string;

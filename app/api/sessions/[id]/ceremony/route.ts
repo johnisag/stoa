@@ -11,6 +11,10 @@ import {
   requireLocalhost,
   SYSTEM_PROMPT_MAX_LENGTH,
 } from "@/lib/api-security";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 function requireSession(id: string): Session | null {
   return (queries.getSession(getDb()).get(id) as Session | undefined) ?? null;
@@ -60,9 +64,14 @@ export async function POST(
 
     const db = getDb();
     const session = requireSession(id);
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
     if (!session.worktree_path || !session.branch_name) {
       return NextResponse.json(
         { error: "Auto mode needs the session on its own worktree + branch." },
@@ -139,9 +148,14 @@ export async function PUT(
   const { id } = await params;
   const db = getDb();
   const session = requireSession(id);
-  if (!session) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  const denied = genericSessionRouteFailure(session);
+  if (denied) {
+    return NextResponse.json(
+      { error: denied.error },
+      { status: denied.status }
+    );
   }
+  assertGenericSessionRouteAccess(session);
   const ceremony = queries.getSessionCeremony(db).get(id) as
     SessionCeremony | undefined;
   if (!ceremony || ceremony.pr_number == null || !session.worktree_path) {
@@ -192,8 +206,12 @@ export async function GET(
   if (!auth.ok) return auth.response;
 
   const { id } = await params;
-  if (!requireSession(id)) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  const denied = genericSessionRouteFailure(requireSession(id));
+  if (denied) {
+    return NextResponse.json(
+      { error: denied.error },
+      { status: denied.status }
+    );
   }
   const ceremony =
     (queries.getSessionCeremony(getDb()).get(id) as
@@ -209,8 +227,12 @@ export async function DELETE(
   if (!auth.ok) return auth.response;
 
   const { id } = await params;
-  if (!requireSession(id)) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  const denied = genericSessionRouteFailure(requireSession(id));
+  if (denied) {
+    return NextResponse.json(
+      { error: denied.error },
+      { status: denied.status }
+    );
   }
   queries.deleteSessionCeremony(getDb()).run(id);
   return NextResponse.json({ success: true });

@@ -24,7 +24,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { createHash, randomBytes } from "crypto";
-import { homeDir } from "./platform";
+import { stoaHomeDir } from "./platform";
 
 const SNAPSHOT_VERSION = 1;
 const MANIFEST_NAME = ".stoa-snapshot.json";
@@ -120,11 +120,10 @@ export function snapshotsToPrune(
 // I/O.
 // ---------------------------------------------------------------------------
 
-function snapshotsRoot(): string {
+export function snapshotsRoot(): string {
   // Match lib/db/index.ts: honor STOA_HOME so snapshots relocate with the rest of
   // Stoa's per-user home (and tests can redirect it to a scratch dir).
-  const stoaHome = process.env.STOA_HOME || path.join(homeDir(), ".stoa");
-  return path.join(stoaHome, "env-snapshots");
+  return path.join(stoaHomeDir(), "env-snapshots");
 }
 
 function errMsg(e: unknown): string {

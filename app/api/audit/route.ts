@@ -20,6 +20,8 @@ import {
   type AuditEnvelope,
 } from "@/lib/audit/response";
 import type { AuditCsvRow } from "@/lib/audit/csv";
+import { genericSessionRouteFailure } from "@/lib/session-route-access";
+import { isInteractiveSessionRole } from "@/lib/session-role";
 
 // GET /api/audit — the fleet-wide audit/activity timeline (#10). Same filters as the
 // per-session route (?types&since&until&limit&offset&format), plus an optional
@@ -36,16 +38,18 @@ export async function GET(request: NextRequest) {
     if (sessionId) {
       const session = queries.getSession(db).get(sessionId) as
         Session | undefined;
-      if (!session) {
+      const denied = genericSessionRouteFailure(session);
+      if (denied) {
         return NextResponse.json(
-          { error: "Session not found" },
-          { status: 404 }
+          { error: denied.error },
+          { status: denied.status }
         );
       }
-      sessionKey = backendKeyForSession(session);
+      sessionKey = backendKeyForSession(session!);
     }
 
     const { query, emptyByFilter } = parseAuditParams(sp, sessionKey);
+    query.excludeInternalSessions = true;
     query.payloadCap = AUDIT_PAYLOAD_CAP; // bound payload size on both read + export
     const format = parseAuditFormat(sp.get("format"));
     const nameByKey = emptyByFilter
@@ -86,7 +90,9 @@ export async function GET(request: NextRequest) {
 
 /** Map each session's BACKEND key → its display name, for enriching event rows. */
 function buildNameMap(db: ReturnType<typeof getDb>): Map<string, string> {
-  const sessions = queries.getAllSessions(db).all() as Session[];
+  const sessions = (queries.getAllSessions(db).all() as Session[]).filter(
+    isInteractiveSessionRole
+  );
   const map = new Map<string, string>();
   for (const s of sessions) map.set(backendKeyForSession(s), s.name);
   return map;

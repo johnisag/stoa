@@ -8,6 +8,7 @@ import {
   moveUp,
   moveDown,
 } from "@/lib/prompt-queue";
+import { genericSessionRouteFailure } from "@/lib/session-route-access";
 
 function requireSession(id: string): Session | null {
   return (queries.getSession(getDb()).get(id) as Session | undefined) ?? null;
@@ -19,8 +20,12 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  if (!requireSession(id)) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  const denied = genericSessionRouteFailure(requireSession(id));
+  if (denied) {
+    return NextResponse.json(
+      { error: denied.error },
+      { status: denied.status }
+    );
   }
   return NextResponse.json({ queue: listQueue(id) });
 }
@@ -33,8 +38,12 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  if (!requireSession(id)) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  const denied = genericSessionRouteFailure(requireSession(id));
+  if (denied) {
+    return NextResponse.json(
+      { error: denied.error },
+      { status: denied.status }
+    );
   }
   const { text, clientId } = await request.json().catch(() => ({}));
   if (typeof text !== "string" || !text.trim()) {
@@ -62,8 +71,12 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  if (!requireSession(id)) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  const denied = genericSessionRouteFailure(requireSession(id));
+  if (denied) {
+    return NextResponse.json(
+      { error: denied.error },
+      { status: denied.status }
+    );
   }
   const { action, index, text } = await request.json().catch(() => ({}));
   if (!Number.isInteger(index) || index < 0) {
@@ -88,8 +101,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  if (!requireSession(id)) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  const denied = genericSessionRouteFailure(requireSession(id));
+  if (denied) {
+    return NextResponse.json(
+      { error: denied.error },
+      { status: denied.status }
+    );
   }
   clearQueue(id);
   return NextResponse.json({ queue: [] });

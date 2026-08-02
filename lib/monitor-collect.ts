@@ -18,6 +18,7 @@ import {
   type SessionProcessInfo,
 } from "./process-tree";
 import { listListeningPorts } from "./listening-ports";
+import { isInteractiveSessionRole } from "./session-role";
 
 /** Stoa-managed dev-server ports grouped BY PROJECT (from the dev_servers table).
  *  Per-project, not account-global, so one session's tracked port can't mask another
@@ -79,7 +80,9 @@ export async function collectMonitorProcessInfo(): Promise<
   Record<string, SessionProcessInfo>
 > {
   const db = getDb();
-  const sessions = queries.getAllSessions(db).all() as Session[];
+  const sessions = (queries.getAllSessions(db).all() as Session[]).filter(
+    isInteractiveSessionRole
+  );
   const backend = getSessionBackend();
 
   let liveNames: Set<string>;

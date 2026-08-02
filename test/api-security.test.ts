@@ -1,11 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NextRequest } from "next/server";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join, parse, resolve } from "path";
+import { homeDir, stoaHomeDir } from "@/lib/platform";
 import {
   parseJsonBody,
   clampInteger,
   sanitizeSessionName,
   sanitizeGroupPath,
   resolveSandboxedPath,
+  resolveSandboxedPathOrHome,
+  resolveRealSandboxedPath,
+  resolveRealSandboxedPathOrHome,
+  resolveRealSandboxedWritePath,
+  isSafeImplicitWorktreesRoot,
   tokenizeCommand,
   shellEscape,
   validateGitHubLabels,
@@ -124,6 +133,254 @@ describe("resolveSandboxedPath", () => {
     const roots = ["C:\\stoa\\project"];
     const result = resolveSandboxedPath("C:\\other\\file.txt", roots);
     expect(result.allowed).toBe(false);
+  });
+
+  it("handles filesystem roots and rejects similarly prefixed siblings", () => {
+    const filesystemRoot = parse(resolve(process.cwd())).root;
+    expect(
+      resolveSandboxedPath(join(filesystemRoot, "stoa-child"), [filesystemRoot])
+        .allowed
+    ).toBe(true);
+
+    const allowed = join(tmpdir(), "stoa-prefix-root");
+    expect(resolveSandboxedPath(`${allowed}-evil`, [allowed]).allowed).toBe(
+      false
+    );
+  });
+
+  it("keeps Stoa authority private even when a broad workspace root contains it", () => {
+    const authority = stoaHomeDir();
+    expect(resolveSandboxedPath(homeDir(), [homeDir()]).allowed).toBe(true);
+    expect(
+      resolveSandboxedPath(join(authority, "token"), [homeDir(), authority])
+        .allowed
+    ).toBe(false);
+  });
+
+  it("allows only the historical source and worktree namespaces under default ~/.stoa", () => {
+    const defaultStoaHome = join(homeDir(), ".stoa");
+    expect(
+      resolveSandboxedPath(join(defaultStoaHome, "repo", "package.json"), [
+        defaultStoaHome,
+      ]).allowed
+    ).toBe(true);
+    expect(
+      resolveSandboxedPath(
+        join(defaultStoaHome, "worktrees", "session-1", "src", "index.ts"),
+        [defaultStoaHome]
+      ).allowed
+    ).toBe(true);
+    expect(
+      resolveSandboxedPath(join(defaultStoaHome, "fleet", "run.json"), [
+        defaultStoaHome,
+      ]).allowed
+    ).toBe(false);
+  });
+});
+
+describe("resolveRealSandboxedPath", () => {
+  it("allows an existing directory beneath a real allowed root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stoa-real-sandbox-"));
+    const child = join(root, "child");
+    mkdirSync(child);
+    try {
+      const result = await resolveRealSandboxedPath(child, [root]);
+      expect(result.allowed).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlink or junction that escapes an allowed root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stoa-real-sandbox-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "stoa-real-sandbox-outside-"));
+    const link = join(root, "escape");
+    try {
+      symlinkSync(
+        outside,
+        link,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+
+      const result = await resolveRealSandboxedPath(link, [root]);
+      expect(result.allowed).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an allowed symlink/junction root alias after verification", async () => {
+    const container = mkdtempSync(join(tmpdir(), "stoa-real-alias-"));
+    const target = mkdtempSync(join(tmpdir(), "stoa-real-target-"));
+    const alias = join(container, "project");
+    try {
+      symlinkSync(
+        target,
+        alias,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+
+      const result = await resolveRealSandboxedPath(alias, [alias]);
+      expect(result).toEqual({ allowed: true, resolved: resolve(alias) });
+    } finally {
+      rmSync(container, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveRealSandboxedWritePath", () => {
+  it("allows a new file below a real allowed root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stoa-real-write-"));
+    try {
+      const target = join(root, "new-file.ts");
+      await expect(
+        resolveRealSandboxedWritePath(target, [root])
+      ).resolves.toEqual({ allowed: true, resolved: resolve(target) });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects existing and new files reached through an escaping link", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stoa-real-write-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "stoa-real-write-outside-"));
+    const link = join(root, "escape");
+    const existing = join(outside, "existing.txt");
+    try {
+      writeFileSync(existing, "secret");
+      symlinkSync(
+        outside,
+        link,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+
+      expect(
+        (
+          await resolveRealSandboxedWritePath(join(link, "existing.txt"), [
+            root,
+          ])
+        ).allowed
+      ).toBe(false);
+      expect(
+        (await resolveRealSandboxedWritePath(join(link, "new.txt"), [root]))
+          .allowed
+      ).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("home-tree sandboxing", () => {
+  it("does not let home-scoped workflows open the Stoa authority store", async () => {
+    const authorityToken = join(stoaHomeDir(), "token");
+    expect(resolveSandboxedPathOrHome(authorityToken, []).allowed).toBe(false);
+    expect(
+      (await resolveRealSandboxedPathOrHome(authorityToken, [])).allowed
+    ).toBe(false);
+  });
+
+  it("still allows the user's existing home directory", async () => {
+    expect((await resolveRealSandboxedPathOrHome(homeDir(), [])).allowed).toBe(
+      true
+    );
+  });
+
+  it("protects the canonical target of a custom STOA_HOME junction", async () => {
+    const container = mkdtempSync(join(tmpdir(), "stoa-authority-alias-"));
+    const target = mkdtempSync(join(tmpdir(), "stoa-authority-target-"));
+    const alias = join(container, "state");
+    const previous = process.env.STOA_HOME;
+    try {
+      writeFileSync(join(target, "token"), "secret");
+      symlinkSync(
+        target,
+        alias,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+      process.env.STOA_HOME = alias;
+
+      const canonicalToken = join(target, "token");
+      expect(resolveSandboxedPath(canonicalToken, [target]).allowed).toBe(
+        false
+      );
+      expect(
+        (await resolveRealSandboxedPath(canonicalToken, [target])).allowed
+      ).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.STOA_HOME;
+      else process.env.STOA_HOME = previous;
+      rmSync(container, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it("protects one authority reached through two different filesystem aliases", () => {
+    const container = mkdtempSync(join(tmpdir(), "stoa-authority-aliases-"));
+    const target = mkdtempSync(join(tmpdir(), "stoa-authority-shared-target-"));
+    const configuredAlias = join(container, "configured-state");
+    const secondAlias = join(container, "second-state");
+    const previous = process.env.STOA_HOME;
+    try {
+      writeFileSync(join(target, "token"), "secret");
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      symlinkSync(target, configuredAlias, linkType);
+      symlinkSync(target, secondAlias, linkType);
+      process.env.STOA_HOME = configuredAlias;
+
+      const aliasedToken = join(secondAlias, "token");
+      expect(resolveSandboxedPath(aliasedToken, [secondAlias]).allowed).toBe(
+        false
+      );
+    } finally {
+      if (previous === undefined) delete process.env.STOA_HOME;
+      else process.env.STOA_HOME = previous;
+      rmSync(container, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("implicit managed-worktree root", () => {
+  it("accepts only the real worktrees child of a safe state directory", () => {
+    const container = mkdtempSync(join(tmpdir(), "stoa-worktree-root-"));
+    const userHome = join(container, "home");
+    const stateRoot = join(userHome, ".stoa");
+    const worktreesRoot = join(stateRoot, "worktrees");
+    mkdirSync(worktreesRoot, { recursive: true });
+    try {
+      expect(
+        isSafeImplicitWorktreesRoot(worktreesRoot, stateRoot, userHome)
+      ).toBe(true);
+    } finally {
+      rmSync(container, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a managed-worktrees junction redirected to the home tree", () => {
+    const container = mkdtempSync(join(tmpdir(), "stoa-worktree-alias-"));
+    const userHome = join(container, "home");
+    const stateRoot = join(container, "state");
+    const worktreesRoot = join(stateRoot, "worktrees");
+    mkdirSync(userHome);
+    mkdirSync(stateRoot);
+    try {
+      symlinkSync(
+        userHome,
+        worktreesRoot,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+      expect(
+        isSafeImplicitWorktreesRoot(worktreesRoot, stateRoot, userHome)
+      ).toBe(false);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+      rmSync(userHome, { recursive: true, force: true });
+      rmSync(container, { recursive: true, force: true });
+    }
   });
 });
 

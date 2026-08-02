@@ -1,30 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
-import { existsSync } from "fs";
+import { existsSync, realpathSync } from "fs";
 import { randomUUID } from "crypto";
 import { getDb, queries, type Session, type Group } from "@/lib/db";
 import { isValidAgentType, type AgentType } from "@/lib/providers";
 import { sessionKey, getProviderDefinition } from "@/lib/providers/registry";
 import { resolveModelForAgent, isSafeModel } from "@/lib/model-catalog";
-import { createWorktree, isStoaWorktree } from "@/lib/worktrees";
+import {
+  createWorktree,
+  getMainRepoPath,
+  isStoaWorktree,
+  listWorktrees,
+  normalizeWorktreePath,
+} from "@/lib/worktrees";
 import { createWorkspace } from "@/lib/multi-repo-worktree";
 import { setupWorktree, type SetupResult } from "@/lib/env-setup";
 import { findAvailablePort } from "@/lib/ports";
 import { runInBackground } from "@/lib/async-operations";
 import { getProject } from "@/lib/projects";
 import {
-  ensureMcpConfig,
+  ensureProviderMcpConfig,
   buildCodexOrchestrationArgs,
-  writeConductorMarker,
   ensureHermesMcpRegistered,
+  McpConfigConflictError,
+  McpConfigSetupError,
 } from "@/lib/mcp-config";
 import { expandHome, homeDir, isWindows } from "@/lib/platform";
 import { getLessonsBlockForCwd } from "@/lib/dispatch/lessons";
 import { composeLaunchPrompt } from "@/lib/prompt-compose";
+import { isGenericSessionLaunchAllowed } from "@/lib/session-launch";
 import { resolvePlaybookParts } from "@/lib/playbooks-server";
 import {
   parseJsonBody,
-  resolveSandboxedPath,
-  resolveSandboxedPathOrHome,
+  resolveRealSandboxedPath,
+  resolveRealSandboxedPathOrHome,
   getAllowedPathRoots,
   sanitizeGroupPath,
   sanitizeSessionName,
@@ -35,7 +43,9 @@ import {
 export async function GET() {
   try {
     const db = getDb();
-    const sessions = queries.getAllSessions(db).all() as Session[];
+    const sessions = (queries.getAllSessions(db).all() as Session[]).filter(
+      isGenericSessionLaunchAllowed
+    );
     const groups = queries.getAllGroups(db).all() as Group[];
 
     // Convert expanded from 0/1 to boolean
@@ -80,21 +90,170 @@ function generateSessionName(db: ReturnType<typeof getDb>): string {
  * Validate that a session path resolves inside the project's workspace.
  * Returns the resolved absolute path on success, or null if it escapes.
  */
-function resolveProjectPath(
+async function resolveProjectPath(
   input: string,
   project: { working_directory: string } | null | undefined
-): { allowed: boolean; resolved: string } {
+): Promise<{ allowed: boolean; resolved: string }> {
   const resolved = expandHome(input);
   // A project-bound session is confined to that project's workspace. A
   // projectless session may sit in ANY already-registered root (other projects,
   // repos, dispatch repos, live sessions, Stoa-managed dirs) or under the user's
   // home — not home-only, which 403s the common "repo on D:\ / /opt" layout.
   if (project) {
-    return resolveSandboxedPath(resolved, [
+    return resolveRealSandboxedPath(resolved, [
       expandHome(project.working_directory),
     ]);
   }
-  return resolveSandboxedPathOrHome(resolved, getAllowedPathRoots());
+  return resolveRealSandboxedPathOrHome(resolved, getAllowedPathRoots());
+}
+
+type ExistingWorktreeResolution =
+  | { ok: true; path: string; branch: string | null }
+  | { ok: false; status: 400 | 403; error: string };
+
+/** Resolve aliases/junctions before comparing repository or worktree paths. */
+function canonicalPathIdentity(candidatePath: string): string | null {
+  try {
+    return normalizeWorktreePath(realpathSync(expandHome(candidatePath)));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve an existing Stoa worktree for an attach.
+ *
+ * Stoa creates worktrees under ~/.stoa/worktrees rather than inside the source
+ * checkout, so the normal descendant sandbox cannot authorize this mode.
+ * Require three independent ownership signals instead: the path is Stoa-managed,
+ * Git says its common repository is exactly the selected repository, and that
+ * repository currently registers the path as a live worktree. The registered
+ * branch is authoritative; never trust client metadata.
+ */
+async function resolveExistingWorktreeAttach(
+  input: unknown,
+  repositoryRoot: string
+): Promise<ExistingWorktreeResolution> {
+  if (
+    typeof input !== "string" ||
+    input.trim().length === 0 ||
+    input.includes("\0")
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      error: "existingWorktreePath must be a valid path",
+    };
+  }
+
+  try {
+    const candidatePath = expandHome(input);
+    if (!isStoaWorktree(candidatePath)) {
+      return {
+        ok: false,
+        status: 403,
+        error: "Worktree is not a Stoa-managed worktree for this repository",
+      };
+    }
+    if (!existsSync(candidatePath)) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Worktree no longer exists: ${input}`,
+      };
+    }
+
+    const candidateMainRepoPath = await getMainRepoPath(candidatePath);
+    const selectedMainRepoPath = await getMainRepoPath(repositoryRoot);
+    const candidateRepository = candidateMainRepoPath
+      ? canonicalPathIdentity(candidateMainRepoPath)
+      : null;
+    const selectedRepository = selectedMainRepoPath
+      ? canonicalPathIdentity(selectedMainRepoPath)
+      : null;
+    if (
+      !candidateRepository ||
+      !selectedRepository ||
+      candidateRepository !== selectedRepository
+    ) {
+      return {
+        ok: false,
+        status: 403,
+        error: "Worktree is not a Stoa-managed worktree for this repository",
+      };
+    }
+
+    const normalizedCandidate = normalizeWorktreePath(candidatePath);
+    const registeredWorktrees = await listWorktrees(repositoryRoot);
+    const registered = registeredWorktrees.find(
+      (worktree) =>
+        normalizeWorktreePath(worktree.path) === normalizedCandidate &&
+        isStoaWorktree(worktree.path)
+    );
+    if (!registered) {
+      return {
+        ok: false,
+        status: 403,
+        error: "Worktree is not a Stoa-managed worktree for this repository",
+      };
+    }
+
+    return {
+      ok: true,
+      path: registered.path,
+      branch: registered.branch || null,
+    };
+  } catch {
+    // Invalid platform paths and unexpected Git/path failures are client input
+    // failures here, never reasons to attach an unverified directory.
+    return {
+      ok: false,
+      status: 400,
+      error: "existingWorktreePath must be a valid path",
+    };
+  }
+}
+
+function sessionWorktreePaths(session: Session): string[] {
+  const candidates = [session.working_directory];
+  if (session.worktree_path) candidates.push(session.worktree_path);
+  if (session.worktree_paths) {
+    try {
+      const parsed: unknown = JSON.parse(session.worktree_paths);
+      if (Array.isArray(parsed)) {
+        candidates.push(
+          ...parsed.filter(
+            (value): value is string => typeof value === "string"
+          )
+        );
+      }
+    } catch {
+      // A malformed legacy workspace list must not break session creation.
+    }
+  }
+  return candidates;
+}
+
+/** The attach picker is advisory; enforce ownership again at the DB boundary. */
+function isWorktreeIdentityAttached(
+  db: ReturnType<typeof getDb>,
+  identity: string
+): boolean {
+  const sessions = queries.getAllSessions(db).all() as Session[];
+  return sessions.some((session) =>
+    sessionWorktreePaths(session).some(
+      (candidate) => canonicalPathIdentity(candidate) === identity
+    )
+  );
+}
+
+/** Serialize attach check + session insertion across concurrent request handlers. */
+function immediateTransaction<T>(
+  db: ReturnType<typeof getDb>,
+  action: () => T
+): T {
+  if (db.inTransaction) return action();
+  return db.transaction(action).immediate();
 }
 
 // POST /api/sessions - Create new session
@@ -146,7 +305,6 @@ export async function POST(request: NextRequest) {
       // Attach to an existing worktree (recover a deleted session's work)
       // instead of creating a new one.
       existingWorktreePath = null,
-      existingWorktreeBranch = null,
       // Multi-repo workspace: when the chosen root holds several git repos, the
       // picked ones ({ path, name }[]) each get a worktree under one workspace dir.
       workspaceRepos = null,
@@ -154,8 +312,8 @@ export async function POST(request: NextRequest) {
       useTmux = true,
       // Initial prompt to send when session starts
       initialPrompt = null,
-      // Conductor: write the orchestration MCP (.mcp.json) so this session can
-      // spawn worker sessions via the stoa MCP's spawn_worker tool.
+      // Conductor: install the provider-native orchestration MCP wiring so this
+      // session can spawn workers via the stoa MCP's spawn_worker tool.
       enableOrchestration = false,
       // Playbook (#13): a selected recipe whose body seeds the prompt (the dialog
       // inlines the body into initialPrompt instead; this is for API/Command callers).
@@ -172,9 +330,42 @@ export async function POST(request: NextRequest) {
     if (projectId && !project) {
       return NextResponse.json({ error: "Project not found" }, { status: 400 });
     }
+    if (parentSessionId) {
+      const parent = queries.getSession(db).get(parentSessionId) as
+        Session | undefined;
+      if (parent && !isGenericSessionLaunchAllowed(parent)) {
+        return NextResponse.json(
+          { error: "Internal sessions cannot be forked or resumed" },
+          { status: 409 }
+        );
+      }
+    }
 
-    // workingDirectory must resolve inside the project's workspace.
-    const cwdCheck = resolveProjectPath(workingDirectory, project ?? null);
+    const hasExistingWorktreePath =
+      existingWorktreePath !== null && existingWorktreePath !== undefined;
+    const isExistingWorktreeAttach = useWorktree && hasExistingWorktreePath;
+    // Uncategorized is the projectless bucket: its stored `~` is not the
+    // repository the user selected in the dialog.
+    const scopedProject = project?.is_uncategorized ? null : project;
+    const isProjectWorktreeAttach =
+      isExistingWorktreeAttach && Boolean(scopedProject);
+
+    // A project-bound existing-worktree attach has its own stricter Git
+    // ownership validation below. Its cwd lives under ~/.stoa/worktrees by
+    // design, so use the trusted project root here instead of applying the
+    // ordinary project-descendant check to a client-supplied worktree path.
+    // All non-attach modes retain the normal workingDirectory validation.
+    const cwdInput =
+      isProjectWorktreeAttach && scopedProject
+        ? scopedProject.working_directory
+        : workingDirectory;
+    if (typeof cwdInput !== "string" || cwdInput.includes("\0")) {
+      return NextResponse.json(
+        { error: "workingDirectory must be a valid path" },
+        { status: 400 }
+      );
+    }
+    const cwdCheck = await resolveProjectPath(cwdInput, scopedProject ?? null);
     if (!cwdCheck.allowed) {
       return NextResponse.json(
         { error: "workingDirectory is outside the project workspace" },
@@ -245,7 +436,10 @@ export async function POST(request: NextRequest) {
       // agent works across the subfolders (one branch/PR per repo).
       // Validate each picked repo path is inside the project workspace.
       for (const r of workspaceRepos) {
-        const repoCheck = resolveProjectPath(String(r.path), project ?? null);
+        const repoCheck = await resolveProjectPath(
+          String(r.path),
+          scopedProject ?? null
+        );
         if (!repoCheck.allowed) {
           return NextResponse.json(
             {
@@ -276,40 +470,26 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-    } else if (useWorktree && existingWorktreePath) {
+    } else if (isExistingWorktreeAttach) {
       // Attach to an existing worktree: it's already on disk (with its files +
       // branch + installed deps), so skip createWorktree and setupWorktree —
       // just point the session at it and allocate a dev-server port.
-      const attachPath = expandHome(existingWorktreePath);
-      // Only attach to an actual Stoa worktree that is ALSO inside the project's
-      // workspace. Being a Stoa worktree is not enough on its own — a worktree
-      // created for a different project or in an arbitrary location must not be
-      // attachable here.
-      const attachCheck = resolveProjectPath(
+      const repositoryRoot = scopedProject
+        ? scopedProject.working_directory
+        : cwdCheck.resolved;
+      const resolved = await resolveExistingWorktreeAttach(
         existingWorktreePath,
-        project ?? null
+        repositoryRoot
       );
-      if (!attachCheck.allowed || !isStoaWorktree(attachPath)) {
+      if (!resolved.ok) {
         return NextResponse.json(
-          {
-            error:
-              "Worktree is outside the allowed workspace or not a Stoa worktree",
-          },
-          { status: 403 }
+          { error: resolved.error },
+          { status: resolved.status }
         );
       }
-      if (!existsSync(attachPath)) {
-        return NextResponse.json(
-          { error: `Worktree no longer exists: ${existingWorktreePath}` },
-          { status: 400 }
-        );
-      }
-      worktreePath = attachPath;
-      branchName =
-        typeof existingWorktreeBranch === "string" && existingWorktreeBranch
-          ? existingWorktreeBranch
-          : null;
-      actualWorkingDirectory = attachPath;
+      worktreePath = resolved.path;
+      branchName = resolved.branch;
+      actualWorkingDirectory = worktreePath;
       port = await findAvailablePort();
     } else if (useWorktree && featureName) {
       try {
@@ -366,25 +546,55 @@ export async function POST(request: NextRequest) {
     const tmuxName = useTmux
       ? sessionKey({ kind: "agent", provider: agentType, id })
       : null;
-    queries.createSession(db).run(
-      id,
-      name,
-      tmuxName,
-      actualWorkingDirectory,
-      parentSessionId,
-      model,
-      systemPrompt,
-      sanitizedGroupPath,
-      agentType,
-      autoApprove ? 1 : 0, // SQLite stores booleans as integers
-      projectId
-    );
+    const insertSession = () => {
+      queries.createSession(db).run(
+        id,
+        name,
+        tmuxName,
+        actualWorkingDirectory,
+        parentSessionId,
+        model,
+        systemPrompt,
+        sanitizedGroupPath,
+        agentType,
+        autoApprove ? 1 : 0, // SQLite stores booleans as integers
+        projectId
+      );
 
-    // Set worktree info if created
-    if (worktreePath) {
-      queries
-        .updateSessionWorktree(db)
-        .run(worktreePath, branchName, baseBranch, port, id);
+      if (worktreePath) {
+        queries
+          .updateSessionWorktree(db)
+          .run(worktreePath, branchName, baseBranch, port, id);
+      }
+    };
+    type InsertResult = "inserted" | "attached" | "missing";
+    let insertResult: InsertResult;
+    if (isExistingWorktreeAttach) {
+      insertResult = immediateTransaction<InsertResult>(db, () => {
+        if (!worktreePath) return "missing";
+        const identity = canonicalPathIdentity(worktreePath);
+        if (!identity) return "missing";
+        if (isWorktreeIdentityAttached(db, identity)) return "attached";
+        // Reserve the attached path in the same transaction as the session row.
+        insertSession();
+        return "inserted";
+      });
+    } else {
+      // Preserve the existing transaction boundary for all non-attach flows.
+      insertSession();
+      insertResult = "inserted";
+    }
+    if (insertResult === "attached") {
+      return NextResponse.json(
+        { error: "Worktree is already attached to another session" },
+        { status: 409 }
+      );
+    }
+    if (insertResult === "missing") {
+      return NextResponse.json(
+        { error: `Worktree no longer exists: ${existingWorktreePath}` },
+        { status: 400 }
+      );
     }
 
     // Multi-repo workspace: record the child worktree paths so deleting the
@@ -430,15 +640,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const session = queries.getSession(db).get(id) as Session;
-
-    // Conductor: write the orchestration MCP config into the session's working
-    // dir BEFORE the client attaches/spawns the agent, so the agent reads
-    // spawn_worker on first launch. ensureMcpConfig also git-excludes the file
-    // so it doesn't pollute the repo. Best-effort — never blocks session create.
-    // Gated on the provider: `.mcp.json` is Claude's convention, so writing it
-    // for Codex/Hermes would silently do nothing — the UI disables the box for
-    // them, and this guard protects direct API callers too.
+    // Conductor: install provider-native MCP wiring before the client attaches,
+    // so spawn_worker is present on first launch. Project-config providers write
+    // a locally git-excluded file; Codex persists per-launch argv and Hermes uses
+    // its global registration. Each path receives this session's identity at
+    // process launch. This remains best-effort so an unavailable CLI or
+    // unwritable config cannot strand the session/worktree already created.
     if (
       enableOrchestration &&
       getProviderDefinition(agentType).supportsOrchestration
@@ -452,19 +659,60 @@ export async function POST(request: NextRequest) {
             .updateSessionMcpArgs(db)
             .run(JSON.stringify(buildCodexOrchestrationArgs(id)), id);
         } else if (agentType === "hermes") {
-          // Hermes reads MCP servers only from its global config and strips env
-          // vars from MCP children, so register the stoa server once (global,
-          // idempotent) and drop this conductor's id in a cwd marker file.
+          // Hermes reads MCP servers from global config. The entry maps a
+          // generic placeholder from this agent process into its MCP child.
           ensureHermesMcpRegistered();
-          writeConductorMarker(expandHome(actualWorkingDirectory), id);
+          queries.updateSessionMcpArgs(db).run("[]", id);
         } else {
-          // Claude reads a project .mcp.json on launch.
-          ensureMcpConfig(expandHome(actualWorkingDirectory), id);
+          // Claude, Kilo, and Kimi each read a different project config path and
+          // schema. The dispatcher fails closed if this capability contract ever
+          // advertises a provider without a writer.
+          ensureProviderMcpConfig(
+            agentType,
+            expandHome(actualWorkingDirectory),
+            id,
+            {
+              isLegacyClaudeSessionOwned: (
+                legacySessionId,
+                configWorkingDirectory
+              ) => {
+                const legacy = queries.getSession(db).get(legacySessionId) as
+                  Session | undefined;
+                return (
+                  !!legacy &&
+                  legacy.agent_type === "claude" &&
+                  isGenericSessionLaunchAllowed(legacy) &&
+                  legacy.mcp_launch_args !== null &&
+                  normalizeWorktreePath(legacy.working_directory) ===
+                    normalizeWorktreePath(configWorkingDirectory)
+                );
+              },
+            }
+          );
+          // An empty argv list is an intentional persisted conductor sentinel:
+          // launch paths use non-null mcp_launch_args to inject this session's
+          // STOA_CONDUCTOR_SESSION_ID into the agent process.
+          queries.updateSessionMcpArgs(db).run("[]", id);
         }
       } catch (err) {
+        if (err instanceof McpConfigSetupError) {
+          queries.deleteSession(db).run(id);
+          return NextResponse.json({ error: err.message }, { status: 503 });
+        }
+        if (err instanceof McpConfigConflictError) {
+          // Never leave a launchable session that could inherit another
+          // conductor's MCP identity. The generated/attached worktree remains
+          // recoverable; only the not-yet-launched session row is rolled back.
+          queries.deleteSession(db).run(id);
+          return NextResponse.json({ error: err.message }, { status: 409 });
+        }
         console.error("Failed to write orchestration MCP config:", err);
       }
     }
+
+    // Re-read after orchestration wiring so the response carries the persisted
+    // conductor sentinel/argv used by the very first launch.
+    const session = queries.getSession(db).get(id) as Session;
 
     // Get project's initial prompt if available
     const projectInitialPrompt = project?.initial_prompt?.trim();

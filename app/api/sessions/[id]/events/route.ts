@@ -14,6 +14,10 @@ import {
   AUDIT_PAYLOAD_CAP,
 } from "@/lib/audit/query";
 import { auditJson, auditDownload } from "@/lib/audit/response";
+import {
+  assertGenericSessionRouteAccess,
+  genericSessionRouteFailure,
+} from "@/lib/session-route-access";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -28,9 +32,14 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const { id } = await params;
     const db = getDb();
     const session = queries.getSession(db).get(id) as Session | undefined;
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const denied = genericSessionRouteFailure(session);
+    if (denied) {
+      return NextResponse.json(
+        { error: denied.error },
+        { status: denied.status }
+      );
     }
+    assertGenericSessionRouteAccess(session);
 
     const key = backendKeyForSession(session);
     const sp = new URL(request.url).searchParams;

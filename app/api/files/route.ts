@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listDirectory } from "@/lib/files";
-import { getAllowedPathRoots, resolveSandboxedPath } from "@/lib/api-security";
+import {
+  getAllowedPathRoots,
+  requireAdmin,
+  resolveSandboxedPath,
+  resolveRealSandboxedPath,
+} from "@/lib/api-security";
 
 /**
  * GET /api/files?path=...&recursive=true
@@ -13,6 +18,10 @@ export async function GET(request: NextRequest) {
     // The folder PICKER's listing mode (see the sandbox note below). Forced shallow:
     // a crafted browse+recursive call must not deep-enumerate the host.
     const browse = searchParams.get("browse") === "true";
+    if (browse) {
+      const adminError = requireAdmin(request);
+      if (adminError) return adminError;
+    }
     const recursive = searchParams.get("recursive") === "true" && !browse;
     // Optional recursion depth (recursive only), clamped so a caller can't ask
     // the server to walk an unbounded tree. Defaults to the historical 2.
@@ -30,7 +39,12 @@ export async function GET(request: NextRequest) {
     }
 
     const roots = getAllowedPathRoots();
-    const { allowed, resolved } = resolveSandboxedPath(inputPath, roots);
+    // Browse intentionally relaxes authorization, but still uses the shared
+    // lexical normalizer so `~` and relative paths behave as before.
+    const checked = browse
+      ? resolveSandboxedPath(inputPath, roots)
+      : await resolveRealSandboxedPath(inputPath, roots);
+    const { allowed, resolved } = checked;
     // Browse mode (the folder picker) intentionally LISTS directories outside the
     // registered workspace roots, so a user can navigate the filesystem to pick a new
     // project directory. It returns a directory listing only (entry names + their

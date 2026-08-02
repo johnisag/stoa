@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 
+const contextState = vi.hoisted(() => ({
+  sessions: [] as Array<Record<string, unknown>>,
+  statuses: [] as Array<Record<string, unknown>>,
+}));
+
 // Pin resolveBinary to null so buildAskArgs falls back to the BARE name, making
 // the argv assertions deterministic and identical on every OS (the real
 // resolveBinary would otherwise return an absolute .cmd path on Windows). isWindows
@@ -10,7 +15,18 @@ vi.mock("@/lib/platform", async (importOriginal) => {
   return { ...actual, resolveBinary: () => null };
 });
 
-import { buildAskArgs, buildAskPrompt } from "@/lib/ask";
+vi.mock("@/lib/db", () => ({
+  getDb: () => ({}),
+  queries: { getAllSessions: () => ({ all: () => contextState.sessions }) },
+}));
+vi.mock("@/lib/analytics/queries", () => ({
+  getAnalyticsReport: vi.fn(async () => null),
+}));
+vi.mock("@/lib/session-status", () => ({
+  computeManagedStatuses: vi.fn(async () => contextState.statuses),
+}));
+
+import { buildAskArgs, buildAskPrompt, gatherStoaContext } from "@/lib/ask";
 import { killTreeArgs } from "@/lib/platform";
 
 const PROMPT = "What is happening in my fleet?";
@@ -28,6 +44,53 @@ describe("killTreeArgs — Windows process-tree teardown on the ask timeout", ()
 
   it("POSIX: null — a plain child.kill() reaps the group", () => {
     expect(killTreeArgs(4242, false)).toBeNull();
+  });
+});
+
+describe("gatherStoaContext internal-session boundary", () => {
+  it("omits server-owned roster and live-screen data", async () => {
+    contextState.sessions = [
+      {
+        id: "visible",
+        name: "Visible",
+        agent_type: "claude",
+        status: "running",
+        working_directory: "/repo",
+        session_role: "interactive",
+      },
+      {
+        id: "internal",
+        name: "Managed supervisor",
+        agent_type: "claude",
+        status: "running",
+        working_directory: "/tmp/internal",
+        session_role: "fleet_supervisor",
+      },
+    ];
+    contextState.statuses = [
+      {
+        id: "visible",
+        name: "claude-visible",
+        status: "running",
+        lastLine: "ordinary output",
+        prompt: null,
+      },
+      {
+        id: "internal",
+        name: "claude-internal",
+        status: "waiting",
+        lastLine: "secret broker output",
+        prompt: { kind: "continue", line: "approve?" },
+      },
+    ];
+
+    const context = await gatherStoaContext();
+
+    expect(context).toContain("Visible");
+    expect(context).toContain("ordinary output");
+    expect(context).not.toContain("Managed supervisor");
+    expect(context).not.toContain("secret broker output");
+    expect(context).not.toContain("/tmp/internal");
   });
 });
 

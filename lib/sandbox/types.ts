@@ -41,8 +41,14 @@ export function coerceApprovalMode(value: unknown): ApprovalMode {
 
 /** WHAT to confine — the writable roots + whether network egress is allowed. */
 export interface SandboxPolicy {
-  /** Directories the agent may write to (its worktree set + git internals + ~/.stoa). */
+  /** Exact directories the agent may write to. */
   rwRoots: string[];
+  /** Authority directories hidden behind an empty tmpfs inside the sandbox. */
+  hiddenRoots?: string[];
+  /** Authority files outside hiddenRoots replaced by an empty read-only file. */
+  maskedPaths?: string[];
+  /** Server-authority environment variables removed before the agent starts. */
+  unsetEnv?: string[];
   /** false = cut egress (--unshare-net); true = inherit host net (model/MCP reachable). */
   allowNet: boolean;
 }

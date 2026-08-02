@@ -2,6 +2,10 @@ export const FLEET_RUN_JSON_BODY_MAX = 16 * 1024;
 export const FLEET_APPROVAL_JSON_BODY_MAX = 2 * 1024;
 export const FLEET_PLAN_JSON_BODY_MAX = 32 * 1024;
 export const FLEET_ARTIFACT_JSON_BODY_MAX = 12 * 1024;
+export const FLEET_SOURCE_JSON_BODY_MAX = 256 * 1024;
+export const FLEET_CAPABILITY_ISSUE_JSON_BODY_MAX = 64 * 1024;
+export const FLEET_CAPABILITY_ACTION_JSON_BODY_MAX = 64 * 1024;
+export const FLEET_APPROVAL_CONTROL_JSON_BODY_MAX = 128 * 1024;
 
 export async function readCappedJsonBody(
   request: Request,

@@ -3,6 +3,7 @@ import {
   pickConductorId,
 } from "../lib/conductor-marker";
 import { PROVIDER_IDS } from "../lib/providers/registry";
+import { FLEET_MCP_CAPABILITIES } from "../lib/fleet/mcp-capabilities";
 
 // Agents that can run a worker/step — the single source of truth shared with
 // the server-side validateSpec (PROVIDER_IDS minus the non-spawnable "shell").
@@ -12,24 +13,18 @@ export const SPAWNABLE_AGENTS = PROVIDER_IDS.filter(
   (id) => id !== "shell"
 ) as string[];
 
-const DIRECT_FLEET_TOOLS = new Set([
-  "fleet_list_runs",
-  "fleet_get_run",
-  "fleet_list_tasks",
-  "fleet_create_run",
-  "fleet_plan_run",
-  "fleet_approve_run",
-  "fleet_pause_run",
-  "fleet_resume_run",
-  "fleet_cancel_run",
-  "fleet_submit_artifact",
+const BLOCKED_FLEET_TOOLS = new Set([
+  "fleet_tick_run",
+  "fleet_cleanup_run",
+  "fleet_kill_worker",
+  "fleet_retry_task",
 ]);
 
 const STOA_URL = process.env.STOA_URL || "http://localhost:3011";
 
-// Conductor session ID: from CONDUCTOR_SESSION_ID (Claude/Codex bake it into the
-// MCP config env) or a `.stoa-conductor` marker in our cwd (Hermes, which strips
-// env vars from MCP children). Can still be overridden per tool call.
+// Conductor session ID: provider config maps the agent process's Stoa-injected
+// identity into CONDUCTOR_SESSION_ID; an old cwd marker is a compatibility
+// fallback. A tool argument is accepted only when no binding is present.
 const DEFAULT_CONDUCTOR_ID = resolveConductorSessionId(process.cwd());
 
 async function apiCall(path: string, options?: RequestInit) {
@@ -51,6 +46,99 @@ function getConductorId(
     args?.conductorId as string | undefined,
     DEFAULT_CONDUCTOR_ID
   );
+}
+
+type DirectFleetAction =
+  | "fleet:create"
+  | "fleet:plan"
+  | "fleet:approve"
+  | "fleet:start"
+  | "fleet:pause"
+  | "fleet:resume"
+  | "fleet:cancel"
+  | "fleet:submit-artifact"
+  | "fleet:merge"
+  | "fleet:land";
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function capabilityScope(
+  args: Record<string, unknown> | undefined,
+  action: DirectFleetAction
+) {
+  const boundHashKind = requireString(args, "boundHashKind");
+  if (!["plan", "execution", "head", "artifact"].includes(boundHashKind)) {
+    throw new Error("boundHashKind is invalid");
+  }
+  const attempt = args?.attempt;
+  if (attempt !== undefined && attempt !== null && !Number.isInteger(attempt)) {
+    throw new Error("attempt must be an integer or null");
+  }
+  return {
+    version: 1,
+    action,
+    runId: requireString(args, "runId"),
+    taskId: nullableString(args?.taskId),
+    workerId: nullableString(args?.workerId),
+    attempt: attempt == null ? null : attempt,
+    boundHash: {
+      kind: boundHashKind,
+      value: requireString(args, "boundHashValue"),
+    },
+  };
+}
+
+async function callFleetCapability(
+  args: Record<string, unknown> | undefined,
+  action: DirectFleetAction,
+  payload: unknown
+) {
+  return apiCall("/api/fleet/capabilities/action", {
+    method: "POST",
+    body: JSON.stringify({
+      token: requireString(args, "capabilityToken"),
+      scope: capabilityScope(args, action),
+      payload,
+    }),
+  });
+}
+
+async function callFleetRead(
+  args: Record<string, unknown> | undefined,
+  resource: "runs" | "run" | "tasks" | "supervisor"
+) {
+  const runId = resource === "runs" ? "*" : requireString(args, "runId");
+  return apiCall("/api/fleet/capabilities/action", {
+    method: "POST",
+    body: JSON.stringify({
+      token: requireString(args, "capabilityToken"),
+      scope: {
+        version: 1,
+        action: "fleet:read",
+        runId,
+        taskId: null,
+        workerId: null,
+        attempt: null,
+        boundHash: null,
+      },
+      payload: { resource },
+    }),
+  });
+}
+
+function fleetToolResult(result: Record<string, unknown>) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: result.error
+          ? `Error: ${String(result.error)}`
+          : JSON.stringify(result.result ?? result, null, 2),
+      },
+    ],
+  };
 }
 
 /** Require a non-empty string arg, else throw a clear error (handleToolCall's
@@ -88,7 +176,28 @@ export function oneLinePreview(value: string, max = 120): string {
 const ELICIT_POLL_INTERVAL_MS = 2000;
 const ELICIT_POLL_TIMEOUT_MS = 8 * 60 * 1000;
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("MCP request was cancelled");
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortReason(signal));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 interface ElicitPollResult {
   status: string;
@@ -96,16 +205,21 @@ interface ElicitPollResult {
   content: Record<string, unknown> | null;
 }
 
-async function pollElicit(id: string): Promise<ElicitPollResult> {
+async function pollElicit(
+  id: string,
+  signal?: AbortSignal
+): Promise<ElicitPollResult> {
   const deadline = Date.now() + ELICIT_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw abortReason(signal);
     // apiCall returns the parsed body regardless of HTTP status; a 404 body is
     // { status: "unknown" }, which is non-pending → we stop and report it.
     const res = (await apiCall(
-      `/api/mcp/elicit/${encodeURIComponent(id)}`
+      `/api/mcp/elicit/${encodeURIComponent(id)}`,
+      signal ? { signal } : undefined
     )) as ElicitPollResult;
     if (res?.status && res.status !== "pending") return res;
-    await sleep(ELICIT_POLL_INTERVAL_MS);
+    await sleep(ELICIT_POLL_INTERVAL_MS, signal);
   }
   return { status: "timeout", action: null, content: null };
 }
@@ -131,24 +245,110 @@ export function formatElicitResult(r: ElicitPollResult): string {
   return "The operator-input request is no longer available (treated as cancelled).";
 }
 
-export async function handleToolCall(request: {
+interface ToolCallRequest {
   params: { name: string; arguments?: Record<string, unknown> };
-}) {
+}
+
+interface ToolCallContext {
+  signal?: AbortSignal;
+}
+
+interface TextToolResult {
+  [key: string]: unknown;
+  content: Array<{ type: "text"; text: string }>;
+  isError?: true;
+}
+
+async function executeToolCall(
+  request: ToolCallRequest,
+  context: ToolCallContext
+) {
   const { name } = request.params;
   const args = request.params.arguments;
 
   try {
-    if (DIRECT_FLEET_TOOLS.has(name)) {
+    if (BLOCKED_FLEET_TOOLS.has(name)) {
       return {
         content: [
           {
             type: "text" as const,
-            text: "Error: direct Fleet access is not exposed through MCP; use fleet_request_action to queue an operator request.",
+            text: "Error: this privileged Fleet operation is not exposed through MCP.",
           },
         ],
       };
     }
     switch (name) {
+      case "fleet_get_capabilities":
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(FLEET_MCP_CAPABILITIES, null, 2),
+            },
+          ],
+        };
+      case "fleet_list_runs": {
+        return fleetToolResult(await callFleetRead(args, "runs"));
+      }
+      case "fleet_get_run": {
+        return fleetToolResult(await callFleetRead(args, "run"));
+      }
+      case "fleet_list_tasks": {
+        return fleetToolResult(await callFleetRead(args, "tasks"));
+      }
+      case "fleet_supervisor_snapshot": {
+        return fleetToolResult(await callFleetRead(args, "supervisor"));
+      }
+      case "fleet_create_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:create", args?.draft)
+        );
+      case "fleet_plan_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:plan", {
+            planText: args?.planText,
+          })
+        );
+      case "fleet_approve_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:approve", {})
+        );
+      case "fleet_start_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:start", {})
+        );
+      case "fleet_pause_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:pause", {})
+        );
+      case "fleet_resume_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:resume", {})
+        );
+      case "fleet_cancel_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:cancel", {})
+        );
+      case "fleet_submit_artifact":
+        return fleetToolResult(
+          await callFleetCapability(
+            args,
+            "fleet:submit-artifact",
+            args?.artifact
+          )
+        );
+      case "fleet_merge_run":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:merge", {
+            target: args?.target,
+          })
+        );
+      case "fleet_authorize_landing":
+        return fleetToolResult(
+          await callFleetCapability(args, "fleet:land", {
+            target: args?.target,
+          })
+        );
       case "fleet_request_action": {
         const conductorId = getConductorId(args);
         if (!conductorId) throw new Error("conductorId is required");
@@ -295,13 +495,19 @@ export async function handleToolCall(request: {
         const result = await apiCall(
           `/api/orchestrate/workers/${encodeURIComponent(requireString(args, "workerId"))}?lines=${clampLines(args?.lines)}`
         );
+        if (result.error) {
+          return {
+            content: [
+              { type: "text" as const, text: `Error: ${result.error}` },
+            ],
+            isError: true as const,
+          };
+        }
         return {
           content: [
             {
               type: "text" as const,
-              text: result.error
-                ? `Error: ${result.error}`
-                : result.output || "(no output)",
+              text: result.output || "(no output)",
             },
           ],
         };
@@ -411,8 +617,9 @@ export async function handleToolCall(request: {
       }
 
       case "get_pipeline": {
+        const runId = requireString(args, "runId");
         const result = await apiCall(
-          `/api/pipelines/${encodeURIComponent(String(args?.runId))}`
+          `/api/pipelines/${encodeURIComponent(runId)}`
         );
         if (result.error) {
           return {
@@ -951,7 +1158,7 @@ export async function handleToolCall(request: {
           };
         }
         // Block until the operator answers, the request expires, or we time out.
-        const result = await pollElicit(created.elicitationId);
+        const result = await pollElicit(created.elicitationId, context.signal);
         return {
           content: [
             { type: "text" as const, text: formatElicitResult(result) },
@@ -961,10 +1168,16 @@ export async function handleToolCall(request: {
 
       default:
         return {
-          content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
+          content: [
+            { type: "text" as const, text: `Error: Unknown tool: ${name}` },
+          ],
+          isError: true as const,
         };
     }
   } catch (error) {
+    // SDK v2 aborts the request context when the peer cancels or disconnects.
+    // Let it terminate the exchange instead of manufacturing a completed result.
+    if (context.signal?.aborted) throw error;
     return {
       content: [
         {
@@ -972,6 +1185,29 @@ export async function handleToolCall(request: {
           text: `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
         },
       ],
+      isError: true as const,
     };
   }
+}
+
+/**
+ * Execute one orchestration tool. Tool/business failures are MCP tool errors so
+ * hosts can pass the actionable text back to the model. The server boundary
+ * separately upgrades unknown tool names to a JSON-RPC protocol error.
+ */
+export async function handleToolCall(
+  request: ToolCallRequest,
+  context: ToolCallContext = {}
+): Promise<TextToolResult> {
+  const result: TextToolResult = await executeToolCall(request, context);
+  const first = result.content[0];
+  const canStartWithErrorAsData =
+    request.params.name === "get_worker_output" ||
+    request.params.name === "memory_get";
+  const failed =
+    result.isError === true ||
+    (!canStartWithErrorAsData && first?.text.startsWith("Error:"));
+  return failed && result.isError !== true
+    ? { ...result, isError: true }
+    : result;
 }

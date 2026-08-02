@@ -43,6 +43,17 @@ export interface CreateOptions {
    * backend — avoids the bash banner so it works on native Windows. */
   binary?: string;
   args?: string[];
+  /** Extra environment overlaid on the spawned process. */
+  env?: Record<string, string>;
+  /**
+   * Whether `env` overlays the parent environment or replaces it completely.
+   * Replacement mode is for narrowly-scoped trusted launch profiles; callers
+   * must supply every OS/runtime variable their child needs.
+   */
+  envMode?: "inherit" | "replace";
+  /** Exact server-validated Fleet attempt directories. Container transports may
+   * bind these paths; ordinary backends ignore the metadata. */
+  fleetWritableRoots?: string[];
 }
 
 export interface SendOptions {

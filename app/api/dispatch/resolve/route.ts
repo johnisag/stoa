@@ -4,7 +4,8 @@ import { isGitRepo, getRepoSlug, getDefaultBranch } from "@/lib/git";
 import { expandHome } from "@/lib/platform";
 import {
   getAllowedPathRoots,
-  resolveSandboxedPathOrHome,
+  requireAdmin,
+  resolveRealSandboxedPathOrHome,
 } from "@/lib/api-security";
 
 /**
@@ -16,6 +17,9 @@ import {
  * source (a Stoa project / a scanned repo / a GitHub clone) instead of typing.
  */
 export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   const rawPath = request.nextUrl.searchParams.get("path")?.trim();
   if (!rawPath) {
     return NextResponse.json({ error: "path is required" }, { status: 400 });
@@ -32,7 +36,7 @@ export async function GET(request: NextRequest) {
 
   // Restrict to the home tree or registered project/repo roots.
   const roots = getAllowedPathRoots();
-  const { allowed } = resolveSandboxedPathOrHome(expanded, roots);
+  const { allowed } = await resolveRealSandboxedPathOrHome(expanded, roots);
   if (!allowed) {
     return NextResponse.json(
       { error: "path is outside the allowed workspace" },

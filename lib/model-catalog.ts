@@ -42,8 +42,8 @@ const MODEL_OPTIONS_BY_AGENT: Partial<Record<AgentType, ModelOption[]>> = {
 // Hermes is free-text (no dropdown), but Stoa gives it an explicit default so a
 // fresh session launches `hermes -m <model>` rather than relying on whatever
 // Hermes happens to be configured for. Keep it aligned with the team's current
-// Hermes backend default: OpenAI Codex / GPT-5.5.
-export const HERMES_DEFAULT_MODEL = "gpt-5.5";
+// Hermes backend default: Moonshot AI / Kimi K3.
+export const HERMES_DEFAULT_MODEL = "kimi-k3";
 
 const DEFAULT_MODEL_BY_AGENT: Partial<Record<AgentType, string>> = {
   claude: "sonnet",
@@ -53,8 +53,9 @@ const DEFAULT_MODEL_BY_AGENT: Partial<Record<AgentType, string>> = {
 
 // Agents whose models are dynamic/provider-specific (no fixed catalog). For
 // these the UI offers a FREE-TEXT model field instead of a dropdown, and any
-// non-empty value is accepted verbatim. Empty means "use the agent's own
-// default" (no model flag passed). Hermes live-fetches models via `hermes model`.
+// non-empty safe value is accepted verbatim. Empty selects the Stoa default
+// above when one exists; otherwise no model flag is passed and the agent owns
+// its default. Hermes live-fetches models via `hermes model`.
 // Kilo (free-text "provider/model" via the Kilo gateway, 500+) and Kimi
 // (config-defined aliases) are likewise dynamic — no static catalog, so the UI
 // shows a free-text field and any foreign static model is dropped to the default.
@@ -71,7 +72,10 @@ export function isFreeTextModelAgent(agentType: AgentType): boolean {
  * leaking into a free-text agent like Hermes, which would then forward the bogus
  * name to its backend (`hermes -m opus` → Anthropic 404 model: opus).
  */
-function isForeignStaticModel(agentType: AgentType, model: string): boolean {
+export function isForeignStaticModel(
+  agentType: AgentType,
+  model: string
+): boolean {
   return Object.entries(MODEL_OPTIONS_BY_AGENT).some(
     ([id, options]) =>
       id !== agentType &&
@@ -119,6 +123,62 @@ export function isSupportedModelForAgent(
   return getModelOptions(agentType).some((option) => option.value === model);
 }
 
+export type ExactModelResolution =
+  { ok: true; model: string | null } | { ok: false; error: string };
+
+/**
+ * Resolve the exact model contract for a provider without silently changing an
+ * explicit value. Static providers accept only their catalog; dynamic
+ * providers accept shell-safe non-empty ids except values owned by another
+ * provider's static catalog. Missing input selects the provider-owned default
+ * (or `null` when that provider intentionally delegates to its own
+ * configuration).
+ *
+ * This is deliberately stricter than `resolveModelForAgent`, whose forgiving
+ * fallback remains useful for legacy interactive forms. Durable/executable
+ * contracts should use this function so their persisted value is the value
+ * that will actually be launched.
+ */
+export function resolveExactModelForAgent(
+  agentType: AgentType,
+  model: string | null | undefined
+): ExactModelResolution {
+  if (agentType === "shell") {
+    return { ok: false, error: "shell sessions do not have an agent model" };
+  }
+
+  const normalized =
+    typeof model === "string" && model.trim() ? model.trim() : null;
+  if (!normalized) {
+    return { ok: true, model: getDefaultModelForAgent(agentType) || null };
+  }
+  if (!isSafeModel(normalized)) {
+    return {
+      ok: false,
+      error: `model is not a safe ${agentType} model id`,
+    };
+  }
+  if (
+    isFreeTextModelAgent(agentType) &&
+    isForeignStaticModel(agentType, normalized)
+  ) {
+    return {
+      ok: false,
+      error: `model belongs to a different provider catalog, not ${agentType}`,
+    };
+  }
+  if (
+    !isFreeTextModelAgent(agentType) &&
+    !isSupportedModelForAgent(agentType, normalized)
+  ) {
+    return {
+      ok: false,
+      error: `model is not supported by ${agentType}`,
+    };
+  }
+  return { ok: true, model: normalized };
+}
+
 export function resolveModelForAgent(
   agentType: AgentType,
   model: string | null | undefined
@@ -127,7 +187,7 @@ export function resolveModelForAgent(
     typeof model === "string" && model.trim() ? model.trim() : null;
 
   // Free-text agents: pass a genuine typed model through as-is. But fall back to
-  // the agent's configured default for (a) empty input and (b) a static model
+  // the provider's Stoa/configured default for (a) empty input and (b) a static model
   // that belongs to ANOTHER agent's catalog (e.g. a project's "opus"/"sonnet"
   // default_model) — forwarding that would 404 (`hermes -m opus`). A genuine
   // free-text model (provider-qualified, e.g. "anthropic/claude-opus-4.8")
@@ -151,11 +211,11 @@ export function resolveModelForAgent(
  * `nextAgent`, carrying the previously-selected `currentModel` only when it
  * makes sense.
  *
- * Switching TO a free-text agent always resets to its default (empty) — a
- * static model name (e.g. "sonnet") accepted verbatim by a free-text agent
- * would otherwise leak into its field and be passed as a bogus `-m`. Switching
- * to a static agent keeps the current model if it's valid there, else the
- * agent's default.
+ * Switching TO a free-text agent always resets to its Stoa default (empty for
+ * providers without one, `kimi-k3` for Hermes) — a static model name (e.g.
+ * "sonnet") accepted verbatim by a free-text agent would otherwise leak into
+ * its field and be passed as a bogus `-m`. Switching to a static agent keeps
+ * the current model if it's valid there, else the agent's default.
  */
 export function nextModelOnAgentChange(
   nextAgent: AgentType,

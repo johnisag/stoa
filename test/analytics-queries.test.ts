@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
+import { internalSessionProfile } from "./internal-session-fixture";
 
 const state = vi.hoisted(() => ({ db: null as unknown }));
 vi.mock("@/lib/db", async (importOriginal) => {
@@ -44,14 +45,20 @@ function addSession(
     status?: string;
     createdMsAgo?: number;
     pr_status?: string | null;
+    session_role?: string;
   } = {}
 ) {
   const createdMs = NOW - (over.createdMsAgo ?? DAY);
   const dt = new Date(createdMs).toISOString().slice(0, 19).replace("T", " ");
+  const role = over.session_role ?? "interactive";
+  const profile = role === "interactive" ? null : internalSessionProfile(role);
   db()
     .prepare(
-      `INSERT INTO sessions (id, name, tmux_name, agent_type, model, status, working_directory, created_at, updated_at, pr_status)
-       VALUES (?, ?, ?, ?, ?, ?, '~', ?, ?, ?)`
+      `INSERT INTO sessions
+       (id, name, tmux_name, agent_type, model, status, working_directory,
+        created_at, updated_at, pr_status, session_role, launch_profile_json,
+        launch_profile_hash)
+       VALUES (?, ?, ?, ?, ?, ?, '~', ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -62,7 +69,10 @@ function addSession(
       over.status ?? "idle",
       dt,
       dt,
-      over.pr_status ?? null
+      over.pr_status ?? null,
+      role,
+      profile?.profileJson ?? null,
+      profile?.profileHash ?? null
     );
 }
 
@@ -205,6 +215,21 @@ describe("getAnalyticsReport", () => {
     const r = await getAnalyticsReport(14, NOW);
     expect(r.performance.totalCostUsd).toBe(2.5);
     expect(r.performance.totalTokens).toBe(150);
+  });
+
+  it("excludes server-owned sessions, events, and transcript cost reads", async () => {
+    addSession("visible");
+    addSession("internal", { session_role: "fleet_supervisor" });
+    addEvent("claude-visible", "input_text", NOW - 1000, { length: 1 });
+    addEvent("claude-internal", "input_text", NOW - 900, { length: 99 });
+
+    const r = await getAnalyticsReport(14, NOW);
+
+    expect(r.performance.sessionCount).toBe(1);
+    expect(r.performance.totalInputEvents).toBe(1);
+    expect(computeSessionCosts).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "visible" }),
+    ]);
   });
 
   it("returns an empty-but-valid report when there is no data", async () => {

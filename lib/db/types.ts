@@ -37,11 +37,20 @@ export interface Session {
   conductor_session_id: string | null;
   worker_task: string | null;
   worker_status: "pending" | "running" | "completed" | "failed" | null;
+  /** Exact, immutable subsystem ownership key. Fleet restart recovery uses
+   * equality on this field and never searches prompt text for ownership. */
+  fleet_ownership_key?: string | null;
   // Conductor launch args: extra argv tokens replayed at every spawn to wire the
   // stoa MCP server into a provider with no on-disk config (Codex's
   // `-c mcp_servers.stoa.*`). NULL for non-conductors and file-configured
-  // providers (Claude's .mcp.json). JSON-encoded string[].
+  // providers (Claude/Kilo/Kimi). JSON-encoded string[].
   mcp_launch_args: string | null;
+  /** Immutable launch identity for server-owned sessions. Generic user sessions
+   * use `interactive` and have no profile; Fleet supervisors use a versioned,
+   * hashed no-tools broker profile and must never be recreated generically. */
+  session_role?: string | null;
+  launch_profile_json?: string | null;
+  launch_profile_hash?: string | null;
   /** A native fork inherits its parent's transcript; this is the parent's
    * cumulative usage AT FORK TIME (JSON TokenUsage), netted out by the cost path so
    * only the fork's own spend counts. NULL for non-forks. Optional so existing

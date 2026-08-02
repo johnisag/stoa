@@ -31,11 +31,11 @@ export interface ProviderDefinition {
   // Auto-approve configuration
   autoApproveFlag?: string; // Flag to skip permission prompts
 
-  // Orchestration (conductor): can this provider pick up the stoa MCP server
-  // that "Enable orchestration" writes? Today that wiring is a `.mcp.json`,
-  // which is Claude Code's convention only — Codex (`~/.codex/config.toml`) and
-  // Hermes (`hermes mcp add`) use their own stores, so the box must not pretend
-  // to work for them. Flip this on per provider once its convention is wired.
+  // Orchestration (conductor): does Stoa have a complete provider-native way to
+  // expose its MCP server on first launch? This capability may be backed by a
+  // project config (Claude/Kilo/Kimi), per-launch argv (Codex), or a provider's
+  // registration mechanism (Hermes). Do not enable it without corresponding
+  // session-create and repair-route wiring.
   supportsOrchestration?: boolean;
 
   // Session management
@@ -151,8 +151,10 @@ export const PROVIDERS: ProviderDefinition[] = [
     //    hard-killed session may not be resumable (degrades to a fresh session).
     //  - modelFlag is "-m": Hermes models are dynamic/provider-specific
     //    (`hermes model` live-fetches /v1/models), so Stoa offers a FREE-TEXT
-    //    model field (no static list) rather than a dropdown. An empty model
-    //    leaves Hermes on its own configured default (no -m passed).
+    //    model field (no static list) rather than a dropdown. The low-level
+    //    builder omits `-m` for an empty token, while every Stoa session/Fleet
+    //    entry point resolves missing Hermes input to the explicit `kimi-k3`
+    //    default before it reaches this builder.
     //    restoresModelOnResume is deliberately UNSET: Hermes re-asserts `-m` on
     //    resume (the long-standing behavior) — whether its TUI restores its own
     //    model is unverified, so we don't drop the flag.
@@ -162,9 +164,10 @@ export const PROVIDERS: ProviderDefinition[] = [
     modelFlag: "-m",
     supportsResume: true,
     supportsFork: false,
-    // Wired via a one-time global `hermes mcp add` + a `.stoa-conductor` marker
-    // in the working dir (Hermes strips env vars from MCP children, so the
-    // conductor id can't ride the process env). See lib/mcp-config.ts.
+    // Wired via a Stoa-owned global `hermes mcp add` entry whose generic env
+    // mapping receives the per-process STOA_CONDUCTOR_SESSION_ID. The legacy
+    // `.stoa-conductor` marker remains read-only fallback only. See
+    // lib/mcp-config.ts.
     supportsOrchestration: true,
   },
   {
@@ -194,6 +197,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     modelFlag: "--model",
     supportsResume: false,
     supportsFork: false,
+    // Project-local `.kilo/kilo.json`, using Kilo's `mcp` local-server schema.
     supportsOrchestration: true,
   },
   {
@@ -228,6 +232,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     modelFlag: "-m",
     supportsResume: true,
     supportsFork: false,
+    // Project-local `.kimi-code/mcp.json`, using Kimi's `mcpServers` schema.
     supportsOrchestration: true,
   },
   {

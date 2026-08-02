@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execFileSync } from "child_process";
 import { expandPath } from "@/lib/git-status";
-import { getAllowedPathRoots, resolveSandboxedPath } from "@/lib/api-security";
+import {
+  getAllowedPathRoots,
+  requireAdmin,
+  resolveRealSandboxedPath,
+} from "@/lib/api-security";
 
 /**
  * GET /api/git/file-content?path=...&file=...
  * Get file content from git HEAD (original version before changes)
  */
 export async function GET(request: NextRequest) {
+  const adminError = requireAdmin(request);
+  if (adminError) return adminError;
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const rawPath = searchParams.get("path");
@@ -29,7 +36,7 @@ export async function GET(request: NextRequest) {
 
     const expandedPath = expandPath(rawPath);
     const roots = getAllowedPathRoots();
-    const { allowed } = resolveSandboxedPath(expandedPath, roots);
+    const { allowed } = await resolveRealSandboxedPath(expandedPath, roots);
     if (!allowed) {
       return NextResponse.json(
         { error: "Path is outside the allowed workspace" },

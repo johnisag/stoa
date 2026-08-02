@@ -4,11 +4,14 @@ import {
   readCappedJsonBody,
 } from "@/lib/fleet/http";
 import { approveFleetRunPlan } from "@/lib/fleet/service";
+import { requireAdmin } from "@/lib/api-security";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const denied = requireAdmin(request);
+  if (denied) return denied;
   const { id } = await params;
   const body = await readCappedJsonBody(request, FLEET_APPROVAL_JSON_BODY_MAX);
   if ("error" in body) {
@@ -16,7 +19,7 @@ export async function POST(
   }
 
   try {
-    const result = approveFleetRunPlan(id, body.body);
+    const result = approveFleetRunPlan(id, body.body, "operator");
     if ("error" in result) {
       return NextResponse.json(
         { error: result.error },

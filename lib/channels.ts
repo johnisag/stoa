@@ -27,6 +27,7 @@
 
 import { randomUUID } from "crypto";
 import { db, getDb, queries, type ChannelMessageRow, type Session } from "./db";
+import { isInteractiveSessionRole } from "./session-role";
 
 /** Max message body length — a coordination message, not a document. Bounded
  * tighter than a note because the opt-in push pastes it into a live terminal. */
@@ -74,6 +75,28 @@ export function channelPairKey(a: string, b: string): string {
   return [a, b].sort().join("__");
 }
 
+function interactiveSession(id: string): Session | null {
+  const session = queries.getSession(db).get(id) as Session | undefined;
+  return session && isInteractiveSessionRole(session) ? session : null;
+}
+
+function requireInteractiveSession(id: string): Session {
+  const session = interactiveSession(id);
+  if (!session) {
+    // Use the same response for missing and server-owned ids so this generic
+    // service neither addresses nor discloses internal sessions.
+    throw new ChannelValidationError(`no session with id "${id}"`);
+  }
+  return session;
+}
+
+function isInteractiveMessage(message: ChannelMessageRow): boolean {
+  return (
+    interactiveSession(message.from_session_id) !== null &&
+    interactiveSession(message.to_session_id) !== null
+  );
+}
+
 /** Send a message from one session to another. Validates the body, rejects a
  * self-send, and requires BOTH ends to be known sessions (a typo'd id is far more
  * likely than messaging a not-yet-created session — and validating `from` stops a
@@ -93,13 +116,8 @@ export function sendChannelMessage(input: {
   if (from === to) {
     throw new ChannelValidationError("cannot send a message to yourself");
   }
-  const getSession = queries.getSession(db);
-  if (!getSession.get(from)) {
-    throw new ChannelValidationError(`no session with id "${from}"`);
-  }
-  if (!getSession.get(to)) {
-    throw new ChannelValidationError(`no session with id "${to}"`);
-  }
+  requireInteractiveSession(from);
+  requireInteractiveSession(to);
   const id = randomUUID();
   queries
     .createChannelMessage(db)
@@ -119,9 +137,12 @@ function getChannelMessage(id: string): ChannelMessageRow | null {
 /** Peek the unread inbox for a session (NON-consuming), oldest first. */
 export function peekInbox(sessionId: string): ChannelMessageRow[] {
   const id = normalizeSessionId(sessionId, "session");
-  return queries
-    .listChannelInbox(db)
-    .all(id, CHANNEL_LIST_LIMIT) as ChannelMessageRow[];
+  requireInteractiveSession(id);
+  return (
+    queries
+      .listChannelInbox(db)
+      .all(id, CHANNEL_LIST_LIMIT) as ChannelMessageRow[]
+  ).filter(isInteractiveMessage);
 }
 
 /** Read + CONSUME the unread inbox for a session: returns the unread messages
@@ -131,10 +152,13 @@ export function peekInbox(sessionId: string): ChannelMessageRow[] {
  * transaction's SELECT runs after the first's marks and sees an empty inbox. */
 export function consumeInbox(sessionId: string): ChannelMessageRow[] {
   const id = normalizeSessionId(sessionId, "session");
+  requireInteractiveSession(id);
   const list = queries.listChannelInbox(db);
   const mark = queries.markChannelRead(db);
   return getDb().transaction(() => {
-    const unread = list.all(id, CHANNEL_LIST_LIMIT) as ChannelMessageRow[];
+    const unread = (
+      list.all(id, CHANNEL_LIST_LIMIT) as ChannelMessageRow[]
+    ).filter(isInteractiveMessage);
     for (const m of unread) mark.run(m.id);
     return unread;
   })();
@@ -144,10 +168,12 @@ export function consumeInbox(sessionId: string): ChannelMessageRow[] {
  * push delivers this one, then marks it delivered. Returns null when the inbox is
  * empty. */
 export function nextUnreadMessage(sessionId: string): ChannelMessageRow | null {
-  return (
-    (queries.nextChannelInbox(db).get(sessionId) as
-      ChannelMessageRow | undefined) ?? null
-  );
+  const id = normalizeSessionId(sessionId, "session");
+  requireInteractiveSession(id);
+  const unread = queries
+    .listChannelInbox(db)
+    .all(id, CHANNEL_LIST_LIMIT) as ChannelMessageRow[];
+  return unread.find(isInteractiveMessage) ?? null;
 }
 
 /**
@@ -164,6 +190,8 @@ export function nextUnreadMessage(sessionId: string): ChannelMessageRow | null {
  * pushed copy is skipped and the pulled/pushed state stays coherent.
  */
 export function claimDelivery(id: string): boolean {
+  const message = getChannelMessage(id);
+  if (!message || !isInteractiveMessage(message)) return false;
   return queries.markChannelDelivered(db).run(id).changes === 1;
 }
 
@@ -195,7 +223,15 @@ export function sessionsWithPendingDelivery(): string[] {
     queries.listPendingChannelRecipients(db).all() as {
       to_session_id: string;
     }[]
-  ).map((r) => r.to_session_id);
+  )
+    .map((r) => r.to_session_id)
+    .filter((id) => {
+      if (!interactiveSession(id)) return false;
+      const unread = queries
+        .listChannelInbox(db)
+        .all(id, CHANNEL_LIST_LIMIT) as ChannelMessageRow[];
+      return unread.some(isInteractiveMessage);
+    });
 }
 
 /** The full conversation between two sessions (both directions), oldest first.
@@ -203,7 +239,11 @@ export function sessionsWithPendingDelivery(): string[] {
 export function listThread(a: unknown, b: unknown): ChannelMessageRow[] {
   const idA = normalizeSessionId(a, "session");
   const idB = normalizeSessionId(b, "peer");
-  return queries
-    .listChannelThread(db)
-    .all(channelPairKey(idA, idB), CHANNEL_LIST_LIMIT) as ChannelMessageRow[];
+  requireInteractiveSession(idA);
+  requireInteractiveSession(idB);
+  return (
+    queries
+      .listChannelThread(db)
+      .all(channelPairKey(idA, idB), CHANNEL_LIST_LIMIT) as ChannelMessageRow[]
+  ).filter(isInteractiveMessage);
 }

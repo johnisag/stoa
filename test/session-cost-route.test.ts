@@ -11,6 +11,7 @@ import {
 import Database from "better-sqlite3";
 import { createSchema } from "../lib/db/schema";
 import { runMigrations } from "../lib/db/migrations";
+import { internalSessionProfile } from "./internal-session-fixture";
 
 // GET /api/sessions/cost feeds the cost UI AND is the same computation the
 // budget-kill / budget-park loops run — #22 locks its contract: per-session
@@ -53,7 +54,32 @@ function insertSession(opts: {
   agent?: string;
   model?: string | null;
   claudeSessionId?: string | null;
+  role?: string;
 }) {
+  if (opts.role && opts.role !== "interactive") {
+    const profile = internalSessionProfile(opts.role);
+    db()
+      .prepare(
+        `INSERT INTO sessions (
+          id, name, tmux_name, working_directory, model, group_path,
+          agent_type, auto_approve, session_role, claude_session_id,
+          launch_profile_json, launch_profile_hash
+        ) VALUES (?, ?, ?, ?, ?, 'sessions', ?, 0, ?, ?, ?, ?)`
+      )
+      .run(
+        opts.id,
+        `sess-${opts.id}`,
+        opts.id,
+        "/repo",
+        opts.model === undefined ? "claude-sonnet-4-6" : opts.model,
+        opts.agent ?? "claude",
+        opts.role,
+        opts.claudeSessionId ?? `cid-${opts.id}`,
+        profile.profileJson,
+        profile.profileHash
+      );
+    return;
+  }
   queries.createSession(db()).run(
     opts.id,
     `sess-${opts.id}`,
@@ -179,6 +205,25 @@ describe("GET /api/sessions/cost (#22 — never 500s on per-session failures)", 
     const body = await res.json();
     expect(body.budget).toEqual({ softUsd: 1, hardUsd: null });
     expect(body.levels["pricey"]).toBe("soft");
+  });
+
+  it("does not read, report, or persist costs for server-owned sessions", async () => {
+    insertSession({ id: "internal", role: "fleet_supervisor" });
+    vi.mocked(readClaudeTranscriptRaw).mockResolvedValue(
+      usageLine(1_000_000, 0)
+    );
+
+    const res = await GET();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.sessions).toEqual({});
+    expect(readClaudeTranscriptRaw).not.toHaveBeenCalled();
+    expect(
+      db().prepare("SELECT COUNT(*) AS n FROM session_costs").get() as {
+        n: number;
+      }
+    ).toEqual({ n: 0 });
   });
 
   it("a catastrophic DB failure is a CLEAN 500 JSON error, not a crash", async () => {

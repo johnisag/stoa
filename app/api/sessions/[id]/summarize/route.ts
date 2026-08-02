@@ -25,6 +25,7 @@ import {
   homeDir,
 } from "@/lib/platform";
 import { runClaudeOneshot } from "@/lib/claude-oneshot";
+import { isGenericSessionLaunchAllowed } from "@/lib/session-launch";
 
 const backend = getSessionBackend();
 
@@ -217,6 +218,12 @@ export async function GET(
     if (!session) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
+    if (!isGenericSessionLaunchAllowed(session)) {
+      return NextResponse.json(
+        { error: "Internal sessions cannot be summarized or forked" },
+        { status: 409 }
+      );
+    }
 
     // Use the session's live backend key (its tmux_name) so a renamed session
     // still resolves to the running pty/tmux — a bare {provider}-{id} key would
@@ -265,6 +272,12 @@ export async function POST(
 
     if (!session) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+    if (!isGenericSessionLaunchAllowed(session)) {
+      return NextResponse.json(
+        { error: "Internal sessions cannot be summarized or forked" },
+        { status: 409 }
+      );
     }
 
     // Use the session's live backend key (its tmux_name) so a renamed session

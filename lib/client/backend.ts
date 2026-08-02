@@ -8,7 +8,10 @@
  * structured spawn params the pty attach protocol needs from a Session.
  */
 
-import { buildAgentArgsForSession } from "@/lib/session-launch";
+import {
+  buildAgentArgsForSession,
+  sessionLaunchEnv,
+} from "@/lib/session-launch";
 import type { Session } from "@/lib/db";
 
 let cached: "pty" | "tmux" | null = null;
@@ -32,10 +35,40 @@ export async function getActiveBackend(): Promise<"pty" | "tmux"> {
   }
 }
 
+/** Ask the server-owned tmux backend to create a session, then return its exact
+ * backend key for the terminal's attach-only command. */
+export async function launchTmuxSession(
+  sessionId: string,
+  initialPrompt?: string
+): Promise<string> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/launch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initialPrompt }),
+    }
+  );
+  const data = (await response.json().catch(() => null)) as {
+    error?: unknown;
+    sessionName?: unknown;
+  } | null;
+  if (!response.ok) {
+    throw new Error(
+      typeof data?.error === "string" ? data.error : "Failed to launch session"
+    );
+  }
+  if (typeof data?.sessionName !== "string" || !data.sessionName) {
+    throw new Error("Session launch returned an invalid backend key");
+  }
+  return data.sessionName;
+}
+
 export interface SessionSpawn {
   binary: string;
   args: string[];
   cwd: string;
+  env: Record<string, string>;
 }
 
 /**
@@ -64,5 +97,5 @@ export function buildSpawnForSession(
   // native-fork parent resolution all live there so no launch path can drift or
   // skip the clamp. A shell session yields an empty argv.
   const { binary, args } = buildAgentArgsForSession(session, opts);
-  return { binary, args, cwd };
+  return { binary, args, cwd, env: sessionLaunchEnv(session) };
 }

@@ -138,11 +138,11 @@ export function NewProjectDialog({
             <label className="text-sm font-medium">Default Model</label>
             {isFreeTextModelAgent(form.agentType) ? (
               // Dynamic-model agents (e.g. Hermes): free-text instead of a list.
-              // Blank = the agent's own default (no model flag passed).
+              // Blank selects Stoa's/provider's trusted default.
               <Input
                 value={form.defaultModel}
                 onChange={(e) => form.setDefaultModel(e.target.value)}
-                placeholder="e.g. anthropic/claude-sonnet-4.6 — blank for the agent default"
+                placeholder="e.g. kimi-k3 or provider/model — blank for the trusted default"
               />
             ) : (
               <Select

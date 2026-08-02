@@ -28,6 +28,53 @@ import path from "path";
 import { isWindows } from "../../platform";
 
 /**
+ * Bump this whenever accepting an older daemon could change the meaning of a
+ * request. The web server and the long-lived daemon can outlive each other
+ * during an upgrade, so TypeScript's shared types are not a wire-compatibility
+ * guarantee.
+ */
+export const PTY_HOST_PROTOCOL_VERSION = 2;
+
+export const PTY_HOST_REQUIRED_CAPABILITIES = [
+  "spawn.envMode.replace",
+  "spawn.fleetWritableRoots",
+] as const;
+
+export type PtyHostCapability = (typeof PTY_HOST_REQUIRED_CAPABILITIES)[number];
+
+export interface PtyHostHandshake {
+  protocolVersion: number;
+  capabilities: PtyHostCapability[];
+}
+
+export function currentPtyHostHandshake(): PtyHostHandshake {
+  return {
+    protocolVersion: PTY_HOST_PROTOCOL_VERSION,
+    capabilities: [...PTY_HOST_REQUIRED_CAPABILITIES],
+  };
+}
+
+/** Return a user-facing reason when a surviving daemon is unsafe to reuse. */
+export function ptyHostCompatibilityError(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return "daemon did not return a protocol handshake";
+  }
+  const candidate = value as Partial<PtyHostHandshake>;
+  if (candidate.protocolVersion !== PTY_HOST_PROTOCOL_VERSION) {
+    return `daemon protocol ${String(candidate.protocolVersion)} is incompatible with required protocol ${PTY_HOST_PROTOCOL_VERSION}`;
+  }
+  if (!Array.isArray(candidate.capabilities)) {
+    return "daemon did not advertise capabilities";
+  }
+  for (const capability of PTY_HOST_REQUIRED_CAPABILITIES) {
+    if (!candidate.capabilities.includes(capability)) {
+      return `daemon is missing required capability ${capability}`;
+    }
+  }
+  return null;
+}
+
+/**
  * A short, stable per-user token so two users (or two installs) on one machine
  * don't bind/connect the SAME global pipe/socket. uid on POSIX (cheap + stable);
  * the username elsewhere (uid is -1 on Windows). Hashed to a few base-36 chars so
@@ -86,6 +133,8 @@ export interface SpawnSpecMsg {
   cols?: number;
   rows?: number;
   env?: Record<string, string>;
+  envMode?: "inherit" | "replace";
+  fleetWritableRoots?: string[];
 }
 
 // Client -> Host
@@ -118,7 +167,13 @@ export type ClientMessage =
   | { t: "listActivity"; id: number }
   | { t: "panePath"; id: number; key: string }
   | { t: "pid"; id: number; key: string }
-  | { t: "ping"; id: number };
+  | {
+      t: "ping";
+      id: number;
+      /** Explicit negotiation data; legacy daemons ignore these fields. */
+      protocolVersion?: number;
+      requiredCapabilities?: PtyHostCapability[];
+    };
 
 // Host -> Client
 export type HostMessage =

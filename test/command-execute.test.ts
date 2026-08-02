@@ -18,6 +18,7 @@ import {
 import Database from "better-sqlite3";
 import { createSchema } from "@/lib/db/schema";
 import { runMigrations } from "@/lib/db/migrations";
+import { internalSessionProfile } from "./internal-session-fixture";
 
 const state = vi.hoisted(() => ({ db: null as unknown }));
 vi.mock("@/lib/db", async (importOriginal) => {
@@ -322,6 +323,17 @@ describe("executeListSessions", () => {
     if (running) {
       queries.updateSessionStatus(db()).run("running", running.id);
     }
+    const profile = internalSessionProfile("future_internal_role");
+    db()
+      .prepare(
+        `INSERT INTO sessions
+          (id, name, working_directory, agent_type, status, session_role,
+           launch_profile_json, launch_profile_hash)
+         VALUES
+          ('internal-command-hidden', 'Managed supervisor', '/tmp/internal',
+           'claude', 'running', 'future_internal_role', ?, ?)`
+      )
+      .run(profile.profileJson, profile.profileHash);
   });
 
   it("returns all sessions when no status filter is given", () => {
@@ -350,5 +362,15 @@ describe("executeListSessions", () => {
     const result = executeListSessions({ status: "waiting" });
     expect(result.total).toBe(0);
     expect(result.sessions).toHaveLength(0);
+  });
+
+  it("does not expose server-owned or future-role sessions", () => {
+    const result = executeListSessions({});
+    expect(result.sessions.map((session) => session.id)).not.toContain(
+      "internal-command-hidden"
+    );
+    expect(result.sessions.map((session) => session.name)).not.toContain(
+      "Managed supervisor"
+    );
   });
 });

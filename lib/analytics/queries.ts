@@ -20,6 +20,7 @@ import type { AgentType } from "../providers";
 import { computeSessionCosts } from "../session-cost";
 import { buildReport, utcDay } from "./engine";
 import { sqliteTimeToMs } from "../sqlite-time";
+import { isInteractiveSessionRole } from "../session-role";
 import type {
   AnalyticsSnapshot,
   AnalyticsSession,
@@ -66,7 +67,9 @@ export async function getAnalyticsReport(
   const db = getDb();
   const since = windowStartMs(now, windowDays);
 
-  const allSessions = queries.getAllSessions(db).all() as Session[];
+  const allSessions = (queries.getAllSessions(db).all() as Session[]).filter(
+    isInteractiveSessionRole
+  );
 
   // Outcome signals: index dispatch rows by their session_id so we can attach a
   // worker's terminal state + review verdict to the matching session.

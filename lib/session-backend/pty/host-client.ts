@@ -22,6 +22,9 @@ import {
   hostAddress,
   encode,
   createDecoder,
+  PTY_HOST_PROTOCOL_VERSION,
+  PTY_HOST_REQUIRED_CAPABILITIES,
+  ptyHostCompatibilityError,
   type ClientMessage,
   type HostMessage,
   type SpawnSpecMsg,
@@ -47,8 +50,26 @@ const CONNECT_ATTEMPTS = 40;
 const CONNECT_RETRY_MS = 100;
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * A reachable daemon that speaks an incompatible protocol may still own live
+ * sessions. Unlike an unreachable daemon, it must never trigger Tier-1
+ * fallback because doing so would create a second process-ownership domain.
+ */
+export class PtyHostCompatibilityError extends Error {
+  constructor(reason: string) {
+    super(`incompatible pty-host daemon: ${reason}`);
+    this.name = "PtyHostCompatibilityError";
+  }
+}
+
+export function ptyHostFailureAllowsTier1Fallback(error: unknown): boolean {
+  return !(error instanceof PtyHostCompatibilityError);
+}
+
 export class HostClient {
   private socket: net.Socket | null = null;
+  /** The exact socket that completed the version/capability handshake. */
+  private negotiatedSocket: net.Socket | null = null;
   private connecting: Promise<void> | null = null;
   private nextId = 1;
   private pending = new Map<number, Pending>();
@@ -145,15 +166,27 @@ export class HostClient {
 
   private wireSocket(s: net.Socket): void {
     this.socket = s;
+    this.negotiatedSocket = null;
     const decode = createDecoder<HostMessage>((m) => this.route(m));
     s.on("data", decode);
     // A late socket error (e.g. half-open pipe) must be handled or Node throws
     // an uncaught exception and crashes the process. Treat it like a close.
     s.on("error", () => {
-      if (this.socket === s) this.socket = null;
+      if (this.socket === s) {
+        this.socket = null;
+        this.negotiatedSocket = null;
+        for (const [, pending] of this.pending) {
+          pending.reject(new Error("host closed"));
+        }
+        this.pending.clear();
+      }
     });
     s.on("close", () => {
-      if (this.socket === s) this.socket = null;
+      // A superseded socket can close after its replacement has negotiated.
+      // Never let that stale close reject requests belonging to the new socket.
+      if (this.socket !== s) return;
+      this.socket = null;
+      this.negotiatedSocket = null;
       // Fail in-flight requests so request()'s retry can reconnect.
       for (const [, p] of this.pending) p.reject(new Error("host closed"));
       this.pending.clear();
@@ -161,8 +194,13 @@ export class HostClient {
   }
 
   private async ensureConnected(): Promise<void> {
-    if (this.socket && !this.socket.destroyed) return;
     if (this.connecting) return this.connecting;
+    if (
+      this.socket &&
+      !this.socket.destroyed &&
+      this.negotiatedSocket === this.socket
+    )
+      return;
 
     const hadSubscriptions = this.outputListeners.size > 0;
 
@@ -188,15 +226,26 @@ export class HostClient {
         throw lastErr ?? new Error("could not connect to pty host");
       }
 
-      // Validate the daemon is actually serving (not a half-open pipe). If the
-      // ping fails, tear down the socket so the NEXT call reconnects instead of
-      // treating this half-open socket as healthy (which would defeat the check).
+      // Validate both reachability and wire semantics. A daemon can survive a
+      // Stoa upgrade, so a successful connect/ping alone is insufficient: an
+      // older daemon may ignore envMode=replace or Fleet writable-root bounds.
       try {
-        await this.pingRaw();
+        await this.negotiateRaw();
+        this.negotiatedSocket = this.socket;
       } catch (err) {
         this.socket?.destroy();
         this.socket = null;
-        throw err;
+        this.negotiatedSocket = null;
+        // Once a peer accepted our socket, an ownership domain may exist behind
+        // it even when it ignores, rejects, or closes during negotiation. Every
+        // post-connect handshake failure therefore fails closed as incompatible;
+        // Tier 1 is safe only when no daemon accepted a connection at all.
+        if (err instanceof PtyHostCompatibilityError) throw err;
+        const reason =
+          err instanceof Error && err.message.trim()
+            ? err.message.trim()
+            : "protocol handshake failed";
+        throw new PtyHostCompatibilityError(reason);
       }
 
       // If we reconnected while holding live subscriptions, re-attach them so
@@ -212,8 +261,8 @@ export class HostClient {
     }
   }
 
-  /** Low-level ping that does not recurse through ensureConnected. */
-  private pingRaw(): Promise<void> {
+  /** Low-level handshake that does not recurse through ensureConnected. */
+  private negotiateRaw(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.socket || this.socket.destroyed) {
         reject(new Error("not connected"));
@@ -225,16 +274,28 @@ export class HostClient {
         reject(new Error("ping timeout"));
       }, 2000);
       this.pending.set(id, {
-        resolve: () => {
+        resolve: (value) => {
           clearTimeout(timer);
-          resolve();
+          const reason = ptyHostCompatibilityError(value);
+          if (reason) {
+            reject(new PtyHostCompatibilityError(reason));
+          } else {
+            resolve();
+          }
         },
         reject: (e) => {
           clearTimeout(timer);
           reject(e);
         },
       });
-      this.socket.write(encode({ t: "ping", id }));
+      this.socket.write(
+        encode({
+          t: "ping",
+          id,
+          protocolVersion: PTY_HOST_PROTOCOL_VERSION,
+          requiredCapabilities: [...PTY_HOST_REQUIRED_CAPABILITIES],
+        })
+      );
     });
   }
 
@@ -493,8 +554,17 @@ export class HostClient {
   }
 
   close(): void {
-    this.socket?.destroy();
+    const current = this.socket;
     this.socket = null;
+    this.negotiatedSocket = null;
+    current?.destroy();
+    // Because the close event is asynchronous, it now sees a superseded socket
+    // and intentionally does nothing. Explicit shutdown still owns requests
+    // issued through the current socket and must settle them immediately.
+    for (const [, pending] of this.pending) {
+      pending.reject(new Error("host closed"));
+    }
+    this.pending.clear();
   }
 }
 

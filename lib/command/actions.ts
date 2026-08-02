@@ -211,8 +211,9 @@ export function validateCreateSessionParams(
   // for a free-text agent (hermes), and that value rides UNESCAPED into the POSIX
   // tmux launch (`-m <model>`) — a prompt-injected `model` would be shell
   // injection. getModelOptions("hermes") is [] → a hermes model is always dropped
-  // (it falls back to Hermes's own default), and claude/codex are clamped to their
-  // fixed, shell-inert catalogs. Otherwise drop to the agent's default.
+  // (session creation resolves Stoa's `kimi-k3` default), and claude/codex are
+  // clamped to their fixed, shell-inert catalogs. Otherwise drop to the trusted
+  // provider default.
   let model: string | undefined;
   if (typeof raw.model === "string" && raw.model.trim()) {
     const candidate = raw.model.trim();

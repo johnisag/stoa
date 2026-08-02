@@ -1,7 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Columns3, HelpCircle, Loader2, AlertCircle, X } from "lucide-react";
+import {
+  Columns3,
+  HelpCircle,
+  Loader2,
+  AlertCircle,
+  MessageCircleQuestion,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { fleetNavEntry, NavIconButton } from "@/components/nav/fleet-nav";
@@ -21,6 +28,7 @@ export function FleetBoardView({
   onOpenDispatch,
   onOpenWorkflows,
   onOpenVerdictInbox,
+  onOpenFleetRun,
   onClose,
 }: {
   /** Jump into a card's live worker session (ceremony rows carry a session id).
@@ -31,6 +39,8 @@ export function FleetBoardView({
   onOpenDispatch?: () => void;
   onOpenWorkflows?: () => void;
   onOpenVerdictInbox?: () => void;
+  /** Open an exact durable Fleet Management run/task in the sibling view. */
+  onOpenFleetRun?: (runId: string, taskId?: string) => void;
   /** Optional close affordance, used on mobile where the tab strip is hidden. */
   onClose?: () => void;
 }) {
@@ -40,13 +50,22 @@ export function FleetBoardView({
     repoById,
     total,
     needsMeCount,
+    elicitationCount,
+    elicitationError,
+    elicitationFetching,
+    fleetError,
+    fleetFetching,
     isLoading,
     isError,
     isFetching,
     refetch,
+    refetchFleetRuns,
+    refetchElicitations,
   } = useFleetBoard(true);
-  // Surfaced in the header so "what needs me?" is answered without scrolling. Same
-  // count as the nav badge (countNeedsMe over the shared inbox) — no drift.
+  // Surfaced in the header so "what needs me?" is answered without scrolling.
+  // Includes Verdict Inbox cards, one card for every Fleet run with at least one
+  // durable run/task/worker signal, and pending operator questions surfaced
+  // above the lanes.
   const attentionCount = needsMeCount;
 
   return (
@@ -121,6 +140,97 @@ export function FleetBoardView({
       </div>
 
       <div className="flex-1 overflow-auto px-4 pb-4">
+        {!showHelp && fleetError && (
+          <div
+            className="border-destructive/30 bg-destructive/5 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border p-3"
+            data-testid="fleet-board-runs-error"
+            role="status"
+            aria-atomic="true"
+          >
+            <span className="flex min-w-0 items-center gap-2 text-sm">
+              <AlertCircle
+                aria-hidden="true"
+                className="text-destructive h-4 w-4 flex-shrink-0"
+              />
+              <span>
+                Fleet Management runs could not be loaded. Dispatch and inbox
+                lanes remain available.
+              </span>
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={refetchFleetRuns}
+              disabled={fleetFetching}
+            >
+              {fleetFetching && (
+                <Loader2
+                  aria-hidden="true"
+                  className="mr-1 h-3.5 w-3.5 animate-spin"
+                />
+              )}
+              Retry Fleet runs
+            </Button>
+          </div>
+        )}
+        {!showHelp && elicitationError && (
+          <div
+            className="border-destructive/30 bg-destructive/5 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border p-3"
+            data-testid="fleet-board-elicitations-error"
+            role="status"
+            aria-atomic="true"
+          >
+            <span className="flex min-w-0 items-center gap-2 text-sm">
+              <AlertCircle
+                aria-hidden="true"
+                className="text-destructive h-4 w-4 flex-shrink-0"
+              />
+              <span>
+                Operator questions could not be loaded. Fleet lanes remain
+                available.
+              </span>
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={refetchElicitations}
+              disabled={elicitationFetching}
+            >
+              {elicitationFetching && (
+                <Loader2
+                  aria-hidden="true"
+                  className="mr-1 h-3.5 w-3.5 animate-spin"
+                />
+              )}
+              Retry operator questions
+            </Button>
+          </div>
+        )}
+        {!showHelp && elicitationCount > 0 && (
+          <div
+            className="border-border bg-primary/5 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border p-3"
+            data-testid="fleet-board-elicitations"
+          >
+            <span className="flex min-w-0 items-center gap-2 text-sm">
+              <MessageCircleQuestion
+                aria-hidden="true"
+                className="text-primary h-4 w-4 flex-shrink-0"
+              />
+              <span>
+                {elicitationCount} operator{" "}
+                {elicitationCount === 1
+                  ? "question needs an answer"
+                  : "questions need answers"}{" "}
+                in Verdict Inbox.
+              </span>
+            </span>
+            {onOpenVerdictInbox && (
+              <Button variant="outline" size="sm" onClick={onOpenVerdictInbox}>
+                Open Verdict Inbox
+              </Button>
+            )}
+          </div>
+        )}
         {showHelp ? (
           <FleetBoardHelp onClose={() => setShowHelp(false)} />
         ) : isLoading ? (
@@ -148,7 +258,9 @@ export function FleetBoardView({
           </div>
         ) : total === 0 ? (
           <div className="text-muted-foreground py-10 text-center text-sm">
-            Fleet idle — dispatch a task, or flip a session to auto mode.
+            {elicitationCount > 0
+              ? "No delivery work is on the board."
+              : "Fleet idle — create a Fleet run or dispatch a task."}
           </div>
         ) : (
           // Mobile: lanes stack vertically (each full-width), no horizontal scroll
@@ -164,10 +276,9 @@ export function FleetBoardView({
               // The merged lane is the full (unbounded) history — cap it.
               const cards = lane.id === "merged" ? all.slice(0, 12) : all;
               const hidden = all.length - cards.length;
-              // Highlight a lane iff it actually holds cards that need the human
-              // (the same predicate behind the header pill), so the amber lanes
-              // and the pill add up — a CHANGES_REQUESTED card in "In review"
-              // now highlights, instead of only the verified/failed columns.
+              // Highlight a lane iff it actually holds cards that need the human.
+              // This is the card portion of the header count; pending operator
+              // questions are represented by the separate banner above.
               const attention = all.some(cardNeedsMe);
               return (
                 <div
@@ -203,6 +314,7 @@ export function FleetBoardView({
                           card={card}
                           repoById={repoById}
                           onOpenSession={onOpenSession}
+                          onOpenFleetRun={onOpenFleetRun}
                         />
                       ))}
                       {hidden > 0 && (

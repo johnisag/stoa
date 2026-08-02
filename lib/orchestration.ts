@@ -8,11 +8,15 @@
 import { randomUUID } from "crypto";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { existsSync, realpathSync } from "fs";
 import { rm } from "fs/promises";
-import { db, queries, type Session } from "./db";
+import { db, queries, resolveDbPath, type Session } from "./db";
 import { createWorktree, deleteWorktree } from "./worktrees";
 import { setupWorktree } from "./env-setup";
-import { resolveModelForAgent } from "./model-catalog";
+import {
+  resolveExactModelForAgent,
+  resolveModelForAgent,
+} from "./model-catalog";
 import {
   type AgentType,
   getProvider,
@@ -23,34 +27,80 @@ import { sessionKey } from "./providers/registry";
 import { statusDetector } from "./status-detector";
 import { wrapWithBanner } from "./banner";
 import { runInBackground } from "./async-operations";
-import { getSessionBackend } from "./session-backend";
-import { expandHome, homeDir } from "./platform";
+import { getSessionBackend, useContainer } from "./session-backend";
+import { expandHome, homeDir, isWindows, stoaHomeDir } from "./platform";
 import { emitGenAiEvent } from "./telemetry/otel";
 import { detectSandboxTool } from "./sandbox/detect";
 import { wrapSpawnForSandbox } from "./sandbox/wrap";
 import { computeRwRoots } from "./sandbox/policy";
 import { decideWorkerSandbox, effectiveSandboxActive } from "./sandbox/worker";
 import type { ApprovalMode } from "./sandbox/types";
-import { join } from "path";
+import { isAbsolute, relative, resolve, sep } from "path";
+import {
+  assertFleetWritableRootIdentityPreserved,
+  fleetWritableRootMounts,
+  mapMountedHostPathsInText,
+  validateFleetWritableRootLayouts,
+} from "./container/mounts";
+import { isInteractiveSessionRole } from "./session-role";
+import {
+  fleetSessionProfile,
+  type FleetSessionOwner,
+} from "./fleet/session-profile";
 
 const execFileAsync = promisify(execFile);
 
 export interface SpawnWorkerOptions {
   conductorSessionId?: string | null;
+  /** Durable, non-secret task summary stored on the session row. */
   task: string;
+  /**
+   * Optional ephemeral task delivered to the terminal instead of `task`.
+   * It is never logged or written to the session row (Fleet uses this for a
+   * one-attempt report nonce).
+   */
+  deliveryTask?: string;
   workingDirectory: string;
   branchName?: string;
   baseBranch?: string;
   useWorktree?: boolean;
+  /** Existing Fleet-owned worktree identity used by an in-place fixer. */
+  attachedWorktree?: {
+    path: string;
+    branchName: string;
+    baseBranch: string;
+  };
   /** Fleet write tasks must fail closed instead of using the source checkout. */
   requireWorktree?: boolean;
   /** Treat backend start or task delivery failure as a rejected launch. */
   requireTaskDelivery?: boolean;
   /** Skip dependency/env setup for short-lived metadata-only worktrees. */
   skipSetup?: boolean;
+  /** Keep the checkout and Git common directory read-only in an active sandbox. */
+  readOnlyWorktree?: boolean;
+  /**
+   * Exact Fleet-owned attempt directories the process may write outside its
+   * checkout. Values are validated against the two narrow runtime layouts;
+   * passing STOA_HOME (or an arbitrary parent) is rejected.
+   */
+  fleetWritableRoots?: string[];
+  /**
+   * Exact host artifact files named in deliveryTask. Container launches rewrite
+   * only these values through the matching exact attempt-directory bind;
+   * durable state and host-side collectors continue using the original paths.
+   */
+  fleetArtifactPaths?: string[];
+  /** Fleet requires stronger isolation than the legacy generic worker sandbox. */
+  requireStrongIsolation?: boolean;
+  /** Opaque, scheduler-issued identity for exact Fleet restart recovery. */
+  fleetOwnershipKey?: string;
+  /** Durable owner identity for a server-owned Fleet agent session. */
+  fleetOwner?: FleetSessionOwner;
   /** Override the default worker approval policy (planners use prompt mode). */
   approvalMode?: ApprovalMode;
   model?: string;
+  /** Fail instead of silently clamping an executable durable model contract. */
+  requireExactModel?: boolean;
   agentType?: AgentType;
 }
 
@@ -63,6 +113,36 @@ export class WorkerSpawnError extends Error {
     super(message);
     this.name = "WorkerSpawnError";
   }
+}
+
+/** Direct orchestration helpers are generic interactive-session surfaces. An
+ * internal row must be operated only by its owning subsystem, even when a
+ * caller bypasses the HTTP route and invokes a helper directly. */
+export class WorkerSessionAccessError extends Error {
+  readonly status = 409;
+
+  constructor() {
+    super("Internal sessions are managed only by their owning subsystem");
+    this.name = "WorkerSessionAccessError";
+  }
+}
+
+function assertInteractiveWorkerSession(session: Session): void {
+  if (!isInteractiveSessionRole(session)) {
+    throw new WorkerSessionAccessError();
+  }
+}
+
+function findInteractiveWorkerSession(workerId: string): Session | undefined {
+  const session = queries.getSession(db).get(workerId) as Session | undefined;
+  if (session) assertInteractiveWorkerSession(session);
+  return session;
+}
+
+function requireInteractiveWorkerSession(workerId: string): Session {
+  const session = findInteractiveWorkerSession(workerId);
+  if (!session) throw new Error(`Worker ${workerId} not found`);
+  return session;
 }
 
 let worktreeOperationTail: Promise<void> = Promise.resolve();
@@ -134,30 +214,115 @@ function taskToSessionName(task: string): string {
  * Resolve a worker's writable roots (#27): its worktree + the git-common dir (so
  * index/refs/objects writes succeed) + the agent's OWN state dir (~/.claude,
  * ~/.codex — where the CLI writes its rollout/transcript, which Stoa reads) +
- * ~/.stoa. Everything else is read-only inside the sandbox.
+ * exact Fleet attempt output directories. Stoa's authority directory remains
+ * hidden inside the sandbox.
  */
 async function resolveWorkerRwRoots(
   cwd: string,
-  agentType: AgentType
+  agentType: AgentType,
+  includeWorktree = true,
+  fleetWritableRoots: string[] = []
 ): Promise<string[]> {
   let gitCommonDir: string | null = null;
-  try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-      { windowsHide: true }
-    );
-    gitCommonDir = stdout.trim() || null;
-  } catch {
-    // Not a git repo (or git absent) — bind just the cwd + state dirs.
+  if (includeWorktree) {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        { windowsHide: true }
+      );
+      gitCommonDir = stdout.trim() || null;
+    } catch {
+      // Not a git repo (or git absent) — bind just the cwd + state dirs.
+    }
   }
   const configDir = getProvider(agentType).configDir; // e.g. "~/.claude"
   return computeRwRoots({
-    worktreePaths: [cwd],
+    worktreePaths: includeWorktree ? [cwd] : [],
     gitCommonDir,
     agentConfigDir: configDir ? expandHome(configDir) : null,
-    stoaHome: join(homeDir(), ".stoa"),
+    fleetWritableRoots,
   });
+}
+
+const FLEET_SANDBOX_AUTHORITY_ENV = [
+  "STOA_TOKEN",
+  "STOA_FLEET_SCHEDULER_TOKEN",
+  "STOA_WEBHOOK_SECRET",
+  "STOA_VAPID_PRIVATE_KEY",
+] as const;
+
+function isPathWithin(parent: string, candidate: string): boolean {
+  const rel = relative(parent, candidate);
+  return (
+    rel.length === 0 ||
+    (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
+  );
+}
+
+/** Validate that a Fleet launch exposes only one exact attempt directory. */
+export function validateFleetSandboxWritableRoots(
+  roots: readonly string[],
+  stoaHome = stoaHomeDir()
+): string[] {
+  const authorityRoot = resolve(stoaHome);
+  const validated = validateFleetWritableRootLayouts(
+    roots.map((value) => expandHome(value)),
+    authorityRoot
+  );
+  for (const candidate of validated) {
+    // A lexical child can still escape through an existing symlink/junction in
+    // any ancestor. Runtime attempt directories exist before spawn, so resolve
+    // both sides and require the actual target to remain under the actual Stoa
+    // authority root. Keep the lexical fallback for pure command-construction
+    // callers/tests whose paths deliberately do not exist yet.
+    if (existsSync(authorityRoot) && existsSync(candidate)) {
+      const realAuthority = realpathSync.native(authorityRoot);
+      const realCandidate = realpathSync.native(candidate);
+      if (!isPathWithin(realAuthority, realCandidate)) {
+        throw new Error(
+          "Fleet sandbox writable root escapes Stoa authority through a symbolic link or junction"
+        );
+      }
+      // Containment alone is insufficient: a valid-looking attempt path could
+      // be a link to another sensitive child or another valid Fleet attempt.
+      assertFleetWritableRootIdentityPreserved({
+        lexicalRoots: [candidate],
+        lexicalStoaHome: authorityRoot,
+        realRoots: [realCandidate],
+        realStoaHome: realAuthority,
+      });
+    }
+  }
+  return validated;
+}
+
+function sandboxAuthorityPolicy(fleetWritableRoots: string[]) {
+  const authorityRoot = resolve(stoaHomeDir());
+  const dbPath = resolve(resolveDbPath());
+  const maskedPaths = isPathWithin(authorityRoot, dbPath)
+    ? []
+    : [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
+  return {
+    hiddenRoots: [authorityRoot],
+    maskedPaths,
+    unsetEnv: [...FLEET_SANDBOX_AUTHORITY_ENV],
+    fleetWritableRoots,
+  };
+}
+
+export function fleetDeliveryTaskForContainer(
+  deliveryTask: string,
+  artifactPaths: readonly string[],
+  fleetWritableRoots: readonly string[],
+  stoaHome = resolve(stoaHomeDir()),
+  hostHome = homeDir()
+): string {
+  return mapMountedHostPathsInText(
+    deliveryTask,
+    artifactPaths,
+    fleetWritableRootMounts(fleetWritableRoots, stoaHome, hostHome)
+  );
 }
 
 /**
@@ -166,10 +331,17 @@ async function resolveWorkerRwRoots(
 export async function spawnWorker(
   options: SpawnWorkerOptions
 ): Promise<Session> {
+  if (
+    options.fleetOwnershipKey != null &&
+    !/^[0-9a-f]{64}$/.test(options.fleetOwnershipKey)
+  ) {
+    throw new Error("Invalid Fleet session ownership key");
+  }
   const backend = getSessionBackend();
   const {
     conductorSessionId,
     task,
+    deliveryTask = task,
     workingDirectory: rawWorkingDir,
     branchName = taskToBranchName(task),
     baseBranch = "main",
@@ -179,10 +351,35 @@ export async function spawnWorker(
     skipSetup = false,
     agentType = "claude",
   } = options;
-  const model = resolveModelForAgent(agentType, options.model);
+  const exactModel = options.requireExactModel
+    ? resolveExactModelForAgent(agentType, options.model)
+    : null;
+  if (exactModel && !exactModel.ok) {
+    throw new Error(exactModel.error);
+  }
+  const model = exactModel?.ok
+    ? (exactModel.model ?? "")
+    : resolveModelForAgent(agentType, options.model);
 
   // Expand ~ to home directory
   const workingDirectory = expandHome(rawWorkingDir);
+  if (useWorktree && options.attachedWorktree) {
+    throw new Error(
+      "Cannot create and attach a worker worktree simultaneously"
+    );
+  }
+  const fleetWritableRoots = validateFleetSandboxWritableRoots(
+    options.fleetWritableRoots ?? []
+  );
+  const containerActive = useContainer?.() === true;
+  const runtimeDeliveryTask =
+    options.fleetArtifactPaths?.length && containerActive
+      ? fleetDeliveryTaskForContainer(
+          deliveryTask,
+          options.fleetArtifactPaths,
+          fleetWritableRoots
+        )
+      : deliveryTask;
 
   const sessionId = randomUUID();
   const sessionName = taskToSessionName(task);
@@ -199,12 +396,19 @@ export async function spawnWorker(
         `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing Stoa session.`
       );
     }
+    if (!isInteractiveSessionRole(conductor)) {
+      throw new Error(
+        `Unknown conductor session: ${conductorSessionId}. The conductor must be an existing interactive Stoa session.`
+      );
+    }
   }
 
-  let worktreePath: string | null = null;
-  let actualWorkingDir = workingDirectory;
-  let actualBranchName = branchName;
-  let actualBaseBranch = baseBranch;
+  let worktreePath: string | null = options.attachedWorktree
+    ? expandHome(options.attachedWorktree.path)
+    : null;
+  let actualWorkingDir = worktreePath ?? workingDirectory;
+  let actualBranchName = options.attachedWorktree?.branchName ?? branchName;
+  let actualBaseBranch = options.attachedWorktree?.baseBranch ?? baseBranch;
 
   // Create worktree if requested
   if (useWorktree) {
@@ -254,6 +458,23 @@ export async function spawnWorker(
       provider: provider.id,
       id: sessionId,
     });
+    const internalProfile = options.fleetOwner
+      ? fleetSessionProfile({
+          ...options.fleetOwner,
+          sessionId,
+          backendKey: tmuxName,
+          provider: provider.id,
+          model: model || null,
+          approvalMode: options.approvalMode ?? null,
+          workingDirectory: actualWorkingDir,
+          conductorSessionId: conductorSessionId ?? null,
+          worktreePath,
+          branchName: worktreePath ? actualBranchName : null,
+          baseBranch: worktreePath ? actualBaseBranch : null,
+          fleetOwnershipKey: options.fleetOwnershipKey ?? null,
+          workerTask: task,
+        })
+      : null;
     queries.createWorkerSession(db).run(
       sessionId,
       sessionName,
@@ -264,19 +485,16 @@ export async function spawnWorker(
       model,
       "sessions", // group_path
       agentType,
-      "uncategorized" // project_id
+      "uncategorized", // project_id
+      worktreePath,
+      worktreePath ? actualBranchName : null,
+      worktreePath ? actualBaseBranch : null,
+      options.fleetOwnershipKey ?? null,
+      options.approvalMode ?? null,
+      internalProfile?.role ?? "interactive",
+      internalProfile?.profileJson ?? null,
+      internalProfile?.profileHash ?? null
     );
-
-    // Update worktree info if created
-    if (worktreePath) {
-      queries.updateSessionWorktree(db).run(
-        worktreePath,
-        actualBranchName,
-        actualBaseBranch,
-        null, // dev_server_port
-        sessionId
-      );
-    }
 
     // Create the session and start the agent. Workers use auto-approve.
     const tmuxSessionName = sessionKey({
@@ -305,7 +523,17 @@ export async function spawnWorker(
     });
     const approvalMode = options.approvalMode ?? sandboxDecision.approvalMode;
     const tentativeActive =
-      approvalMode === "sandboxed-auto" && sandboxDecision.sandboxActive;
+      approvalMode === "sandboxed-auto" &&
+      sandboxDecision.sandboxActive &&
+      options.requireStrongIsolation !== true;
+    if (
+      approvalMode === "sandboxed-auto" &&
+      options.requireStrongIsolation === true
+    ) {
+      console.warn(
+        "[sandbox] Fleet strong isolation is unavailable; running without prompt bypass"
+      );
+    }
 
     // Resolve the ACTUAL wrap BEFORE building argv, so the bypass flag is pushed
     // ONLY when the sandbox truly confines: a downgrade withdraws the flag (the
@@ -313,11 +541,23 @@ export async function spawnWorker(
     let wrapPrefix: { file: string; argsPrefix: string[] } | null = null;
     let sandboxActive = tentativeActive;
     if (tentativeActive && detected) {
-      const rwRoots = await resolveWorkerRwRoots(expandHome(cwd), provider.id);
+      const authorityPolicy = sandboxAuthorityPolicy(fleetWritableRoots);
+      const rwRoots = await resolveWorkerRwRoots(
+        expandHome(cwd),
+        provider.id,
+        options.readOnlyWorktree !== true,
+        authorityPolicy.fleetWritableRoots
+      );
       const wrap = wrapSpawnForSandbox(
         { file: "", args: [] },
         "sandboxed-auto",
-        { rwRoots, allowNet: true },
+        {
+          rwRoots,
+          hiddenRoots: authorityPolicy.hiddenRoots,
+          maskedPaths: authorityPolicy.maskedPaths,
+          unsetEnv: authorityPolicy.unsetEnv,
+          allowNet: true,
+        },
         { detect: () => detected } // reuse the one detection — no second probe
       );
       sandboxActive = effectiveSandboxActive(tentativeActive, wrap.downgraded);
@@ -364,6 +604,7 @@ export async function spawnWorker(
         command: newSessionCmd,
         binary: spawnBinary,
         args: spawnArgs,
+        fleetWritableRoots,
       });
 
       // Wait for the agent's prompt before sending the task, auto-accepting any
@@ -420,11 +661,9 @@ export async function spawnWorker(
       }
 
       // Send the task as input, then press Enter
-      console.log(
-        `[orchestration] Sending task to ${tmuxSessionName}: "${task}"`
-      );
+      console.log(`[orchestration] Sending task to ${tmuxSessionName}`);
       try {
-        await backend.sendKeysLiteral(tmuxSessionName, task);
+        await backend.sendKeysLiteral(tmuxSessionName, runtimeDeliveryTask);
         await backend.sendEnter(tmuxSessionName);
         console.log(
           `[orchestration] Task sent successfully to ${tmuxSessionName}`
@@ -509,9 +748,17 @@ export async function spawnWorker(
 export async function getWorkers(
   conductorSessionId: string
 ): Promise<WorkerInfo[]> {
+  const conductor = queries.getSession(db).get(conductorSessionId) as
+    Session | undefined;
+  if (conductor) assertInteractiveWorkerSession(conductor);
+
   const workers = queries
     .getWorkersByConductor(db)
     .all(conductorSessionId) as Session[];
+
+  // Validate the whole result set before touching any backend so a corrupt or
+  // future internal child cannot cause partial observation of adjacent rows.
+  for (const worker of workers) assertInteractiveWorkerSession(worker);
 
   // Get live status for each worker
   const workerInfos: WorkerInfo[] = [];
@@ -565,10 +812,7 @@ export async function getWorkerOutput(
   workerId: string,
   lines: number = 50
 ): Promise<string> {
-  const session = queries.getSession(db).get(workerId) as Session | undefined;
-  if (!session) {
-    throw new Error(`Worker ${workerId} not found`);
-  }
+  const session = requireInteractiveWorkerSession(workerId);
 
   const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
@@ -591,10 +835,7 @@ export async function sendToWorker(
   workerId: string,
   message: string
 ): Promise<boolean> {
-  const session = queries.getSession(db).get(workerId) as Session | undefined;
-  if (!session) {
-    throw new Error(`Worker ${workerId} not found`);
-  }
+  const session = requireInteractiveWorkerSession(workerId);
 
   const backend = getSessionBackend();
   const provider = getProvider(session.agent_type || "claude");
@@ -616,6 +857,7 @@ export async function sendToWorker(
  * Mark a worker as completed
  */
 export function completeWorker(workerId: string): void {
+  if (!findInteractiveWorkerSession(workerId)) return;
   queries.updateWorkerStatus(db).run("completed", workerId);
 }
 
@@ -623,6 +865,7 @@ export function completeWorker(workerId: string): void {
  * Mark a worker as failed
  */
 export function failWorker(workerId: string): void {
+  if (!findInteractiveWorkerSession(workerId)) return;
   queries.updateWorkerStatus(db).run("failed", workerId);
 }
 
@@ -632,9 +875,10 @@ export function failWorker(workerId: string): void {
 export async function killWorker(
   workerId: string,
   cleanupWorktree: boolean = false,
-  finalStatus: "completed" | "failed" = "failed"
+  finalStatus: "completed" | "failed" = "failed",
+  options: { failOnBackendError?: boolean } = {}
 ): Promise<void> {
-  const session = queries.getSession(db).get(workerId) as Session | undefined;
+  const session = findInteractiveWorkerSession(workerId);
   if (!session) {
     return;
   }
@@ -648,8 +892,11 @@ export async function killWorker(
   // Kill tmux session
   try {
     await backend.kill(tmuxSessionName);
-  } catch {
-    // Ignore errors
+  } catch (error) {
+    // Generic worker cleanup remains best-effort. Session deletion opts into a
+    // strict stop so its durable DB claim stays retryable if the backend is
+    // temporarily unavailable rather than deleting a still-live process row.
+    if (options.failOnBackendError) throw error;
   }
 
   // Clean up worktree if requested
