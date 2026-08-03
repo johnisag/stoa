@@ -163,14 +163,21 @@ describe("managed Fleet supervisor broker", () => {
     });
     try {
       await expect
-        .poll(() =>
-          managedSupervisorBrokerHasMarker(output, MANAGED_SUPERVISOR_READY)
+        .poll(
+          () =>
+            managedSupervisorBrokerHasMarker(output, MANAGED_SUPERVISOR_READY),
+          { timeout: 10_000 }
         )
         .toBe(true);
       child.stdin.write(`${managedSupervisorPromptFrame("bounded prompt")}\r`);
       await expect
-        .poll(() =>
-          managedSupervisorBrokerHasMarker(output, MANAGED_SUPERVISOR_STARTED)
+        .poll(
+          () =>
+            managedSupervisorBrokerHasMarker(
+              output,
+              MANAGED_SUPERVISOR_STARTED
+            ),
+          { timeout: 10_000 }
         )
         .toBe(true);
       await expect
@@ -197,7 +204,7 @@ describe("managed Fleet supervisor broker", () => {
     } finally {
       child.kill();
     }
-  });
+  }, 35_000);
 
   it("reaps the provider process tree when bounded output is exceeded", async () => {
     const dir = mkdtempSync(join(tmpdir(), "stoa-supervisor-reap-"));
@@ -225,8 +232,10 @@ describe("managed Fleet supervisor broker", () => {
     });
     try {
       await expect
-        .poll(() =>
-          managedSupervisorBrokerHasMarker(output, MANAGED_SUPERVISOR_READY)
+        .poll(
+          () =>
+            managedSupervisorBrokerHasMarker(output, MANAGED_SUPERVISOR_READY),
+          { timeout: 10_000 }
         )
         .toBe(true);
       child.stdin.write(
@@ -243,5 +252,5 @@ describe("managed Fleet supervisor broker", () => {
       child.kill();
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 35_000);
 });

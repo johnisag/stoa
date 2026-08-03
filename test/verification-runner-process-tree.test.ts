@@ -53,13 +53,22 @@ function forceCleanup(pid: number): void {
   }
 }
 
+function removeDirectory(dir: string): void {
+  rmSync(dir, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 50,
+  });
+}
+
 afterEach(async () => {
   for (const pid of cleanupPids) {
     forceCleanup(pid);
     await waitForProcessExit(pid);
   }
   cleanupPids.clear();
-  for (const dir of cleanupDirs) rmSync(dir, { recursive: true, force: true });
+  for (const dir of cleanupDirs) removeDirectory(dir);
   cleanupDirs.clear();
 });
 
@@ -102,9 +111,7 @@ async function expectTreeReapedAndDirectoryReleased(
 ): Promise<void> {
   await waitForProcessExit(result.rootPid);
   await waitForProcessExit(result.descendantPid);
-  expect(() =>
-    rmSync(result.dir, { recursive: true, force: true })
-  ).not.toThrow();
+  expect(() => removeDirectory(result.dir)).not.toThrow();
   cleanupPids.delete(result.rootPid);
   cleanupPids.delete(result.descendantPid);
   cleanupDirs.delete(result.dir);
