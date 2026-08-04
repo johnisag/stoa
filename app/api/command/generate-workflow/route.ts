@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ASK_PROVIDERS, runAsk, type AskProvider } from "@/lib/ask";
-import { getModelOptions } from "@/lib/model-catalog";
+import { isAskModel } from "@/lib/ask-provider";
 import { getAllProjects } from "@/lib/projects";
 import {
   buildGenerateWorkflowPrompt,
@@ -26,8 +26,8 @@ const GENERATE_TIMEOUT_MS = 120_000;
  * all degrade to a plain answer / error — never a broken or auto-running canvas.
  *
  * Body:  { summary: string, projectId: string,
- *          provider?: "claude" | "codex",   // default "claude"
- *          model?: string }                 // a getModelOptions(provider) token
+ *          provider?: "claude" | "codex" | "hermes", // default "claude"
+ *          model?: string }                 // a trusted Ask model token
  * Reply: { kind: "answer", text }
  *      |  { kind: "workflow", doc, project: { id, name } }
  */
@@ -71,11 +71,7 @@ export async function POST(request: NextRequest) {
     // Model: honored only if it's a token from the provider's static catalog
     // (never free text) — same guard as /api/ask, keeps an arbitrary string out of
     // the argv model flag.
-    const model =
-      typeof rawModel === "string" &&
-      getModelOptions(provider).some((o) => o.value === rawModel)
-        ? rawModel
-        : undefined;
+    const model = isAskModel(provider, rawModel) ? rawModel : undefined;
 
     // Resolve the project SERVER-SIDE — the agent never supplies a path. A
     // missing/unknown project degrades to a helpful answer (the UI picks one).

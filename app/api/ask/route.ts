@@ -7,7 +7,7 @@ import {
   type AskHistoryTurn,
   type AskProvider,
 } from "@/lib/ask";
-import { getModelOptions } from "@/lib/model-catalog";
+import { isAskModel } from "@/lib/ask-provider";
 
 /**
  * POST /api/ask — answer a natural-language question about the user's Stoa fleet.
@@ -19,8 +19,8 @@ import { getModelOptions } from "@/lib/model-catalog";
  *
  * Body:  { question: string,
  *          history?: { role: "user" | "assistant"; content: string }[],
- *          provider?: "claude" | "codex",   // default "claude"
- *          model?: string }                 // a getModelOptions(provider) token;
+ *          provider?: "claude" | "codex" | "hermes", // default "claude"
+ *          model?: string }                 // a trusted Ask model token;
  *                                            // anything else → the agent's default
  * Reply: { answer } on success, or { error } with a 4xx/5xx status.
  */
@@ -67,11 +67,7 @@ export async function POST(request: NextRequest) {
     // honored (a fixed token, never user free-text), else fall through to the
     // agent's own default. So a crafted body can't smuggle an arbitrary string
     // into the argv `--model`/`-c model=` flag.
-    const model =
-      typeof rawModel === "string" &&
-      getModelOptions(provider).some((o) => o.value === rawModel)
-        ? rawModel
-        : undefined;
+    const model = isAskModel(provider, rawModel) ? rawModel : undefined;
 
     // Normalize history: keep only well-formed {role, content} turns.
     const history: AskHistoryTurn[] = Array.isArray(rawHistory)

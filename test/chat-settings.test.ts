@@ -5,24 +5,33 @@
 // global (which would corrupt sibling test files sharing the worker fork).
 import { describe, it, expect, beforeEach } from "vitest";
 import {
+  CHAT_PROVIDER_OPTIONS,
   defaultChatModel,
   loadChatModel,
   saveChatModel,
 } from "@/lib/chat-settings";
-import { getModelOptions } from "@/lib/model-catalog";
+import { getAskModelOptions } from "@/lib/ask-provider";
 
 describe("chat-settings — model default + per-provider persistence", () => {
   beforeEach(() => {
     window.localStorage.clear();
   });
 
+  it("offers Hermes in the Ask Stoa provider picker", () => {
+    expect(
+      CHAT_PROVIDER_OPTIONS.some((option) => option.value === "hermes")
+    ).toBe(true);
+  });
+
   it("each provider's chatbox default is a real catalog value (sync guard)", () => {
     // Locks the CHAT_DEFAULT_MODEL ↔ getModelOptions invariant: a catalog rename
     // that stranded a default would otherwise pass tsc/build and only surface as a
     // blank Select trigger + the agent silently using its own default.
-    for (const provider of ["claude", "codex"] as const) {
+    for (const provider of ["claude", "codex", "hermes"] as const) {
       const def = defaultChatModel(provider);
-      expect(getModelOptions(provider).some((o) => o.value === def)).toBe(true);
+      expect(getAskModelOptions(provider).some((o) => o.value === def)).toBe(
+        true
+      );
     }
   });
 
@@ -33,6 +42,7 @@ describe("chat-settings — model default + per-provider persistence", () => {
   it("loadChatModel returns the provider default when nothing is saved", () => {
     expect(loadChatModel("claude")).toBe("opus");
     expect(loadChatModel("codex")).toBe("gpt-5.4");
+    expect(loadChatModel("hermes")).toBe("kimi-k3");
   });
 
   it("round-trips a saved model, ignoring a value not in the provider catalog", () => {

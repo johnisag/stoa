@@ -103,10 +103,17 @@ import {
 } from "@/lib/fleet/admission";
 import {
   FLEET_MODEL_MAX,
-  FLEET_PROVIDER_MAX,
   FLEET_RUN_GOAL_MAX,
   FLEET_RUN_NAME_MAX,
 } from "@/lib/fleet/engine";
+import { AGENT_OPTIONS } from "@/components/NewSessionDialog/NewSessionDialog.types";
+import {
+  getDefaultModelForAgent,
+  getModelOptions,
+  isFreeTextModelAgent,
+} from "@/lib/model-catalog";
+import type { AgentType } from "@/lib/providers";
+import { isFleetUnattendedProvider } from "@/lib/fleet/provider-eligibility";
 import { cn } from "@/lib/utils";
 import type {
   FleetApprovalControlBinding,
@@ -115,6 +122,9 @@ import type {
 } from "@/lib/fleet/approval-control-types";
 
 const NONE = "__none__";
+const FLEET_AGENT_OPTIONS = AGENT_OPTIONS.filter((option) =>
+  isFleetUnattendedProvider(option.value)
+);
 type MobileFleetSection = "plan" | "tasks" | "workers" | "events" | "merge";
 
 const MOBILE_FLEET_SECTIONS: Array<{
@@ -4043,7 +4053,7 @@ export function FleetManagementView({
     })
   );
   const [provider, setProvider] = useState("claude");
-  const [model, setModel] = useState("");
+  const [model, setModel] = useState(() => getDefaultModelForAgent("claude"));
   const [maxConcurrency, setMaxConcurrency] = useState(
     FLEET_DEFAULT_PARALLEL_WORKERS
   );
@@ -4635,23 +4645,51 @@ export function FleetManagementView({
               <div className="grid grid-cols-2 gap-2">
                 <label className="grid gap-1 text-xs">
                   <span>Preferred/default provider</span>
-                  <Input
-                    aria-label="Preferred/default provider"
-                    placeholder="Provider"
-                    maxLength={FLEET_PROVIDER_MAX}
+                  <Select
                     value={provider}
-                    onChange={(event) => setProvider(event.target.value)}
-                  />
+                    onValueChange={(value) => {
+                      setProvider(value);
+                      setModel(getDefaultModelForAgent(value as AgentType));
+                    }}
+                  >
+                    <SelectTrigger aria-label="Preferred/default provider">
+                      <SelectValue placeholder="Provider" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {FLEET_AGENT_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </label>
                 <label className="grid gap-1 text-xs">
                   <span>Preferred model</span>
-                  <Input
-                    aria-label="Preferred model"
-                    placeholder="Model"
-                    maxLength={FLEET_MODEL_MAX}
-                    value={model}
-                    onChange={(event) => setModel(event.target.value)}
-                  />
+                  {isFreeTextModelAgent(provider as AgentType) ? (
+                    <Input
+                      aria-label="Preferred model"
+                      placeholder="Model"
+                      maxLength={FLEET_MODEL_MAX}
+                      value={model}
+                      onChange={(event) => setModel(event.target.value)}
+                    />
+                  ) : (
+                    <Select value={model} onValueChange={setModel}>
+                      <SelectTrigger aria-label="Preferred model">
+                        <SelectValue placeholder="Model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {getModelOptions(provider as AgentType).map(
+                          (option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          )
+                        )}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </label>
               </div>
               <p className="text-muted-foreground text-xs">

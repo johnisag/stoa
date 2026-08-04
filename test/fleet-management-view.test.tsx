@@ -2225,6 +2225,20 @@ describe("FleetManagementView status drilldowns", () => {
     render(<FleetManagementView />);
     expect(await screen.findByText("Preferred/default provider")).toBeTruthy();
     expect(
+      screen.getByLabelText("Preferred/default provider").textContent
+    ).toContain("Claude Code");
+    expect(screen.getByLabelText("Preferred model").textContent).toContain(
+      "Sonnet"
+    );
+    fireEvent.click(screen.getByLabelText("Preferred/default provider"));
+    expect(screen.queryByRole("option", { name: "Kilo Code" })).toBeNull();
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Hermes Agent" })
+    );
+    expect(
+      (screen.getByLabelText("Preferred model") as HTMLInputElement).value
+    ).toBe("kimi-k3");
+    expect(
       screen.getByText(/allocates available agents automatically/)
     ).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Fleet input mode"));
