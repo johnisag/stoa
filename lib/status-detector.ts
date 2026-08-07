@@ -19,6 +19,14 @@
 import { getSessionBackend } from "./session-backend";
 import { detectRateLimit, type RateLimitState } from "./rate-limit";
 import { detectPrompt, type PromptState } from "./auto-steer";
+import {
+  deriveConfidence,
+  shouldHoldWorkingToIdle,
+  isInStartupGrace,
+  createDebounceState,
+  type StatusConfidence,
+  type DebounceState,
+} from "./detection";
 
 // Resolve the backend lazily (per use). Capturing it at module load would lock
 // in the wrong choice before server.ts finalizes the pty-host fallback decision.
@@ -250,6 +258,14 @@ class SessionStatusDetector {
   // per session (the banner prints once and may scroll off). Same as Hermes.
   private kimiSessionIds = new Map<string, string>();
 
+  // Per-session debounce state for the working→idle transition (Herdr-inspired
+  // PendingIdleConfirmation). Prevents Fleet Board / notification flicker.
+  private debounceStates = new Map<string, DebounceState>();
+
+  // The last published status per session — the debounce logic needs the
+  // PREVIOUS status to decide whether a working→idle transition should be held.
+  private lastStatuses = new Map<string, SessionStatus>();
+
   // Cache management
   async refreshCache(): Promise<void> {
     if (Date.now() - this.cache.updatedAt < CONFIG.CACHE_VALIDITY_MS) return;
@@ -417,13 +433,80 @@ class SessionStatusDetector {
     // Dead check
     if (!this.sessionExists(sessionName)) {
       this.trackers.delete(sessionName);
+      this.debounceStates.delete(sessionName);
+      this.lastStatuses.delete(sessionName);
       return { status: "dead", content: "" };
     }
 
     const timestamp = this.getTimestamp(sessionName);
     const tracker = this.getTracker(sessionName, timestamp);
     const content = await this.capturePane(sessionName);
-    return { status: this.classify(content, tracker, timestamp), content };
+    let status = this.classify(content, tracker, timestamp);
+
+    // --- Herdr-inspired enhancements (layered on top of classify) ---
+
+    const now = Date.now();
+    let debounce = this.debounceStates.get(sessionName);
+    if (!debounce) {
+      debounce = createDebounceState(now);
+      this.debounceStates.set(sessionName, debounce);
+    }
+
+    // Startup grace window: during the first few seconds, suppress false
+    // idle/waiting readings from agent boot output (banners, loading screens).
+    // BUT never mask error or dead — an agent that crashes on startup must
+    // surface its error immediately, not be hidden behind "running".
+    if (
+      isInStartupGrace(debounce, now) &&
+      status !== "dead" &&
+      status !== "error"
+    ) {
+      status = "running";
+    }
+
+    // Working→idle debounce: require N consecutive idle readings before
+    // publishing the transition. Prevents Fleet Board / notification flicker
+    // from spinner redraw gaps.
+    const previous = this.lastStatuses.get(sessionName) ?? status;
+    if (
+      shouldHoldWorkingToIdle(
+        debounce,
+        previous,
+        status,
+        false, // agentChanged — not tracked here yet (future: agent swap detection)
+        false, // processExited — dead check above handles this
+        now
+      )
+    ) {
+      status = "running"; // hold the previous running status
+    }
+
+    this.lastStatuses.set(sessionName, status);
+    return { status, content };
+  }
+
+  /**
+   * Status, the last rendered line, rate-limit/prompt detail, AND confidence
+   * signals — all from a SINGLE screen capture. The confidence flags tell
+   * callers WHY the detector classified the screen a certain way.
+   */
+  async getStatusDetailWithConfidence(sessionName: string): Promise<{
+    status: SessionStatus;
+    lastLine: string;
+    rateLimit: RateLimitState | null;
+    prompt: PromptState | null;
+    confidence: StatusConfidence;
+  }> {
+    const { status, content } = await this.evaluate(sessionName);
+    const busy = checkBusyIndicators(content);
+    const waiting = checkWaitingPatterns(content);
+    return {
+      status,
+      lastLine: lastNonEmptyLine(content),
+      rateLimit: detectRateLimit(content),
+      prompt: detectPrompt(content),
+      confidence: deriveConfidence(content, busy, waiting),
+    };
   }
 
   // Pure-ish classification over an already-captured screen (mutates the
@@ -498,6 +581,12 @@ class SessionStatusDetector {
     }
     for (const [name] of this.kimiSessionIds) {
       if (!this.sessionExists(name)) this.kimiSessionIds.delete(name);
+    }
+    for (const [name] of this.debounceStates) {
+      if (!this.sessionExists(name)) this.debounceStates.delete(name);
+    }
+    for (const [name] of this.lastStatuses) {
+      if (!this.sessionExists(name)) this.lastStatuses.delete(name);
     }
   }
 }
