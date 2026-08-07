@@ -52,7 +52,7 @@ const DEFAULT_MODEL_BY_AGENT: Partial<Record<AgentType, string>> = {
   // Prime Agent models are free-text "provider/id" patterns. The default uses
   // the Z.AI GLM model (the team's primary backend). Users can type any
   // provider/model pattern: anthropic/claude-sonnet-4-5, kimi-coding/..., etc.
-  prime: "zai/glm-4.6",
+  prime: "zai/glm-5.2",
 };
 
 // Agents whose models are dynamic/provider-specific (no fixed catalog). For

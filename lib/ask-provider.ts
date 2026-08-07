@@ -33,7 +33,7 @@ export function getAskModelOptions(provider: AskProvider): ModelOption[] {
   }
   if (provider === "prime") {
     const model = defaultAskModel(provider);
-    return [{ value: model, label: "GLM 4.6 (Z.AI)" }];
+    return [{ value: model, label: "GLM 5.2 (Z.AI)" }];
   }
   return getModelOptions(provider);
 }

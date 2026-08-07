@@ -49,7 +49,7 @@ describe("chat-settings — model default + per-provider persistence", () => {
     expect(loadChatModel("claude")).toBe("opus");
     expect(loadChatModel("codex")).toBe("gpt-5.4");
     expect(loadChatModel("hermes")).toBe("kimi-k3");
-    expect(loadChatModel("prime")).toBe("zai/glm-4.6");
+    expect(loadChatModel("prime")).toBe("zai/glm-5.2");
   });
 
   it("round-trips a saved model, ignoring a value not in the provider catalog", () => {
