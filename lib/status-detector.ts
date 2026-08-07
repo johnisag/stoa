@@ -452,9 +452,15 @@ class SessionStatusDetector {
       this.debounceStates.set(sessionName, debounce);
     }
 
-    // Startup grace window: during the first few seconds, force "running"
-    // so agent boot output (banners, loading screens) doesn't false-positive.
-    if (isInStartupGrace(debounce, now) && status !== "dead") {
+    // Startup grace window: during the first few seconds, suppress false
+    // idle/waiting readings from agent boot output (banners, loading screens).
+    // BUT never mask error or dead — an agent that crashes on startup must
+    // surface its error immediately, not be hidden behind "running".
+    if (
+      isInStartupGrace(debounce, now) &&
+      status !== "dead" &&
+      status !== "error"
+    ) {
       status = "running";
     }
 

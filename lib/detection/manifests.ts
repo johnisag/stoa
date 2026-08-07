@@ -109,9 +109,23 @@ export function userManifestDir(): string {
   return join(homeDir(), ".stoa", "detection");
 }
 
-/** The bundled manifest directory: data/detection/<id>.json */
+/** The bundled manifest directory: data/detection/<id>.json
+ *
+ * Uses __dirname (the module file's directory) to locate the data folder
+ * relative to the Stoa install root, NOT process.cwd() (which would break
+ * when the process runs from a different directory, e.g. a systemd unit or
+ * a launched-from-IDE dev server).
+ */
 export function bundledManifestDir(): string {
-  return join(process.cwd(), "data", "detection");
+  // __dirname is lib/detection/, so the project root is two levels up.
+  // In production (Next.js build), the data files are bundled — this path
+  // is only used in dev mode or when the bundled JSON is shipped alongside.
+  try {
+    return join(__dirname, "..", "..", "data", "detection");
+  } catch {
+    // Fallback: process.cwd() if __dirname resolution fails (edge runtime).
+    return join(process.cwd(), "data", "detection");
+  }
 }
 
 /**
