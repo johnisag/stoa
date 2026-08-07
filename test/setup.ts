@@ -1,4 +1,4 @@
-import childProcess from "node:child_process";
+import childProcess from "child_process";
 
 // Some browser-targeted dependencies (e.g. @xterm/addon-canvas) reference the
 // global `self` at module load. Provide it in the Node test environment.
