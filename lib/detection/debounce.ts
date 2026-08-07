@@ -25,7 +25,10 @@ import type { SessionStatus } from "../status-detector";
 export const DEBOUNCE_CONFIG = {
   PENDING_IDLE_CONFIRMATIONS: 3,
   PENDING_IDLE_INTERVAL_MS: 100,
-  PENDING_IDLE_CAP_MS: 700,
+  // The cap must be LONGER than 3× the status poll interval (2.5s), otherwise
+  // the cap always fires before 3 confirmations can be collected and the
+  // debounce never actually holds. 10s gives comfortable room for 3 polls.
+  PENDING_IDLE_CAP_MS: 10_000,
   STARTUP_GRACE_MS: 3000,
 } as const;
 

@@ -453,14 +453,10 @@ class SessionStatusDetector {
     }
 
     // Startup grace window: during the first few seconds, suppress false
-    // idle/waiting readings from agent boot output (banners, loading screens).
-    // BUT never mask error or dead — an agent that crashes on startup must
-    // surface its error immediately, not be hidden behind "running".
-    if (
-      isInStartupGrace(debounce, now) &&
-      status !== "dead" &&
-      status !== "error"
-    ) {
+    // idle readings from agent boot output (banners, loading screens).
+    // ONLY coerce idle→running — never mask error, waiting, or dead. An
+    // agent that crashes or prompts on startup must surface immediately.
+    if (isInStartupGrace(debounce, now) && status === "idle") {
       status = "running";
     }
 
