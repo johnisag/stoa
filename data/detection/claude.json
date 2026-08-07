@@ -1,0 +1,33 @@
+{
+  "id": "claude",
+  "version": 1,
+  "waiting": [
+    "\\[Y/n\\]",
+    "\\[y/N\\]",
+    "Allow\\?",
+    "Approve\\?",
+    "Continue\\?",
+    "Press Enter to",
+    "waiting for input",
+    "\\(yes/no\\)",
+    "Do you want to",
+    "Enter to confirm.*Esc to cancel",
+    ">\\s*1\\.\\s*Yes",
+    "Yes, allow all",
+    "allow all edits",
+    "allow all commands"
+  ],
+  "running": [
+    "esc to interrupt",
+    "\\(esc to interrupt\\)",
+    "· esc to interrupt",
+    "⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏"
+  ],
+  "error": [
+    "\\bError code: \\d{3}\\b[^\\n]*\\binvalid_request_error\\b",
+    "You're out of (extra )?usage",
+    "\\bquota (exceeded|exhausted)\\b",
+    "\\binsufficient[_ ](quota|credit|balance)\\b"
+  ],
+  "idle": ["\\$\\s*$", ">\\s*$", "%\\s*$"]
+}
