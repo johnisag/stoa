@@ -18,6 +18,7 @@ export const READINESS_AGENTS = [
   "hermes",
   "kilo",
   "kimi",
+  "prime",
 ] as const;
 export type ReadinessAgent = (typeof READINESS_AGENTS)[number];
 
@@ -39,6 +40,7 @@ export const EMPTY_READINESS: ReadinessPayload = Object.freeze({
     hermes: false,
     kilo: false,
     kimi: false,
+    prime: false,
   }),
   gh: false,
   authHint: false,

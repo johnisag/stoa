@@ -475,6 +475,74 @@ export const kimiProvider: AgentProvider = {
 };
 
 /**
+ * Prime Agent (PrimeIntellect) — a self-improving RLM coding agent built on
+ * pi-mono. Self-authenticating via `/login` (OAuth/API-key in
+ * ~/.prime/agent/auth.json). Free-text "provider/id" models (no static
+ * catalog); the model pattern's provider/ prefix routes to the right backend
+ * (anthropic, zai, kimi-coding, etc). Mirrors the Kilo/Kimi shape: no
+ * auto-approve flag on the bare TUI, resume re-asserts the (free-text) model,
+ * and the model token is shell-quoted on the tmux path. No positional prompt
+ * (user types in the TUI).
+ */
+export const primeProvider: AgentProvider = {
+  id: "prime",
+  name: "Prime Agent",
+  description: "PrimeIntellect self-improving RLM agent",
+  command: "prime-agent",
+  configDir: "~/.prime/agent",
+
+  // Fresh-launch-only for now (lockstep with the registry def): prime-agent has
+  // --resume/--continue, but Stoa doesn't yet capture its TUI session id.
+  supportsResume: false,
+  supportsFork: false,
+
+  buildFlags(options: BuildFlagsOptions): string[] {
+    const def = getProviderDefinition("prime");
+    const flags: string[] = [];
+    if (shouldBypassPrompts(options) && def.autoApproveFlag) {
+      flags.push(def.autoApproveFlag);
+    }
+    if (options.sessionId && def.resumeFlag) {
+      flags.push(`${def.resumeFlag} ${shellQuoteArg(options.sessionId)}`);
+    }
+    if (shouldPassModel(def, options)) {
+      // Shell-quoted — Prime Agent models are FREE-TEXT ("provider/id"
+      // patterns), so an unquoted value would be shell injection into the
+      // tmux launch on the POSIX backend.
+      flags.push(`${def.modelFlag} ${shellQuoteArg(options.model!)}`);
+    }
+    if (options.initialPrompt?.trim() && def.initialPromptFlag !== undefined) {
+      const prompt = options.initialPrompt.trim().replace(/'/g, "'\\''");
+      flags.push(
+        def.initialPromptFlag === ""
+          ? `'${prompt}'`
+          : `${def.initialPromptFlag} '${prompt}'`
+      );
+    }
+    return flags;
+  },
+
+  // Shared TUI conventions; tune once we observe Prime Agent busy/waiting output.
+  waitingPatterns: [
+    /\[Y\/n\]/i,
+    /\[y\/N\]/i,
+    /Allow\?/i,
+    /Approve\?/i,
+    /Continue\?/i,
+    /Press Enter/i,
+    /Do you want to/i,
+  ],
+  runningPatterns: [SPINNER_CHARS, /esc to interrupt/i, /tokens/i],
+  idlePatterns: [],
+
+  // Ready/trust cues are TODO from a live `prime-agent` spawn; until filled,
+  // the wait loop falls back to sending after the timeout (works, just not
+  // instant).
+  readyPatterns: [],
+  trustPromptPatterns: [],
+};
+
+/**
  * Shell Provider
  * Plain terminal without any AI CLI
  */
@@ -506,6 +574,7 @@ export const providers: Record<AgentType, AgentProvider> = {
   hermes: hermesProvider,
   kilo: kiloProvider,
   kimi: kimiProvider,
+  prime: primeProvider,
   shell: shellProvider,
 };
 

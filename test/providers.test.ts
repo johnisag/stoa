@@ -9,6 +9,7 @@ import {
 } from "@/lib/providers";
 import {
   PROVIDER_IDS,
+  type ProviderId,
   getAllProviderDefinitions,
   getProviderDefinition,
   getManagedSessionPattern,
@@ -280,6 +281,47 @@ describe("Kimi provider wiring", () => {
   });
 });
 
+describe("Prime Agent provider wiring", () => {
+  it("has the expected registry definition (free-text model, no auto-approve)", () => {
+    const def = getProviderDefinition("prime");
+    expect(def.cli).toBe("prime-agent");
+    expect(def.autoApproveFlag).toBeUndefined(); // no bare-TUI auto-approve
+    expect(def.resumeFlag).toBe("--resume");
+    expect(def.supportsResume).toBe(false); // fresh-launch-only until id-capture
+    expect(def.supportsFork).toBe(false);
+    expect(def.modelFlag).toBe("--model"); // free-text "provider/id" patterns
+    expect(isFreeTextModelAgent("prime")).toBe(true);
+    expect(getModelOptions("prime")).toEqual([]);
+  });
+
+  it("has a provider object whose buildFlags emits no auto-approve flag", () => {
+    const p = getProvider("prime");
+    expect(p.command).toBe("prime-agent");
+    expect(p.supportsResume).toBe(false); // lockstep with the registry definition
+    expect(p.buildFlags({})).toEqual([]);
+    expect(p.buildFlags({ autoApprove: true })).toEqual([]); // no flag to push
+    expect(p.buildFlags({ skipPermissions: true })).toEqual([]);
+  });
+
+  it("emits the free-text model on a fresh launch on BOTH the pty and tmux paths", () => {
+    const { binary, args } = buildAgentArgs("prime", {
+      model: "zai/glm-4.6",
+      initialPrompt: "hi", // still ignored (initialPromptFlag unset)
+    });
+    expect(binary).toBe("prime-agent");
+    expect(args).toEqual(["--model", "zai/glm-4.6"]);
+    expect(getProvider("prime").buildFlags({ model: "zai/glm-4.6" })).toEqual([
+      "--model zai/glm-4.6",
+    ]);
+  });
+
+  it("is a valid agent type and appears in the New Session picker", () => {
+    expect(isValidProviderId("prime")).toBe(true);
+    expect(isValidAgentType("prime")).toBe(true);
+    expect(AGENT_OPTIONS.some((o) => o.value === "prime")).toBe(true);
+  });
+});
+
 // Guards against half-wiring a provider (registry entry without a provider
 // object, a picker option for a non-existent id, etc.).
 describe("provider registry integrity", () => {
@@ -358,8 +400,17 @@ describe("orchestration readiness contract", () => {
   // Claude/Kilo/Kimi read their native project configs; Codex gets per-launch
   // `-c mcp_servers.stoa.*` flags; Hermes gets a global `mcp add` + cwd marker.
   // The New Session box and create/repair routes gate on this flag.
+  // Providers whose orchestration wiring is not yet verified (Prime Agent's
+  // MCP config convention) are exempt until a follow-up lands their wiring.
+  const ORCHESTRATION_PENDING = new Set<ProviderId>(["prime"]);
   it("every agent provider advertises supportsOrchestration; shell does not", () => {
     for (const id of PROVIDER_IDS) {
+      if (ORCHESTRATION_PENDING.has(id)) {
+        expect(Boolean(getProviderDefinition(id).supportsOrchestration)).toBe(
+          false
+        );
+        continue;
+      }
       const expected = id !== "shell";
       expect(Boolean(getProviderDefinition(id).supportsOrchestration)).toBe(
         expected

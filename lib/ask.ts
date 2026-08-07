@@ -138,6 +138,17 @@ export function buildAskArgs(
         input: prompt,
         shell: false,
       };
+    case "prime":
+      // Prime Agent's --print mode reads the prompt from stdin (merging piped
+      // input into the initial prompt) and prints the response — same safe
+      // shape as Codex exec. No --autonomous flag (read-only Q&A). The model
+      // is a trusted Ask catalog token ("zai/glm-4.6"), never user free-text.
+      return {
+        binary: resolveBinary("prime-agent") || "prime-agent",
+        args: model ? ["-p", "--model", model] : ["-p"],
+        input: prompt,
+        shell: isWindows,
+      };
   }
 }
 

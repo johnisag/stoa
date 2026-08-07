@@ -235,6 +235,7 @@ describe("detectAgentBinaries — binary-presence mapping (injected resolver)", 
       hermes: false,
       kilo: true,
       kimi: false,
+      prime: false,
     });
   });
 
@@ -301,6 +302,7 @@ describe("collectReadiness (fully injected)", () => {
         hermes: false,
         kilo: false,
         kimi: false,
+        prime: false,
       },
       gh: true,
       authHint: true,
