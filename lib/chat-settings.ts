@@ -1,5 +1,10 @@
 import { AGENT_OPTIONS } from "@/components/NewSessionDialog/NewSessionDialog.types";
-import { getModelOptions } from "@/lib/model-catalog";
+import {
+  ASK_PROVIDERS,
+  defaultAskModel,
+  getAskModelOptions,
+  type AskProvider,
+} from "@/lib/ask-provider";
 
 // Which agent provider answers "Ask Stoa" questions. Persisted in localStorage so
 // the choice sticks across reloads — mirrors the AGENT_TYPE_KEY pattern in
@@ -7,18 +12,14 @@ import { getModelOptions } from "@/lib/model-catalog";
 export const CHAT_PROVIDER_KEY = "stoa:chatProvider";
 
 // The agents that can answer an Ask-Stoa question. Must stay in sync with
-// ASK_PROVIDERS in lib/ask.ts (kept separate so this client module doesn't pull
-// the server-only lib/ask into the browser bundle). Phase 1 = claude + codex;
-// hermes is deferred until its one-shot mode is verified (see lib/ask.ts).
-export type ChatProvider = "claude" | "codex";
-
-const CHAT_PROVIDERS: readonly ChatProvider[] = ["claude", "codex"];
+// ASK_PROVIDERS in lib/ask-provider.ts is client-safe and shared with the route.
+export type ChatProvider = AskProvider;
 
 /** The default provider when nothing is stored (or a stale/invalid value is). */
 export const DEFAULT_CHAT_PROVIDER: ChatProvider = "claude";
 
 function isChatProvider(value: string | null): value is ChatProvider {
-  return value != null && (CHAT_PROVIDERS as readonly string[]).includes(value);
+  return value != null && (ASK_PROVIDERS as readonly string[]).includes(value);
 }
 
 /**
@@ -63,17 +64,12 @@ function chatModelKey(provider: ChatProvider): string {
 // The chatbox's default model PER PROVIDER. This deliberately OVERRIDES the
 // agent's own default (Claude's is Sonnet) — the chatbox defaults to OPUS, the
 // user's preferred Claude-subscription model. Configurable in the chat header.
-// INVARIANT: each value must be a real getModelOptions(provider) token (locked by
+// INVARIANT: each value must be a trusted getAskModelOptions(provider) token (locked by
 // test/chat-settings.test.ts) — else loadChatModel hands back an off-catalog id
 // and the Select renders a blank trigger.
-const CHAT_DEFAULT_MODEL: Record<ChatProvider, string> = {
-  claude: "opus",
-  codex: "gpt-5.4",
-};
-
 /** The chatbox's default model for a provider (NOT the agent's own default). */
 export function defaultChatModel(provider: ChatProvider): string {
-  return CHAT_DEFAULT_MODEL[provider];
+  return defaultAskModel(provider);
 }
 
 /**
@@ -86,7 +82,8 @@ export function loadChatModel(provider: ChatProvider): string {
   if (typeof window === "undefined") return fallback;
   const saved = window.localStorage.getItem(chatModelKey(provider));
   const valid =
-    saved != null && getModelOptions(provider).some((o) => o.value === saved);
+    saved != null &&
+    getAskModelOptions(provider).some((o) => o.value === saved);
   return valid ? saved! : fallback;
 }
 

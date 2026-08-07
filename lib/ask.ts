@@ -10,7 +10,7 @@
  * fork or mutate a session, and the prompt instructs the agent to answer from the
  * context without running tools. The spawn shape mirrors the cross-platform-safe
  * one in app/api/sessions/[id]/summarize/route.ts (resolveBinary for the Windows
- * .cmd shim, argv array, content on stdin, sanitizeDigest the reply) plus a hard
+ * .cmd shim, stdin prompt transport, sanitizeDigest the reply) plus a hard
  * timeout that KILLS the child so a hung/interactive process can't wedge the
  * request.
  *
@@ -20,6 +20,8 @@
  */
 
 import { spawn, type ChildProcess } from "child_process";
+import { existsSync, readFileSync } from "fs";
+import { dirname, isAbsolute, join } from "path";
 import { resolveBinary, isWindows, killTreeArgs } from "./platform";
 import { sanitizeDigest } from "./summarize";
 import { getAnalyticsReport } from "./analytics/queries";
@@ -27,22 +29,9 @@ import { computeManagedStatuses } from "./session-status";
 import { getDb, queries, type Session } from "./db";
 import type { AgentType } from "./providers";
 import { isInteractiveSessionRole } from "./session-role";
+import type { AskProvider } from "./ask-provider";
 
-/**
- * The providers Ask Stoa can route a question to. Phase 1 ships claude + codex
- * only: both have a VERIFIED non-interactive mode that takes the prompt on STDIN
- * (so the prompt — which embeds untrusted fleet context — never rides in argv,
- * which would be shell-injectable under the Windows `.cmd` spawn). Hermes is
- * deferred until its `-z` one-shot mode is live-verified AND a stdin/temp-file
- * path replaces argv (the registry flags `-z` as interactive-vs-one-shot
- * unconfirmed; AGENTS.md: only wire a verified flag).
- */
-export type AskProvider = "claude" | "codex";
-
-export const ASK_PROVIDERS: readonly AskProvider[] = [
-  "claude",
-  "codex",
-] as const;
+export { ASK_PROVIDERS, type AskProvider } from "./ask-provider";
 
 /** One prior conversation turn (the optional multi-turn history). */
 export interface AskHistoryTurn {
@@ -50,13 +39,61 @@ export interface AskHistoryTurn {
   content: string;
 }
 
-/** A resolved spawn plan: which binary, its argv, and the prompt to pipe on
- * stdin. The prompt is ALWAYS on stdin (never argv) so untrusted context can't be
- * shell-injected under the Windows `.cmd` spawn (`shell: isWindows`). */
+/** A resolved spawn plan. Every provider reads the fleet prompt from stdin so
+ * private context never appears in process arguments. */
 export interface AskSpawn {
   binary: string;
   args: string[];
   input: string;
+  shell: boolean;
+}
+
+const HERMES_NO_TOOLS = "__stoa_no_tools__";
+const HERMES_ASK_SCRIPT = [
+  "import contextlib, logging, os, sys",
+  "from inspect import signature",
+  "import run_agent",
+  "from hermes_cli.oneshot import _run_agent",
+  "required = {'toolsets', 'use_config_toolsets'}",
+  "if not required.issubset(signature(_run_agent).parameters) or not callable(getattr(run_agent, 'get_tool_definitions', None)):",
+  "    raise RuntimeError('Installed Hermes is not compatible with Ask Stoa')",
+  "run_agent.get_tool_definitions = lambda *args, **kwargs: []",
+  "logging.disable(logging.CRITICAL)",
+  "with open(os.devnull, 'w', encoding='utf-8') as sink:",
+  "    with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):",
+  `        response, _ = _run_agent(sys.stdin.read(), model=sys.argv[1], toolsets=['${HERMES_NO_TOOLS}'], use_config_toolsets=False)`,
+  "sys.stdout.write(response)",
+].join("\n");
+
+export function parseHermesLauncherPython(launcher: string): string | null {
+  const execMatch = launcher.match(
+    /^exec\s+"([^"]*\/python(?:3(?:\.\d+)?)?)"\s/m
+  );
+  const shebangMatch = launcher.match(
+    /^#!\s*(\/\S*\/python(?:3(?:\.\d+)?)?)(?:\s|$)/
+  );
+  const interpreter = execMatch?.[1] || shebangMatch?.[1];
+  return interpreter && isAbsolute(interpreter) ? interpreter : null;
+}
+
+function resolveHermesPython(): string {
+  const hermes = resolveBinary("hermes") || "hermes";
+  if (isWindows) {
+    const sibling = join(dirname(hermes), "python.exe");
+    if (existsSync(sibling)) return sibling;
+  } else {
+    try {
+      const interpreter = parseHermesLauncherPython(
+        readFileSync(hermes, "utf8")
+      );
+      if (interpreter && existsSync(interpreter)) return interpreter;
+    } catch {
+      // Fall through to the actionable compatibility error below.
+    }
+  }
+  throw new Error(
+    "Could not locate the Python interpreter owned by the Hermes installation"
+  );
 }
 
 /**
@@ -65,14 +102,14 @@ export interface AskSpawn {
  *   - codex:  `codex exec [-c model=<m>]` → prompt on STDIN (exec reads stdin
  *                             when no prompt arg — "Run Codex non-interactively").
  * `model` is an optional CATALOG value (e.g. "opus" for claude, "gpt-5.4" for
- * codex) — it's a fixed token from getModelOptions, never user free-text, so it's
+ * codex) — it's a fixed token from the Ask model list, never user free-text, so it's
  * not an injection vector even though it rides in argv. Omitted → the agent's own
- * default. The prompt is ALWAYS on STDIN (never argv) — critical, because
- * `runAsk` spawns with `shell: isWindows` and the prompt embeds untrusted fleet
- * context; argv under a shell would be command-injectable. No `--dangerously-*`/
- * bypass flag is ever added — this is read-only Q&A. The binary is resolved with
- * resolveBinary (so the Windows .cmd shim is found), falling back to the bare
- * name. Pure → unit-tested as the cross-platform argv regression guard.
+ * default. Hermes' public one-shot CLI only accepts its prompt in argv, so Ask
+ * invokes the installed Hermes interpreter and its one-shot runner directly:
+ * the prompt stays on stdin and the runner's tool-schema seam is pinned to an
+ * empty list before agent construction. No `--dangerously-*`/bypass flag is
+ * ever added.
+ * Pure → unit-tested as the cross-platform argv regression guard.
  */
 export function buildAskArgs(
   provider: AskProvider,
@@ -85,12 +122,21 @@ export function buildAskArgs(
         binary: resolveBinary("claude") || "claude",
         args: model ? ["-p", "--model", model] : ["-p"],
         input: prompt,
+        shell: isWindows,
       };
     case "codex":
       return {
         binary: resolveBinary("codex") || "codex",
         args: model ? ["exec", "-c", `model=${model}`] : ["exec"],
         input: prompt,
+        shell: isWindows,
+      };
+    case "hermes":
+      return {
+        binary: resolveHermesPython(),
+        args: ["-c", HERMES_ASK_SCRIPT, model || "kimi-k3"],
+        input: prompt,
+        shell: false,
       };
   }
 }
@@ -217,6 +263,8 @@ export interface RunAskOptions {
   /** Hard wall-clock cap; the child is KILLED past it so a hung/interactive
    * process can't wedge the request. */
   timeoutMs?: number;
+  /** Process seam for deterministic stream-failure tests. */
+  spawnChild?: typeof spawn;
 }
 
 const DEFAULT_ASK_TIMEOUT_MS = 60_000;
@@ -253,20 +301,32 @@ function killChildTree(child: ChildProcess): void {
 export function runAsk(
   provider: AskProvider,
   prompt: string,
-  { model, timeoutMs = DEFAULT_ASK_TIMEOUT_MS }: RunAskOptions = {}
+  {
+    model,
+    timeoutMs = DEFAULT_ASK_TIMEOUT_MS,
+    spawnChild = spawn,
+  }: RunAskOptions = {}
 ): Promise<string> {
-  const { binary, args, input } = buildAskArgs(provider, prompt, model);
+  const { binary, args, input, shell } = buildAskArgs(provider, prompt, model);
 
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, {
+    const child = spawnChild(binary, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      shell: isWindows,
+      shell,
       windowsHide: isWindows,
     });
 
     let stdout = "";
     let stderr = "";
     let settled = false;
+
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      killChildTree(child);
+      reject(error);
+    };
 
     // Hard timeout: kill the child so a hung or unexpectedly-interactive agent
     // can't hold the HTTP request open forever.
@@ -297,15 +357,16 @@ export function runAsk(
       }
     });
 
-    child.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(err);
-    });
+    child.stdin.on("error", fail);
+    child.stdout.on("error", fail);
+    child.stderr.on("error", fail);
+    child.on("error", fail);
 
-    // The prompt always rides on stdin (never argv) — see buildAskArgs.
-    child.stdin.write(input);
-    child.stdin.end();
+    try {
+      child.stdin.write(input);
+      child.stdin.end();
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error("Ask stdin failed"));
+    }
   });
 }

@@ -6,7 +6,7 @@ import {
   type AskHistoryTurn,
   type AskProvider,
 } from "@/lib/ask";
-import { getModelOptions } from "@/lib/model-catalog";
+import { isAskModel } from "@/lib/ask-provider";
 import { getAllProjects } from "@/lib/projects";
 import {
   buildCommandPrompt,
@@ -33,8 +33,8 @@ import { getDb, queries } from "@/lib/db";
  *
  * Body:  { message: string,
  *          history?: { role: "user" | "assistant"; content: string }[],
- *          provider?: "claude" | "codex",   // default "claude"
- *          model?: string }                 // a getModelOptions(provider) token
+ *          provider?: "claude" | "codex" | "hermes", // default "claude"
+ *          model?: string }                 // a trusted Ask model token
  * Reply: { kind: "answer", text }
  *      |  { kind: "proposal", action, params, summary, project: { id, name } }
  */
@@ -78,11 +78,7 @@ export async function POST(request: NextRequest) {
     // Model: honored only if it's a value from the provider's catalog (a fixed
     // token, never free text), else the agent's own default. Same guard as
     // /api/ask — keeps an arbitrary string out of the argv model flag.
-    const model =
-      typeof rawModel === "string" &&
-      getModelOptions(provider).some((o) => o.value === rawModel)
-        ? rawModel
-        : undefined;
+    const model = isAskModel(provider, rawModel) ? rawModel : undefined;
 
     const history: AskHistoryTurn[] = Array.isArray(rawHistory)
       ? rawHistory

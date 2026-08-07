@@ -1,3 +1,5 @@
+import { EventEmitter } from "events";
+import type { ChildProcessWithoutNullStreams, spawn } from "child_process";
 import { describe, it, expect, vi } from "vitest";
 
 const contextState = vi.hoisted(() => ({
@@ -15,6 +17,16 @@ vi.mock("@/lib/platform", async (importOriginal) => {
   return { ...actual, resolveBinary: () => null };
 });
 
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return {
+    ...actual,
+    existsSync: (path: string) => /python(?:3|\.exe)?$/.test(path),
+    readFileSync: () =>
+      '#!/usr/bin/env bash\nexec "/opt/hermes/venv/bin/python" "/opt/hermes/hermes" "$@"\n',
+  };
+});
+
 vi.mock("@/lib/db", () => ({
   getDb: () => ({}),
   queries: { getAllSessions: () => ({ all: () => contextState.sessions }) },
@@ -26,7 +38,13 @@ vi.mock("@/lib/session-status", () => ({
   computeManagedStatuses: vi.fn(async () => contextState.statuses),
 }));
 
-import { buildAskArgs, buildAskPrompt, gatherStoaContext } from "@/lib/ask";
+import {
+  buildAskArgs,
+  buildAskPrompt,
+  gatherStoaContext,
+  parseHermesLauncherPython,
+  runAsk,
+} from "@/lib/ask";
 import { killTreeArgs } from "@/lib/platform";
 
 const PROMPT = "What is happening in my fleet?";
@@ -95,6 +113,23 @@ describe("gatherStoaContext internal-session boundary", () => {
 });
 
 describe("buildAskArgs — per-provider non-interactive argv (cross-platform guard)", () => {
+  it("resolves the interpreter from the official POSIX Hermes launcher", () => {
+    expect(
+      parseHermesLauncherPython(
+        '#!/usr/bin/env bash\nexec "/opt/hermes/venv/bin/python" "/opt/hermes/hermes" "$@"\n'
+      )
+    ).toBe("/opt/hermes/venv/bin/python");
+    expect(parseHermesLauncherPython('#!/bin/sh\nexec python3 "$@"')).toBeNull;
+  });
+
+  it("resolves the interpreter from a Hermes console-script shebang", () => {
+    expect(
+      parseHermesLauncherPython(
+        "#!/opt/hermes/venv/bin/python3\nfrom hermes_cli.main import main\n"
+      )
+    ).toBe("/opt/hermes/venv/bin/python3");
+  });
+
   it("claude: `claude -p`, prompt on stdin", () => {
     const plan = buildAskArgs("claude", PROMPT);
     expect(plan.binary).toBe("claude");
@@ -112,11 +147,30 @@ describe("buildAskArgs — per-provider non-interactive argv (cross-platform gua
     expect(plan.args).not.toContain(PROMPT);
   });
 
-  it("both providers carry the prompt on STDIN, never in argv (injection-safe)", () => {
+  it("hermes: tool-free one-shot keeps the prompt on stdin", () => {
+    const plan = buildAskArgs("hermes", PROMPT, "kimi-k3");
+    expect(plan.binary).toMatch(/python(?:3|\.exe)?$/);
+    expect(plan.args[0]).toBe("-c");
+    expect(plan.args[1]).toContain("__stoa_no_tools__");
+    expect(plan.args[1]).toContain("get_tool_definitions = lambda");
+    expect(plan.args[1]).toContain("use_config_toolsets=False");
+    expect(plan.args[2]).toBe("kimi-k3");
+    expect(plan.args).not.toContain(PROMPT);
+    expect(plan.input).toBe(PROMPT);
+    expect(plan.shell).toBe(false);
+  });
+
+  it("hermes keeps a Windows-sized prompt off argv", () => {
+    const largePrompt = `PREAMBLE\n${"fleet-context\n".repeat(4_000)}QUESTION`;
+    const plan = buildAskArgs("hermes", largePrompt, "kimi-k3");
+    expect(plan.input).toBe(largePrompt);
+    expect(plan.args.join(" ")).not.toContain(largePrompt);
+  });
+
+  it("claude and codex carry the prompt on STDIN, never in argv", () => {
     // The prompt embeds untrusted fleet context; under shell:isWindows an argv
     // prompt would be command-injectable. So it must always be `input`, never an
-    // arg. (Hermes — which only had an argv `-z` mode — is deferred for exactly
-    // this reason.)
+    // arg. Hermes is covered separately and also reads stdin without a shell.
     for (const provider of ["claude", "codex"] as const) {
       const plan = buildAskArgs(provider, PROMPT);
       expect(plan.input).toBe(PROMPT);
@@ -125,7 +179,7 @@ describe("buildAskArgs — per-provider non-interactive argv (cross-platform gua
   });
 
   it("never adds a --dangerously-* / bypass flag (read-only Q&A)", () => {
-    for (const provider of ["claude", "codex"] as const) {
+    for (const provider of ["claude", "codex", "hermes"] as const) {
       const { args } = buildAskArgs(provider, PROMPT);
       for (const arg of args) {
         expect(arg).not.toMatch(/dangerous|bypass|yolo|--fork/i);
@@ -133,7 +187,7 @@ describe("buildAskArgs — per-provider non-interactive argv (cross-platform gua
     }
   });
 
-  it("threads a catalog model into argv per provider, prompt still on stdin", () => {
+  it("threads static-provider models into argv with prompts on stdin", () => {
     // The model is a fixed CATALOG token (validated server-side), so it's safe in
     // argv even though the prompt never is.
     const claude = buildAskArgs("claude", PROMPT, "opus");
@@ -147,9 +201,37 @@ describe("buildAskArgs — per-provider non-interactive argv (cross-platform gua
     expect(codex.args).not.toContain(PROMPT);
   });
 
-  it("omits the model flag when no model is given (agent's own default)", () => {
+  it("uses provider defaults when no model is given", () => {
     expect(buildAskArgs("claude", PROMPT).args).toEqual(["-p"]);
     expect(buildAskArgs("codex", PROMPT).args).toEqual(["exec"]);
+    expect(buildAskArgs("hermes", PROMPT).args.at(-1)).toBe("kimi-k3");
+  });
+});
+
+describe("runAsk stream failures", () => {
+  it("rejects and tears down when the prompt pipe emits EPIPE", async () => {
+    const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+    const stdin = Object.assign(new EventEmitter(), {
+      write: vi.fn(() => {
+        queueMicrotask(() => stdin.emit("error", new Error("EPIPE")));
+        return true;
+      }),
+      end: vi.fn(),
+    });
+    const kill = vi.fn();
+    Object.assign(child, {
+      pid: undefined,
+      stdin,
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill,
+    });
+    const spawnChild = vi.fn(() => child) as unknown as typeof spawn;
+
+    await expect(
+      runAsk("claude", PROMPT, { timeoutMs: 1_000, spawnChild })
+    ).rejects.toThrow("EPIPE");
+    expect(kill).toHaveBeenCalled();
   });
 });
 

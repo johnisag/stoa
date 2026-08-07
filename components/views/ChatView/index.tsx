@@ -24,7 +24,7 @@ import {
   saveChatModel,
   type ChatProvider,
 } from "@/lib/chat-settings";
-import { getModelOptions } from "@/lib/model-catalog";
+import { getAskModelOptions } from "@/lib/ask-provider";
 import { useViewport } from "@/hooks/useViewport";
 import {
   useProposeCommand,
@@ -593,7 +593,7 @@ export function ChatView({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {getModelOptions(provider).map((option) => (
+            {getAskModelOptions(provider).map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 {option.label}
                 {option.value === defaultChatModel(provider) && (
