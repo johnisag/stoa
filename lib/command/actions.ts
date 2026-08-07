@@ -54,6 +54,7 @@ export const SESSION_AGENT_IDS = [
   "hermes",
   "kilo",
   "kimi",
+  "prime",
 ] as const;
 export type SessionAgentId = (typeof SESSION_AGENT_IDS)[number];
 

@@ -179,7 +179,7 @@ describe("buildAskArgs — per-provider non-interactive argv (cross-platform gua
   });
 
   it("never adds a --dangerously-* / bypass flag (read-only Q&A)", () => {
-    for (const provider of ["claude", "codex", "hermes"] as const) {
+    for (const provider of ["claude", "codex", "hermes", "prime"] as const) {
       const { args } = buildAskArgs(provider, PROMPT);
       for (const arg of args) {
         expect(arg).not.toMatch(/dangerous|bypass|yolo|--fork/i);
@@ -201,10 +201,20 @@ describe("buildAskArgs — per-provider non-interactive argv (cross-platform gua
     expect(codex.args).not.toContain(PROMPT);
   });
 
+  it("prime: -p one-shot keeps the prompt on stdin", () => {
+    const plan = buildAskArgs("prime", PROMPT, "zai/glm-4.6");
+    expect(plan.args[0]).toBe("-p");
+    expect(plan.args).toContain("--model");
+    expect(plan.args).toContain("zai/glm-4.6");
+    expect(plan.args).not.toContain(PROMPT);
+    expect(plan.input).toBe(PROMPT);
+  });
+
   it("uses provider defaults when no model is given", () => {
     expect(buildAskArgs("claude", PROMPT).args).toEqual(["-p"]);
     expect(buildAskArgs("codex", PROMPT).args).toEqual(["exec"]);
     expect(buildAskArgs("hermes", PROMPT).args.at(-1)).toBe("kimi-k3");
+    expect(buildAskArgs("prime", PROMPT).args).toEqual(["-p"]);
   });
 });
 

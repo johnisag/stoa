@@ -23,11 +23,17 @@ describe("chat-settings — model default + per-provider persistence", () => {
     ).toBe(true);
   });
 
+  it("offers Prime Agent in the Ask Stoa provider picker", () => {
+    expect(
+      CHAT_PROVIDER_OPTIONS.some((option) => option.value === "prime")
+    ).toBe(true);
+  });
+
   it("each provider's chatbox default is a real catalog value (sync guard)", () => {
     // Locks the CHAT_DEFAULT_MODEL ↔ getModelOptions invariant: a catalog rename
     // that stranded a default would otherwise pass tsc/build and only surface as a
     // blank Select trigger + the agent silently using its own default.
-    for (const provider of ["claude", "codex", "hermes"] as const) {
+    for (const provider of ["claude", "codex", "hermes", "prime"] as const) {
       const def = defaultChatModel(provider);
       expect(getAskModelOptions(provider).some((o) => o.value === def)).toBe(
         true
@@ -43,6 +49,7 @@ describe("chat-settings — model default + per-provider persistence", () => {
     expect(loadChatModel("claude")).toBe("opus");
     expect(loadChatModel("codex")).toBe("gpt-5.4");
     expect(loadChatModel("hermes")).toBe("kimi-k3");
+    expect(loadChatModel("prime")).toBe("zai/glm-4.6");
   });
 
   it("round-trips a saved model, ignoring a value not in the provider catalog", () => {

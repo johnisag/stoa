@@ -137,13 +137,14 @@ describe("validateCreateSessionParams — per-field rules", () => {
     expect(res.ok && res.params.name).toBeUndefined();
   });
 
-  it("allows the AI agents claude/codex/hermes/kilo/kimi only (not shell)", () => {
+  it("allows the AI agents claude/codex/hermes/kilo/kimi/prime only (not shell)", () => {
     expect([...SESSION_AGENT_IDS]).toEqual([
       "claude",
       "codex",
       "hermes",
       "kilo",
       "kimi",
+      "prime",
     ]);
   });
 });

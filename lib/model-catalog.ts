@@ -49,6 +49,10 @@ const DEFAULT_MODEL_BY_AGENT: Partial<Record<AgentType, string>> = {
   claude: "sonnet",
   codex: "gpt-5.5",
   hermes: HERMES_DEFAULT_MODEL,
+  // Prime Agent models are free-text "provider/id" patterns. The default uses
+  // the Z.AI GLM model (the team's primary backend). Users can type any
+  // provider/model pattern: anthropic/claude-sonnet-4-5, kimi-coding/..., etc.
+  prime: "zai/glm-4.6",
 };
 
 // Agents whose models are dynamic/provider-specific (no fixed catalog). For
@@ -59,7 +63,12 @@ const DEFAULT_MODEL_BY_AGENT: Partial<Record<AgentType, string>> = {
 // Kilo (free-text "provider/model" via the Kilo gateway, 500+) and Kimi
 // (config-defined aliases) are likewise dynamic — no static catalog, so the UI
 // shows a free-text field and any foreign static model is dropped to the default.
-const FREE_TEXT_MODEL_AGENTS = new Set<AgentType>(["hermes", "kilo", "kimi"]);
+const FREE_TEXT_MODEL_AGENTS = new Set<AgentType>([
+  "hermes",
+  "kilo",
+  "kimi",
+  "prime",
+]);
 
 export function isFreeTextModelAgent(agentType: AgentType): boolean {
   return FREE_TEXT_MODEL_AGENTS.has(agentType);

@@ -126,6 +126,11 @@ export const AGENT_OPTIONS: {
     label: "Kimi Code",
     description: "Kimi Code — Moonshot AI's coding agent",
   },
+  {
+    value: "prime",
+    label: "Prime Agent",
+    description: "Prime Agent — PrimeIntellect self-improving RLM agent",
+  },
 ];
 
 // Props for main dialog

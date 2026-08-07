@@ -10,6 +10,7 @@ export const PROVIDER_IDS = [
   "hermes",
   "kilo",
   "kimi",
+  "prime",
   "shell",
 ] as const;
 
@@ -234,6 +235,43 @@ export const PROVIDERS: ProviderDefinition[] = [
     supportsFork: false,
     // Project-local `.kimi-code/mcp.json`, using Kimi's `mcpServers` schema.
     supportsOrchestration: true,
+  },
+  {
+    id: "prime",
+    name: "Prime Agent",
+    description: "PrimeIntellect self-improving RLM agent",
+    cli: "prime-agent",
+    configDir: "~/.prime/agent",
+    // Prime Agent (PrimeIntellect) — a self-improving RLM coding agent built on
+    // pi-mono. Binary `prime-agent` (installed by curl install.sh). Self-
+    // authenticating: `/login` in the TUI stores OAuth/API-key creds in
+    // ~/.prime/agent/auth.json (0600). Verified via `prime-agent --help`
+    // (v0.7.1) and packages/coding-agent/docs/usage.md.
+    //  - modelFlag is "--model": models are FREE-TEXT "provider/id" patterns
+    //    (e.g. "anthropic/claude-sonnet-4-5", "kimi-coding/...", "zai/glm-..."),
+    //    so Stoa offers a FREE-TEXT model field (no static catalog). An empty
+    //    model leaves Prime Agent on its own configured default (no --model
+    //    passed). The team default is the Z.AI GLM model.
+    //  - `--provider` selects the backend (anthropic, openai, google, zai,
+    //    kimi-coding, etc). The model pattern's provider/ prefix already
+    //    routes to the right backend, so we do NOT pass --provider separately
+    //    — the model token carries it. The Z.AI (GLM), Anthropic (Claude),
+    //    and Kimi providers are all wired in Prime Agent's env-api-keys map.
+    //  - resume is ON: prime-agent HAS `-r, --resume [path|id]` (resumeFlag
+    //    "--resume"). Stoa does NOT yet capture Prime Agent's session id from
+    //    the TUI banner, so supportsResume stays false (fresh-launch-only)
+    //    until a follow-up wires id-capture. The resumeFlag is kept so the
+    //    plumbing is ready.
+    //  - auto-approve: Prime Agent has NO bare-TUI auto-approve flag. Its
+    //    autonomous mode is `--autonomous` with budget gates — a different
+    //    surface from a simple yolo flag. autoApproveFlag stays UNSET.
+    //  - No positional prompt on the bare TUI; Stoa sets the pty cwd.
+    //    initialPromptFlag unset (user types in the TUI).
+    autoApproveFlag: undefined,
+    resumeFlag: "--resume",
+    modelFlag: "--model",
+    supportsResume: false,
+    supportsFork: false,
   },
   {
     id: "shell",
