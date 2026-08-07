@@ -202,10 +202,10 @@ describe("buildAskArgs — per-provider non-interactive argv (cross-platform gua
   });
 
   it("prime: -p one-shot keeps the prompt on stdin", () => {
-    const plan = buildAskArgs("prime", PROMPT, "zai/glm-4.6");
+    const plan = buildAskArgs("prime", PROMPT, "zai/glm-5.2");
     expect(plan.args[0]).toBe("-p");
     expect(plan.args).toContain("--model");
-    expect(plan.args).toContain("zai/glm-4.6");
+    expect(plan.args).toContain("zai/glm-5.2");
     expect(plan.args).not.toContain(PROMPT);
     expect(plan.input).toBe(PROMPT);
   });

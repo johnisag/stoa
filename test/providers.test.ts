@@ -305,13 +305,13 @@ describe("Prime Agent provider wiring", () => {
 
   it("emits the free-text model on a fresh launch on BOTH the pty and tmux paths", () => {
     const { binary, args } = buildAgentArgs("prime", {
-      model: "zai/glm-4.6",
+      model: "zai/glm-5.2",
       initialPrompt: "hi", // still ignored (initialPromptFlag unset)
     });
     expect(binary).toBe("prime-agent");
-    expect(args).toEqual(["--model", "zai/glm-4.6"]);
-    expect(getProvider("prime").buildFlags({ model: "zai/glm-4.6" })).toEqual([
-      "--model zai/glm-4.6",
+    expect(args).toEqual(["--model", "zai/glm-5.2"]);
+    expect(getProvider("prime").buildFlags({ model: "zai/glm-5.2" })).toEqual([
+      "--model zai/glm-5.2",
     ]);
   });
 

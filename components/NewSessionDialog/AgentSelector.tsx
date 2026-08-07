@@ -21,7 +21,7 @@ export function AgentSelector({ value, onChange }: AgentSelectorProps) {
         <SelectTrigger>
           <SelectValue />
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent className="max-h-[40vh] overflow-y-auto">
           {AGENT_OPTIONS.map((option) => (
             <SelectItem key={option.value} value={option.value}>
               <span className="font-medium">{option.label}</span>
