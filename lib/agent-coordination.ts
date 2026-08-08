@@ -28,6 +28,21 @@ import {
   assertGenericSessionRouteAccess,
   genericSessionRouteFailure,
 } from "./session-route-access";
+import { SEND_KEYS_MAX_LENGTH } from "./api-security";
+
+/**
+ * Reject C0 control characters except tab and newline — same guard as the
+ * send-keys route. Kept here so promptSession is self-contained and safe
+ * regardless of caller.
+ */
+function hasDisallowedControlChars(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 32 && code !== 9 && code !== 10) return true;
+    if (code === 127) return true;
+  }
+  return false;
+}
 
 /** The states an agent-to-agent wait can watch for. */
 export type WaitTargetStatus =
@@ -214,6 +229,27 @@ export async function promptSession(
     }
   | { ok: false; error: string; status: number }
 > {
+  // Defense-in-depth: enforce the same controls the send-keys route applies,
+  // so promptSession is safe regardless of caller. Without this, a library
+  // consumer could bypass length/character validation.
+  if (!text) {
+    return { ok: false, error: "No text provided", status: 400 };
+  }
+  if (text.length > SEND_KEYS_MAX_LENGTH) {
+    return {
+      ok: false,
+      error: `Text exceeds maximum length of ${SEND_KEYS_MAX_LENGTH}`,
+      status: 400,
+    };
+  }
+  if (hasDisallowedControlChars(text)) {
+    return {
+      ok: false,
+      error: "Text contains disallowed control characters",
+      status: 400,
+    };
+  }
+
   const db = getDb();
   const session = queries.getSession(db).get(sessionId) as Session | undefined;
 
