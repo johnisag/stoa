@@ -4,6 +4,8 @@ import {
   listComments,
   CommentValidationError,
 } from "@/lib/session-comments";
+import { checkRateLimit } from "@/lib/api-security";
+import { getDb, queries } from "@/lib/db";
 
 // GET /api/sessions/[id]/comments → list comments for a session (oldest first)
 export async function GET(
@@ -27,6 +29,13 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const rate = checkRateLimit(request);
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests" },
+      { status: 429, headers: { "Retry-After": String(rate.retryAfter ?? 60) } }
+    );
+  }
   let body: unknown;
   try {
     body = await request.json();
@@ -38,6 +47,11 @@ export async function POST(
   }
   try {
     const { id } = await params;
+    // Validate the session exists before creating a comment.
+    const session = queries.getSession(getDb()).get(id);
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
     const { body: commentBody, author } = (body ?? {}) as {
       body?: unknown;
       author?: unknown;

@@ -104,9 +104,10 @@ export function listNotes(): NoteRow[] {
   return queries.listNotes(db).all(NOTE_LIST_LIMIT) as NoteRow[];
 }
 
-/** List notes visible to a project: its own notes + fleet-wide pinned notes. */
+/** List notes visible to a project: its own notes + fleet-wide pinned notes.
+ *  Returns [] for an invalid projectId (never silently broadens scope). */
 export function listNotesForProject(projectId: string): NoteRow[] {
-  if (!projectId || typeof projectId !== "string") return listNotes();
+  if (!projectId || typeof projectId !== "string") return [];
   return queries
     .listNotesForProject(db)
     .all(projectId, NOTE_LIST_LIMIT) as NoteRow[];

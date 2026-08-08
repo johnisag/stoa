@@ -18,9 +18,11 @@ export class CommentValidationError extends Error {
   }
 }
 
-/** Validate + normalize a comment body. Pure → unit-testable. */
+/** Validate + normalize a comment body. Throws on null/undefined/empty. Pure. */
 export function validateCommentBody(raw: unknown): string {
-  if (raw == null) return "";
+  if (raw == null) {
+    throw new CommentValidationError("body is required");
+  }
   if (typeof raw !== "string") {
     throw new CommentValidationError("body must be a string");
   }
@@ -67,26 +69,38 @@ export function createComment(input: {
   return queries.getSessionComment(db).get(id) as SessionCommentRow;
 }
 
-/** List comments for a session, oldest first. */
+/** List comments for a session, oldest first (bounded by COMMENT_LIST_LIMIT). */
 export function listComments(sessionId: string): SessionCommentRow[] {
   if (!sessionId || typeof sessionId !== "string") return [];
-  return queries.listSessionComments(db).all(sessionId) as SessionCommentRow[];
+  return queries
+    .listSessionComments(db)
+    .all(sessionId, COMMENT_LIST_LIMIT) as SessionCommentRow[];
 }
 
-/** Update a comment's body. Returns the updated row or null when not found. */
+/** Update a comment's body, scoped to the given session. Returns the updated
+ *  row or null when the comment doesn't exist or doesn't belong to the session. */
 export function updateComment(
-  id: string,
+  sessionId: string,
+  commentId: string,
   body: unknown
 ): SessionCommentRow | null {
-  if (!id || typeof id !== "string") return null;
+  if (!sessionId || !commentId) return null;
   const validated = validateCommentBody(body);
-  const result = queries.updateSessionComment(db).run(validated, id);
+  const result = queries
+    .updateSessionComment(db)
+    .run(validated, commentId, sessionId);
   if (result.changes === 0) return null;
-  return queries.getSessionComment(db).get(id) as SessionCommentRow;
+  return queries.getSessionComment(db).get(commentId) as SessionCommentRow;
 }
 
-/** Delete a comment by id. Returns true when a row was removed. */
-export function deleteComment(id: string): boolean {
-  if (!id || typeof id !== "string") return false;
-  return queries.deleteSessionComment(db).run(id).changes > 0;
+/** Delete a comment by id, scoped to the given session. Returns true when removed. */
+export function deleteComment(sessionId: string, commentId: string): boolean {
+  if (!sessionId || !commentId) return false;
+  return queries.deleteSessionComment(db).run(commentId, sessionId).changes > 0;
+}
+
+/** Delete all comments for a session (called on session deletion). */
+export function deleteCommentsForSession(sessionId: string): number {
+  if (!sessionId || typeof sessionId !== "string") return 0;
+  return queries.deleteSessionCommentsForSession(db).run(sessionId).changes;
 }

@@ -10,9 +10,11 @@ describe("validateCommentBody", () => {
     expect(validateCommentBody("  hello  ")).toBe("hello");
   });
 
-  it("returns empty string for null/undefined", () => {
-    expect(validateCommentBody(null)).toBe("");
-    expect(validateCommentBody(undefined)).toBe("");
+  it("throws for null/undefined (body is required)", () => {
+    expect(() => validateCommentBody(null)).toThrow(CommentValidationError);
+    expect(() => validateCommentBody(undefined)).toThrow(
+      CommentValidationError
+    );
   });
 
   it("throws for non-string", () => {

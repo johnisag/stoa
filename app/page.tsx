@@ -744,7 +744,12 @@ function HomeContent() {
     } else if (parsed.action === "live-wall") {
       addViewTab(focusedPaneId, "live-wall");
     } else if (parsed.action === "open-session") {
-      handleSelectSession(parsed.sessionId);
+      const session = sessions.find((s) => s.id === parsed.sessionId);
+      if (session) {
+        handleSelectSession(parsed.sessionId);
+      } else {
+        toast.error("Session not found");
+      }
     }
     window.history.replaceState(null, "", window.location.pathname);
     // eslint-disable-next-line react-hooks/exhaustive-deps

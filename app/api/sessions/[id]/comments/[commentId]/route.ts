@@ -5,7 +5,7 @@ import {
   CommentValidationError,
 } from "@/lib/session-comments";
 
-// PATCH /api/sessions/[id]/comments/[commentId] { body } → update
+// PATCH /api/sessions/[id]/comments/[commentId] { body } → update (session-scoped)
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; commentId: string }> }
@@ -20,9 +20,9 @@ export async function PATCH(
     );
   }
   try {
-    const { commentId } = await params;
+    const { id, commentId } = await params;
     const { body: commentBody } = (body ?? {}) as { body?: unknown };
-    const comment = updateComment(commentId, commentBody);
+    const comment = updateComment(id, commentId, commentBody);
     if (!comment) {
       return NextResponse.json({ error: "Comment not found" }, { status: 404 });
     }
@@ -39,14 +39,14 @@ export async function PATCH(
   }
 }
 
-// DELETE /api/sessions/[id]/comments/[commentId] → delete
+// DELETE /api/sessions/[id]/comments/[commentId] → delete (session-scoped)
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string; commentId: string }> }
 ) {
   try {
-    const { commentId } = await params;
-    const removed = deleteComment(commentId);
+    const { id, commentId } = await params;
+    const removed = deleteComment(id, commentId);
     if (!removed) {
       return NextResponse.json({ error: "Comment not found" }, { status: 404 });
     }

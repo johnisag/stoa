@@ -1,15 +1,6 @@
 import type Database from "better-sqlite3";
+import type { SessionCommentRow } from "../types";
 import { getStmt } from "./_shared";
-
-/** A human comment on a session (annotation / hand-off note). */
-export interface SessionCommentRow {
-  id: string;
-  session_id: string;
-  author: string;
-  body: string;
-  created_at: string;
-  updated_at: string;
-}
 
 export const sessionCommentsQueries = {
   createSessionComment: (db: Database.Database) =>
@@ -27,15 +18,21 @@ export const sessionCommentsQueries = {
   listSessionComments: (db: Database.Database) =>
     getStmt<unknown[], SessionCommentRow>(
       db,
-      `SELECT * FROM session_comments WHERE session_id = ? ORDER BY created_at ASC, id ASC`
+      `SELECT * FROM session_comments WHERE session_id = ? ORDER BY created_at ASC, id ASC LIMIT ?`
     ),
 
+  /** Update a comment's body, scoped to the session id (prevents cross-session IDOR). */
   updateSessionComment: (db: Database.Database) =>
     getStmt(
       db,
-      `UPDATE session_comments SET body = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE session_comments SET body = ?, updated_at = datetime('now') WHERE id = ? AND session_id = ?`
     ),
 
+  /** Delete a comment, scoped to the session id. */
   deleteSessionComment: (db: Database.Database) =>
-    getStmt(db, `DELETE FROM session_comments WHERE id = ?`),
+    getStmt(db, `DELETE FROM session_comments WHERE id = ? AND session_id = ?`),
+
+  /** Delete ALL comments for a session (used on session deletion cleanup). */
+  deleteSessionCommentsForSession: (db: Database.Database) =>
+    getStmt(db, `DELETE FROM session_comments WHERE session_id = ?`),
 };
