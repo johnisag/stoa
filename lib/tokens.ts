@@ -117,5 +117,65 @@ export function revokeToken(
 ): boolean {
   if (typeof id !== "string" || !id) return false;
   const info = queries.revokeAuthToken(db).run(id);
+  // Clean up project scopes (orphan prevention).
+  queries.clearTokenProjects(db).run(id);
   return info.changes > 0;
+}
+
+// ── Project-scoped workspace access (Feature 6) ──
+
+/** The project ids a token is scoped to (empty = full fleet access). */
+export function getTokenProjects(
+  tokenId: string,
+  db: Database.Database = getDb()
+): string[] {
+  if (!tokenId) return [];
+  return queries
+    .listTokenProjects(db)
+    .all(tokenId)
+    .map((r: { project_id: string }) => r.project_id);
+}
+
+/** Add a project scope to a token. */
+export function addTokenProject(
+  tokenId: string,
+  projectId: string,
+  db: Database.Database = getDb()
+): void {
+  if (!tokenId || !projectId) return;
+  queries.addTokenProject(db).run(tokenId, projectId);
+}
+
+/** Remove a project scope from a token. */
+export function removeTokenProject(
+  tokenId: string,
+  projectId: string,
+  db: Database.Database = getDb()
+): void {
+  if (!tokenId || !projectId) return;
+  queries.removeTokenProject(db).run(tokenId, projectId);
+}
+
+/**
+ * Resolve a token by its secret to its project scope. Returns the scope AND the
+ * allowed project ids (empty = no restriction = full fleet). Returns null when
+ * the token doesn't match a live row. Pure resolution — stamps last-use.
+ */
+export function resolveTokenProjects(
+  presented: string,
+  db: Database.Database = getDb()
+): { scope: TokenScope; projectIds: string[] } | null {
+  if (typeof presented !== "string" || presented.length === 0) return null;
+  const row = queries.resolveAuthToken(db).get(hashToken(presented));
+  if (!row) return null;
+  try {
+    queries.touchAuthToken(db).run(row.id);
+  } catch {
+    // best-effort
+  }
+  const scope = row.scope === "admin" ? "admin" : "observer";
+  // Admin tokens have no project restriction — they see everything.
+  if (scope === "admin") return { scope, projectIds: [] };
+  const projectIds = getTokenProjects(row.id, db);
+  return { scope, projectIds };
 }
