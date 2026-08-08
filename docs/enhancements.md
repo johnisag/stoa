@@ -51,58 +51,58 @@ tracking, offline queue, cross-platform backend abstraction.
 
 ### Phase 1: Operator Experience (foundation, highest impact/effort ratio)
 
-| #   | Feature                                | User Value                                                                                            | Existing Seam                                                       | Effort | Status      |
-| --- | -------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------ | ----------- |
-| 1   | **Session Replay & Timeline Scrubber** | Re-watch any agent run, jump to errors, share links to specific moments.                              | Snapshots API (`/api/sessions/[id]/snapshots`) + `SnapshotTimeline` | M      | Not started |
-| 2   | **Human-in-the-Loop Approval Queue**   | Central queue for permission prompts, guardrail blocks, and dispatch approvals.                       | Guardrails + Fleet approvals + Ask Stoa                             | M      | Not started |
-| 3   | **PWA Install & Offline-First Shell**  | Install Stoa to phone/desktop home screen; offline queue already exists, make the shell work offline. | serwist service worker + offline queue                              | S      | Not started |
-| 4   | **Session Templates / Quick Starts**   | One-click templates for common tasks (bug fix, refactor, write tests).                                | Playbooks + NewSessionDialog                                        | S      | Not started |
-| 5   | **Real-Time Cost Dashboard**           | Fleet-wide spend, per-project/model, budget alerts.                                                   | `lib/session-cost.ts`, `CostIndicator`, Fleet analytics             | M      | Not started |
+| #   | Feature                                | User Value                                                                                            | Existing Seam                                                       | Effort | Status          |
+| --- | -------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------ | --------------- |
+| 1   | **Session Replay & Timeline Scrubber** | Re-watch any agent run, jump to errors, share links to specific moments.                              | Snapshots API (`/api/sessions/[id]/snapshots`) + `SnapshotTimeline` | M      | Planned         |
+| 2   | **Human-in-the-Loop Approval Queue**   | Central queue for permission prompts, guardrail blocks, and dispatch approvals.                       | Guardrails + Fleet approvals + Ask Stoa                             | M      | Planned         |
+| 3   | **PWA Install & Offline-First Shell**  | Install Stoa to phone/desktop home screen; offline queue already exists, make the shell work offline. | serwist service worker + offline queue                              | S      | Planned         |
+| 4   | **Session Templates / Quick Starts**   | One-click templates for common tasks (bug fix, refactor, write tests).                                | Playbooks + NewSessionDialog                                        | S      | Planned         |
+| 5   | **Real-Time Cost Dashboard**           | Fleet-wide spend, per-project/model, budget alerts.                                                   | `lib/session-cost.ts`, `CostIndicator`, Fleet analytics             | M      | **DONE (#416)** |
 
 ### Phase 2: Team & Collaboration
 
-| #   | Feature                           | User Value                                                             | Existing Seam                | Effort | Status      |
-| --- | --------------------------------- | ---------------------------------------------------------------------- | ---------------------------- | ------ | ----------- |
-| 6   | **Multi-User Workspace**          | Multiple users share the same Stoa instance with isolated projects.    | Projects + auth tokens table | L      | Not started |
-| 7   | **Project Wiki / Knowledge Base** | Long-lived project docs, automatically linked by agents.               | Notes dialog + shared memory | M      | Not started |
-| 8   | **Session Sharing & Deep Links**  | Share a read-only session view or a specific replay timestamp.         | Session status + snapshots   | S      | Not started |
-| 9   | **Audit Log & Compliance Export** | CSV/JSON export of all agent actions, approvals, and guardrail events. | Events ledger + guardrails   | M      | Not started |
-| 10  | **Comment / Annotation Layer**    | Add human comments on a session replay or snapshot for hand-off.       | Snapshots + session events   | S      | Not started |
+| #   | Feature                           | User Value                                                             | Existing Seam                | Effort | Status              |
+| --- | --------------------------------- | ---------------------------------------------------------------------- | ---------------------------- | ------ | ------------------- |
+| 6   | **Multi-User Workspace**          | Multiple users share the same Stoa instance with isolated projects.    | Projects + auth tokens table | L      | **DONE (#418)**     |
+| 7   | **Project Wiki / Knowledge Base** | Long-lived project docs, automatically linked by agents.               | Notes dialog + shared memory | M      | **DONE (#417)**     |
+| 8   | **Session Sharing & Deep Links**  | Share a read-only session view or a specific replay timestamp.         | Session status + snapshots   | S      | **DONE (#417)**     |
+| 9   | **Audit Log & Compliance Export** | CSV/JSON export of all agent actions, approvals, and guardrail events. | Events ledger + guardrails   | M      | **Already shipped** |
+| 10  | **Comment / Annotation Layer**    | Add human comments on a session replay or snapshot for hand-off.       | Snapshots + session events   | S      | **DONE (#417)**     |
 
 ### Phase 3: Control & Trust
 
-| #   | Feature                         | User Value                                                                  | Existing Seam                      | Effort | Status      |
-| --- | ------------------------------- | --------------------------------------------------------------------------- | ---------------------------------- | ------ | ----------- |
-| 11  | **Approval Queue Mobile Push**  | Get notified on phone when an agent needs approval.                         | Web push + approval queue          | S      | Not started |
-| 12  | **Docker Sandbox Per Agent**    | Run each agent in a clean container with repo mounted.                      | PtyTransport + container-transport | L      | Not started |
-| 13  | **Guardrails Policy Editor UI** | Visual rule editor for BLOCK/WARN patterns, no JSON editing.                | Guardrails rules + `Rule` type     | M      | Not started |
-| 14  | **Secret Scan Pre-Flight**      | Scan every staged change for secrets before agent commits.                  | `secret-scan` API                  | S      | Not started |
-| 15  | **RBAC & Permissions**          | Roles (admin, operator, viewer) controlling who can prompt, approve, merge. | Auth tokens + multi-user           | L      | Not started |
+| #   | Feature                         | User Value                                                                  | Existing Seam                      | Effort | Status                        |
+| --- | ------------------------------- | --------------------------------------------------------------------------- | ---------------------------------- | ------ | ----------------------------- |
+| 11  | **Approval Queue Mobile Push**  | Get notified on phone when an agent needs approval.                         | Web push + approval queue          | S      | Planned                       |
+| 12  | **Docker Sandbox Per Agent**    | Run each agent in a clean container with repo mounted.                      | PtyTransport + container-transport | L      | Deferred (XL)                 |
+| 13  | **Guardrails Policy Editor UI** | Visual rule editor for BLOCK/WARN patterns, no JSON editing.                | Guardrails rules + `Rule` type     | M      | **DONE (#418)**               |
+| 14  | **Secret Scan Pre-Flight**      | Scan every staged change for secrets before agent commits.                  | `secret-scan` API                  | S      | **Already shipped**           |
+| 15  | **RBAC & Permissions**          | Roles (admin, operator, viewer) controlling who can prompt, approve, merge. | Auth tokens + multi-user           | L      | **Foundation shipped (#418)** |
 
 ### Phase 4: Scale & Intelligence
 
-| #   | Feature                             | User Value                                                             | Existing Seam                       | Effort | Status      |
-| --- | ----------------------------------- | ---------------------------------------------------------------------- | ----------------------------------- | ------ | ----------- |
-| 16  | **Agent Marketplace / Skill Store** | Discover and install community playbooks, MCP servers, slash commands. | Playbooks + skills API + MCP config | L      | Not started |
-| 17  | **Multi-Model Routing & Fallbacks** | Auto-switch model on rate-limit or cost; route by task type.           | Model catalog + providers           | M      | Not started |
-| 18  | **Auto-Fix Loop**                   | Detect test/build failure, spawn repair agent, verify, merge.          | Fleet + dispatch + CI fix           | L      | Not started |
-| 19  | **Code Review Agent**               | Dedicated agent that reviews a PR and posts findings.                  | Dispatch + review planner           | M      | Not started |
-| 20  | **Documentation Agent**             | Keeps README/API docs in sync with code changes.                       | Ask Stoa + git commit               | M      | Not started |
-| 21  | **Test Generation Agent**           | Generate missing tests for a file or branch.                           | New session + prompt templates      | M      | Not started |
-| 22  | **Refactor Agent**                  | Safe, scoped refactoring with plan/approve/apply flow.                 | Best-of-N + diff view               | M      | Not started |
-| 23  | **Smart Cost Alerts**               | Slack/Discord/email when budget threshold breached.                    | Cost dashboard + web push           | S      | Not started |
+| #   | Feature                             | User Value                                                             | Existing Seam                       | Effort | Status                               |
+| --- | ----------------------------------- | ---------------------------------------------------------------------- | ----------------------------------- | ------ | ------------------------------------ |
+| 16  | **Agent Marketplace / Skill Store** | Discover and install community playbooks, MCP servers, slash commands. | Playbooks + skills API + MCP config | L      | Planned                              |
+| 17  | **Multi-Model Routing & Fallbacks** | Auto-switch model on rate-limit or cost; route by task type.           | Model catalog + providers           | M      | **Partial (model-router exists)**    |
+| 18  | **Auto-Fix Loop**                   | Detect test/build failure, spawn repair agent, verify, merge.          | Fleet + dispatch + CI fix           | L      | **Partial (dispatch CI fix exists)** |
+| 19  | **Code Review Agent**               | Dedicated agent that reviews a PR and posts findings.                  | Dispatch + review planner           | M      | **Partial (review planner exists)**  |
+| 20  | **Documentation Agent**             | Keeps README/API docs in sync with code changes.                       | Ask Stoa + git commit               | M      | Planned                              |
+| 21  | **Test Generation Agent**           | Generate missing tests for a file or branch.                           | New session + prompt templates      | M      | Planned                              |
+| 22  | **Refactor Agent**                  | Safe, scoped refactoring with plan/approve/apply flow.                 | Best-of-N + diff view               | M      | Planned                              |
+| 23  | **Smart Cost Alerts**               | Slack/Discord/email when budget threshold breached.                    | Cost dashboard + web push           | S      | **DONE (this phase)**                |
 
 ### Phase 5: Platform & Distribution
 
-| #   | Feature                         | User Value                                                   | Existing Seam                    | Effort | Status      |
-| --- | ------------------------------- | ------------------------------------------------------------ | -------------------------------- | ------ | ----------- |
-| 24  | **Public REST API**             | External tools can query sessions, costs, and dispatch runs. | API routes + tokens              | M      | Not started |
-| 25  | **Plugin / Extension API**      | Third-party extensions add UI panels and backend jobs.       | Components + API hooks           | L      | Not started |
-| 26  | **Desktop App Wrapper**         | Native Electron/Tauri wrapper around the web UI.             | Next.js + server.ts              | L      | Not started |
-| 27  | **Voice Control**               | Push-to-talk voice prompt input and spoken status updates.   | Web Speech API + mobile          | M      | Not started |
-| 28  | **One-Click Cloud Deploy**      | Deploy Stoa to Render/Railway/Fly with a single button.      | Docker + install scripts         | M      | Not started |
-| 29  | **CI/CD Webhooks**              | GitHub Actions/GitLab triggers dispatch from CI events.      | Webhooks intake + dispatch       | S      | Not started |
-| 30  | **Interactive Onboarding Tour** | First-run guide that creates a sample session.               | StoaGuide + onboarding checklist | S      | Not started |
+| #   | Feature                         | User Value                                                   | Existing Seam                    | Effort | Status  |
+| --- | ------------------------------- | ------------------------------------------------------------ | -------------------------------- | ------ | ------- |
+| 24  | **Public REST API**             | External tools can query sessions, costs, and dispatch runs. | API routes + tokens              | M      | Planned |
+| 25  | **Plugin / Extension API**      | Third-party extensions add UI panels and backend jobs.       | Components + API hooks           | L      | Planned |
+| 26  | **Desktop App Wrapper**         | Native Electron/Tauri wrapper around the web UI.             | Next.js + server.ts              | L      | Planned |
+| 27  | **Voice Control**               | Push-to-talk voice prompt input and spoken status updates.   | Web Speech API + mobile          | M      | Planned |
+| 28  | **One-Click Cloud Deploy**      | Deploy Stoa to Render/Railway/Fly with a single button.      | Docker + install scripts         | M      | Planned |
+| 29  | **CI/CD Webhooks**              | GitHub Actions/GitLab triggers dispatch from CI events.      | Webhooks intake + dispatch       | S      | Planned |
+| 30  | **Interactive Onboarding Tour** | First-run guide that creates a sample session.               | StoaGuide + onboarding checklist | S      | Planned |
 
 ## Phase 1: Detailed Implementation Plan
 
