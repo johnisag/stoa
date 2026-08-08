@@ -10,7 +10,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { DollarSign, AlertTriangle, TrendingUp } from "lucide-react";
+import { DollarSign, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatCard, Sparkline } from "./primitives";
 import { useSessionCosts } from "@/hooks/useSessionCosts";
@@ -58,9 +58,8 @@ export function aggregateByProvider(
     // degrades gracefully. Guard against a malformed missing name.
     const name = s.name || "";
     const hasProviderPrefix = name.includes(" — ");
-    const provider = hasProviderPrefix
-      ? name.split(" — ")[0]
-      : s.model || "Unknown";
+    const prefix = hasProviderPrefix ? name.split(" — ")[0].trim() : "";
+    const provider = prefix || s.model || "Unknown";
     const cur = map.get(provider) ?? { costUsd: 0, sessions: 0 };
     cur.costUsd += s.costUsd;
     cur.sessions += 1;
@@ -80,8 +79,11 @@ function sanitizeHistoryValues(values: number[]): number[] {
 export function CostPanel({ windowDays }: { windowDays: number }) {
   const [showModelBreakdown, setShowModelBreakdown] = useState(true);
   const { data, isLoading, isError, refetch } = useSessionCosts();
-  const { data: history, isError: historyError } =
-    useSessionCostHistory(windowDays);
+  const {
+    data: history,
+    isLoading: historyLoading,
+    isError: historyError,
+  } = useSessionCostHistory(windowDays);
 
   const sessions = data?.sessions ?? {};
   const totalUsd = Number.isFinite(data?.totalUsd) ? (data?.totalUsd ?? 0) : 0;
@@ -158,12 +160,16 @@ export function CostPanel({ windowDays }: { windowDays: number }) {
         />
         <StatCard
           label={`Last ${windowDays} days`}
-          value={historyError ? "—" : formatCost(historyTotal)}
+          value={
+            historyError ? "—" : historyLoading ? "…" : formatCost(historyTotal)
+          }
           tone={historyError ? "warn" : "default"}
           hint={
             historyError
               ? "History unavailable"
-              : "Durable history (survives session deletion)"
+              : historyLoading
+                ? "Loading history…"
+                : "Durable history (survives session deletion)"
           }
         />
         <StatCard
@@ -199,7 +205,7 @@ export function CostPanel({ windowDays }: { windowDays: number }) {
       )}
       {!anyHard && anySoft && (
         <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-400">
-          <TrendingUp className="h-4 w-4 flex-shrink-0" />
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
           <span>
             One or more sessions crossed the soft budget warning threshold.
           </span>
@@ -216,12 +222,18 @@ export function CostPanel({ windowDays }: { windowDays: number }) {
           <span className="text-muted-foreground text-xs">
             {historyError
               ? "History unavailable"
-              : `${historyValues.length} days sampled`}
+              : historyLoading
+                ? "Loading history…"
+                : `${historyValues.length} days sampled`}
           </span>
         </div>
         {historyError ? (
           <div className="text-muted-foreground flex h-[60px] items-center px-2 text-sm">
             History failed to load.
+          </div>
+        ) : historyLoading ? (
+          <div className="text-muted-foreground flex h-[60px] items-center px-2 text-sm">
+            Loading history…
           </div>
         ) : historyValues.length === 0 ? (
           <div className="text-muted-foreground flex h-[60px] items-center px-2 text-sm">

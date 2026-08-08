@@ -137,11 +137,17 @@ describe("aggregateByProvider", () => {
     ]);
   });
 
-  it("degrades gracefully when name is missing", () => {
+  it("falls back to model/Unknown when the name prefix is empty", () => {
     const sessions = {
-      a: makeCost({ name: "", model: "gpt-4o", costUsd: 1.0 }),
+      a: makeCost({
+        name: " — description only",
+        model: "gpt-4o",
+        costUsd: 1.0,
+      }),
+      b: makeCost({ name: "   — leading spaces", costUsd: 2.0 }),
     };
     expect(aggregateByProvider(sessions)).toEqual([
+      { provider: "Unknown", costUsd: 2.0, sessions: 1 },
       { provider: "gpt-4o", costUsd: 1.0, sessions: 1 },
     ]);
   });
