@@ -183,10 +183,10 @@ export function CostPanel({ windowDays }: { windowDays: number }) {
         />
         <StatCard
           label="Budget cap"
-          value={budget?.hardUsd ? formatCost(budget.hardUsd) : "—"}
+          value={budget?.hardUsd != null ? formatCost(budget.hardUsd) : "—"}
           tone={anyHard ? "bad" : anySoft ? "warn" : "default"}
           hint={
-            budget?.softUsd
+            budget?.softUsd != null
               ? `Soft warning at ${formatCost(budget.softUsd)}`
               : "No cap configured"
           }
@@ -331,14 +331,14 @@ export function CostPanel({ windowDays }: { windowDays: number }) {
                 key={id}
                 className="hover:bg-muted/50 flex items-center justify-between gap-3 px-3 py-2 text-sm"
               >
-                <span className="min-w-0 flex-1 truncate" title={s.name}>
+                <span className="min-w-0 flex-1 truncate" title={s.name || id}>
                   {levels[id] === "hard" && (
                     <AlertTriangle className="mr-1 inline h-3.5 w-3.5 text-red-400" />
                   )}
                   {levels[id] === "soft" && (
                     <AlertTriangle className="mr-1 inline h-3.5 w-3.5 text-yellow-400" />
                   )}
-                  {s.name}
+                  {s.name || `Unnamed (${id.slice(0, 8)})`}
                 </span>
                 <span className="text-muted-foreground text-xs">
                   {s.model || "Unknown"}
