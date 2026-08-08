@@ -5,8 +5,9 @@
  *
  * A pane TAB (a window like a session, not a dialog) with a segmented control
  * across the lenses: Overview · Performance · Behaviour · Intelligence · Trends ·
- * Issues. All data comes from one /api/analytics report (react-query); charts
- * are dependency-free inline SVG (see primitives.tsx).
+ * Issues · Cost. The Overview–Issues lenses read from /api/analytics; Cost reads
+ * from /api/sessions/cost and /api/sessions/cost/history. Charts are dependency-free
+ * inline SVG (see primitives.tsx).
  */
 
 import { useState } from "react";
@@ -24,6 +25,7 @@ import { useAnalyticsQuery } from "@/data/analytics/queries";
 import type { AnalyticsReport } from "@/lib/analytics/types";
 import { StatCard, BarRow, Sparkline, fmt, fmtDuration } from "./primitives";
 import { AnalyticsHelp } from "./AnalyticsHelp";
+import { CostPanel } from "./CostPanel";
 
 type Tab =
   | "overview"
@@ -31,7 +33,8 @@ type Tab =
   | "behaviour"
   | "intelligence"
   | "trends"
-  | "issues";
+  | "issues"
+  | "cost";
 
 const WINDOWS = [7, 14, 30] as const;
 
@@ -77,6 +80,7 @@ export function AnalyticsView({
     { key: "intelligence", label: "Intelligence" },
     { key: "trends", label: "Trends" },
     { key: "issues", label: "Issues", badge: issueCount },
+    { key: "cost", label: "Cost" },
   ];
 
   return (
@@ -179,6 +183,8 @@ export function AnalyticsView({
       >
         {showHelp ? (
           <AnalyticsHelp onClose={() => setShowHelp(false)} />
+        ) : tab === "cost" ? (
+          <CostPanel />
         ) : isLoading ? (
           <Centered>Computing insight…</Centered>
         ) : isError ? (
