@@ -17,6 +17,7 @@ import { backendKeyForSession } from "@/lib/providers/registry";
 import { removeConductorMarker } from "@/lib/mcp-config";
 import { clearQueue } from "@/lib/prompt-queue";
 import { deleteChannelMessagesForSession } from "@/lib/channels";
+import { deleteCommentsForSession } from "@/lib/session-comments";
 import { deleteSchedulesForSession } from "@/lib/scheduler";
 import { expandHome } from "@/lib/platform";
 import {
@@ -509,13 +510,15 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
     for (const worker of deletionPlan.interactiveWorkers) {
       clearQueue(worker.id);
-      // channel_messages + schedules have no session FK cascade.
+      // channel_messages + schedules + session_comments have no session FK cascade.
       deleteChannelMessagesForSession(worker.id);
       deleteSchedulesForSession(worker.id);
+      deleteCommentsForSession(worker.id);
     }
     clearQueue(id);
     deleteChannelMessagesForSession(id);
     deleteSchedulesForSession(id);
+    deleteCommentsForSession(id);
 
     // Drop the conductor marker so a future session in this same dir can't
     // inherit this (now-dead) conductor's id from a stale .stoa-conductor file.

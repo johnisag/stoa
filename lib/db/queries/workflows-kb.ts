@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import type { NoteRow } from "../types";
 import { getStmt } from "./_shared";
 
 export const workflowsKbQueries = {
@@ -48,19 +49,25 @@ export const workflowsKbQueries = {
     getStmt(db, `DELETE FROM agent_memory WHERE key = ?`),
 
   // Notes / shared knowledge base
-  createNote: (db: Database.Database) =>
+  createNoteWithProject: (db: Database.Database) =>
     getStmt(
       db,
-      `INSERT INTO notes (id, title, content, pinned) VALUES (?, ?, ?, ?)`
+      `INSERT INTO notes (id, title, content, pinned, project_id) VALUES (?, ?, ?, ?, ?)`
     ),
 
   getNote: (db: Database.Database) =>
-    getStmt(db, `SELECT * FROM notes WHERE id = ?`),
+    getStmt<unknown[], NoteRow>(db, `SELECT * FROM notes WHERE id = ?`),
 
   listNotes: (db: Database.Database) =>
-    getStmt(
+    getStmt<unknown[], NoteRow>(
       db,
       `SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC, created_at DESC LIMIT ?`
+    ),
+
+  listNotesForProject: (db: Database.Database) =>
+    getStmt<unknown[], NoteRow>(
+      db,
+      `SELECT * FROM notes WHERE project_id = ? OR (project_id IS NULL AND pinned = 1) ORDER BY pinned DESC, updated_at DESC, created_at DESC LIMIT ?`
     ),
 
   updateNote: (db: Database.Database) =>

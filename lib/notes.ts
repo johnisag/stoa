@@ -74,17 +74,23 @@ export function normalizeNotePinned(raw: unknown): 0 | 1 {
   throw new NoteValidationError("pinned must be a boolean");
 }
 
-/** Create a note. Validates first; returns the stored row. */
+/** Create a note. Validates first; returns the stored row. The optional
+ *  projectId scopes the note to a project wiki (NULL = fleet-wide). */
 export function createNote(input: {
   title?: unknown;
   content?: unknown;
   pinned?: unknown;
+  projectId?: string | null;
 }): NoteRow {
   const id = randomUUID();
   const title = normalizeNoteTitle(input.title);
   const content = validateNoteContent(input.content);
   const pinned = normalizeNotePinned(input.pinned);
-  queries.createNote(db).run(id, title, content, pinned);
+  const projectId =
+    input.projectId && typeof input.projectId === "string"
+      ? input.projectId
+      : null;
+  queries.createNoteWithProject(db).run(id, title, content, pinned, projectId);
   return queries.getNote(db).get(id) as NoteRow;
 }
 
@@ -96,6 +102,15 @@ export function getNote(id: string): NoteRow | null {
 /** List notes — pinned first, then most-recently-updated (bounded). */
 export function listNotes(): NoteRow[] {
   return queries.listNotes(db).all(NOTE_LIST_LIMIT) as NoteRow[];
+}
+
+/** List notes visible to a project: its own notes + fleet-wide pinned notes.
+ *  Returns [] for an invalid projectId (never silently broadens scope). */
+export function listNotesForProject(projectId: string): NoteRow[] {
+  if (!projectId || typeof projectId !== "string") return [];
+  return queries
+    .listNotesForProject(db)
+    .all(projectId, NOTE_LIST_LIMIT) as NoteRow[];
 }
 
 /** Partial-update a note (only the provided fields change). Returns the updated
