@@ -3468,12 +3468,16 @@ const migrations: Migration[] = [
     up: (db) => {
       // Per-project wiki scoping: a note with project_id is visible only in
       // that project's wiki; NULL = fleet-wide (the original behavior).
-      if (!hasColumn(db, "notes", "project_id")) {
-        db.exec(`ALTER TABLE notes ADD COLUMN project_id TEXT DEFAULT NULL`);
+      // Guard on hasTable: some test suites create fresh DBs that only run a
+      // subset of migrations, so the notes table may not exist yet.
+      if (hasTable(db, "notes")) {
+        if (!hasColumn(db, "notes", "project_id")) {
+          db.exec(`ALTER TABLE notes ADD COLUMN project_id TEXT DEFAULT NULL`);
+        }
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id) WHERE project_id IS NOT NULL`
+        );
       }
-      db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id) WHERE project_id IS NOT NULL`
-      );
     },
   },
 ];
