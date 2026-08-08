@@ -64,7 +64,7 @@ agent-os.db-shm
 docs/*
 !docs/setup/
 !docs/issues/
-!docs/ROADMAP.md
+!docs/enhancements.md
 !docs/fleet-management.md
 .mcp.json
 .git-evening

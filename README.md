@@ -82,7 +82,7 @@ Sessions survive browser disconnects everywhere. The underlying process also sur
 | Kilo Code   | ❌     | ✅ scrollback | —                                            |
 | Kimi Code   | ✅     | ✅ scrollback | `--yolo`                                     |
 
-**Resume**/**Fork** reflect what Stoa manages per session. **Fork** branches a conversation: Claude does it natively (`--fork-session`, full history); other agents use a scrollback fallback — a fresh session seeded with the parent's recent transcript. **Auto-approve** is the flag Stoa passes when you enable "skip permissions". Codex native fork is planned; see [docs/ROADMAP.md](docs/ROADMAP.md).
+**Resume**/**Fork** reflect what Stoa manages per session. **Fork** branches a conversation: Claude does it natively (`--fork-session`, full history); other agents use a scrollback fallback — a fresh session seeded with the parent's recent transcript. **Auto-approve** is the flag Stoa passes when you enable "skip permissions". Codex native fork is planned; see [docs/enhancements.md](docs/enhancements.md).
 
 ## CLI Commands
 
@@ -126,7 +126,7 @@ Use [Tailscale](https://tailscale.com):
 
 - [AGENTS.md](AGENTS.md) — architecture and contributor principles
 - [docs/setup/README.md](docs/setup/README.md) — detailed setup notes
-- [docs/ROADMAP.md](docs/ROADMAP.md) — what's coming next
+- [docs/enhancements.md](docs/enhancements.md) — what's coming next
 
 ## License
 
