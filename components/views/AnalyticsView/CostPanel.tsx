@@ -12,17 +12,18 @@
 import { useMemo, useState } from "react";
 import { DollarSign, AlertTriangle, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { StatCard, Sparkline, fmt } from "./primitives";
+import { StatCard, Sparkline } from "./primitives";
 import { useSessionCosts } from "@/hooks/useSessionCosts";
 import { useSessionCostHistory } from "@/hooks/useSessionCostHistory";
 import type { SessionCost } from "@/app/api/sessions/cost/route";
-import type { BudgetLevel } from "@/lib/budget";
 
-const HISTORY_DAYS = 14;
-
-/** Format a cost amount consistently with the rest of the UI. */
+/** Format a cost amount consistently with the rest of the UI.
+ *  Defensive: clamps non-finite values (NaN / Infinity / -Infinity) and negative
+ *  amounts to readable fallback strings rather than rendering garbage. */
 export function formatCost(n: number | null | undefined): string {
   if (n == null || n === 0) return "$0.00";
+  if (!Number.isFinite(n)) return n > 0 ? "∞" : "—";
+  if (n < 0) return "—$" + Math.abs(n).toFixed(2);
   if (n > 0 && n < 0.01) return "<$0.01";
   return `$${n.toFixed(2)}`;
 }
@@ -33,7 +34,7 @@ export function aggregateByModel(
 ): Array<{ model: string; costUsd: number; sessions: number }> {
   const map = new Map<string, { costUsd: number; sessions: number }>();
   for (const s of Object.values(sessions)) {
-    if (!s.costUsd || s.costUsd <= 0) continue;
+    if (!s.costUsd || s.costUsd <= 0 || !Number.isFinite(s.costUsd)) continue;
     const model = s.model || "Unknown";
     const cur = map.get(model) ?? { costUsd: 0, sessions: 0 };
     cur.costUsd += s.costUsd;
@@ -51,13 +52,14 @@ export function aggregateByProvider(
 ): Array<{ provider: string; costUsd: number; sessions: number }> {
   const map = new Map<string, { costUsd: number; sessions: number }>();
   for (const s of Object.values(sessions)) {
-    if (!s.costUsd || s.costUsd <= 0) continue;
+    if (!s.costUsd || s.costUsd <= 0 || !Number.isFinite(s.costUsd)) continue;
     // Best-effort provider label: the cost name may be "agent — description";
     // if it isn't, fall back to the model, then Unknown so the UI always
-    // degrades gracefully.
-    const hasProviderPrefix = s.name.includes(" — ");
+    // degrades gracefully. Guard against a malformed missing name.
+    const name = s.name || "";
+    const hasProviderPrefix = name.includes(" — ");
     const provider = hasProviderPrefix
-      ? s.name.split(" — ")[0]
+      ? name.split(" — ")[0]
       : s.model || "Unknown";
     const cur = map.get(provider) ?? { costUsd: 0, sessions: 0 };
     cur.costUsd += s.costUsd;
@@ -69,57 +71,33 @@ export function aggregateByProvider(
     .sort((a, b) => b.costUsd - a.costUsd);
 }
 
-function budgetTone(
-  level: BudgetLevel | undefined
-): "default" | "good" | "warn" | "bad" {
-  if (level === "hard") return "bad";
-  if (level === "soft") return "warn";
-  return "default";
+/** Filter the raw history curve to only finite numbers so the SVG sparkline never
+ *  receives NaN/undefined/null values. */
+function sanitizeHistoryValues(values: number[]): number[] {
+  return values.filter((v) => typeof v === "number" && Number.isFinite(v));
 }
 
-function BudgetRow({
-  label,
-  value,
-  level,
-}: {
-  label: string;
-  value: string;
-  level?: BudgetLevel | "untracked";
-}) {
-  const tone =
-    level === "hard"
-      ? "text-red-400"
-      : level === "soft"
-        ? "text-yellow-400"
-        : "text-muted-foreground";
-  return (
-    <div className="flex items-center justify-between text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={cn("font-medium tabular-nums", tone)}>{value}</span>
-    </div>
-  );
-}
-
-export function CostPanel() {
+export function CostPanel({ windowDays }: { windowDays: number }) {
   const [showModelBreakdown, setShowModelBreakdown] = useState(true);
   const { data, isLoading, isError, refetch } = useSessionCosts();
-  const {
-    data: history,
-    isLoading: historyLoading,
-    isError: historyError,
-  } = useSessionCostHistory(HISTORY_DAYS);
+  const { data: history, isError: historyError } =
+    useSessionCostHistory(windowDays);
 
   const sessions = data?.sessions ?? {};
-  const totalUsd = data?.totalUsd ?? 0;
+  const totalUsd = Number.isFinite(data?.totalUsd) ? (data?.totalUsd ?? 0) : 0;
   const budget = data?.budget;
   const levels = data?.levels ?? {};
 
   const byModel = useMemo(() => aggregateByModel(sessions), [sessions]);
   const byProvider = useMemo(() => aggregateByProvider(sessions), [sessions]);
+  const trackedSessions = useMemo(
+    () => Object.values(sessions).filter((s) => s.supported || s.trackable),
+    [sessions]
+  );
   const sortedSessions = useMemo(
     () =>
       Object.entries(sessions)
-        .filter(([, s]) => (s.costUsd ?? 0) > 0)
+        .filter(([, s]) => Number.isFinite(s.costUsd) && (s.costUsd ?? 0) > 0)
         .sort(([, a], [, b]) => (b.costUsd ?? 0) - (a.costUsd ?? 0)),
     [sessions]
   );
@@ -141,10 +119,12 @@ export function CostPanel() {
   );
 
   const historyValues = useMemo(
-    () => history?.fleet.map((p) => p.costUsd) ?? [],
+    () => sanitizeHistoryValues(history?.fleet.map((p) => p.costUsd) ?? []),
     [history]
   );
-  const historyTotal = history?.totalUsd ?? 0;
+  const historyTotal = Number.isFinite(history?.totalUsd)
+    ? (history?.totalUsd ?? 0)
+    : 0;
   const untrackedCount = Object.values(sessions).filter(
     (s) => s.trackable && !s.supported
   ).length;
@@ -177,16 +157,21 @@ export function CostPanel() {
           }
         />
         <StatCard
-          label="Last 14 days"
-          value={formatCost(historyTotal)}
-          hint="Durable history (survives session deletion)"
+          label={`Last ${windowDays} days`}
+          value={historyError ? "—" : formatCost(historyTotal)}
+          tone={historyError ? "warn" : "default"}
+          hint={
+            historyError
+              ? "History unavailable"
+              : "Durable history (survives session deletion)"
+          }
         />
         <StatCard
-          label="Active sessions"
-          value={sortedSessions.length.toString()}
+          label="Tracked sessions"
+          value={trackedSessions.length.toString()}
           hint={
-            Object.keys(sessions).length > 0
-              ? `${Object.keys(sessions).length} total tracked`
+            trackedSessions.length > 0
+              ? `${sortedSessions.length} with positive cost`
               : "No tracked sessions"
           }
         />
@@ -226,7 +211,7 @@ export function CostPanel() {
         <div className="mb-2 flex items-center justify-between">
           <span className="flex items-center gap-2 text-sm font-medium">
             <DollarSign className="h-4 w-4" />
-            Spend trend (last {HISTORY_DAYS} days)
+            Spend trend (last {windowDays} days)
           </span>
           <span className="text-muted-foreground text-xs">
             {historyError
@@ -234,13 +219,23 @@ export function CostPanel() {
               : `${historyValues.length} days sampled`}
           </span>
         </div>
-        <Sparkline
-          values={historyValues}
-          height={60}
-          label={`Fleet spend over the last ${HISTORY_DAYS} days`}
-        />
+        {historyError ? (
+          <div className="text-muted-foreground flex h-[60px] items-center px-2 text-sm">
+            History failed to load.
+          </div>
+        ) : historyValues.length === 0 ? (
+          <div className="text-muted-foreground flex h-[60px] items-center px-2 text-sm">
+            No historical spend data yet.
+          </div>
+        ) : (
+          <Sparkline
+            values={historyValues}
+            height={60}
+            label={`Fleet spend over the last ${windowDays} days`}
+          />
+        )}
         <div className="text-muted-foreground mt-2 text-xs">
-          Total sampled: {formatCost(historyTotal)}
+          Total sampled: {historyError ? "—" : formatCost(historyTotal)}
         </div>
       </div>
 
@@ -326,10 +321,10 @@ export function CostPanel() {
               >
                 <span className="min-w-0 flex-1 truncate" title={s.name}>
                   {levels[id] === "hard" && (
-                    <span className="mr-1 text-red-400">🛑</span>
+                    <AlertTriangle className="mr-1 inline h-3.5 w-3.5 text-red-400" />
                   )}
                   {levels[id] === "soft" && (
-                    <span className="mr-1 text-yellow-400">⚠️</span>
+                    <AlertTriangle className="mr-1 inline h-3.5 w-3.5 text-yellow-400" />
                   )}
                   {s.name}
                 </span>

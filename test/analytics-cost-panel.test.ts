@@ -26,7 +26,7 @@ function makeCost(
 }
 
 describe("formatCost", () => {
-  it("formats zero as $0.00", () => {
+  it("formats zero and null as $0.00", () => {
     expect(formatCost(0)).toBe("$0.00");
     expect(formatCost(null)).toBe("$0.00");
     expect(formatCost(undefined)).toBe("$0.00");
@@ -41,6 +41,16 @@ describe("formatCost", () => {
     expect(formatCost(1.234)).toBe("$1.23");
     expect(formatCost(1234.5)).toBe("$1234.50");
   });
+
+  it("handles non-finite values gracefully", () => {
+    expect(formatCost(Number.NaN)).toBe("—");
+    expect(formatCost(Number.POSITIVE_INFINITY)).toBe("∞");
+    expect(formatCost(Number.NEGATIVE_INFINITY)).toBe("—");
+  });
+
+  it("shows negative amounts", () => {
+    expect(formatCost(-1.23)).toBe("—$1.23");
+  });
 });
 
 describe("aggregateByModel", () => {
@@ -48,10 +58,20 @@ describe("aggregateByModel", () => {
     expect(aggregateByModel({})).toEqual([]);
   });
 
-  it("ignores sessions with zero or null cost", () => {
+  it("ignores sessions with zero, null, or non-finite cost", () => {
     const sessions = {
       a: makeCost({ name: "a", model: "claude-3-5-sonnet", costUsd: 0 }),
       b: makeCost({ name: "b", model: "claude-3-5-sonnet", costUsd: null }),
+      c: makeCost({
+        name: "c",
+        model: "claude-3-5-sonnet",
+        costUsd: Number.NaN,
+      }),
+      d: makeCost({
+        name: "d",
+        model: "claude-3-5-sonnet",
+        costUsd: Number.POSITIVE_INFINITY,
+      }),
     };
     expect(aggregateByModel(sessions)).toEqual([]);
   });
@@ -114,6 +134,26 @@ describe("aggregateByProvider", () => {
     };
     expect(aggregateByProvider(sessions)).toEqual([
       { provider: "Unknown", costUsd: 1.0, sessions: 1 },
+    ]);
+  });
+
+  it("degrades gracefully when name is missing", () => {
+    const sessions = {
+      a: makeCost({ name: "", model: "gpt-4o", costUsd: 1.0 }),
+    };
+    expect(aggregateByProvider(sessions)).toEqual([
+      { provider: "gpt-4o", costUsd: 1.0, sessions: 1 },
+    ]);
+  });
+
+  it("ignores non-finite and negative costs", () => {
+    const sessions = {
+      a: makeCost({ name: "claude — a", costUsd: Number.NaN }),
+      b: makeCost({ name: "claude — b", costUsd: -1.0 }),
+      c: makeCost({ name: "claude — c", costUsd: 1.0 }),
+    };
+    expect(aggregateByProvider(sessions)).toEqual([
+      { provider: "claude", costUsd: 1.0, sessions: 1 },
     ]);
   });
 });

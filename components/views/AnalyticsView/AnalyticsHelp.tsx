@@ -8,6 +8,7 @@ import {
   TrendingUp,
   AlertTriangle,
   Users,
+  DollarSign,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -88,6 +89,14 @@ export function AnalyticsHelp({ onClose }: { onClose: () => void }) {
             </span>{" "}
             — plain-language anomalies (cost spikes, stalled or runaway
             sessions, failure clusters, a low reviewer pass rate).
+          </li>
+          <li>
+            <span className="text-foreground inline-flex items-center gap-1 font-medium">
+              <DollarSign className="h-3.5 w-3.5" aria-hidden="true" /> Cost
+            </span>{" "}
+            — live and historical spend: fleet totals, per-model and
+            per-provider breakdowns, per-session estimates, and budget-cap
+            status.
           </li>
         </ul>
       </section>

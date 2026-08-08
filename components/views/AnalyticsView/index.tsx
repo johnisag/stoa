@@ -184,7 +184,7 @@ export function AnalyticsView({
         {showHelp ? (
           <AnalyticsHelp onClose={() => setShowHelp(false)} />
         ) : tab === "cost" ? (
-          <CostPanel />
+          <CostPanel windowDays={windowDays} />
         ) : isLoading ? (
           <Centered>Computing insight…</Centered>
         ) : isError ? (
