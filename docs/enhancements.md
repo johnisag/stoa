@@ -61,13 +61,13 @@ tracking, offline queue, cross-platform backend abstraction.
 
 ### Phase 2: Team & Collaboration
 
-| #   | Feature                           | User Value                                                             | Existing Seam                | Effort | Status              |
-| --- | --------------------------------- | ---------------------------------------------------------------------- | ---------------------------- | ------ | ------------------- |
-| 6   | **Multi-User Workspace**          | Multiple users share the same Stoa instance with isolated projects.    | Projects + auth tokens table | L      | **DONE (#418)**     |
-| 7   | **Project Wiki / Knowledge Base** | Long-lived project docs, automatically linked by agents.               | Notes dialog + shared memory | M      | **DONE (#417)**     |
-| 8   | **Session Sharing & Deep Links**  | Share a read-only session view or a specific replay timestamp.         | Session status + snapshots   | S      | **DONE (#417)**     |
-| 9   | **Audit Log & Compliance Export** | CSV/JSON export of all agent actions, approvals, and guardrail events. | Events ledger + guardrails   | M      | **Already shipped** |
-| 10  | **Comment / Annotation Layer**    | Add human comments on a session replay or snapshot for hand-off.       | Snapshots + session events   | S      | **DONE (#417)**     |
+| #   | Feature                           | User Value                                                             | Existing Seam                | Effort | Status                                       |
+| --- | --------------------------------- | ---------------------------------------------------------------------- | ---------------------------- | ------ | -------------------------------------------- |
+| 6   | **Multi-User Workspace**          | Multiple users share the same Stoa instance with isolated projects.    | Projects + auth tokens table | L      | **Foundation (#418)** — enforcement deferred |
+| 7   | **Project Wiki / Knowledge Base** | Long-lived project docs, automatically linked by agents.               | Notes dialog + shared memory | M      | **DONE (#417)**                              |
+| 8   | **Session Sharing & Deep Links**  | Share a read-only session view or a specific replay timestamp.         | Session status + snapshots   | S      | **DONE (#417)**                              |
+| 9   | **Audit Log & Compliance Export** | CSV/JSON export of all agent actions, approvals, and guardrail events. | Events ledger + guardrails   | M      | **Already shipped**                          |
+| 10  | **Comment / Annotation Layer**    | Add human comments on a session replay or snapshot for hand-off.       | Snapshots + session events   | S      | **DONE (#417)**                              |
 
 ### Phase 3: Control & Trust
 

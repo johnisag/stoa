@@ -123,6 +123,12 @@ export function revokeToken(
 }
 
 // ── Project-scoped workspace access (Feature 6) ──
+//
+// NOTE: The enforcement (filtering GET routes by allowed project ids) is a
+// Phase 2c follow-up — it requires injecting the allowed-projects list into
+// every project-scoped GET route, the same way SCOPE_HEADER is injected. The
+// CRUD API and resolution function are shipped here; wiring enforcement into
+// the auth gate is tracked as a follow-up in docs/enhancements.md.
 
 /** The project ids a token is scoped to (empty = full fleet access). */
 export function getTokenProjects(
