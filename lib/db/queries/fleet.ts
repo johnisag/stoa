@@ -307,6 +307,17 @@ export const fleetQueries = {
   deleteFleetTasksForRun: (db: Database.Database) =>
     getStmt(db, `DELETE FROM fleet_tasks WHERE fleet_run_id = ?`),
 
+  /** All fleet tasks needing human attention (across all runs). */
+  listFleetTasksNeedingAttention: (db: Database.Database) =>
+    getStmt(
+      db,
+      `SELECT t.id, t.fleet_run_id, t.session_id, t.title, t.status, t.updated_at
+       FROM fleet_tasks t
+       WHERE t.status IN ('waiting_for_operator', 'blocked')
+       ORDER BY t.updated_at DESC
+       LIMIT 100`
+    ),
+
   deleteFleetTaskDependenciesForRun: (db: Database.Database) =>
     getStmt(db, `DELETE FROM fleet_task_dependencies WHERE fleet_run_id = ?`),
 

@@ -51,13 +51,13 @@ tracking, offline queue, cross-platform backend abstraction.
 
 ### Phase 1: Operator Experience (foundation, highest impact/effort ratio)
 
-| #   | Feature                                | User Value                                                                                            | Existing Seam                                                       | Effort | Status          |
-| --- | -------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------ | --------------- |
-| 1   | **Session Replay & Timeline Scrubber** | Re-watch any agent run, jump to errors, share links to specific moments.                              | Snapshots API (`/api/sessions/[id]/snapshots`) + `SnapshotTimeline` | M      | Planned         |
-| 2   | **Human-in-the-Loop Approval Queue**   | Central queue for permission prompts, guardrail blocks, and dispatch approvals.                       | Guardrails + Fleet approvals + Ask Stoa                             | M      | Planned         |
-| 3   | **PWA Install & Offline-First Shell**  | Install Stoa to phone/desktop home screen; offline queue already exists, make the shell work offline. | serwist service worker + offline queue                              | S      | Planned         |
-| 4   | **Session Templates / Quick Starts**   | One-click templates for common tasks (bug fix, refactor, write tests).                                | Playbooks + NewSessionDialog                                        | S      | Planned         |
-| 5   | **Real-Time Cost Dashboard**           | Fleet-wide spend, per-project/model, budget alerts.                                                   | `lib/session-cost.ts`, `CostIndicator`, Fleet analytics             | M      | **DONE (#416)** |
+| #   | Feature                                | User Value                                                                                            | Existing Seam                                                       | Effort | Status              |
+| --- | -------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------ | ------------------- |
+| 1   | **Session Replay & Timeline Scrubber** | Re-watch any agent run, jump to errors, share links to specific moments.                              | Snapshots API (`/api/sessions/[id]/snapshots`) + `SnapshotTimeline` | M      | Planned             |
+| 2   | **Human-in-the-Loop Approval Queue**   | Central queue for permission prompts, guardrail blocks, and dispatch approvals.                       | Guardrails + Fleet approvals + Ask Stoa                             | M      | **DONE (#420)**     |
+| 3   | **PWA Install & Offline-First Shell**  | Install Stoa to phone/desktop home screen; offline queue already exists, make the shell work offline. | serwist service worker + offline queue                              | S      | **Already shipped** |
+| 4   | **Session Templates / Quick Starts**   | One-click templates for common tasks (bug fix, refactor, write tests).                                | Playbooks + NewSessionDialog                                        | S      | **Already shipped** |
+| 5   | **Real-Time Cost Dashboard**           | Fleet-wide spend, per-project/model, budget alerts.                                                   | `lib/session-cost.ts`, `CostIndicator`, Fleet analytics             | M      | **DONE (#416)**     |
 
 ### Phase 2: Team & Collaboration
 
