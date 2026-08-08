@@ -13,7 +13,8 @@ import type { Session } from "./db/types";
 import type { SessionStatus } from "./status-detector";
 
 /** The Kanban columns in left-to-right order. */
-export type KanbanColumnId = "backlog" | "in-progress" | "review" | "done";
+export type KanbanColumnId =
+  "backlog" | "in-progress" | "blocked" | "review" | "done";
 
 export interface KanbanColumn {
   id: KanbanColumnId;
@@ -31,71 +32,79 @@ export interface KanbanClassificationInput {
   workerStatus?: Session["worker_status"];
   /** The session's PR status (if it has a PR). */
   prStatus?: Session["pr_status"];
-  /** Whether the session has a parent (child workers go to in-progress). */
-  isChild?: boolean;
 }
 
 /**
  * Classify a single session into a Kanban column.
  *
- * Classification rules (evaluated in order):
- * 1. worker_status "completed" or "failed" → done
- * 2. PR status "merged" or "closed" → done
- * 3. PR status "open" → review
- * 4. worker_status "running" or "pending" → in-progress
- * 5. status "running" or "waiting" → in-progress
- * 6. status "error" → in-progress (needs attention)
- * 7. status "idle" + has a PR → review (finished work, awaiting merge)
- * 8. status "idle" → done (finished and idle)
- * 9. default → backlog
+ * Classification rules (evaluated in priority order):
+ *
+ * 1. PR status "open" → review (an open PR needs human review regardless of
+ *    what the worker lifecycle says — a completed worker with an open PR
+ *    is NOT done, it's awaiting merge).
+ * 2. PR status "merged" or "closed" → done.
+ * 3. status "error" → blocked (broken, needs human intervention).
+ * 4. status "dead" → done (session exited, no longer active).
+ * 5. worker_status "completed" or "failed" → done (but rule 1 already
+ *    intercepted if there's an open PR).
+ * 6. worker_status "running" or "pending" → in-progress.
+ * 7. status "running" or "waiting" → in-progress.
+ * 8. status "idle" → done (finished and idle).
+ * 9. default → backlog.
  */
 export function classifySession(
   input: KanbanClassificationInput
 ): KanbanColumnId {
-  // 1. Fleet worker lifecycle states are authoritative.
-  if (input.workerStatus === "completed" || input.workerStatus === "failed") {
-    return "done";
-  }
-
-  // 2. PR status overrides everything else.
-  if (input.prStatus === "merged" || input.prStatus === "closed") {
-    return "done";
-  }
+  // 1. Open PR needs review FIRST — even a completed/failed worker with an
+  //    open PR should land in review, not done.
   if (input.prStatus === "open") {
     return "review";
   }
 
-  // 3. Fleet workers in flight.
+  // 2. Merged/closed PR → done.
+  if (input.prStatus === "merged" || input.prStatus === "closed") {
+    return "done";
+  }
+
+  // 3. Error sessions are blocked, not in-progress — they need human
+  //    intervention and shouldn't be visually conflated with healthy work.
+  if (input.status === "error") {
+    return "blocked";
+  }
+
+  // 4. Dead sessions → done (exited, not backlog).
+  if (input.status === "dead") {
+    return "done";
+  }
+
+  // 5. Fleet worker terminal states → done (open PR already handled above).
+  if (input.workerStatus === "completed" || input.workerStatus === "failed") {
+    return "done";
+  }
+
+  // 6. Fleet workers in flight.
   if (input.workerStatus === "running" || input.workerStatus === "pending") {
     return "in-progress";
   }
 
-  // 4. Active session states.
+  // 7. Active session states.
   if (input.status === "running" || input.status === "waiting") {
     return "in-progress";
   }
 
-  // 5. Error sessions need attention — keep them visible in-progress.
-  if (input.status === "error") {
-    return "in-progress";
-  }
-
-  // 6. Idle + has an open PR → review (already checked above, but idle
-  //    without a PR → done).
+  // 8. Idle → done (finished and idle).
   if (input.status === "idle") {
     return "done";
   }
 
-  // 7. Dead or unknown → backlog.
+  // 9. Default → backlog.
   return "backlog";
 }
 
 /**
  * Classify all sessions into Kanban columns. Pure function.
  *
- * @param sessions The full session list.
- * @param statuses The status map (from the status event stream).
- * @returns Four columns with session ids, in display order.
+ * @returns Five columns with session ids, in display order.
  */
 export function classifySessionsForKanban(
   sessions: KanbanClassificationInput[]
@@ -103,6 +112,7 @@ export function classifySessionsForKanban(
   const columns: Record<KanbanColumnId, string[]> = {
     backlog: [],
     "in-progress": [],
+    blocked: [],
     review: [],
     done: [],
   };
@@ -119,6 +129,7 @@ export function classifySessionsForKanban(
       label: "In Progress",
       sessionIds: columns["in-progress"],
     },
+    { id: "blocked", label: "Blocked", sessionIds: columns.blocked },
     { id: "review", label: "Review", sessionIds: columns.review },
     { id: "done", label: "Done", sessionIds: columns.done },
   ];
