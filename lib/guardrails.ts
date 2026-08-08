@@ -63,10 +63,11 @@ export const DEFAULT_RULES: GuardrailRule[] = [
     id: "rm-rf-home",
     description: "rm -rf targeting home directory or root",
     // Matches: rm -rf ~, rm -fr ~, rm --recursive --force ~,
-    // rm -rf $HOME, rm -rf /, rm -rf /home, rm -rf /Users
-    // Handles both short-flag orderings (-rf and -fr) and long-form.
+    // rm -rf $HOME, rm -rf /, rm -rf /home, rm -rf /Users.
+    // Handles -rf/-fr orderings + long-form. Path boundaries prevent
+    // false-positives on /homeless or /Users-john.
     pattern:
-      "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive.*--force|--force.*--recursive)\\s+(~|/|\\$HOME|/home|/Users)",
+      "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive.*--force|--force.*--recursive)\\s+(~(?:/|$)|/(?:$|home(?:/|$)|Users(?:/|$))|\\$HOME(?:/|$))",
     severity: "block",
     scanLines: 5,
   },
@@ -79,11 +80,31 @@ export const DEFAULT_RULES: GuardrailRule[] = [
     scanLines: 5,
   },
   {
+    id: "rm-rf-wildcard",
+    description: "rm -rf targeting wildcard (cwd wipe)",
+    // Matches: rm -rf *, rm -rf .
+    pattern:
+      "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive.*--force|--force.*--recursive)\\s+\\*",
+    severity: "block",
+    scanLines: 3,
+  },
+  {
     id: "force-push-main",
     description: "git push --force to main/master (history rewrite)",
-    // Matches: git push --force origin main, git push -f origin master
-    pattern: "git\\s+push\\s+(?:--force|-f)\\s+\\S*\\s*(?:main|master)\\b",
+    // Anchored: the branch name must be exactly main or master (followed
+    // by end-of-line or whitespace), NOT main-rebase or main-feature.
+    pattern:
+      "git\\s+push\\s+(?:--force|-f)\\s+\\S*\\s*(?:main|master)(?:\\s|$)",
     severity: "block",
+    scanLines: 3,
+  },
+  {
+    id: "force-push-bare",
+    description: "git push --force with no branch specified (may target main)",
+    // Matches: git push --force (no remote/branch — pushes to default)
+    pattern:
+      "git\\s+push\\s+(?:--force|-f)(?:\\s|$)(?!.*\\b(origin|upstream)\\b)",
+    severity: "warn",
     scanLines: 3,
   },
   {
@@ -111,8 +132,9 @@ export const DEFAULT_RULES: GuardrailRule[] = [
   {
     id: "curl-pipe-sh",
     description: "curl/wget piped to shell (arbitrary code execution)",
+    // BLOCK severity — this is remote code execution, not a footgun.
     pattern: "(curl|wget)\\s+[^|]*\\|\\s*(sudo\\s+)?(ba)?sh",
-    severity: "warn",
+    severity: "block",
     scanLines: 3,
   },
   {
@@ -127,6 +149,22 @@ export const DEFAULT_RULES: GuardrailRule[] = [
     description: "killall/kill -9 on broad process groups",
     pattern: "killall\\b|kill\\s+-9\\s+(?:-1|0|\\$)",
     severity: "warn",
+    scanLines: 3,
+  },
+  {
+    id: "windows-rmdir-silent",
+    description: "Windows: Remove-Item -Recurse -Force on critical paths",
+    // PowerShell: Remove-Item ~ -Recurse -Force
+    pattern:
+      "Remove-Item\\s+(?:-LiteralPath\\s+)?(~|C:\\\\Users|C:\\\\|\\$env:USERPROFILE)(?:\\s+|-Recurse)",
+    severity: "block",
+    scanLines: 3,
+  },
+  {
+    id: "windows-format",
+    description: "Windows: format command (disk wipe)",
+    pattern: "format\\s+[A-Z]:\\s*/",
+    severity: "block",
     scanLines: 3,
   },
 ];
@@ -157,7 +195,7 @@ export function checkGuardrails(
 
     let regex: RegExp;
     try {
-      regex = new RegExp(rule.pattern, "i");
+      regex = new RegExp(rule.pattern, "im");
     } catch {
       // Invalid regex in a rule — skip it (don't crash the checker).
       continue;
@@ -200,15 +238,24 @@ export function deduplicateViolations(
   for (const v of newViolations) {
     const key = `${v.ruleId}:${v.sessionName}`;
     const lastReported = recentlyReported.get(key);
-    // Use the violation's detectedAt as the time reference, so callers
-    // can pass violations with explicit timestamps (testable). Falls back
-    // to Date.now() if detectedAt is 0 or missing.
-    const checkTime = v.detectedAt || Date.now();
-    if (lastReported && checkTime - lastReported < cooldownMs) {
-      // Still in cooldown — skip.
-      continue;
+
+    // BLOCK violations are NEVER suppressed by cooldown — a real rm -rf
+    // must fire every time even if the same command was caught 5 seconds
+    // ago. Only WARN violations are deduplicated.
+    if (lastReported && v.severity === "warn") {
+      const checkTime = v.detectedAt || Date.now();
+      if (checkTime - lastReported < cooldownMs) {
+        // Still in cooldown — skip.
+        continue;
+      }
+      recentlyReported.set(key, checkTime);
+    } else if (v.severity === "block") {
+      // Always report + update the timestamp (keeps warn-dedup current).
+      recentlyReported.set(key, v.detectedAt || Date.now());
+    } else {
+      const checkTime = v.detectedAt || Date.now();
+      recentlyReported.set(key, checkTime);
     }
-    recentlyReported.set(key, checkTime);
     fresh.push(v);
   }
 

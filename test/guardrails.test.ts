@@ -40,6 +40,51 @@ describe("checkGuardrails", () => {
     expect(violations.some((v) => v.ruleId === "rm-rf-home")).toBe(true);
   });
 
+  it("does NOT false-positive on /homeless or /Users-john", () => {
+    const content1 = "rm -rf /homeless\n";
+    expect(checkGuardrails(content1, DEFAULT_RULES)).toEqual([]);
+    const content2 = "rm -rf /Users-john\n";
+    expect(checkGuardrails(content2, DEFAULT_RULES)).toEqual([]);
+  });
+
+  it("detects rm -rf wildcard (cwd wipe)", () => {
+    const content = "rm -rf *\n";
+    const violations = checkGuardrails(content, DEFAULT_RULES);
+    expect(violations.some((v) => v.ruleId === "rm-rf-wildcard")).toBe(true);
+  });
+
+  it("does NOT flag force push to main-rebase feature branch", () => {
+    const content = "git push --force origin main-rebase\n";
+    const violations = checkGuardrails(content, DEFAULT_RULES);
+    expect(violations.some((v) => v.ruleId === "force-push-main")).toBe(false);
+  });
+
+  it("detects bare force push (no branch — may target main)", () => {
+    const content = "git push --force\n";
+    const violations = checkGuardrails(content, DEFAULT_RULES);
+    expect(violations.some((v) => v.ruleId === "force-push-bare")).toBe(true);
+  });
+
+  it("does NOT flag force push with explicit origin (not bare)", () => {
+    const content = "git push --force origin\n";
+    const violations = checkGuardrails(content, DEFAULT_RULES);
+    expect(violations.some((v) => v.ruleId === "force-push-bare")).toBe(false);
+  });
+
+  it("detects Windows Remove-Item on home/profile", () => {
+    const content = "Remove-Item ~ -Recurse -Force\n";
+    const violations = checkGuardrails(content, DEFAULT_RULES);
+    expect(violations.some((v) => v.ruleId === "windows-rmdir-silent")).toBe(
+      true
+    );
+  });
+
+  it("detects Windows format command (disk wipe)", () => {
+    const content = "format C: /fs:ntfs\n";
+    const violations = checkGuardrails(content, DEFAULT_RULES);
+    expect(violations.some((v) => v.ruleId === "windows-format")).toBe(true);
+  });
+
   it("detects rm -rf targeting dotfiles (.ssh, .aws)", () => {
     const violations1 = checkGuardrails("rm -rf ~/.ssh\n", DEFAULT_RULES);
     expect(violations1.some((v) => v.ruleId === "rm-rrf-dotfiles")).toBe(true);
@@ -250,5 +295,28 @@ describe("deduplicateViolations", () => {
       30_000
     );
     expect(reported.get("rule-1:sess-1")).toBe(now);
+  });
+
+  it("NEVER suppresses a BLOCK violation within cooldown", () => {
+    const now = Date.now();
+    const reported = new Map<string, number>();
+    const blockViolation: GuardrailViolation = {
+      ruleId: "rm-rf-home",
+      description: "rm -rf home",
+      severity: "block",
+      match: "rm -rf ~",
+      detectedAt: now,
+      sessionName: "sess-1",
+    };
+    // First block — reported
+    const fresh1 = deduplicateViolations([blockViolation], reported, 30_000);
+    expect(fresh1).toHaveLength(1);
+    // Second block 1 second later — STILL reported (never suppressed)
+    const fresh2 = deduplicateViolations(
+      [{ ...blockViolation, detectedAt: now + 1000 }],
+      reported,
+      30_000
+    );
+    expect(fresh2).toHaveLength(1);
   });
 });
