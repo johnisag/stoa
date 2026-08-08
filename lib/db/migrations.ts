@@ -3480,6 +3480,24 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 86,
+    name: "add_token_project_scope",
+    up: (db) => {
+      // Project-scoped tokens: restricts an observer token to specific projects.
+      // A row in token_projects means "this token may access this project."
+      // No rows = full fleet access (backward compatible).
+      if (!hasTable(db, "token_projects")) {
+        db.exec(`
+          CREATE TABLE token_projects (
+            token_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            PRIMARY KEY (token_id, project_id)
+          )
+        `);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
