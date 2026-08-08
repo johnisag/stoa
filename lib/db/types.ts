@@ -111,12 +111,25 @@ export interface AgentMemoryRow {
   updated_at: string;
 }
 
-/** A note in the shared knowledge base (notes). `pinned` is a SQLite 0/1. */
+/** A human comment / annotation on a session (hand-off note, review remark). */
+export interface SessionCommentRow {
+  id: string;
+  session_id: string;
+  author: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A note in the shared knowledge base (notes). `pinned` is a SQLite 0/1.
+ *  `project_id` is NULL for fleet-wide notes; set for a per-project wiki page. */
 export interface NoteRow {
   id: string;
   title: string;
   content: string;
   pinned: number;
+  /** NULL = fleet-wide; a project id = scoped to that project's wiki. */
+  project_id?: string | null;
   created_at: string;
   updated_at: string;
 }

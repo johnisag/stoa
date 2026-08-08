@@ -3438,6 +3438,44 @@ const migrations: Migration[] = [
     name: "add_fleet_control_plane_poll_cursors",
     up: ensureFleetControlPlanePollCursorSchema,
   },
+  {
+    id: 84,
+    name: "add_session_comments_table",
+    up: (db) => {
+      // Per-session human comments / annotations: hand-off notes, review
+      // remarks attached to a specific session. Separate from the fleet-wide
+      // Notes KB — these are scoped to one session's lifecycle.
+      if (!hasTable(db, "session_comments")) {
+        db.exec(`
+          CREATE TABLE session_comments (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            author TEXT NOT NULL DEFAULT '',
+            body TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `);
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_session_comments_session ON session_comments(session_id)`
+        );
+      }
+    },
+  },
+  {
+    id: 85,
+    name: "add_project_id_to_notes",
+    up: (db) => {
+      // Per-project wiki scoping: a note with project_id is visible only in
+      // that project's wiki; NULL = fleet-wide (the original behavior).
+      if (!hasColumn(db, "notes", "project_id")) {
+        db.exec(`ALTER TABLE notes ADD COLUMN project_id TEXT DEFAULT NULL`);
+      }
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id) WHERE project_id IS NOT NULL`
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

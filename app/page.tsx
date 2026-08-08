@@ -50,6 +50,7 @@ import { paneCommandActions } from "@/stores/paneCommands";
 import { getSwitchableSessionOrder } from "@/lib/session-navigation";
 import { nextAttentionSession } from "@/lib/session-attention";
 import { parseAppAction } from "@/lib/share-intake";
+import { parseDeepLink } from "@/lib/session-deep-link";
 import { getActiveBackend, launchTmuxSession } from "@/lib/client/backend";
 import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
@@ -722,16 +723,16 @@ function HomeContent() {
     else if (action === "open-ask-stoa") addViewTab(focusedPaneId, "ask");
   });
 
-  // #17: app-shortcut / share-target deep links. Read `?action=…` ONCE on
-  // launch (mount-only, no deps; the ref also guards StrictMode's dev
-  // double-invoke), dispatch to the same handlers the keybindings use, then
-  // strip the query from the URL so a reload (or the PWA restoring the
+  // #17: app-shortcut / share-target / session deep links. Read `?action=…` or
+  // `?session=…` ONCE on launch (mount-only, no deps; the ref also guards
+  // StrictMode's dev double-invoke), dispatch to the same handlers the keybindings
+  // use, then strip the query from the URL so a reload (or the PWA restoring the
   // location) can't re-fire the action.
   const appActionHandledRef = useRef(false);
   useEffect(() => {
     if (appActionHandledRef.current) return;
     appActionHandledRef.current = true;
-    const parsed = parseAppAction(window.location.search);
+    const parsed = parseDeepLink(window.location.search);
     if (!parsed) return;
     if (parsed.action === "new-session") {
       if (parsed.prompt) setNewSessionPromptSeed(parsed.prompt);
@@ -742,6 +743,8 @@ function HomeContent() {
       addViewTab(focusedPaneId, "ask");
     } else if (parsed.action === "live-wall") {
       addViewTab(focusedPaneId, "live-wall");
+    } else if (parsed.action === "open-session") {
+      handleSelectSession(parsed.sessionId);
     }
     window.history.replaceState(null, "", window.location.pathname);
     // eslint-disable-next-line react-hooks/exhaustive-deps

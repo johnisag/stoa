@@ -6,6 +6,7 @@ import { sessionsQueries } from "./sessions";
 import { messagingQueries } from "./messaging";
 import { projectsQueries } from "./projects";
 import { workflowsKbQueries } from "./workflows-kb";
+import { sessionCommentsQueries } from "./session-comments";
 import { channelsQueries } from "./channels";
 import { infraQueries } from "./infra";
 import { dispatchQueries } from "./dispatch";
@@ -28,6 +29,7 @@ export const queries = {
   ...messagingQueries,
   ...projectsQueries,
   ...workflowsKbQueries,
+  ...sessionCommentsQueries,
   ...channelsQueries,
   ...infraQueries,
   ...dispatchQueries,

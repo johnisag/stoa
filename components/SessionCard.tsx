@@ -4,6 +4,7 @@ import { memo, useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
+import { sessionDeepLinkPath } from "@/lib/session-deep-link";
 import { useTick30s } from "@/hooks/useSharedTicker";
 import {
   GitFork,
@@ -31,6 +32,7 @@ import {
   Bell,
   BellOff,
   Monitor,
+  Link2,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -306,6 +308,20 @@ function SessionCardComponent({
     }
   };
 
+  // Copy a deep link that opens Stoa focused on this session (?session=<id>).
+  // Works on any origin (localhost, LAN IP, Tailscale) — built from window.origin.
+  const copyDeepLink = async () => {
+    try {
+      const path = sessionDeepLinkPath(session.id);
+      const url = `${window.location.origin}${path}`;
+      const ok = await copyText(url);
+      if (!ok) throw new Error("Couldn't copy to the clipboard");
+      toast.success("Deep link copied");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
   // Handle card click - coordinates selection with navigation
   const handleCardClick = (e: React.MouseEvent) => {
     if (isEditing) return;
@@ -368,6 +384,10 @@ function SessionCardComponent({
             Open in new tab
           </MenuItem>
         )}
+        <MenuItem onClick={copyDeepLink}>
+          <Link2 className="mr-2 h-3 w-3" />
+          Copy deep link
+        </MenuItem>
         {onRename && (
           <MenuItem onClick={() => setIsEditing(true)}>
             <Pencil className="mr-2 h-3 w-3" />

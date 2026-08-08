@@ -29,12 +29,18 @@ export async function POST(request: NextRequest) {
     );
   }
   try {
-    const { title, content, pinned } = (body ?? {}) as {
+    const { title, content, pinned, projectId } = (body ?? {}) as {
       title?: unknown;
       content?: unknown;
       pinned?: unknown;
+      projectId?: unknown;
     };
-    const note = createNote({ title, content, pinned });
+    const note = createNote({
+      title,
+      content,
+      pinned,
+      projectId: typeof projectId === "string" ? projectId : null,
+    });
     return NextResponse.json({ note }, { status: 201 });
   } catch (error) {
     if (error instanceof NoteValidationError) {
