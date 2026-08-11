@@ -282,22 +282,17 @@ export function ProjectsSection({
                   {/* Project sessions */}
                   {projectSessions.length === 0 &&
                   projectDevServers.length === 0 ? (
-                    <div className="flex flex-col items-start gap-1.5 px-2 py-2">
-                      <p className="text-muted-foreground text-xs">
-                        No sessions yet
-                      </p>
-                      {onNewSession && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-muted-foreground hover:text-foreground -ml-1 h-7 px-2"
-                          onClick={() => onNewSession(project.id)}
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                          New session
-                        </Button>
-                      )}
-                    </div>
+                    onNewSession ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground hover:text-foreground h-6 w-full justify-start gap-1 px-2 text-xs"
+                        onClick={() => onNewSession(project.id)}
+                      >
+                        <Plus className="h-3 w-3" />
+                        New session
+                      </Button>
+                    ) : null
                   ) : projectSessions.length === 0 ? null : (
                     projectSessions.map((session) => {
                       const workers = workersByConduct[session.id] || [];
