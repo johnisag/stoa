@@ -816,6 +816,7 @@ export const Pane = memo(function Pane({
                 workingDirectory={session.working_directory}
                 fileEditor={fileEditor}
                 onAddToAgent={handleAddToAgent}
+                active={viewMode === "files"}
               />
             </div>
           )}
@@ -928,6 +929,7 @@ export const Pane = memo(function Pane({
                         workingDirectory={session.working_directory}
                         fileEditor={fileEditor}
                         onAddToAgent={handleAddToAgent}
+                        active={viewMode === "files"}
                       />
                     </div>
                   )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { FolderOpen, RefreshCw, Loader2, AlertCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,7 @@ export function FileExplorerDrawer({
   const [files, setFiles] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const isAnimatingIn = useDrawerAnimation(open);
   const confirm = useConfirm();
 
@@ -55,39 +56,49 @@ export function FileExplorerDrawer({
     reset,
   } = fileEditor;
 
-  // `token` guards against out-of-order responses: a fast working-dir switch
-  // (the drawer stays mounted across tab switches) can otherwise land an older
-  // /api/files response after a newer one. The effect cancels the prior run.
-  const loadFiles = useCallback(
-    async (token?: { cancelled: boolean }) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(
-          `/api/files?path=${encodeURIComponent(workingDirectory)}`
-        );
-        const data = await res.json();
-        if (token?.cancelled) return;
-        if (!res.ok || data.error)
-          setError(data.error || "Failed to load directory");
-        else setFiles(data.files || []);
-      } catch {
-        if (!token?.cancelled) setError("Failed to load directory");
-      } finally {
-        if (!token?.cancelled) setLoading(false);
-      }
-    },
-    [workingDirectory]
-  );
+  // `requestSeq` guards against out-of-order responses: a fast working-dir
+  // switch (the drawer stays mounted across tab switches) or two rapid manual
+  // refreshes can otherwise land an older /api/files response after a newer
+  // one. Only the LATEST request may commit (same pattern as FileExplorer).
+  const requestSeq = useRef(0);
+  const loadFiles = useCallback(async () => {
+    const seq = ++requestSeq.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/files?path=${encodeURIComponent(workingDirectory)}`
+      );
+      const data = await res.json();
+      if (seq !== requestSeq.current) return;
+      if (!res.ok || data.error)
+        setError(data.error || "Failed to load directory");
+      else setFiles(data.files || []);
+    } catch {
+      if (seq === requestSeq.current) setError("Failed to load directory");
+    } finally {
+      if (seq === requestSeq.current) setLoading(false);
+    }
+  }, [workingDirectory]);
 
   useEffect(() => {
     if (!open) return;
-    const token = { cancelled: false };
-    loadFiles(token);
-    return () => {
-      token.cancelled = true;
-    };
+    void loadFiles();
   }, [open, loadFiles]);
+
+  // Clear the previous directory's listing on a workingDirectory switch so a
+  // failed load can't leave the old dir's tree rendered under the new path
+  // (the spinner/error gates only apply while no listing exists). Gated on
+  // `open` to match loadFiles — otherwise a dir switch while the drawer is
+  // closed bumps requestSeq-free, letting the old dir's in-flight fetch
+  // commit its listing AFTER the clear.
+  const prevDirRef = useRef(workingDirectory);
+  useEffect(() => {
+    if (!open) return;
+    if (prevDirRef.current === workingDirectory) return;
+    prevDirRef.current = workingDirectory;
+    setFiles([]);
+  }, [open, workingDirectory]);
 
   const activeFile = activeFilePath ? getFile(activeFilePath) : undefined;
 
@@ -157,7 +168,10 @@ export function FileExplorerDrawer({
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => loadFiles()}
+              onClick={() => {
+                loadFiles();
+                setRefreshKey((k) => k + 1);
+              }}
               disabled={loading}
               aria-label="Refresh files"
               className="h-7 w-7"
@@ -180,11 +194,13 @@ export function FileExplorerDrawer({
 
         {/* Tree */}
         <div className="flex-1 overflow-y-auto pb-2">
-          {loading ? (
+          {/* Gate on EMPTY data, not `loading` alone: unmounting FileTree on a
+              refresh would wipe its expanded-dir state. */}
+          {loading && files.length === 0 ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="text-muted-foreground h-6 w-6 animate-spin" />
             </div>
-          ) : error ? (
+          ) : error && files.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-8 text-center">
               <AlertCircle className="h-8 w-8 text-red-500" />
               <p className="text-muted-foreground text-sm">{error}</p>
@@ -198,9 +214,11 @@ export function FileExplorerDrawer({
             </div>
           ) : (
             <FileTree
+              key={workingDirectory}
               nodes={files}
               basePath={workingDirectory}
               onFileClick={openFile}
+              refreshKey={refreshKey}
             />
           )}
         </div>

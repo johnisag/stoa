@@ -89,3 +89,34 @@ export function getLanguageFromExtension(ext: string): string {
 
   return languageMap[ext.toLowerCase()] || "plaintext";
 }
+
+/**
+ * Result of re-fetching one directory's listing during a tree refresh.
+ * Only successful fetches produce a result — transient failures (network
+ * blip, server restart, 5xx) are skipped by the caller so the tree keeps its
+ * last-known listing instead of collapsing every expanded dir on a hiccup.
+ * A DELETED dir needs no special case: it returns an empty listing here, and
+ * its parent's refreshed listing drops the node entirely.
+ */
+export interface DirRefreshResult {
+  path: string;
+  files: FileNode[];
+}
+
+/**
+ * Merge refreshed directory listings into the FileTree's per-level cache.
+ * Untouched dirs keep their cached children; expanded state is preserved
+ * (returned as a fresh Set so the caller can swap both maps atomically).
+ * Pure → unit-tested.
+ */
+export function applyDirRefresh(
+  loadedChildren: ReadonlyMap<string, FileNode[]>,
+  expanded: ReadonlySet<string>,
+  results: DirRefreshResult[]
+): { loadedChildren: Map<string, FileNode[]>; expanded: Set<string> } {
+  const nextChildren = new Map(loadedChildren);
+  for (const { path, files } of results) {
+    nextChildren.set(path, files);
+  }
+  return { loadedChildren: nextChildren, expanded: new Set(expanded) };
+}

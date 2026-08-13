@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -14,6 +14,8 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { FileNode } from "@/lib/file-utils";
+import { applyDirRefresh } from "@/lib/file-utils";
+import type { DirRefreshResult } from "@/lib/file-utils";
 import { relativePath, formatPathsForAgent } from "@/lib/path-display";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import {
@@ -30,6 +32,9 @@ interface FileTreeProps {
   /** Inject a path into the active agent's prompt (right-click → "Add to agent").
    *  Omitted where no terminal is in scope (e.g. the docked file drawer). */
   onAddToAgent?: (path: string) => void;
+  /** Bump to force a refetch of every expanded directory (agent edits don't
+   *  reach the tree otherwise — listings are cached on first expand). */
+  refreshKey?: number;
   depth?: number;
 }
 
@@ -43,14 +48,34 @@ export function FileTree({
   basePath,
   onFileClick,
   onAddToAgent,
+  refreshKey = 0,
   depth = 0,
 }: FileTreeProps) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [loadedChildren, setLoadedChildren] = useState<Map<string, FileNode[]>>(
-    new Map()
-  );
+  // expanded + loadedChildren live in ONE state object so a refresh can swap
+  // both atomically (applyDirRefresh) — separate setStates could tear when a
+  // deleted dir must drop out of both maps at once.
+  const [cache, setCache] = useState<{
+    expanded: Set<string>;
+    loadedChildren: Map<string, FileNode[]>;
+  }>({ expanded: new Set(), loadedChildren: new Map() });
+  const { expanded, loadedChildren } = cache;
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const { copy } = useCopyToClipboard();
+  const lastRefreshKey = useRef(refreshKey);
+  // Ref mirror of `expanded` so the refresh effect can depend on refreshKey
+  // alone — with `expanded` in deps, a user expand/collapse mid-flight would
+  // cancel the in-flight batch and the re-run would early-return (key already
+  // consumed), silently dropping that refresh for every dir. Synced via effect
+  // (declared BEFORE the refresh effect so it runs first in the same flush) —
+  // writing a ref during render is unsafe under concurrent rendering.
+  const expandedRef = useRef(expanded);
+  useEffect(() => {
+    expandedRef.current = expanded;
+  }, [expanded]);
+  // Skip overlapping batches: with server latency above the poll interval a
+  // new batch would cancel the previous one before it commits, starving the
+  // expanded-dir listings. Skipping retries on the next tick instead.
+  const refreshingRef = useRef(false);
 
   const handleCopyPath = useCallback(
     async (text: string) => {
@@ -73,7 +98,13 @@ export function FileTree({
         if (!res.ok) throw new Error(`Failed to load directory: ${res.status}`);
         const data = await res.json();
         if (data.files) {
-          setLoadedChildren((prev) => new Map(prev).set(dirPath, data.files));
+          setCache((prev) => ({
+            ...prev,
+            loadedChildren: new Map(prev.loadedChildren).set(
+              dirPath,
+              data.files
+            ),
+          }));
         }
       } catch (err) {
         console.error("Failed to load directory:", err);
@@ -88,18 +119,66 @@ export function FileTree({
     [loadedChildren]
   );
 
+  // Refresh: bump of `refreshKey` refetches every expanded dir at this level.
+  // Only SUCCESSFUL fetches update the cache — a transient failure (network
+  // blip, server restart, 5xx) keeps the last-known listing so one bad tick
+  // can't collapse the whole tree. Deleted dirs return an empty listing and
+  // vanish from their parent's refreshed children. Nested levels get the same
+  // key via props and refresh themselves.
+  useEffect(() => {
+    if (refreshKey === lastRefreshKey.current) return;
+    lastRefreshKey.current = refreshKey;
+    if (refreshingRef.current) return; // batch in flight; next tick retries
+    const dirs = Array.from(expandedRef.current);
+    if (dirs.length === 0) return;
+    refreshingRef.current = true;
+    const token = { cancelled: false };
+    void (async () => {
+      try {
+        const settled = await Promise.all(
+          dirs.map(async (dirPath): Promise<DirRefreshResult | null> => {
+            try {
+              const res = await fetch(
+                `/api/files?path=${encodeURIComponent(dirPath)}`
+              );
+              if (!res.ok) return null; // transient: keep current listing
+              const data = await res.json();
+              if (!Array.isArray(data.files)) return null;
+              return { path: dirPath, files: data.files as FileNode[] };
+            } catch {
+              return null; // network failure: keep current listing
+            }
+          })
+        );
+        if (token.cancelled) return;
+        const results = settled.filter(
+          (r): r is DirRefreshResult => r !== null
+        );
+        if (results.length === 0) return;
+        setCache((prev) =>
+          applyDirRefresh(prev.loadedChildren, prev.expanded, results)
+        );
+      } finally {
+        refreshingRef.current = false;
+      }
+    })();
+    return () => {
+      token.cancelled = true;
+    };
+  }, [refreshKey]);
+
   const toggleExpand = useCallback(
     async (path: string) => {
       const isCurrentlyExpanded = expanded.has(path);
 
-      setExpanded((prev) => {
-        const next = new Set(prev);
+      setCache((prev) => {
+        const next = new Set(prev.expanded);
         if (next.has(path)) {
           next.delete(path);
         } else {
           next.add(path);
         }
-        return next;
+        return { ...prev, expanded: next };
       });
 
       // Fetch children if expanding and not already loaded
@@ -215,6 +294,7 @@ export function FileTree({
                 basePath={basePath}
                 onFileClick={onFileClick}
                 onAddToAgent={onAddToAgent}
+                refreshKey={refreshKey}
                 depth={depth + 1}
               />
             )}
