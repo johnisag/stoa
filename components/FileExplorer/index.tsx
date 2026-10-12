@@ -112,8 +112,14 @@ export function FileExplorer({
   );
 
   useEffect(() => {
+    // Load on mount and whenever the root changes (the live cwd can move it).
+    // Gated on `active` like the auto-refresh below: a hidden Files view must
+    // not refetch on every root oscillation — the prevDirRef switch already
+    // cleared the stale listing, and this effect re-runs when the view
+    // becomes active again.
+    if (!active) return;
     void loadFiles();
-  }, [loadFiles]);
+  }, [loadFiles, active]);
 
   // Clear the previous directory's listing on a workingDirectory switch.
   // Without this a FAILED load leaves the old dir's tree rendered under the
@@ -123,6 +129,11 @@ export function FileExplorer({
   useEffect(() => {
     if (prevDirRef.current === workingDirectory) return;
     prevDirRef.current = workingDirectory;
+    // Invalidate any in-flight fetch for the OLD directory: the load effect is
+    // gated on `active`, so a root switch while hidden bumps no requestSeq of
+    // its own — without this, that fetch still holds the latest seq and would
+    // commit the old dir's listing AFTER the clear below.
+    requestSeq.current++;
     setFiles([]);
   }, [workingDirectory]);
 
@@ -347,7 +358,19 @@ function DesktopFileExplorer({
       <div className="flex h-full flex-col" style={{ width: treeWidth }}>
         <div className="flex items-center gap-2 p-3">
           <FolderOpen className="text-muted-foreground h-4 w-4 flex-shrink-0" />
-          <p className="flex-1 truncate text-sm font-medium">Files</p>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">Files</p>
+            {/* Show WHICH directory the tree is rooted at — it can move (the
+                view follows the terminal's live cwd), so the root must be
+                visible, not implied. rtl + isolate truncates from the START:
+                the tail (the distinguishing, changing part) stays visible. */}
+            <p
+              className="text-muted-foreground truncate text-xs [direction:rtl] [unicode-bidi:isolate]"
+              title={workingDirectory}
+            >
+              {workingDirectory}
+            </p>
+          </div>
           <Button
             variant="ghost"
             size="icon"
@@ -547,7 +570,12 @@ function MobileFileExplorer({
         <Folder className="text-muted-foreground h-4 w-4 flex-shrink-0" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">Files</p>
-          <p className="text-muted-foreground truncate text-xs">
+          {/* Start-truncated like the desktop panel: the tail is the
+              distinguishing, changing part of a live root. */}
+          <p
+            className="text-muted-foreground truncate text-xs [direction:rtl] [unicode-bidi:isolate]"
+            title={workingDirectory}
+          >
             {workingDirectory}
           </p>
         </div>

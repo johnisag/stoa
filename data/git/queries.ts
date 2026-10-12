@@ -56,6 +56,31 @@ export function useGitCheck(path: string) {
   });
 }
 
+// --- Git Repo Root ---
+
+async function fetchGitRepoRoot(path: string): Promise<string | null> {
+  const res = await fetch(`/api/git/root?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error("Failed to resolve repo root");
+  const data = (await res.json()) as { repoRoot: string | null };
+  return data.repoRoot ?? null;
+}
+
+/**
+ * The repository ROOT containing a path (null when the path is not inside a
+ * work tree). Git porcelain paths and per-file pathspecs are relative to this
+ * root regardless of the cwd git runs from — the Git surfaces anchor on it so
+ * a subdirectory live cwd can't break per-file actions. Deliberately the
+ * lightweight /api/git/root probe, not the heavier /api/git/check payload.
+ */
+export function useGitRepoRoot(path: string) {
+  return useQuery({
+    queryKey: gitKeys.repoRoot(path),
+    queryFn: () => fetchGitRepoRoot(path),
+    staleTime: 15000,
+    enabled: !!path && path !== "~",
+  });
+}
+
 // --- Git Clone ---
 
 async function cloneRepo(data: {
@@ -369,7 +394,14 @@ export function useMultiRepoGitStatus(
 ) {
   const paths = options?.paths;
   return useQuery({
-    queryKey: gitKeys.multiStatus(projectId || "", fallbackPath, paths),
+    // When explicit paths are set the server ignores fallbackPath entirely —
+    // keep it OUT of the key so a live-cwd change can't mint duplicate cache
+    // entries for byte-identical workspace data.
+    queryKey: gitKeys.multiStatus(
+      projectId || "",
+      paths && paths.length > 0 ? undefined : fallbackPath,
+      paths
+    ),
     queryFn: () => fetchMultiRepoGitStatus(projectId, fallbackPath, paths),
     staleTime: 10000, // Consider fresh for 10s
     refetchInterval: 15000, // Poll every 15s

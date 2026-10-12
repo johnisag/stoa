@@ -18,9 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Pinned to the last-known-good patch: node 24.21.0 crashes forked
+      # vitest workers (libuv "Assertion failed: (env) != nullptr") on all
+      # three OSes — proven on a plain-main baseline run (2026-10-12). Float
+      # the pin only after a newer node proves green here.
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 24
+          node-version: 24.18.0
       # Run the guard CODE from a TRUSTED ref (the base branch), not the PR head, so
       # a PR cannot weaken the guard LOGIC and pass its own check. (The pins/config
       # are still read from the PR head — re-pinning a trojan is blocked by the
@@ -50,7 +54,7 @@ jobs:
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         id: setup-node
         with:
-          node-version: 24
+          node-version: 24.18.0
           cache: npm
       - name: Cache node_modules
         id: node-modules-cache
@@ -93,7 +97,7 @@ jobs:
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         id: setup-node
         with:
-          node-version: 24
+          node-version: 24.18.0
           cache: npm
 
       # Cache the installed node_modules (including the built better-sqlite3 /

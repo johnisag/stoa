@@ -19,6 +19,36 @@ async function fetchStatuses(): Promise<StatusResponse> {
   return res.json();
 }
 
+/**
+ * Shared options for every consumer of the status poll — one query key means
+ * one fetch: the session list, the Files-view live cwd, and any future
+ * consumer share a single react-query cache entry instead of re-polling.
+ */
+const statusesQueryOptions = {
+  queryKey: statusKeys.all,
+  queryFn: fetchStatuses,
+  staleTime: 2000,
+  // Refetch on window focus (overrides the global default) so transitions
+  // missed while the tab was hidden/throttled are caught the moment you
+  // return — checkStateChanges then fires any pending notifications.
+  refetchOnWindowFocus: true,
+  refetchInterval: (query: {
+    state: { data?: StatusResponse | undefined };
+  }) => {
+    const statuses = query.state.data?.statuses;
+    if (!statuses) return 5000;
+
+    // "running"/"waiting"/"error" are live or needs-attention states — poll
+    // fast so transitions (and recovery) show quickly; otherwise back off.
+    const hasActive = Object.values(statuses).some(
+      (s) =>
+        s.status === "running" || s.status === "waiting" || s.status === "error"
+    );
+
+    return hasActive ? 5000 : 30000;
+  },
+};
+
 interface UseSessionStatusesOptions {
   sessions: Session[];
   activeSessionId?: string | null;
@@ -38,30 +68,7 @@ export function useSessionStatusesQuery({
   activeSessionId,
   checkStateChanges,
 }: UseSessionStatusesOptions) {
-  const query = useQuery({
-    queryKey: statusKeys.all,
-    queryFn: fetchStatuses,
-    staleTime: 2000,
-    // Refetch on window focus (overrides the global default) so transitions
-    // missed while the tab was hidden/throttled are caught the moment you
-    // return — checkStateChanges then fires any pending notifications.
-    refetchOnWindowFocus: true,
-    refetchInterval: (query) => {
-      const statuses = query.state.data?.statuses;
-      if (!statuses) return 5000;
-
-      // "running"/"waiting"/"error" are live or needs-attention states — poll
-      // fast so transitions (and recovery) show quickly; otherwise back off.
-      const hasActive = Object.values(statuses).some(
-        (s) =>
-          s.status === "running" ||
-          s.status === "waiting" ||
-          s.status === "error"
-      );
-
-      return hasActive ? 5000 : 30000;
-    },
-  });
+  const query = useQuery(statusesQueryOptions);
 
   useEffect(() => {
     if (!query.data?.statuses) return;
@@ -82,4 +89,21 @@ export function useSessionStatusesQuery({
     sessionStatuses: query.data?.statuses ?? EMPTY_STATUSES,
     isLoading: query.isLoading,
   };
+}
+
+/**
+ * The session's LIVE working directory from the shared status-poll cache —
+ * the backend's pane path, sandbox-checked server-side. Null when unknown or
+ * unchanged: callers fall back to the session's stored working_directory.
+ * Mounting this hook adds NO extra network traffic (same query key as the
+ * session-list poll — react-query serves both from one cache entry).
+ */
+export function useSessionLiveCwd(
+  sessionId: string | null | undefined
+): string | null {
+  const { data } = useQuery<StatusResponse, Error, string | null>({
+    ...statusesQueryOptions,
+    select: (d) => d?.statuses?.[sessionId ?? ""]?.cwd ?? null,
+  });
+  return data ?? null;
 }

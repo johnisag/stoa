@@ -160,9 +160,19 @@ export function FileExplorerDrawer({
       >
         {/* Header */}
         <div className="flex items-center justify-between px-3 py-2">
-          <div className="flex items-center gap-2">
-            <FolderOpen className="text-muted-foreground h-4 w-4" />
-            <span className="text-sm font-medium">Files</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <FolderOpen className="text-muted-foreground h-4 w-4 flex-shrink-0" />
+            <div className="min-w-0">
+              <span className="block text-sm font-medium">Files</span>
+              {/* The root can move (the drawer follows the terminal's live
+                  cwd), so show it — start-truncated like the Files panel. */}
+              <span
+                className="text-muted-foreground block truncate text-xs [direction:rtl] [unicode-bidi:isolate]"
+                title={workingDirectory}
+              >
+                {workingDirectory}
+              </span>
+            </div>
           </div>
           <div className="flex items-center gap-1">
             <Button

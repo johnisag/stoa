@@ -5,18 +5,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { SessionStatus } from "@/components/views/types";
 import { statusKeys } from "../sessions/keys";
 import { reconnectBaseDelay } from "./reconnect-delay";
+import { applyStatusDeltas, type StatusDelta } from "./apply-deltas";
 
 interface StatusResponse {
   statuses: Record<string, SessionStatus>;
-}
-
-interface StatusDelta {
-  id: string;
-  name: string;
-  status: SessionStatus["status"];
-  lastLine: string;
-  rateLimit?: SessionStatus["rateLimit"];
-  hasPrompt?: boolean;
 }
 
 /**
@@ -54,20 +46,12 @@ export function useStatusEventStream() {
         try {
           const msg = JSON.parse(e.data);
           if (msg.type !== "status" || !Array.isArray(msg.deltas)) return;
-          queryClient.setQueryData<StatusResponse>(statusKeys.all, (old) => {
-            const statuses = { ...(old?.statuses ?? {}) };
-            for (const d of msg.deltas as StatusDelta[]) {
-              statuses[d.id] = {
-                sessionName: d.name,
-                status: d.status,
-                lastLine: d.lastLine,
-                claudeSessionId: statuses[d.id]?.claudeSessionId ?? null,
-                rateLimit: d.rateLimit ?? null,
-                hasPrompt: d.hasPrompt ?? false,
-              };
-            }
-            return { statuses };
-          });
+          queryClient.setQueryData<StatusResponse>(statusKeys.all, (old) => ({
+            statuses: applyStatusDeltas(
+              old?.statuses ?? {},
+              msg.deltas as StatusDelta[]
+            ),
+          }));
         } catch {
           // ignore malformed frame
         }

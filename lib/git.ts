@@ -51,6 +51,29 @@ export async function isGitRepo(dirPath: string): Promise<boolean> {
 }
 
 /**
+ * Resolve the repository ROOT containing a path. Git's porcelain output (and
+ * per-file pathspecs) are relative to this root regardless of the cwd git was
+ * run from — so consumers anchoring file paths must use THIS, not the cwd.
+ * Null when the path is not inside a work tree.
+ */
+export async function getRepoRoot(dirPath: string): Promise<string | null> {
+  try {
+    const resolvedPath = expandHome(dirPath);
+    const { stdout } = await git(
+      resolvedPath,
+      ["rev-parse", "--show-toplevel"],
+      5000
+    );
+    // Normalize to native separators (git prints forward slashes on Windows)
+    // so the root compares and joins consistently with DB-stored paths.
+    const root = path.resolve(stdout.trim());
+    return root || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Get the current branch name
  */
 export async function getCurrentBranch(dirPath: string): Promise<string> {
