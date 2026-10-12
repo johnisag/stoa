@@ -12,6 +12,7 @@ export const gitKeys = {
       JSON.stringify(paths ?? []),
     ] as const,
   pr: (workingDir: string) => [...gitKeys.all, "pr", workingDir] as const,
+  repoRoot: (path: string) => [...gitKeys.all, "repo-root", path] as const,
   history: (workingDir: string) =>
     [...gitKeys.all, "history", workingDir] as const,
   commitDetail: (workingDir: string, hash: string) =>

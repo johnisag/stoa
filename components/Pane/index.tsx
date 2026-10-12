@@ -18,6 +18,8 @@ import { cn } from "@/lib/utils";
 import { ConductorPanel } from "@/components/ConductorPanel";
 import { useFileEditor } from "@/hooks/useFileEditor";
 import { useSessionLiveCwd } from "@/data/statuses";
+import { useGitRepoRoot } from "@/data/git/queries";
+import { resolveGitSurfacesRoot } from "@/lib/git-surfaces-root";
 import { MobileTabBar } from "./MobileTabBar";
 import { DesktopTabBar } from "./DesktopTabBar";
 import { shouldFocusPaneOnClick } from "./focus-guard";
@@ -230,6 +232,18 @@ export const Pane = memo(function Pane({
   // poll's query cache, so this adds no extra network traffic.
   const liveCwd = useSessionLiveCwd(session?.id);
   const filesRoot = liveCwd ?? session?.working_directory;
+
+  // GIT surfaces root: the REPO containing the Files root — git's porcelain
+  // paths and per-file pathspecs are repo-ROOT relative even when run from a
+  // subdirectory, so anchoring on a subdir cwd breaks every per-file action.
+  // A non-repo cwd keeps git on the stored directory (the Files view still
+  // follows the live cwd).
+  const { data: resolvedRepoRoot } = useGitRepoRoot(filesRoot ?? "");
+  const gitRoot = resolveGitSurfacesRoot(
+    resolvedRepoRoot,
+    filesRoot,
+    session?.working_directory
+  );
 
   // File editor state - lifted here so it persists across view switches
   const fileEditor = useFileEditor();
@@ -489,18 +503,17 @@ export const Pane = memo(function Pane({
 
   const handleGitFileOpen = useCallback(
     (file: GitChangeEditorFile) => {
-      // Anchor on the SAME root the Git panel ran git against (the live cwd
-      // when present) — mixing anchors would resolve change paths against a
-      // directory the panel never used.
-      if (!filesRoot) return;
+      // Anchor on the repo root the panel ran git against — porcelain paths
+      // are repo-root relative; a subdirectory cwd would join to nothing.
+      if (!gitRoot) return;
 
-      const filePath = gitChangeEditorPath(file, filesRoot);
+      const filePath = gitChangeEditorPath(file, gitRoot);
       if (!filePath) return;
 
       setViewMode("files");
       void fileEditor.openFile(filePath);
     },
-    [fileEditor, filesRoot]
+    [fileEditor, gitRoot]
   );
 
   // Insert a saved snippet (from the shared store the mobile toolbar also uses)
@@ -833,10 +846,10 @@ export const Pane = memo(function Pane({
           )}
 
           {/* Git - mobile only */}
-          {filesRoot && (
+          {gitRoot && (
             <div className={viewMode === "git" ? "h-full" : "hidden"}>
               <GitPanel
-                workingDirectory={filesRoot}
+                workingDirectory={gitRoot}
                 projectId={currentProject?.id}
                 repositories={effectiveRepositories}
                 repoPaths={
@@ -983,7 +996,7 @@ export const Pane = memo(function Pane({
                   <GitDrawer
                     open={true}
                     onOpenChange={(o) => !o && setRightDrawer(null)}
-                    workingDirectory={filesRoot ?? session.working_directory}
+                    workingDirectory={gitRoot ?? session.working_directory}
                     projectId={currentProject?.id}
                     repositories={effectiveRepositories}
                     repoPaths={
