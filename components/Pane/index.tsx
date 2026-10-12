@@ -489,15 +489,18 @@ export const Pane = memo(function Pane({
 
   const handleGitFileOpen = useCallback(
     (file: GitChangeEditorFile) => {
-      if (!session?.working_directory) return;
+      // Anchor on the SAME root the Git panel ran git against (the live cwd
+      // when present) — mixing anchors would resolve change paths against a
+      // directory the panel never used.
+      if (!filesRoot) return;
 
-      const filePath = gitChangeEditorPath(file, session.working_directory);
+      const filePath = gitChangeEditorPath(file, filesRoot);
       if (!filePath) return;
 
       setViewMode("files");
       void fileEditor.openFile(filePath);
     },
-    [fileEditor, session?.working_directory]
+    [fileEditor, filesRoot]
   );
 
   // Insert a saved snippet (from the shared store the mobile toolbar also uses)
@@ -830,10 +833,10 @@ export const Pane = memo(function Pane({
           )}
 
           {/* Git - mobile only */}
-          {session?.working_directory && (
+          {filesRoot && (
             <div className={viewMode === "git" ? "h-full" : "hidden"}>
               <GitPanel
-                workingDirectory={session.working_directory}
+                workingDirectory={filesRoot}
                 projectId={currentProject?.id}
                 repositories={effectiveRepositories}
                 repoPaths={
@@ -980,7 +983,7 @@ export const Pane = memo(function Pane({
                   <GitDrawer
                     open={true}
                     onOpenChange={(o) => !o && setRightDrawer(null)}
-                    workingDirectory={session.working_directory}
+                    workingDirectory={filesRoot ?? session.working_directory}
                     projectId={currentProject?.id}
                     repositories={effectiveRepositories}
                     repoPaths={
