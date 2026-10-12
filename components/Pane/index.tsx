@@ -17,6 +17,7 @@ import { getActiveBackend, buildSpawnForSession } from "@/lib/client/backend";
 import { cn } from "@/lib/utils";
 import { ConductorPanel } from "@/components/ConductorPanel";
 import { useFileEditor } from "@/hooks/useFileEditor";
+import { useSessionLiveCwd } from "@/data/statuses";
 import { MobileTabBar } from "./MobileTabBar";
 import { DesktopTabBar } from "./DesktopTabBar";
 import { shouldFocusPaneOnClick } from "./focus-guard";
@@ -222,6 +223,13 @@ export const Pane = memo(function Pane({
   const session = activeTab
     ? sessions.find((s) => s.id === activeTab.sessionId)
     : null;
+
+  // Files view root: the session's LIVE pane cwd when the backend reports one
+  // (the terminal may have cd'd — e.g. into a git worktree — since the session
+  // was created), else the creation-time working_directory. Shares the status
+  // poll's query cache, so this adds no extra network traffic.
+  const liveCwd = useSessionLiveCwd(session?.id);
+  const filesRoot = liveCwd ?? session?.working_directory;
 
   // File editor state - lifted here so it persists across view switches
   const fileEditor = useFileEditor();
@@ -810,10 +818,10 @@ export const Pane = memo(function Pane({
           })}
 
           {/* Files */}
-          {session?.working_directory && (
+          {filesRoot && (
             <div className={viewMode === "files" ? "h-full" : "hidden"}>
               <FileExplorer
-                workingDirectory={session.working_directory}
+                workingDirectory={filesRoot}
                 fileEditor={fileEditor}
                 onAddToAgent={handleAddToAgent}
                 active={viewMode === "files"}
@@ -923,10 +931,10 @@ export const Pane = memo(function Pane({
                   })}
 
                   {/* Files */}
-                  {session?.working_directory && (
+                  {filesRoot && (
                     <div className={viewMode === "files" ? "h-full" : "hidden"}>
                       <FileExplorer
-                        workingDirectory={session.working_directory}
+                        workingDirectory={filesRoot}
                         fileEditor={fileEditor}
                         onAddToAgent={handleAddToAgent}
                         active={viewMode === "files"}
@@ -984,7 +992,7 @@ export const Pane = memo(function Pane({
                   <FileExplorerDrawer
                     open={true}
                     onOpenChange={(o) => !o && setRightDrawer(null)}
-                    workingDirectory={session.working_directory}
+                    workingDirectory={filesRoot ?? session.working_directory}
                   />
                 )}
               </ResizablePanel>

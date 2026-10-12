@@ -12,7 +12,16 @@ import {
 } from "@/lib/providers/registry";
 import { getDb, queries, type Session } from "@/lib/db";
 import { getSessionBackend, type SessionActivity } from "@/lib/session-backend";
-import { claudeProjectDirName, findClaudeProjectDir } from "@/lib/platform";
+import {
+  getAllowedPathRoots,
+  resolveRealSandboxedPath,
+} from "@/lib/api-security";
+import {
+  claudeProjectDirName,
+  findClaudeProjectDir,
+  isMac,
+  isWindows,
+} from "@/lib/platform";
 import { getBudgetStage, isBudgetParked } from "@/lib/budget-park";
 import { isGenericSessionLaunchAllowed } from "@/lib/session-launch";
 import {
@@ -42,6 +51,14 @@ interface SessionStatusResponse {
    * and whether the tick has PARKED it (fail-closed, no new work fed). */
   budgetStage?: string;
   budgetParked?: boolean;
+  /**
+   * The session's LIVE working directory (the backend's pane path — tmux
+   * follows the shell/agent around; the pty registry reports the spawn cwd),
+   * validated against the same roots /api/files enforces. Null when unknown,
+   * unchanged from the stored working_directory, or outside the sandbox —
+   * consumers fall back to the session's stored working_directory.
+   */
+  cwd?: string | null;
 }
 
 async function getTmuxSessions(): Promise<SessionActivity[]> {
@@ -60,6 +77,63 @@ async function getTmuxSessions(): Promise<SessionActivity[]> {
 
 async function getTmuxSessionCwd(sessionName: string): Promise<string | null> {
   return backend.getPanePath(sessionName);
+}
+
+// ── Live pane cwd for the Files view ────────────────────────────────────────
+// The Files view roots itself at the session's LIVE working directory when the
+// backend reports one that differs from the creation-time `working_directory`
+// (the terminal may have cd'd — e.g. into a git worktree — since the session
+// was created). Only a path that would PASS the /api/files sandbox is reported,
+// so the client can adopt it without a second authorization round-trip, and a
+// drift outside the workspace can never 403 the explorer. Verdicts are NOT
+// cached: allowed roots change at runtime, and a stale positive would root the
+// explorer at a path /api/files may since have stopped allowing.
+/**
+ * Whether a pane path and the stored working_directory denote the SAME
+ * directory. Strict string equality is not enough: the backend and the DB can
+ * differ by trailing separator or slash style anywhere, and by casing on the
+ * case-insensitive filesystems Stoa actually runs on (Windows, macOS/APFS —
+ * macOS also normalizes NFC/NFD). Without normalization those pairs would run
+ * the sandbox check on EVERY poll forever and report a non-null cwd for a
+ * directory the session never left.
+ */
+function sameDirectory(panePath: string, stored: string): boolean {
+  const a = path.resolve(panePath);
+  const b = path.resolve(stored);
+  if (isWindows || isMac) {
+    return (
+      a.toLowerCase().normalize("NFC") === b.toLowerCase().normalize("NFC")
+    );
+  }
+  return a === b;
+}
+
+/**
+ * Live pane path for a session, or null. Null when the backend reports none,
+ * denotes the stored working_directory (nothing to follow), the path is
+ * outside the /api/files sandbox, or the sandbox check itself fails — in every
+ * case the client keeps the stored working_directory as the Files root.
+ * `panePath` is the SAME per-poll fetch the Claude session-id resolution uses,
+ * so the route issues exactly one backend getPanePath per session per poll.
+ * `roots` is read ONCE per poll by the caller — one DB sweep per request, not
+ * one per drifted session.
+ */
+async function getLiveFilesCwd(
+  panePath: string | null,
+  stored: string | null | undefined,
+  roots: string[]
+): Promise<string | null> {
+  if (!panePath) return null;
+  if (stored && sameDirectory(panePath, stored)) return null;
+  try {
+    const { allowed, resolved } = await resolveRealSandboxedPath(
+      panePath,
+      roots
+    );
+    return allowed ? resolved : null;
+  } catch {
+    return null;
+  }
 }
 
 // Get Claude session ID from tmux environment variable
@@ -138,15 +212,17 @@ function getClaudeSessionIdFromFiles(projectPath: string): string | null {
   }
 }
 
-async function getClaudeSessionId(sessionName: string): Promise<string | null> {
+async function getClaudeSessionId(
+  sessionName: string,
+  panePath: string | null
+): Promise<string | null> {
   const envId = await getClaudeSessionIdFromEnv(sessionName);
   if (envId) {
     return envId;
   }
 
-  const cwd = await getTmuxSessionCwd(sessionName);
-  if (cwd) {
-    return getClaudeSessionIdFromFiles(cwd);
+  if (panePath) {
+    return getClaudeSessionIdFromFiles(panePath);
   }
 
   return null;
@@ -162,13 +238,14 @@ async function getProviderSessionId(
   sessionName: string,
   agentType: AgentType,
   session: Session | null,
-  activitySeconds: number | null
+  activitySeconds: number | null,
+  panePath: string | null
 ): Promise<string | null> {
   if (agentType === "hermes") {
     return statusDetector.getHermesSessionId(sessionName);
   }
   if (agentType === "claude") {
-    return getClaudeSessionId(sessionName);
+    return getClaudeSessionId(sessionName, panePath);
   }
   if (agentType === "kimi") {
     // Per-session id from Kimi Code's startup banner (captured from the rendered
@@ -213,6 +290,11 @@ export async function GET() {
     // Get status for stoa managed sessions
     const managedSessions = sessions.filter((s) => UUID_PATTERN.test(s));
 
+    // ONE allowed-roots read per poll — getAllowedPathRoots() sweeps four DB
+    // tables plus realpaths every root, so the live-cwd sandbox checks below
+    // share this snapshot instead of each paying for their own.
+    const allowedRoots = getAllowedPathRoots();
+
     // Use the new status detector
     const statusMap: Record<string, SessionStatusResponse> = {};
 
@@ -233,6 +315,12 @@ export async function GET() {
       // whether an actual prompt is on screen.
       const { status, lastLine, rateLimit, prompt } =
         await statusDetector.getStatusDetail(sessionName);
+      // ONE pane-path fetch per session per poll — shared by the Claude
+      // session-id resolution below and the live Files cwd. A backend failure
+      // yields null instead of failing the poll (previously one rejected
+      // pane-path fetch 503'd the ENTIRE status board; now that session alone
+      // falls back, which is strictly better).
+      const panePath = await getTmuxSessionCwd(sessionName).catch(() => null);
       // Resolve the agent resume-id AFTER getStatusDetail: its capturePane()
       // populates the Hermes banner-id cache, so reading it here captures the id
       // on the same poll the banner is visible rather than one poll behind.
@@ -245,7 +333,8 @@ export async function GET() {
           sessionName,
           agentType,
           sessionRow,
-          activity
+          activity,
+          panePath
         );
         if (liveId) {
           claudeSessionId = liveId;
@@ -261,10 +350,23 @@ export async function GET() {
           sessionName,
           agentType,
           sessionRow,
-          activityByName.get(sessionName) ?? null
+          activityByName.get(sessionName) ?? null,
+          panePath
         );
         if (claudeSessionId) resolvedSessionIds.set(id, claudeSessionId);
       }
+
+      // Live Files root: the pane cwd when it drifted from the stored one
+      // (null keeps the client on the stored working_directory). Skipped for
+      // orphan backend sessions with no DB row — no client can look up an id
+      // that isn't in the sessions table.
+      const cwd = sessionRow
+        ? await getLiveFilesCwd(
+            panePath,
+            sessionRow.working_directory ?? null,
+            allowedRoots
+          )
+        : null;
 
       return {
         sessionName,
@@ -275,6 +377,7 @@ export async function GET() {
         agentType,
         rateLimit,
         hasPrompt: prompt != null,
+        cwd,
       };
     });
 
@@ -298,6 +401,7 @@ export async function GET() {
       agentType,
       rateLimit,
       hasPrompt,
+      cwd,
     } of results) {
       // Track status changes - update DB when session becomes active
       const prevStatus = previousStatuses.get(id);
@@ -329,6 +433,7 @@ export async function GET() {
         verifyOutput: v?.verify_output ? v.verify_output.slice(0, 400) : null,
         budgetStage: getBudgetStage(id),
         budgetParked: isBudgetParked(id),
+        cwd: cwd ?? null,
       };
     }
 

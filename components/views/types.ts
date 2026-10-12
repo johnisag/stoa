@@ -22,6 +22,12 @@ export interface SessionStatus {
   /** #21 budget badge: stage vs the session's budget cap + parked flag. */
   budgetStage?: string;
   budgetParked?: boolean;
+  /**
+   * The session's LIVE working directory as reported by the status poll (the
+   * backend's pane path, sandbox-checked server-side). Null when unknown or
+   * unchanged — consumers fall back to the session's stored working_directory.
+   */
+  cwd?: string | null;
 }
 
 export interface ViewProps {
