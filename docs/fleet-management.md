@@ -219,7 +219,7 @@ Stoa exposes an MCP orchestration server with tools for:
   capabilities, plus the informational-only `fleet_request_action` bridge for
   agents that do not hold delegated authority.
 
-The server uses `@modelcontextprotocol/server` 2.0.0: SDK major v2, which should
+The server uses `@modelcontextprotocol/server` 2.4.0: SDK major v2, which should
 not be confused with a protocol named "MCP 2.0." Its stdio entry uses
 `serveStdio`, serves native 2026-07-28 requests, and tests legacy `initialize`
 negotiation at 2025-11-25 through `legacy: "serve"` for existing Claude, Codex,
