@@ -17,6 +17,9 @@ import { getActiveBackend, buildSpawnForSession } from "@/lib/client/backend";
 import { cn } from "@/lib/utils";
 import { ConductorPanel } from "@/components/ConductorPanel";
 import { useFileEditor } from "@/hooks/useFileEditor";
+import { useSessionLiveCwd } from "@/data/statuses";
+import { useGitRepoRoot } from "@/data/git/queries";
+import { resolveGitSurfacesRoot } from "@/lib/git-surfaces-root";
 import { MobileTabBar } from "./MobileTabBar";
 import { DesktopTabBar } from "./DesktopTabBar";
 import { shouldFocusPaneOnClick } from "./focus-guard";
@@ -222,6 +225,25 @@ export const Pane = memo(function Pane({
   const session = activeTab
     ? sessions.find((s) => s.id === activeTab.sessionId)
     : null;
+
+  // Files view root: the session's LIVE pane cwd when the backend reports one
+  // (the terminal may have cd'd — e.g. into a git worktree — since the session
+  // was created), else the creation-time working_directory. Shares the status
+  // poll's query cache, so this adds no extra network traffic.
+  const liveCwd = useSessionLiveCwd(session?.id);
+  const filesRoot = liveCwd ?? session?.working_directory;
+
+  // GIT surfaces root: the REPO containing the Files root — git's porcelain
+  // paths and per-file pathspecs are repo-ROOT relative even when run from a
+  // subdirectory, so anchoring on a subdir cwd breaks every per-file action.
+  // A non-repo cwd keeps git on the stored directory (the Files view still
+  // follows the live cwd).
+  const { data: resolvedRepoRoot } = useGitRepoRoot(filesRoot ?? "");
+  const gitRoot = resolveGitSurfacesRoot(
+    resolvedRepoRoot,
+    filesRoot,
+    session?.working_directory
+  );
 
   // File editor state - lifted here so it persists across view switches
   const fileEditor = useFileEditor();
@@ -481,15 +503,17 @@ export const Pane = memo(function Pane({
 
   const handleGitFileOpen = useCallback(
     (file: GitChangeEditorFile) => {
-      if (!session?.working_directory) return;
+      // Anchor on the repo root the panel ran git against — porcelain paths
+      // are repo-root relative; a subdirectory cwd would join to nothing.
+      if (!gitRoot) return;
 
-      const filePath = gitChangeEditorPath(file, session.working_directory);
+      const filePath = gitChangeEditorPath(file, gitRoot);
       if (!filePath) return;
 
       setViewMode("files");
       void fileEditor.openFile(filePath);
     },
-    [fileEditor, session?.working_directory]
+    [fileEditor, gitRoot]
   );
 
   // Insert a saved snippet (from the shared store the mobile toolbar also uses)
@@ -810,10 +834,10 @@ export const Pane = memo(function Pane({
           })}
 
           {/* Files */}
-          {session?.working_directory && (
+          {filesRoot && (
             <div className={viewMode === "files" ? "h-full" : "hidden"}>
               <FileExplorer
-                workingDirectory={session.working_directory}
+                workingDirectory={filesRoot}
                 fileEditor={fileEditor}
                 onAddToAgent={handleAddToAgent}
                 active={viewMode === "files"}
@@ -822,10 +846,13 @@ export const Pane = memo(function Pane({
           )}
 
           {/* Git - mobile only */}
-          {session?.working_directory && (
+          {gitRoot && (
             <div className={viewMode === "git" ? "h-full" : "hidden"}>
               <GitPanel
-                workingDirectory={session.working_directory}
+                // Remount on a repo switch: a diff/selection opened against
+                // the OLD repo must not stage or discard in the new one.
+                key={gitRoot}
+                workingDirectory={gitRoot}
                 projectId={currentProject?.id}
                 repositories={effectiveRepositories}
                 repoPaths={
@@ -923,10 +950,10 @@ export const Pane = memo(function Pane({
                   })}
 
                   {/* Files */}
-                  {session?.working_directory && (
+                  {filesRoot && (
                     <div className={viewMode === "files" ? "h-full" : "hidden"}>
                       <FileExplorer
-                        workingDirectory={session.working_directory}
+                        workingDirectory={filesRoot}
                         fileEditor={fileEditor}
                         onAddToAgent={handleAddToAgent}
                         active={viewMode === "files"}
@@ -970,9 +997,11 @@ export const Pane = memo(function Pane({
               <ResizablePanel defaultSize={30} minSize={10}>
                 {rightDrawer === "git" ? (
                   <GitDrawer
+                    // Remount on a repo switch (see GitPanel above).
+                    key={gitRoot ?? session.working_directory}
                     open={true}
                     onOpenChange={(o) => !o && setRightDrawer(null)}
-                    workingDirectory={session.working_directory}
+                    workingDirectory={gitRoot ?? session.working_directory}
                     projectId={currentProject?.id}
                     repositories={effectiveRepositories}
                     repoPaths={
@@ -984,7 +1013,7 @@ export const Pane = memo(function Pane({
                   <FileExplorerDrawer
                     open={true}
                     onOpenChange={(o) => !o && setRightDrawer(null)}
-                    workingDirectory={session.working_directory}
+                    workingDirectory={filesRoot ?? session.working_directory}
                   />
                 )}
               </ResizablePanel>
