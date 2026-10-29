@@ -1,7 +1,7 @@
 import { execFileSync } from "child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRepoRoot } from "@/lib/git";
 import { joinPath } from "@/lib/path-display";
 import { isWindows, tmpDir } from "@/lib/platform";
@@ -9,14 +9,15 @@ import { isWindows, tmpDir } from "@/lib/platform";
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
 // Under the OS temp dir on purpose: on macOS it sits behind the /var ->
-// /private/var link (git reports the physical path), and a developer's home
-// may itself be a work tree (dotfiles), which would break the null case.
+// /private/var link, so git reports the physical path and every case below
+// also exercises mapping it back onto the caller's spelling.
 function tempDirectory(prefix: string): string {
   const directory = mkdtempSync(join(tmpDir(), prefix));
   temporaryDirectories.push(directory);
@@ -90,6 +91,9 @@ describe("getRepoRoot", () => {
 
   it("returns null outside any work tree", async () => {
     const noRepo = tempDirectory("stoa-repo-root-empty-");
+    // Stop discovery at the temp dir: a developer's home (which holds the
+    // temp dir on Windows) may itself be a work tree (dotfiles).
+    vi.stubEnv("GIT_CEILING_DIRECTORIES", tmpDir());
     expect(await getRepoRoot(noRepo)).toBeNull();
   });
 

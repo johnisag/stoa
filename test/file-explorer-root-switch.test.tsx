@@ -92,4 +92,25 @@ describe("FileExplorer — root switch", () => {
     const refresh = screen.getByRole("button", { name: "Refresh files" });
     expect((refresh as HTMLButtonElement).disabled).toBe(false);
   });
+
+  it("drops the OLD root's in-flight listing when the root moves while hidden", async () => {
+    const { rerender } = render(
+      <FileExplorer workingDirectory="/A" fileEditor={fileEditor} />
+    );
+    // The root moves while the view is hidden: no load of its own runs, so
+    // only the clear effect's seq bump stops /A's late response committing.
+    rerender(
+      <FileExplorer
+        workingDirectory="/B"
+        fileEditor={fileEditor}
+        active={false}
+      />
+    );
+    await respond("/A");
+    expect(screen.queryByText("/A/f.ts")).toBeNull();
+
+    rerender(<FileExplorer workingDirectory="/B" fileEditor={fileEditor} />);
+    await respond("/B");
+    expect(await screen.findByText("/B/f.ts")).toBeTruthy();
+  });
 });

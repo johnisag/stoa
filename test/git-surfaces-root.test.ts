@@ -11,8 +11,12 @@ describe("resolveGitSurfacesRoot", () => {
     );
   });
 
-  it("falls back to the Files root while the resolution is loading", () => {
-    expect(resolveGitSurfacesRoot(undefined, FILES_ROOT, STORED)).toBe(
+  it("stays on the stored directory while the resolution is loading (never the unchecked subdir)", () => {
+    expect(resolveGitSurfacesRoot(undefined, FILES_ROOT, STORED)).toBe(STORED);
+  });
+
+  it("falls back to the Files root while loading when no stored directory exists", () => {
+    expect(resolveGitSurfacesRoot(undefined, FILES_ROOT, null)).toBe(
       FILES_ROOT
     );
   });

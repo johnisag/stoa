@@ -13,18 +13,17 @@
  * - A live cwd that is not inside a repo keeps git on the session's stored
  *   working directory (a non-repo cwd would 400 every git route) — the Files
  *   view still follows the live cwd; only git stays behind.
- * - While the resolution is loading, fall back to the Files root so the panel
- *   behaves exactly as it did before the resolution existed.
+ * - While the resolution is loading (or if it failed), stay on the stored
+ *   working directory too — what git used before the live cwd existed. Never
+ *   the unchecked Files root: it may be a subdirectory, and the surfaces are
+ *   keyed on this value, so a transient anchor would remount them twice.
  */
 export function resolveGitSurfacesRoot(
   repoRoot: string | null | undefined,
   filesRoot: string | null | undefined,
   storedWorkingDirectory: string | null | undefined
 ): string | null {
-  const root = filesRoot ?? null;
-  if (repoRoot === undefined) return root;
-  if (repoRoot === null) return storedWorkingDirectory ?? root;
-  return repoRoot;
+  return repoRoot ?? storedWorkingDirectory ?? filesRoot ?? null;
 }
 
 /** Whether `p` is `root` or inside it ("/" and "\\" tolerant). Pure. */
