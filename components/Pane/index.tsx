@@ -849,6 +849,9 @@ export const Pane = memo(function Pane({
           {gitRoot && (
             <div className={viewMode === "git" ? "h-full" : "hidden"}>
               <GitPanel
+                // Remount on a repo switch: a diff/selection opened against
+                // the OLD repo must not stage or discard in the new one.
+                key={gitRoot}
                 workingDirectory={gitRoot}
                 projectId={currentProject?.id}
                 repositories={effectiveRepositories}
@@ -994,6 +997,8 @@ export const Pane = memo(function Pane({
               <ResizablePanel defaultSize={30} minSize={10}>
                 {rightDrawer === "git" ? (
                   <GitDrawer
+                    // Remount on a repo switch (see GitPanel above).
+                    key={gitRoot ?? session.working_directory}
                     open={true}
                     onOpenChange={(o) => !o && setRightDrawer(null)}
                     workingDirectory={gitRoot ?? session.working_directory}

@@ -55,19 +55,33 @@ export async function isGitRepo(dirPath: string): Promise<boolean> {
  * per-file pathspecs) are relative to this root regardless of the cwd git was
  * run from — so consumers anchoring file paths must use THIS, not the cwd.
  * Null when the path is not inside a work tree.
+ *
+ * Git prints the PHYSICAL (link-resolved) toplevel, e.g. `/private/var/...` on
+ * macOS or a junction's target on Windows. The sandbox checks lexical paths
+ * first, so the root is mapped back onto the caller's own spelling: the
+ * ancestor of `dirPath` that IS the toplevel. A repo reached through a
+ * symlink/junction alias keeps its alias.
  */
 export async function getRepoRoot(dirPath: string): Promise<string | null> {
   try {
-    const resolvedPath = expandHome(dirPath);
+    const resolvedPath = path.resolve(expandHome(dirPath));
     const { stdout } = await git(
       resolvedPath,
       ["rev-parse", "--show-toplevel"],
       5000
     );
-    // Normalize to native separators (git prints forward slashes on Windows)
-    // so the root compares and joins consistently with DB-stored paths.
-    const root = path.resolve(stdout.trim());
-    return root || null;
+    const toplevel = stdout.trim();
+    // Old git (< 2.25) prints nothing inside `.git`/bare repos — and
+    // path.resolve("") would be the server's own cwd.
+    if (!toplevel) return null;
+    const realToplevel = await fs.promises.realpath(toplevel);
+    for (let dir = resolvedPath; ; dir = path.dirname(dir)) {
+      const realDir = await fs.promises.realpath(dir).catch(() => null);
+      if (realDir === realToplevel) return dir;
+      // No ancestor matches (the link sits inside the repo): fall back to
+      // git's path, native separators.
+      if (path.dirname(dir) === dir) return path.resolve(toplevel);
+    }
   } catch {
     return null;
   }

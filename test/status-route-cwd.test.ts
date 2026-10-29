@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { join } from "path";
 import type { Session } from "@/lib/db";
+import { homeDir } from "@/lib/platform";
 
 const state = {
   sessions: [] as Array<string | { name: string; activity: number | null }>,
@@ -11,6 +13,7 @@ const state = {
   sandboxResolved: null as string | null,
   sandboxCalls: 0,
   roots: ["/w/proj"] as string[],
+  rootsReads: 0,
 };
 
 vi.mock("@/lib/db", () => ({
@@ -66,7 +69,10 @@ vi.mock("@/lib/codex-usage", () => ({
 }));
 
 vi.mock("@/lib/api-security", () => ({
-  getAllowedPathRoots: () => state.roots,
+  getAllowedPathRoots: () => {
+    state.rootsReads++;
+    return state.roots;
+  },
   resolveRealSandboxedPath: vi.fn(
     async (inputPath: string, _roots: string[]) => {
       state.sandboxCalls++;
@@ -214,5 +220,22 @@ describe("/api/sessions/status — live cwd for the Files view", () => {
     const body = await getBody(await GET());
     expect(body.statuses[ID].cwd).toBeNull();
     expect(state.sandboxCalls).toBe(0);
+  });
+
+  it("treats a ~-stored directory as unchanged when the pane reports it expanded", async () => {
+    // "~" is the new-session default; the backend always reports the expanded
+    // path. Without expansion this reported a bogus cwd on EVERY poll.
+    seedSession("~/proj");
+    state.panePath = join(homeDir(), "proj");
+    const body = await getBody(await GET());
+    expect(body.statuses[ID].cwd).toBeNull();
+    expect(state.sandboxCalls).toBe(0);
+  });
+
+  it("does not read the allowed roots on a poll where no session drifted", async () => {
+    state.panePath = STORED;
+    state.rootsReads = 0;
+    await GET();
+    expect(state.rootsReads).toBe(0);
   });
 });

@@ -111,20 +111,13 @@ export function FileExplorer({
     [workingDirectory]
   );
 
-  useEffect(() => {
-    // Load on mount and whenever the root changes (the live cwd can move it).
-    // Gated on `active` like the auto-refresh below: a hidden Files view must
-    // not refetch on every root oscillation — the prevDirRef switch already
-    // cleared the stale listing, and this effect re-runs when the view
-    // becomes active again.
-    if (!active) return;
-    void loadFiles();
-  }, [loadFiles, active]);
-
   // Clear the previous directory's listing on a workingDirectory switch.
   // Without this a FAILED load leaves the old dir's tree rendered under the
   // new path indefinitely (the spinner/error gates only apply when no
   // listing exists). Refreshes for the SAME directory never touch this.
+  // Declared BEFORE the load effect: effects run in declaration order, and
+  // the seq bump below must precede the load's own — after it, it would
+  // supersede the fresh load, whose `finally` then never clears the spinner.
   const prevDirRef = useRef(workingDirectory);
   useEffect(() => {
     if (prevDirRef.current === workingDirectory) return;
@@ -136,6 +129,16 @@ export function FileExplorer({
     requestSeq.current++;
     setFiles([]);
   }, [workingDirectory]);
+
+  useEffect(() => {
+    // Load on mount and whenever the root changes (the live cwd can move it).
+    // Gated on `active` like the auto-refresh below: a hidden Files view must
+    // not refetch on every root oscillation — the prevDirRef switch already
+    // cleared the stale listing, and this effect re-runs when the view
+    // becomes active again.
+    if (!active) return;
+    void loadFiles();
+  }, [loadFiles, active]);
 
   // Auto-refresh every 5s (ConductorPanel precedent) so files the agent
   // creates/edits show up without a manual reload. Silent + paused while the
@@ -362,13 +365,14 @@ function DesktopFileExplorer({
             <p className="truncate text-sm font-medium">Files</p>
             {/* Show WHICH directory the tree is rooted at — it can move (the
                 view follows the terminal's live cwd), so the root must be
-                visible, not implied. rtl + isolate truncates from the START:
-                the tail (the distinguishing, changing part) stays visible. */}
+                visible, not implied. rtl truncates from the START: the tail
+                (the distinguishing, changing part) stays visible. The ltr
+                <bdi> keeps a leading "/" or "~" from jumping to the end. */}
             <p
-              className="text-muted-foreground truncate text-xs [direction:rtl] [unicode-bidi:isolate]"
+              className="text-muted-foreground truncate text-left text-xs [direction:rtl]"
               title={workingDirectory}
             >
-              {workingDirectory}
+              <bdi dir="ltr">{workingDirectory}</bdi>
             </p>
           </div>
           <Button
@@ -573,10 +577,10 @@ function MobileFileExplorer({
           {/* Start-truncated like the desktop panel: the tail is the
               distinguishing, changing part of a live root. */}
           <p
-            className="text-muted-foreground truncate text-xs [direction:rtl] [unicode-bidi:isolate]"
+            className="text-muted-foreground truncate text-left text-xs [direction:rtl]"
             title={workingDirectory}
           >
-            {workingDirectory}
+            <bdi dir="ltr">{workingDirectory}</bdi>
           </p>
         </div>
         <Button

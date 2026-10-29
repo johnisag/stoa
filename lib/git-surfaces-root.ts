@@ -1,6 +1,8 @@
 /**
  * Resolve the directory the GIT surfaces (panel/drawer + per-file actions)
- * must operate from, given the git-check result for the Files root.
+ * must operate from, given the /api/git/root result for the Files root (null
+ * when the Files root is not in a repo, or its repo root is outside the
+ * workspace).
  *
  * Pure on purpose (node-env testable). The rules:
  * - Git porcelain paths and per-file pathspecs are REPO-ROOT relative — even
@@ -23,4 +25,11 @@ export function resolveGitSurfacesRoot(
   if (repoRoot === undefined) return root;
   if (repoRoot === null) return storedWorkingDirectory ?? root;
   return repoRoot;
+}
+
+/** Whether `p` is `root` or inside it ("/" and "\\" tolerant). Pure. */
+export function isWithinRoot(p: string, root: string): boolean {
+  const a = p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const b = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  return a === b || a.startsWith(b + "/");
 }

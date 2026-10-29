@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { gitKeys } from "./keys";
+import { isWithinRoot } from "@/lib/git-surfaces-root";
 
 // Re-export for convenience
 export { gitKeys };
@@ -77,6 +78,12 @@ export function useGitRepoRoot(path: string) {
     queryKey: gitKeys.repoRoot(path),
     queryFn: () => fetchGitRepoRoot(path),
     staleTime: 15000,
+    // A cd within the same repo must not flash the git surfaces onto the
+    // subdirectory (and remount them) while the new root resolves. Only a path
+    // INSIDE the previous root borrows it — a switch to another session or
+    // repo must not.
+    placeholderData: (previous) =>
+      previous && isWithinRoot(path, previous) ? previous : undefined,
     enabled: !!path && path !== "~",
   });
 }

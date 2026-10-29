@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveGitSurfacesRoot } from "@/lib/git-surfaces-root";
+import { isWithinRoot, resolveGitSurfacesRoot } from "@/lib/git-surfaces-root";
 
 const FILES_ROOT = "/w/proj/subdir";
 const STORED = "/w/proj";
@@ -28,5 +28,18 @@ describe("resolveGitSurfacesRoot", () => {
   it("returns null when everything is missing", () => {
     expect(resolveGitSurfacesRoot(undefined, null, null)).toBeNull();
     expect(resolveGitSurfacesRoot(null, null, null)).toBeNull();
+  });
+});
+
+describe("isWithinRoot", () => {
+  it("matches the root itself and paths inside it, either separator", () => {
+    expect(isWithinRoot("/w/proj", "/w/proj/")).toBe(true);
+    expect(isWithinRoot("/w/proj/src/lib", "/w/proj")).toBe(true);
+    expect(isWithinRoot("C:\\w\\proj\\src", "C:/w/proj")).toBe(true);
+  });
+
+  it("rejects siblings sharing a name prefix and unrelated paths", () => {
+    expect(isWithinRoot("/w/project", "/w/proj")).toBe(false);
+    expect(isWithinRoot("/other", "/w/proj")).toBe(false);
   });
 });

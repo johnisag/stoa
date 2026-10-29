@@ -1,10 +1,10 @@
 import { execFileSync } from "child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getRepoRoot } from "@/lib/git";
 import { joinPath } from "@/lib/path-display";
-import { homeDir, isWindows } from "@/lib/platform";
+import { isWindows, tmpDir } from "@/lib/platform";
 
 const temporaryDirectories: string[] = [];
 
@@ -14,9 +14,17 @@ afterEach(() => {
   }
 });
 
-function initRepo(): string {
-  const directory = mkdtempSync(join(homeDir(), ".stoa-repo-root-test-"));
+// Under the OS temp dir on purpose: on macOS it sits behind the /var ->
+// /private/var link (git reports the physical path), and a developer's home
+// may itself be a work tree (dotfiles), which would break the null case.
+function tempDirectory(prefix: string): string {
+  const directory = mkdtempSync(join(tmpDir(), prefix));
   temporaryDirectories.push(directory);
+  return directory;
+}
+
+function initRepo(): string {
+  const directory = tempDirectory("stoa-repo-root-test-");
   execFileSync("git", ["init", "-b", "main"], {
     cwd: directory,
     windowsHide: isWindows,
@@ -48,6 +56,8 @@ describe("getRepoRoot", () => {
       "user.email=t@stoa.local",
       "-c",
       "user.name=stoa-test",
+      "-c",
+      "commit.gpgsign=false",
       "commit",
       "-m",
       "init",
@@ -79,8 +89,18 @@ describe("getRepoRoot", () => {
   });
 
   it("returns null outside any work tree", async () => {
-    const noRepo = mkdtempSync(join(homeDir(), ".stoa-repo-root-empty-"));
-    temporaryDirectories.push(noRepo);
+    const noRepo = tempDirectory("stoa-repo-root-empty-");
     expect(await getRepoRoot(noRepo)).toBeNull();
+  });
+
+  it("keeps a symlink/junction alias instead of git's physical path", async () => {
+    // git prints the link-resolved toplevel; the sandbox checks lexical paths
+    // first, so a project registered through an alias must get the alias back.
+    const repo = initRepo();
+    mkdirSync(join(repo, "pkg"));
+    const alias = join(tempDirectory("stoa-repo-root-alias-"), "alias");
+    symlinkSync(repo, alias, isWindows ? "junction" : "dir");
+    expect(await getRepoRoot(join(alias, "pkg"))).toBe(alias);
+    expect(await getRepoRoot(alias)).toBe(alias);
   });
 });

@@ -167,10 +167,10 @@ export function FileExplorerDrawer({
               {/* The root can move (the drawer follows the terminal's live
                   cwd), so show it — start-truncated like the Files panel. */}
               <span
-                className="text-muted-foreground block truncate text-xs [direction:rtl] [unicode-bidi:isolate]"
+                className="text-muted-foreground block truncate text-left text-xs [direction:rtl]"
                 title={workingDirectory}
               >
-                {workingDirectory}
+                <bdi dir="ltr">{workingDirectory}</bdi>
               </span>
             </div>
           </div>

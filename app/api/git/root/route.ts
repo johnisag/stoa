@@ -38,8 +38,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // The root can sit OUTSIDE the workspace (a session registered at a
+    // monorepo subfolder whose repo root is not itself allowed). Every git
+    // route would 403 it, so report null: the git surfaces stay on the
+    // stored working directory.
     const repoRoot = await getRepoRoot(resolved);
-    return NextResponse.json({ repoRoot });
+    const rootAllowed =
+      repoRoot !== null &&
+      (await resolveRealSandboxedPath(repoRoot, roots)).allowed;
+    return NextResponse.json({ repoRoot: rootAllowed ? repoRoot : null });
   } catch (error) {
     console.error("Error resolving repo root:", error);
     return NextResponse.json(
